@@ -38,3 +38,4 @@ site/
 results_*/
 *x86_64/
 cargo-vendor-filterer
+/.direnv/
