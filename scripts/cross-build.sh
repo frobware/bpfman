@@ -4,95 +4,55 @@ set -eu
 
 host_arch=$(uname -m)
 
-# Canonical architecture names.
-# $ dpkg --print-foreign-architectures
-declare -A canonical_arch_map
-canonical_arch_map=(
-    ["aarch64"]="arm64"
-    ["amd64"]="amd64"
-    ["ppc64le"]="ppc64le"
-    ["s390x"]="s390x"
-)
-
-# Rust target mappings.
-declare -A rust_target_map
-rust_target_map=(
-    ["amd64"]="x86_64-unknown-linux-gnu"
-    ["arm64"]="aarch64-unknown-linux-gnu"
-    ["ppc64le"]="powerpc64le-unknown-linux-gnu"
-    ["s390x"]="s390x-unknown-linux-gnu"
-)
-
-# GCC toolchain mappings.
-declare -A gcc_toolchain_map
-gcc_toolchain_map=(
-    ["amd64"]="x86_64-linux-gnu"
-    ["arm64"]="aarch64-linux-gnu"
-    ["ppc64le"]="powerpc64le-linux-gnu"
-    ["s390x"]="s390x-linux-gnu"
-)
-
-# Debian architecture for package management (if different from
-# canonical).
-declare -A debian_arch_map
-debian_arch_map=(
-    ["amd64"]="amd64"
-    ["arm64"]="arm64"
-    ["ppc64le"]="ppc64le"
-    ["s390x"]="s390x"
-)
-
-# Function to canonicalise the architecture input.
-canonicalise_arch() {
-    local arch_input="$1"
-    if [[ -n "${canonical_arch_map[$arch_input]+set}" ]]; then
-        echo "${canonical_arch_map[$arch_input]}"
-    else
-        echo "Unsupported architecture: $arch_input" >&2
-        exit 1
-    fi
+# Map common architecture names to their corresponding Rust target
+# format.
+arch_map() {
+    case "$1" in
+        x86_64) echo "x86_64-unknown-linux-gnu" ;;
+        aarch64) echo "aarch64-unknown-linux-gnu" ;;
+        ppc64le) echo "powerpc64le-unknown-linux-gnu" ;;
+        s390x) echo "s390x-unknown-linux-gnu" ;;
+        *) echo "Unsupported architecture: $1" && exit 1 ;;
+    esac
 }
 
-# Specify the target architecture.
-target_arch_input=$1
-if [ -z "$target_arch_input" ]; then
+# Specify the target architecture and corresponding Rust target.
+target_arch=$1
+if [ -z "$target_arch" ]; then
     echo "Usage: $0 <target-architecture>"
-    echo "Supported architectures: amd64, arm64, ppc64le, s390x"
+    echo "Supported architectures: amd64, aarch64, ppc64le, s390x"
     exit 1
 fi
 
-# Canonicalise the architecture input.
-target_arch=$(canonicalise_arch "$target_arch_input")
+# Get Rust targets based on the architectures.
+host_rust_target=$(arch_map "$host_arch")
+rust_target=$(arch_map "$target_arch")
 
-# Get Rust target based on the canonical architecture.
-rust_target="${rust_target_map[$target_arch]}"
-
-# Get GCC toolchain name based on the canonical architecture.
-gcc_target="${gcc_toolchain_map[$target_arch]}"
+gcc_target="${target_arch}-linux-gnu"
 cc="${gcc_target}-gcc"
 linker="${gcc_target}-gcc"
-
-echo "gcc_target=$gcc_target"
-echo "cc=$cc"
-echo "linker=$linker"
 
 sysroot="/usr/${gcc_target}"
 lib_dir="/usr/lib/${gcc_target}"
 
-# Get Debian architecture name for package management.
-debian_arch="${debian_arch_map[$target_arch]}"
+# Debian uses 'arm64' for package management even though the Rust
+# target and toolchain is 'aarch64'.
+debian_arch="$target_arch"
+if [ "$target_arch" = "aarch64" ]; then
+    debian_arch="arm64"  # Use arm64 for Debian package management
+fi
 
 # Set the appropriate version of libssl-dev depending on the
 # architecture.
 libssl_dev="libssl-dev"
-if [ "$(uname -m)" != "$target_arch_input" ]; then
+if [ "$host_arch" != "$target_arch" ]; then
     libssl_dev="libssl-dev:${debian_arch}"
 fi
 
 echo "Setting up cross-compilation environment for $target_arch"
 
 # Add foreign architectures only if we're cross-compiling.
-if [ "$(uname -m)" != "$target_arch_input" ]; then
+if [ "$host_arch" != "$target_arch" ]; then
     ${SUDO:-} dpkg --add-architecture "$debian_arch"
 fi
 
@@ -104,6 +64,7 @@ ${SUDO:-} apt-get install -y \
      clang \
      cmake \
      direnv \
+     gcc-multilib \
      git \
      libelf-dev \
      libssl-dev \
@@ -112,16 +73,11 @@ ${SUDO:-} apt-get install -y \
      pkg-config \
      protobuf-compiler
 
-# Install cross-compilation toolchains and OpenSSL for the target architecture.
-if [ "$host_arch" != "$target_arch_input" ]; then
-    # Cross-compiling: host and target architectures are different
-    ${SUDO:-} apt-get install -y gcc-${gcc_target} "$libssl_dev"
-else
-    # Native compilation: host and target architectures are the same
-    ${SUDO:-} apt-get install -y gcc "$libssl_dev"
-fi
+# Install cross-compilation toolchains and OpenSSL for the target
+# architecture.
+${SUDO:-} apt-get install -y gcc-${gcc_target} "$libssl_dev"
 
-if [ "$(uname -m)" != "$target_arch_input" ]; then
+if [ "$host_arch" != "$target_arch" ]; then
     # Correct the paths for pkg-config and to find OpenSSL.
     export PKG_CONFIG_SYSROOT_DIR="/usr/${gcc_target}"
     export PKG_CONFIG_PATH="/usr/lib/${gcc_target}/pkgconfig:${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
@@ -129,12 +85,10 @@ if [ "$(uname -m)" != "$target_arch_input" ]; then
 fi
 
 # Install Rust target for the specific architecture.
-if ! rustup target list | grep -q "^$rust_target (installed)$"; then
-    rustup target add "$rust_target"
-fi
+rustup target add "$rust_target"
 
 # Set RUSTFLAGS to use the correct cross-linker if cross-compiling.
-if [ "$(uname -m)" != "$target_arch_input" ]; then
+if [ "$host_arch" != "$target_arch" ]; then
     export RUSTFLAGS="-C linker=$linker ${RUSTFLAGS:-}"
 fi
 
