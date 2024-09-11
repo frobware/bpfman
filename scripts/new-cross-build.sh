@@ -11,7 +11,8 @@ canonical_arch_map=(
     ["aarch64"]="arm64"
     ["amd64"]="x86_64"
     ["x86-64"]="x86_64"
-    ["ppc64le"]="ppc64le"
+    ["ppc64le"]="ppc64el"
+    ["ppc64el"]="ppc64el"
     ["s390x"]="s390x"
 )
 
@@ -21,6 +22,7 @@ rust_target_map=(
     ["x86_64"]="x86_64-unknown-linux-gnu"
     ["arm64"]="aarch64-unknown-linux-gnu"
     ["ppc64le"]="powerpc64le-unknown-linux-gnu"
+    ["ppc64el"]="powerpc64le-unknown-linux-gnu"
     ["s390x"]="s390x-unknown-linux-gnu"
 )
 
@@ -30,6 +32,7 @@ gcc_toolchain_map=(
     ["x86_64"]="x86_64-linux-gnu"
     ["arm64"]="aarch64-linux-gnu"
     ["ppc64le"]="powerpc64le-linux-gnu"
+    ["ppc64el"]="powerpc64le-linux-gnu"
     ["s390x"]="s390x-linux-gnu"
 )
 
@@ -39,6 +42,7 @@ gcc_pkg_toolchain_map=(
     ["x86_64"]="gcc-x86-64-linux-gnu"
     ["arm64"]="gcc-aarch64-linux-gnu"
     ["ppc64le"]="gcc-powerpc64le-linux-gnu"
+    ["ppc64el"]="gcc-powerpc64le-linux-gnu"
     ["s390x"]="gcc-s390x-linux-gnu"
 )
 
@@ -48,7 +52,8 @@ declare -A debian_arch_map
 debian_arch_map=(
     ["x86_64"]="amd64"
     ["arm64"]="arm64"
-    ["ppc64le"]="ppc64le"
+    ["ppc64le"]="ppc64el"
+    ["ppc64el"]="ppc64el"
     ["s390x"]="s390x"
 )
 
@@ -73,7 +78,6 @@ fi
 
 # Canonicalise the architecture input.
 target_arch=$(canonicalise_arch "$target_arch_input")
-echo "$target_arch"
 
 # Get Rust target based on the canonical architecture.
 rust_target="${rust_target_map[$target_arch]}"
@@ -83,9 +87,16 @@ gcc_target="${gcc_toolchain_map[$target_arch]}"
 cc="${gcc_target}-gcc"
 linker="${gcc_target}-gcc"
 
-echo "gcc_target=$gcc_target"
-echo "cc=$cc"
-echo "linker=$linker"
+# Check if the compiler and linker exist
+if ! type -P "$cc" >/dev/null; then
+    echo "Error: GCC compiler ($cc) not found. Please ensure the toolchain is installed." >&2
+    exit 1
+fi
+
+if ! type -P "$linker" >/dev/null; then
+    echo "Error: Linker ($linker) not found. Please ensure the toolchain is installed." >&2
+    exit 1
+fi
 
 sysroot="/usr/${gcc_target}"
 lib_dir="/usr/lib/${gcc_target}"
