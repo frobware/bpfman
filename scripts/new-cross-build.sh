@@ -126,7 +126,7 @@ ${SUDO:-} apt-get install -y \
 # Install cross-compilation toolchains and OpenSSL for the target architecture.
 if [ "$host_arch" != "$target_arch_input" ]; then
     # Cross-compiling: host and target architectures are different
-    ${SUDO:-} apt-get install -y $(gcc_pkg_toolchain_map ${target_arch}) "$libssl_dev"
+    ${SUDO:-} apt-get install -y "${gcc_pkg_toolchain_map[$target_arch]}" "$libssl_dev"
 else
     # Native compilation: host and target architectures are the same
     ${SUDO:-} apt-get install -y gcc "$libssl_dev"
