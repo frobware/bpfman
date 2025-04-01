@@ -70,7 +70,10 @@ pub struct LoadedProgram {
 #[derive(Debug)]
 pub struct UnloadError {
     pub program_id: KernelU32,
-    pub error: String,
+    /// The underlying error encountered during the unload operation.
+    /// This error is stored as an `anyhow::Error` to allow downstream
+    /// callers to inspect or downcast it if needed.
+    pub error: anyhow::Error,
 }
 
 /// Encapsulates all parameters required to load eBPF programs into
@@ -376,11 +379,11 @@ fn load_program(
     Ok(())
 }
 
-fn attempt_unload(_lp: &LoadedProgram) -> anyhow::Result<()> {
+fn attempt_unload(_lp: &LoadedProgram) -> Result<()> {
     // TODO(frobware).
     // Circle back here when we address the `unload` bpfman command. We
     // may want to go through the public API (i.e., the front door).
-    todo!("sqlite");
+    todo!("Implement unload using sqlite interface");
 }
 
 /// Loads an individual eBPF program into the kernel and returns
@@ -552,7 +555,7 @@ pub(crate) fn unload_all(programs: &[LoadedProgram]) -> Vec<UnloadError> {
         if let Err(e) = attempt_unload(lp) {
             failures.push(UnloadError {
                 program_id: lp.program.id,
-                error: e.to_string(),
+                error: e,
             });
         }
     }
