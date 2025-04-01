@@ -707,4 +707,322 @@ mod tests {
             "Expected shared map to be deleted after all program references removed"
         );
     }
+
+    #[cfg(test)]
+    mod bpfprogram_constraint_tests {
+        use diesel::result::{DatabaseErrorKind, Error};
+
+        use super::*;
+        use crate::establish_sqlite_connection;
+
+        fn setup_test_db() -> SqliteConnection {
+            let database_url = ":memory:";
+            establish_sqlite_connection(database_url)
+                .expect("Failed to establish in-memory SQLite connection")
+        }
+
+        fn create_valid_base_program() -> BpfProgram {
+            BpfProgram {
+                id: 100u32.into(),
+                name: "test_program".to_owned(),
+                kind: "xdp".to_owned(),
+                state: "pre_load".to_owned(),
+                location_type: "file".to_owned(),
+                file_path: Some("/path/to/test_program.o".to_owned()),
+                map_pin_path: "/sys/fs/bpf/test_program".to_owned(),
+                program_bytes: vec![0xAA, 0xBB, 0xCC],
+                ..Default::default()
+            }
+        }
+
+        fn assert_constraint_violation(result: Result<BpfProgram, Error>) {
+            match result {
+                Err(Error::DatabaseError(DatabaseErrorKind::CheckViolation, _)) => {
+                    // This is the expected outcome for a constraint
+                    // violation.
+                }
+                Err(e) => panic!(
+                    "Expected check constraint violation, got different error: {:?}",
+                    e
+                ),
+                Ok(_) => {
+                    panic!("Expected insertion to fail with constraint violation, but it succeeded")
+                }
+            }
+        }
+
+        #[test]
+        /// Tests that the 'kind' field constraint is enforced. The
+        /// schema only allows specific values: 'xdp', 'tc', 'tcx',
+        /// 'tracepoint', 'kprobe', 'uprobe', 'fentry', 'fexit'.
+        fn test_kind_constraint() {
+            let mut conn = setup_test_db();
+
+            // Valid kind should succeed.
+            let valid_program = create_valid_base_program();
+            BpfProgram::insert_record(&mut conn, &valid_program)
+                .expect("Valid program should insert successfully");
+
+            // Invalid kind should fail.
+            let mut invalid_program = create_valid_base_program();
+            invalid_program.id = 101u32.into();
+            invalid_program.kind = "invalid_kind".to_owned();
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_program);
+            assert_constraint_violation(result);
+        }
+
+        #[test]
+        /// Tests that the 'state' field constraint is enforced. The
+        /// schema only allows 'pre_load' or 'loaded'.
+        fn test_state_constraint() {
+            let mut conn = setup_test_db();
+
+            // Valid state should succeed.
+            let valid_program = create_valid_base_program();
+            BpfProgram::insert_record(&mut conn, &valid_program)
+                .expect("Valid program should insert successfully");
+
+            // Test with 'loaded' state, which should also be valid.
+            let mut loaded_program = create_valid_base_program();
+            loaded_program.id = 101u32.into();
+            loaded_program.state = "loaded".to_owned();
+            BpfProgram::insert_record(&mut conn, &loaded_program)
+                .expect("Program with 'loaded' state should insert successfully");
+
+            // Invalid state should fail.
+            let mut invalid_program = create_valid_base_program();
+            invalid_program.id = 102u32.into();
+            invalid_program.state = "running".to_owned();
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_program);
+            assert_constraint_violation(result);
+        }
+
+        #[test]
+        /// Tests that the 'location_type' and corresponding field
+        /// constraints are enforced. If location_type is 'file',
+        /// file_path must be provided. If location_type is 'image',
+        /// image_url must be provided.
+        fn test_location_type_constraints() {
+            let mut conn = setup_test_db();
+
+            // Valid file location should succeed.
+            let valid_file_program = create_valid_base_program();
+            BpfProgram::insert_record(&mut conn, &valid_file_program)
+                .expect("Valid file-based program should insert successfully");
+
+            // Valid image location should succeed.
+            let mut valid_image_program = create_valid_base_program();
+            valid_image_program.id = 101u32.into();
+            valid_image_program.location_type = "image".to_owned();
+            valid_image_program.file_path = None;
+            valid_image_program.image_url = Some("registry.example.com/image:tag".to_owned());
+            BpfProgram::insert_record(&mut conn, &valid_image_program)
+                .expect("Valid image-based program should insert successfully");
+
+            // Invalid: File location type without file_path.
+            let mut invalid_file_program = create_valid_base_program();
+            invalid_file_program.id = 102u32.into();
+            invalid_file_program.file_path = None;
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_file_program);
+            assert_constraint_violation(result);
+
+            // Invalid: Image location type without image_url.
+            let mut invalid_image_program = create_valid_base_program();
+            invalid_image_program.id = 103u32.into();
+            invalid_image_program.location_type = "image".to_owned();
+            invalid_image_program.file_path = None;
+            invalid_image_program.image_url = None;
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_image_program);
+            assert_constraint_violation(result);
+
+            // Invalid location_type should fail.
+            let mut invalid_location_program = create_valid_base_program();
+            invalid_location_program.id = 104u32.into();
+            invalid_location_program.location_type = "network".to_owned();
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_location_program);
+            assert_constraint_violation(result);
+        }
+
+        #[test]
+        /// Tests that the function name constraint is enforced for
+        /// 'fentry' and 'fexit' program types.
+        fn test_function_name_constraint() {
+            let mut conn = setup_test_db();
+
+            // Valid fentry program with fn_name should succeed.
+            let mut valid_fentry_program = create_valid_base_program();
+            valid_fentry_program.kind = "fentry".to_owned();
+            valid_fentry_program.fn_name = Some("test_function".to_owned());
+
+            BpfProgram::insert_record(&mut conn, &valid_fentry_program)
+                .expect("Valid fentry program should insert successfully");
+
+            // Valid fexit program with fn_name should succeed.
+            let mut valid_fexit_program = create_valid_base_program();
+            valid_fexit_program.id = 101u32.into();
+            valid_fexit_program.kind = "fexit".to_owned();
+            valid_fexit_program.fn_name = Some("test_function".to_owned());
+
+            BpfProgram::insert_record(&mut conn, &valid_fexit_program)
+                .expect("Valid fexit program should insert successfully");
+
+            // Invalid: fentry program without fn_name should fail.
+            let mut invalid_fentry_program = create_valid_base_program();
+            invalid_fentry_program.id = 102u32.into();
+            invalid_fentry_program.kind = "fentry".to_owned();
+            invalid_fentry_program.fn_name = None;
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_fentry_program);
+            assert_constraint_violation(result);
+
+            // Invalid: fexit program without fn_name should fail.
+            let mut invalid_fexit_program = create_valid_base_program();
+            invalid_fexit_program.id = 103u32.into();
+            invalid_fexit_program.kind = "fexit".to_owned();
+            invalid_fexit_program.fn_name = None;
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_fexit_program);
+            assert_constraint_violation(result);
+
+            // Other program types don't require fn_name.
+            let mut tracepoint_program = create_valid_base_program();
+            tracepoint_program.id = 104u32.into();
+            tracepoint_program.kind = "tracepoint".to_owned();
+            tracepoint_program.fn_name = None;
+
+            BpfProgram::insert_record(&mut conn, &tracepoint_program)
+                .expect("Tracepoint program without fn_name should insert successfully");
+        }
+
+        #[test]
+        /// Tests that the retprobe constraint is enforced for
+        /// 'kprobe' and 'uprobe' program types.
+        fn test_retprobe_constraint() {
+            let mut conn = setup_test_db();
+
+            // Valid kprobe program with retprobe should succeed.
+            let mut valid_kprobe_program = create_valid_base_program();
+            valid_kprobe_program.kind = "kprobe".to_owned();
+            valid_kprobe_program.retprobe = Some(false);
+
+            BpfProgram::insert_record(&mut conn, &valid_kprobe_program)
+                .expect("Valid kprobe program should insert successfully");
+
+            // Valid uprobe program with retprobe should succeed.
+            let mut valid_uprobe_program = create_valid_base_program();
+            valid_uprobe_program.id = 101u32.into();
+            valid_uprobe_program.kind = "uprobe".to_owned();
+            valid_uprobe_program.retprobe = Some(true);
+
+            BpfProgram::insert_record(&mut conn, &valid_uprobe_program)
+                .expect("Valid uprobe program should insert successfully");
+
+            // Invalid: kprobe program without retprobe should fail.
+            let mut invalid_kprobe_program = create_valid_base_program();
+            invalid_kprobe_program.id = 102u32.into();
+            invalid_kprobe_program.kind = "kprobe".to_owned();
+            invalid_kprobe_program.retprobe = None;
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_kprobe_program);
+            assert_constraint_violation(result);
+
+            // Invalid: uprobe program without retprobe should fail.
+            let mut invalid_uprobe_program = create_valid_base_program();
+            invalid_uprobe_program.id = 103u32.into();
+            invalid_uprobe_program.kind = "uprobe".to_owned();
+            invalid_uprobe_program.retprobe = None;
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_uprobe_program);
+            assert_constraint_violation(result);
+
+            // Other program types don't require retprobe.
+            let mut xdp_program = create_valid_base_program();
+            xdp_program.id = 104u32.into();
+            xdp_program.kind = "xdp".to_owned();
+            xdp_program.retprobe = None;
+
+            BpfProgram::insert_record(&mut conn, &xdp_program)
+                .expect("XDP program without retprobe should insert successfully");
+        }
+
+        #[test]
+        /// Test that program can be updated while still enforcing
+        /// constraints.
+        fn test_update_with_constraints() {
+            let mut conn = setup_test_db();
+
+            // Create a valid program.
+            let program = create_valid_base_program();
+            let inserted_program = BpfProgram::insert_record(&mut conn, &program)
+                .expect("Valid program should insert successfully");
+
+            // Valid update should succeed.
+            let mut program_to_update = inserted_program.clone();
+            program_to_update.name = "updated_name".to_owned();
+            program_to_update
+                .update_record(&mut conn)
+                .expect("Valid update should succeed");
+
+            // Invalid update should fail (invalid kind).
+            let mut invalid_update = inserted_program.clone();
+            invalid_update.kind = "invalid_kind".to_owned();
+            let result = invalid_update.update_record(&mut conn);
+            match result {
+                Err(Error::DatabaseError(DatabaseErrorKind::CheckViolation, _)) => {
+                    // This is the expected outcome
+                }
+                Err(e) => panic!(
+                    "Expected check constraint violation, got different error: {:?}",
+                    e
+                ),
+                Ok(_) => {
+                    panic!("Expected update to fail with constraint violation, but it succeeded")
+                }
+            }
+
+            // Invalid update should fail (missing required field
+            // based on kind).
+            let mut invalid_update = inserted_program.clone();
+            invalid_update.kind = "fentry".to_owned();
+            invalid_update.fn_name = None;
+            let result = invalid_update.update_record(&mut conn);
+            assert_constraint_violation(Result::Err(result.unwrap_err()));
+        }
+
+        #[test]
+        /// Test combination of multiple constraints.
+        fn test_combined_constraints() {
+            let mut conn = setup_test_db();
+
+            // Complex valid case: fentry program with image location.
+            let mut program = create_valid_base_program();
+            program.id = 101u32.into();
+            program.kind = "fentry".to_owned();
+            program.fn_name = Some("test_function".to_owned());
+            program.location_type = "image".to_owned();
+            program.file_path = None;
+            program.image_url = Some("registry.example.com/image:tag".to_owned());
+            program.image_pull_policy = Some("Always".to_owned());
+
+            BpfProgram::insert_record(&mut conn, &program)
+                .expect("Valid complex program should insert successfully");
+
+            // Invalid complex case: missing multiple required fields.
+            let mut invalid_complex_program = create_valid_base_program();
+            invalid_complex_program.id = 102u32.into();
+            invalid_complex_program.kind = "kprobe".to_owned(); // Requires retprobe
+            invalid_complex_program.retprobe = None;
+            invalid_complex_program.location_type = "image".to_owned(); // Requires image_url
+            invalid_complex_program.file_path = None;
+            invalid_complex_program.image_url = None;
+
+            let result = BpfProgram::insert_record(&mut conn, &invalid_complex_program);
+            assert_constraint_violation(result);
+        }
+    }
 }

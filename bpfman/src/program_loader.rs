@@ -293,7 +293,6 @@ fn build_bpfprogram_from_aya_program(
             .ok()
             .map(|pt| KernelU32::from(pt as u32)),
         kernel_loaded_at,
-        //kernel_tag: Some(format!("{:016x}", prog_info.tag())), // TODO(frobware); choose a non-string type?
         kernel_tag: U64Blob::from(prog_info.tag()),
         kernel_gpl_compatible: prog_info.gpl_compatible(),
         kernel_btf_id: prog_info.btf_id().map(KernelU32::from),
