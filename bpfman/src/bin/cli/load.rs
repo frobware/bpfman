@@ -217,7 +217,7 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
             Err(anyhow::anyhow!(summary))
         }
 
-        Err(BpfmanError::DbPersistFailed {
+        Err(BpfmanError::LoadError {
             cause,
             loaded,
             unload_failures,

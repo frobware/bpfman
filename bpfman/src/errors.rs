@@ -92,27 +92,32 @@ pub enum BpfmanError {
     ProgramsLoadFailure(Vec<BpfmanError>),
     #[error("Failed to retrieve map info: {0}")]
     BpfMapInfoError(#[source] aya::maps::MapError),
-
     #[error("Kernel load failed: {cause}")]
     LoadFailed {
-        /// What specifically caused the load failure (e.g. "bad function name").
+        /// What specifically caused the load failure (e.g. "bad
+        /// function name").
         cause: String,
-
-        /// Programs that were successfully loaded before we hit `cause`.
-        /// They were then unloaded if possible.
+        /// Programs that were successfully loaded before we hit
+        /// `cause`. They were then unloaded if possible.
         loaded_before_failure: Vec<LoadedProgram>,
-
-        /// If unloading those programs failed for some, capture them here.
+        /// If unloading those programs failed for some, capture them
+        /// here.
         unload_failures: Vec<UnloadError>,
     },
-
-    #[error("DB persistence failed: {cause}")]
-    DbPersistFailed {
+    #[error("Load program failed: {cause}")]
+    LoadError {
+        /// A string representation of the underlying database error
+        /// (e.g., a constraint violation).
         cause: String,
-
-        /// All programs were fully loaded, but we must now unload them.
+        /// The list of eBPF programs that were successfully loaded
+        /// into the kernel before the database persistence step
+        /// failed. These programs are pending unload as part of the
+        /// rollback.
         loaded: Vec<LoadedProgram>,
-
+        /// Any errors encountered while attempting to unload the
+        /// previously loaded eBPF programs. This provides additional
+        /// context if the rollback (unloading) process fails
+        /// partially.
         unload_failures: Vec<UnloadError>,
     },
 }

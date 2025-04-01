@@ -2230,7 +2230,7 @@ pub fn load_ebpf_programs(
     }) {
         let unload_failures = program_loader::unload_all(&loaded);
 
-        return Err(BpfmanError::DbPersistFailed {
+        return Err(BpfmanError::LoadError {
             cause: db_err.to_string(),
             loaded,
             unload_failures,
