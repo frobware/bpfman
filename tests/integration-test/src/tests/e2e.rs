@@ -1,8 +1,12 @@
-use std::{collections::HashMap, path::PathBuf, thread::sleep, time::Duration};
+use std::{collections::HashMap, fs, path::PathBuf, thread::sleep, time::Duration};
 
 use bpfman::{
-    remove_program, setup,
-    types::{AttachInfo, BytecodeImage, Location, TcProceedOn, XdpProceedOn},
+    ProgramType, load_ebpf_programs,
+    program_loader::LoadSpec,
+    remove_program,
+    schema::bpf_programs::global_data,
+    setup, setup_with_sqlite,
+    types::{AttachInfo, BytecodeImage, ImagePullPolicy, Location, TcProceedOn, XdpProceedOn},
 };
 use procfs::sys::kernel::Version;
 
@@ -1062,6 +1066,78 @@ fn test_load_unload_xdp_maps() {
 
     verify_and_delete_programs(&config, &root_db, vec![res]);
 
+    assert!(!bpffs_has_entries(RTDIR_FS_XDP));
+}
+
+// #[track_caller]
+// pub fn assert_program_loaded(conn: &mut sqlite::SqliteConnection, program_id: KernelU32) {
+//     match BpfProgram::find_record(conn, program_id) {
+//         Ok(_) => (), // Program loaded as expected
+//         Err(diesel::result::Error::NotFound) => {
+//             panic!(
+//                 "Expected program ID {:?} to be loaded, but it wasn't found",
+//                 program_id
+//             );
+//         }
+//         Err(e) => panic!("Error retrieving program ID {:?}: {}", program_id, e),
+//     }
+// }
+
+#[test]
+fn sqlite_test_load_unload_xdp_maps() {
+    init_logger();
+    let (_config, conn) = setup_with_sqlite().unwrap();
+    let _namespace_guard = create_namespace().unwrap();
+    let _ping_guard = start_ping().unwrap();
+
+    assert!(iface_exists(DEFAULT_BPFMAN_IFACE));
+
+    println!("Installing xdp_counter program");
+
+    let bytecode = fs::read(&*XDP_COUNTER_IMAGE_LOC).unwrap();
+
+    let globals = Some(vec![
+        ("xdp".to_string(), b"foo".to_vec()),
+        ("another".to_string(), vec![1, 2, 3]),
+    ]);
+
+    let spec = LoadSpec::new(
+        Location::Image(BytecodeImage {
+            image_url: XDP_COUNTER_IMAGE_LOC.to_string(),
+            image_pull_policy: ImagePullPolicy::Always,
+            username: None,
+            password: None,
+        }),
+        &[],
+        &None,
+        None,
+        &None,
+        &bytecode,
+        &globals,
+    )
+    .unwrap();
+
+    let loaded = load_ebpf_programs(&mut conn, &spec).unwrap();
+
+    assert_eq!(loaded[0].kind, ProgramType::Xdp);
+
+    let program = &loaded[0].program;
+    assert_eq!(program.kind, "xdp");
+    assert_eq!(program.state, "loaded");
+    assert!(program.map_pin_path.starts_with("/sys/fs/bpf/"));
+
+    assert!(bpffs_has_entries(RTDIR_FS_XDP));
+
+    // let map_pin_path = loaded[0].maps[0].pin_path.as_ref().unwrap();
+    // assert!(map_pin_path.join("xdp_stats_map").exists());
+
+    let map = &loaded[0].maps[0];
+    assert_eq!(map.name, "xdp_stats_map");
+    assert_eq!(map.max_entries.get(), 128);
+
+    //unload_programs(&loaded).unwrap();
+
+    // Verify bpffs entries are cleaned up
     assert!(!bpffs_has_entries(RTDIR_FS_XDP));
 }
 

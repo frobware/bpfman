@@ -95,6 +95,7 @@ pub struct LoadSpec<'a> {
 impl<'a> LoadSpec<'a> {
     /// Creates a `HashMap` from the given global data tuples.
     ///
+
     /// This helper method converts the internal tuple representation
     /// of global data (name-value pairs) into a `HashMap<String,
     /// Vec<u8>>` for easier access and manipulation. If no global

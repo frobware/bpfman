@@ -56,6 +56,7 @@ pub mod config;
 mod dispatcher_config;
 pub mod errors;
 pub mod k32;
+mod load_spec;
 pub mod models;
 mod multiprog;
 mod netlink;
@@ -2183,7 +2184,7 @@ impl ProgramType {
 ///    successfully, the programs are inserted in a single database
 ///    transaction. If that transaction fails (e.g., CHECK
 ///    constraints), all loaded programs are unloaded (rollback), and
-///    a [`BpfmanError::DbPersistFailed`] is returned.
+///    a [`BpfmanError::LoadError`] is returned.
 ///
 /// On success, it returns a list of all loaded programs (with
 /// associated map metadata).
@@ -2200,7 +2201,7 @@ impl ProgramType {
 ///   **and** persisted to the DB.
 /// * `Err(BpfmanError::LoadFailed { ... })` if kernel loading fails — partial
 ///   successes are unloaded.
-/// * `Err(BpfmanError::DbPersistFailed { ... })` if kernel loading succeeds
+/// * `Err(BpfmanError::LoadError { ... })` if kernel loading succeeds
 ///   but database persistence fails — all loaded programs are then unloaded.
 ///
 /// # Errors
