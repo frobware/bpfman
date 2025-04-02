@@ -61,7 +61,9 @@ impl LoadSpec2Builder {
 
 #[cfg(test)]
 mod tests {
-    use crate::load_spec::LoadSpec2Builder;
+    use super::*;
+    // Use the following import to test like a client would.
+    //use crate::load_spec::LoadSpec2Builder;
 
     #[test]
     fn test_build_fails_with_no_fields() {
@@ -102,5 +104,24 @@ mod tests {
         );
         let spec = result.unwrap();
         assert_eq!(&spec.function_names, &vec!["main".to_string()]);
+    }
+
+    #[test]
+    fn test_build_global_data_serialises_to_json() {
+        let result = LoadSpec2Builder::default()
+            .function_names(vec!["main".into()])
+            .program_bytes(vec![0xde, 0xad])
+            .global_data(vec![
+                ("key1".into(), b"value1".to_vec()),
+                ("key2".into(), b"value2".to_vec()),
+            ])
+            .build();
+
+        assert!(result.is_ok());
+        let spec = result.unwrap();
+
+        let json: serde_json::Value = serde_json::from_str(&spec.global_data_json).unwrap();
+        assert!(json.get("key1").is_some(), "expected key1 in JSON");
+        assert!(json.get("key2").is_some(), "expected key2 in JSON");
     }
 }
