@@ -248,60 +248,6 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
     }
 }
 
-// fn sqlite_execute_load(
-//     location: Location,
-//     map_owner_id: Option<u32>,
-//     metadata: &Option<Vec<(String, String)>>,
-//     global: &Option<Vec<GlobalArg>>,
-//     programs: &[(String, Vec<String>)],
-// ) -> anyhow::Result<()> {
-//     let (config, mut conn) = setup_with_sqlite()?;
-
-//     let mut image_manager = ImageManager::new(
-//         config.signing().verify_enabled,
-//         config.signing().allow_unsigned,
-//     )?;
-
-//     let (program_bytes, function_names) =
-//         get_program_bytes_and_validate(&location, &mut image_manager, programs)?;
-
-//     let global_data_tuples = convert_globals_to_tuples(global);
-
-//     let load_spec = LoadSpec::new(
-//         location,
-//         &function_names,
-//         &global_data_tuples,
-//         map_owner_id,
-//         metadata,
-//         &program_bytes,
-//         programs,
-//     )?;
-
-//     let result = load_ebpf_programs(&mut conn, &load_spec);
-
-//     handle_load_result(result)
-// }
-
-// fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
-//     sqlite_execute_load(
-//         Location::File(args.path.clone()),
-//         args.map_owner_id,
-//         &args.metadata,
-//         &args.global,
-//         &args.programs,
-//     )
-// }
-
-// fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
-//     sqlite_execute_load(
-//         Location::Image((&args.pull_args).try_into()?),
-//         args.map_owner_id,
-//         &args.metadata,
-//         &args.global,
-//         &args.programs,
-//     )
-// }
-
 fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
     let (config, mut conn) = setup_with_sqlite()?;
 
@@ -312,11 +258,8 @@ fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
 
     let source = Location::File(args.path.clone());
 
-    let (program_bytes, function_names) = get_program_bytes_and_validate(
-        &source,
-        &mut image_manager,
-        &args.programs,
-    )?;
+    let (program_bytes, function_names) =
+        get_program_bytes_and_validate(&source, &mut image_manager, &args.programs)?;
 
     let load_spec = LoadSpecBuilder::default()
         .bytecode_source(source)
@@ -342,11 +285,8 @@ fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
 
     let source = Location::Image((&args.pull_args).try_into()?);
 
-    let (program_bytes, function_names) = get_program_bytes_and_validate(
-        &source,
-        &mut image_manager,
-        &args.programs,
-    )?;
+    let (program_bytes, function_names) =
+        get_program_bytes_and_validate(&source, &mut image_manager, &args.programs)?;
 
     let load_spec = LoadSpecBuilder::default()
         .bytecode_source(source)

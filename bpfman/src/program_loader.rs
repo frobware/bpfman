@@ -117,7 +117,6 @@ pub struct LoadSpec {
     programs: Vec<(String, Vec<String>)>,
 
     // The following fields are computed in build().
-
     #[builder(setter(skip), default = "String::from(\"{}\")")]
     global_data_json: String,
 
