@@ -95,7 +95,7 @@ pub struct KernelU32(i64);
 impl KernelU32 {
     /// Returns the value as `u32`, panicking if out of range.
     ///
-    /// For fallible conversion, use [`try_u32()`] instead.
+    /// For fallible conversion, use [`Self::try_u32()`] instead.
     pub fn get(self) -> u32 {
         self.try_u32().expect("KernelU32: value out of u32 range")
     }
