@@ -10,7 +10,7 @@ use bpfman::{
     load_ebpf_programs,
     models::get_program_bytes_and_validate,
     oci_utils::image_manager::ImageManager,
-    program_loader::{LoadSpec, LoadSpec2Builder, LoadedProgram},
+    program_loader::{LoadSpecBuilder, LoadedProgram},
     setup, setup_with_sqlite,
     types::{
         FentryProgram, FexitProgram, KprobeProgram, Location, Program, ProgramData, TcProgram,
@@ -170,21 +170,13 @@ fn parse_global(global: &Option<Vec<GlobalArg>>) -> HashMap<String, Vec<u8>> {
     global_data
 }
 
+// TODO(frobware). This one is for LoadSpec. The preceding function
+// can be deleted when we drop SLED.
 fn parse_global2(global: &[GlobalArg]) -> Vec<(String, Vec<u8>)> {
     global
         .into_iter()
         .map(|arg| (arg.name.clone(), arg.value.clone()))
         .collect()
-}
-
-/// Converts GlobalArg to the tuple format (String, Vec<u8>) needed by
-/// LoadSpec.
-fn convert_globals_to_tuples(globals: &Option<Vec<GlobalArg>>) -> Option<Vec<(String, Vec<u8>)>> {
-    globals.as_ref().map(|args| {
-        args.iter()
-            .map(|arg| (arg.name.clone(), arg.value.clone()))
-            .collect::<Vec<_>>()
-    })
 }
 
 fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()> {
@@ -256,61 +248,61 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
     }
 }
 
-fn sqlite_execute_load(
-    location: Location,
-    map_owner_id: Option<u32>,
-    metadata: &Option<Vec<(String, String)>>,
-    global: &Option<Vec<GlobalArg>>,
-    programs: &[(String, Vec<String>)],
-) -> anyhow::Result<()> {
-    let (config, mut conn) = setup_with_sqlite()?;
+// fn sqlite_execute_load(
+//     location: Location,
+//     map_owner_id: Option<u32>,
+//     metadata: &Option<Vec<(String, String)>>,
+//     global: &Option<Vec<GlobalArg>>,
+//     programs: &[(String, Vec<String>)],
+// ) -> anyhow::Result<()> {
+//     let (config, mut conn) = setup_with_sqlite()?;
 
-    let mut image_manager = ImageManager::new(
-        config.signing().verify_enabled,
-        config.signing().allow_unsigned,
-    )?;
+//     let mut image_manager = ImageManager::new(
+//         config.signing().verify_enabled,
+//         config.signing().allow_unsigned,
+//     )?;
 
-    let (program_bytes, function_names) =
-        get_program_bytes_and_validate(&location, &mut image_manager, programs)?;
+//     let (program_bytes, function_names) =
+//         get_program_bytes_and_validate(&location, &mut image_manager, programs)?;
 
-    let global_data_tuples = convert_globals_to_tuples(global);
+//     let global_data_tuples = convert_globals_to_tuples(global);
 
-    let load_spec = LoadSpec::new(
-        location,
-        &function_names,
-        &global_data_tuples,
-        map_owner_id,
-        metadata,
-        &program_bytes,
-        programs,
-    )?;
+//     let load_spec = LoadSpec::new(
+//         location,
+//         &function_names,
+//         &global_data_tuples,
+//         map_owner_id,
+//         metadata,
+//         &program_bytes,
+//         programs,
+//     )?;
 
-    let result = load_ebpf_programs(&mut conn, &load_spec);
+//     let result = load_ebpf_programs(&mut conn, &load_spec);
 
-    handle_load_result(result)
-}
+//     handle_load_result(result)
+// }
+
+// fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
+//     sqlite_execute_load(
+//         Location::File(args.path.clone()),
+//         args.map_owner_id,
+//         &args.metadata,
+//         &args.global,
+//         &args.programs,
+//     )
+// }
+
+// fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
+//     sqlite_execute_load(
+//         Location::Image((&args.pull_args).try_into()?),
+//         args.map_owner_id,
+//         &args.metadata,
+//         &args.global,
+//         &args.programs,
+//     )
+// }
 
 fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
-    sqlite_execute_load(
-        Location::File(args.path.clone()),
-        args.map_owner_id,
-        &args.metadata,
-        &args.global,
-        &args.programs,
-    )
-}
-
-fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
-    sqlite_execute_load(
-        Location::Image((&args.pull_args).try_into()?),
-        args.map_owner_id,
-        &args.metadata,
-        &args.global,
-        &args.programs,
-    )
-}
-
-fn a_2_sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
     let (config, mut conn) = setup_with_sqlite()?;
 
     let mut image_manager = ImageManager::new(
@@ -318,55 +310,49 @@ fn a_2_sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
         config.signing().allow_unsigned,
     )?;
 
-    // Get program bytes and function names from the image or file.
     let (program_bytes, function_names) = get_program_bytes_and_validate(
         &Location::File(args.path.clone()),
         &mut image_manager,
         &args.programs,
     )?;
 
-    // Construct LoadSpec2 directly here
-    let _load_spec = LoadSpec2Builder::default()
+    let load_spec = LoadSpecBuilder::default()
         .function_names(function_names)
         .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
         .map_owner_id(args.map_owner_id)
         .metadata(args.metadata.clone().unwrap_or_else(Vec::new))
         .program_bytes(program_bytes)
-        .raw_programs(args.programs.clone())
+        .programs(args.programs.clone())
         .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec2: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
 
-    Ok(())
+    let result = load_ebpf_programs(&mut conn, &load_spec);
+    handle_load_result(result)
 }
 
-fn a_2_sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
-    // Setup and image manager initialization
+fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
     let (config, mut conn) = setup_with_sqlite()?;
     let mut image_manager = ImageManager::new(
         config.signing().verify_enabled,
         config.signing().allow_unsigned,
     )?;
 
-    // Get program bytes and function names from the image
     let (program_bytes, function_names) = get_program_bytes_and_validate(
         &Location::Image((&args.pull_args).try_into()?),
         &mut image_manager,
         &args.programs,
     )?;
 
-    // Construct LoadSpec2 directly here using the builder
-    let _load_spec = LoadSpec2Builder::default()
+    let load_spec = LoadSpecBuilder::default()
         .function_names(function_names)
         .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
         .map_owner_id(args.map_owner_id)
         .metadata(args.metadata.clone().unwrap_or_else(Vec::new))
         .program_bytes(program_bytes)
-        .raw_programs(args.programs.clone())
+        .programs(args.programs.clone())
         .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec2: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
 
-    // Pass the constructed LoadSpec2 to sqlite_execute_load
-    // sqlite_execute_load(load_spec)
-
-    Ok(())
+    let result = load_ebpf_programs(&mut conn, &load_spec);
+    handle_load_result(result)
 }

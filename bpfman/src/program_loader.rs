@@ -83,110 +83,110 @@ pub struct UnloadError {
 ///
 /// A `LoadSpec` represents the desired state for eBPF program loading
 /// and includes:
-pub struct LoadSpec<'a> {
-    bytecode_source: Location,
-    #[allow(dead_code)] // XXX(frobware) TODO
-    function_names: &'a [String],
-    global_data_json: String,
-    map_owner_id: Option<u32>,
-    metadata_json: String,
-    program_bytes: &'a [u8],
-    programs: Vec<(ProgramType, String)>,
-}
+// pub struct LoadSpec<'a> {
+//     bytecode_source: Location,
+//     #[allow(dead_code)] // XXX(frobware) TODO
+//     function_names: &'a [String],
+//     global_data_json: String,
+//     map_owner_id: Option<u32>,
+//     metadata_json: String,
+//     program_bytes: &'a [u8],
+//     programs: Vec<(ProgramType, String)>,
+// }
 
-impl<'a> LoadSpec<'a> {
-    /// Creates a `HashMap` from the given global data tuples.
-    ///
+// impl<'a> LoadSpec<'a> {
+//     /// Creates a `HashMap` from the given global data tuples.
+//     ///
 
-    /// This helper method converts the internal tuple representation
-    /// of global data (name-value pairs) into a `HashMap<String,
-    /// Vec<u8>>` for easier access and manipulation. If no global
-    /// data is provided, an empty `HashMap` is returned.
-    fn create_global_data_map(
-        global_data: &Option<Vec<(String, Vec<u8>)>>,
-    ) -> HashMap<String, Vec<u8>> {
-        let mut global_data_map: HashMap<String, Vec<u8>> = HashMap::new();
-        if let Some(globals) = global_data {
-            for (name, value) in globals.iter() {
-                global_data_map.insert(name.clone(), value.clone());
-            }
-        }
-        global_data_map
-    }
+//     /// This helper method converts the internal tuple representation
+//     /// of global data (name-value pairs) into a `HashMap<String,
+//     /// Vec<u8>>` for easier access and manipulation. If no global
+//     /// data is provided, an empty `HashMap` is returned.
+//     fn create_global_data_map(
+//         global_data: &Option<Vec<(String, Vec<u8>)>>,
+//     ) -> HashMap<String, Vec<u8>> {
+//         let mut global_data_map: HashMap<String, Vec<u8>> = HashMap::new();
+//         if let Some(globals) = global_data {
+//             for (name, value) in globals.iter() {
+//                 global_data_map.insert(name.clone(), value.clone());
+//             }
+//         }
+//         global_data_map
+//     }
 
-    /// Creates a new `LoadSpec` instance that encapsulates all
-    /// parameters needed for eBPF program loading.
-    ///
-    /// This constructor validates the provided inputs to prevent
-    /// invalid configurations before execution. It ensures that the
-    /// eBPF bytecode is non-empty, that at least one valid program
-    /// definition is provided, and that any required function names
-    /// are present (e.g., for `fentry` and `fexit` types).
-    /// Additionally, it precomputes and serialises global data and
-    /// metadata into JSON strings for efficient access during
-    /// loading.
-    pub fn new(
-        // TODO(frobware) switch to a builder?
-        bytecode_source: Location,
-        function_names: &'a [String],
-        global_data: &'a Option<Vec<(String, Vec<u8>)>>,
-        map_owner_id: Option<u32>,
-        metadata: &'a Option<Vec<(String, String)>>,
-        program_bytes: &'a [u8],
-        programs: &'a [(String, Vec<String>)],
-    ) -> Result<Self, BpfmanError> {
-        if program_bytes.is_empty() {
-            return Err(BpfmanError::Error(
-                "`program_bytes` cannot be empty".to_string(),
-            ));
-        }
-        if programs.is_empty() {
-            return Err(BpfmanError::Error("`programs` cannot be empty".to_string()));
-        }
+//     /// Creates a new `LoadSpec` instance that encapsulates all
+//     /// parameters needed for eBPF program loading.
+//     ///
+//     /// This constructor validates the provided inputs to prevent
+//     /// invalid configurations before execution. It ensures that the
+//     /// eBPF bytecode is non-empty, that at least one valid program
+//     /// definition is provided, and that any required function names
+//     /// are present (e.g., for `fentry` and `fexit` types).
+//     /// Additionally, it precomputes and serialises global data and
+//     /// metadata into JSON strings for efficient access during
+//     /// loading.
+//     pub fn new(
+//         // TODO(frobware) switch to a builder?
+//         bytecode_source: Location,
+//         function_names: &'a [String],
+//         global_data: &'a Option<Vec<(String, Vec<u8>)>>,
+//         map_owner_id: Option<u32>,
+//         metadata: &'a Option<Vec<(String, String)>>,
+//         program_bytes: &'a [u8],
+//         programs: &'a [(String, Vec<String>)],
+//     ) -> Result<Self, BpfmanError> {
+//         if program_bytes.is_empty() {
+//             return Err(BpfmanError::Error(
+//                 "`program_bytes` cannot be empty".to_string(),
+//             ));
+//         }
+//         if programs.is_empty() {
+//             return Err(BpfmanError::Error("`programs` cannot be empty".to_string()));
+//         }
 
-        // Validate and convert program definitions
-        let mut validated_programs = Vec::new();
-        for (program_type_str, parts) in programs {
-            let name = parts.first().ok_or_else(|| {
-                BpfmanError::Error(format!("Missing program name for {}", program_type_str))
-            })?;
+//         // Validate and convert program definitions
+//         let mut validated_programs = Vec::new();
+//         for (program_type_str, parts) in programs {
+//             let name = parts.first().ok_or_else(|| {
+//                 BpfmanError::Error(format!("Missing program name for {}", program_type_str))
+//             })?;
 
-            if matches!(program_type_str.as_str(), "fentry" | "fexit") && parts.len() != 2 {
-                return Err(BpfmanError::Error(format!(
-                    "Missing function name for {} program",
-                    program_type_str
-                )));
-            }
+//             if matches!(program_type_str.as_str(), "fentry" | "fexit") && parts.len() != 2 {
+//                 return Err(BpfmanError::Error(format!(
+//                     "Missing function name for {} program",
+//                     program_type_str
+//                 )));
+//             }
 
-            let fn_name = if matches!(program_type_str.as_str(), "fentry" | "fexit") {
-                parts.get(1).map(|s| s.as_str())
-            } else {
-                None
-            };
+//             let fn_name = if matches!(program_type_str.as_str(), "fentry" | "fexit") {
+//                 parts.get(1).map(|s| s.as_str())
+//             } else {
+//                 None
+//             };
 
-            let program_type = ProgramType::from_str(program_type_str, fn_name)
-                .map_err(|e| BpfmanError::Error(format!("Invalid program type: {}", e)))?;
+//             let program_type = ProgramType::from_str(program_type_str, fn_name)
+//                 .map_err(|e| BpfmanError::Error(format!("Invalid program type: {}", e)))?;
 
-            validated_programs.push((program_type, name.clone()));
-        }
+//             validated_programs.push((program_type, name.clone()));
+//         }
 
-        let global_data_json = serde_json::to_string(&Self::create_global_data_map(global_data))
-            .map_err(|e| BpfmanError::Error(format!("Failed to serialize global data: {}", e)))?;
+//         let global_data_json = serde_json::to_string(&Self::create_global_data_map(global_data))
+//             .map_err(|e| BpfmanError::Error(format!("Failed to serialize global data: {}", e)))?;
 
-        let metadata_json = serde_json::to_string(metadata)
-            .map_err(|e| BpfmanError::Error(format!("Failed to serialize metadata: {}", e)))?;
+//         let metadata_json = serde_json::to_string(metadata)
+//             .map_err(|e| BpfmanError::Error(format!("Failed to serialize metadata: {}", e)))?;
 
-        Ok(LoadSpec {
-            bytecode_source,
-            function_names,
-            global_data_json,
-            map_owner_id,
-            metadata_json,
-            program_bytes,
-            programs: validated_programs,
-        })
-    }
-}
+//         Ok(LoadSpec {
+//             bytecode_source,
+//             function_names,
+//             global_data_json,
+//             map_owner_id,
+//             metadata_json,
+//             program_bytes,
+//             programs: validated_programs,
+//         })
+//     }
+// }
 
 fn build_bpfmap_from_aya_map(
     data: &aya::maps::Map,
@@ -509,12 +509,12 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
     bytecode_loader.allow_unsupported_maps();
 
     let mut program_bytecode = bytecode_loader
-        .load(spec.program_bytes)
+        .load(&spec.program_bytes)
         .map_err(BpfmanError::BpfLoadError)?;
 
     let mut loaded_programs = Vec::new();
 
-    for (program_type, fn_name) in &spec.programs {
+    for (program_type, fn_name) in &spec.programs_by_type {
         match load_program_into_kernel(program_type, fn_name, &mut program_bytecode, spec) {
             Ok(loaded) => loaded_programs.push(loaded),
             Err(err) => {
@@ -568,7 +568,11 @@ pub(crate) fn unload_all(programs: &[LoadedProgram]) -> Vec<UnloadError> {
 
 #[derive(Debug, Builder)]
 #[builder(pattern = "mutable", build_fn(name = "build_partial"))]
-pub struct LoadSpec2 {
+pub struct LoadSpec {
+    #[builder(setter(into))]
+    bytecode_source: Location,
+
+    #[allow(dead_code)]          // TODO(frobware) - why?
     #[builder(setter(into))]
     function_names: Option<Vec<String>>,
 
@@ -584,8 +588,9 @@ pub struct LoadSpec2 {
     #[builder(setter(into))]
     program_bytes: Vec<u8>,
 
+    #[allow(dead_code)]
     #[builder(setter(into), default)]
-    raw_programs: Vec<(String, Vec<String>)>,
+    programs: Vec<(String, Vec<String>)>,
 
     #[builder(setter(skip), default = "String::from(\"{}\")")]
     global_data_json: String,
@@ -597,8 +602,8 @@ pub struct LoadSpec2 {
     programs_by_type: Vec<(ProgramType, String)>,
 }
 
-impl LoadSpec2Builder {
-    pub fn build(&mut self) -> Result<LoadSpec2, String> {
+impl LoadSpecBuilder {
+    pub fn build(&mut self) -> Result<LoadSpec, String> {
         let mut spec = self.build_partial().map_err(|e| e.to_string())?;
 
         let global_data_map =
@@ -612,7 +617,7 @@ impl LoadSpec2Builder {
 
         let mut validated_programs = Vec::new();
 
-        for (program_type_str, parts) in self.raw_programs.as_ref().unwrap_or(&vec![]) {
+        for (program_type_str, parts) in self.programs.as_ref().unwrap_or(&vec![]) {
             let name = parts
                 .first()
                 .ok_or_else(|| format!("Missing program name for {}", program_type_str))?;
@@ -656,17 +661,17 @@ mod tests {
         // Importing to test the builder as an external client would
         // use it. The alternative would be to use integration tests
         // to simulate the full end-to-end flow.
-        use crate::program_loader::LoadSpec2Builder;
+        use crate::program_loader::LoadSpecBuilder;
 
         #[test]
         fn test_build_fails_with_no_fields() {
-            let result = LoadSpec2Builder::default().build();
+            let result = LoadSpecBuilder::default().build();
             assert!(result.is_err());
         }
 
         #[test]
         fn test_build_global_data_serialises_to_json() {
-            let result = LoadSpec2Builder::default()
+            let result = LoadSpecBuilder::default()
                 .function_names(vec!["main".into()])
                 .program_bytes(vec![0xde, 0xad])
                 .global_data(vec![
@@ -685,7 +690,7 @@ mod tests {
 
         #[test]
         fn test_build_metadata_serialises_to_json() {
-            let result = LoadSpec2Builder::default()
+            let result = LoadSpecBuilder::default()
                 .function_names(vec!["main".into()])
                 .program_bytes(vec![0xde, 0xad])
                 .metadata(vec![
@@ -704,7 +709,7 @@ mod tests {
 
         #[test]
         fn test_build_valid_program_types() {
-            let result = LoadSpec2Builder::default()
+            let result = LoadSpecBuilder::default()
                 .function_names(vec!["main".into()])
                 .program_bytes(vec![0xde, 0xad])
                 .raw_programs(vec![
@@ -719,12 +724,12 @@ mod tests {
             );
             let spec = result.unwrap();
 
-            assert_eq!(spec.raw_programs.len(), 2);
+            assert_eq!(spec.programs.len(), 2);
         }
 
         #[test]
         fn test_build_invalid_program_types() {
-            let result = LoadSpec2Builder::default()
+            let result = LoadSpecBuilder::default()
                 .function_names(Some(vec!["main".into()]))
                 .program_bytes(vec![0xde, 0xad])
                 .raw_programs(vec![("invalid_type".into(), vec!["program1".into()])])
@@ -738,7 +743,7 @@ mod tests {
 
         #[test]
         fn test_build_missing_fentry_function_name() {
-            let result = LoadSpec2Builder::default()
+            let result = LoadSpecBuilder::default()
                 .function_names(Some(vec!["main".into()]))
                 .program_bytes(vec![0xde, 0xad])
                 .raw_programs(vec![("fentry".into(), vec!["program2".into()])])

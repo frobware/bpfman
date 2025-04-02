@@ -9,7 +9,7 @@ use crate::ProgramType;
 
 #[derive(Debug, Builder)]
 #[builder(pattern = "mutable", build_fn(name = "build_partial"))]
-pub struct LoadSpec2 {
+pub struct LoadSpec {
     #[builder(setter(into))]
     function_names: Option<Vec<String>>,
 
@@ -38,8 +38,8 @@ pub struct LoadSpec2 {
     programs_by_type: Vec<(ProgramType, String)>,
 }
 
-impl LoadSpec2Builder {
-    pub fn build(&mut self) -> Result<LoadSpec2, String> {
+impl LoadSpecBuilder {
+    pub fn build(&mut self) -> Result<LoadSpec, String> {
         let mut spec = self.build_partial().map_err(|e| e.to_string())?;
 
         let global_data_map = Self::global_data_to_map(spec.global_data.as_deref().unwrap_or_default());
@@ -94,17 +94,17 @@ impl LoadSpec2Builder {
 mod tests {
     //use super::*;
     // Use the following import to test like a client would.
-    use crate::load_spec::LoadSpec2Builder;
+    use crate::load_spec::LoadSpecBuilder;
 
     #[test]
     fn test_build_fails_with_no_fields() {
-        let result = LoadSpec2Builder::default().build();
+        let result = LoadSpecBuilder::default().build();
         assert!(result.is_err());
     }
 
     #[test]
     fn test_build_global_data_serialises_to_json() {
-        let result = LoadSpec2Builder::default()
+        let result = LoadSpecBuilder::default()
             .function_names(vec!["main".into()])
             .program_bytes(vec![0xde, 0xad])
             .global_data(vec![
@@ -123,7 +123,7 @@ mod tests {
 
     #[test]
     fn test_build_metadata_serialises_to_json() {
-        let result = LoadSpec2Builder::default()
+        let result = LoadSpecBuilder::default()
             .function_names(vec!["main".into()])
             .program_bytes(vec![0xde, 0xad])
             .metadata(vec![
@@ -142,7 +142,7 @@ mod tests {
 
     #[test]
     fn test_build_valid_program_types() {
-        let result = LoadSpec2Builder::default()
+        let result = LoadSpecBuilder::default()
             .function_names(vec!["main".into()])
             .program_bytes(vec![0xde, 0xad])
             .raw_programs(vec![
@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_build_invalid_program_types() {
-        let result = LoadSpec2Builder::default()
+        let result = LoadSpecBuilder::default()
             .function_names(Some(vec!["main".into()]))
             .program_bytes(vec![0xde, 0xad])
             .raw_programs(vec![
@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_build_missing_fentry_function_name() {
-        let result = LoadSpec2Builder::default()
+        let result = LoadSpecBuilder::default()
             .function_names(Some(vec!["main".into()]))
             .program_bytes(vec![0xde, 0xad])
             .raw_programs(vec![
