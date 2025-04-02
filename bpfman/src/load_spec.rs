@@ -40,12 +40,12 @@ impl LoadSpec2Builder {
         // Convert global_data → global_data_json
         let global_data_map = Self::global_data_to_map(spec.global_data.as_deref().unwrap_or(&[]));
         spec.global_data_json = serde_json::to_string(&global_data_map)
-            .map_err(|e| format!("Failed to serialize global data: {}", e))?;
+            .map_err(|e| format!("Failed to serialize global data to JSON: {}", e))?;
 
         // Convert metadata → metadata_json
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or(&[]));
         spec.metadata_json = serde_json::to_string(&metadata_map)
-            .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
+            .map_err(|e| format!("Failed to serialize metadata to JSON: {}", e))?;
 
         Ok(spec)
     }
@@ -61,9 +61,9 @@ impl LoadSpec2Builder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    //use super::*;
     // Use the following import to test like a client would.
-    //use crate::load_spec::LoadSpec2Builder;
+    use crate::load_spec::LoadSpec2Builder;
 
     #[test]
     fn test_build_fails_with_no_fields() {
