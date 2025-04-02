@@ -42,11 +42,11 @@ impl LoadSpec2Builder {
     pub fn build(&mut self) -> Result<LoadSpec2, String> {
         let mut spec = self.build_partial().map_err(|e| e.to_string())?;
 
-        let global_data_map = Self::global_data_to_map(spec.global_data.as_deref().unwrap_or(&[]));
+        let global_data_map = Self::global_data_to_map(spec.global_data.as_deref().unwrap_or_default());
         spec.global_data_json = serde_json::to_string(&global_data_map)
             .map_err(|e| format!("Failed to serialise global data to JSON: {}", e))?;
 
-        let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or(&[]));
+        let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or_default());
         spec.metadata_json = serde_json::to_string(&metadata_map)
             .map_err(|e| format!("Failed to serialise metadata to JSON: {}", e))?;
 
