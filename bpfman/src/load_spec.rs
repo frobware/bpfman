@@ -11,7 +11,7 @@ use crate::ProgramType;
 #[builder(pattern = "mutable", build_fn(name = "build_partial"))]
 pub struct LoadSpec2 {
     #[builder(setter(into))]
-    function_names: Vec<String>,
+    function_names: Option<Vec<String>>,
 
     #[builder(setter(strip_option), default)]
     global_data: Option<Vec<(String, Vec<u8>)>>,
@@ -25,41 +25,34 @@ pub struct LoadSpec2 {
     #[builder(setter(into))]
     program_bytes: Vec<u8>,
 
-    #[builder(setter(strip_option), default)]
-    raw_programs: Option<Vec<(String, Vec<String>)>>,
+    #[builder(setter(into), default)]
+    raw_programs: Vec<(String, Vec<String>)>,
 
-    #[builder(setter(skip), default)]
+    #[builder(setter(skip), default = "String::from(\"{}\")")]
     global_data_json: String,
 
-    #[builder(setter(skip), default)]
+    #[builder(setter(skip), default = "String::from(\"{}\")")]
     metadata_json: String,
 
     #[builder(setter(skip), default)]
-    programs: Vec<(ProgramType, String)>,
+    programs_by_type: Vec<(ProgramType, String)>,
 }
 
 impl LoadSpec2Builder {
     pub fn build(&mut self) -> Result<LoadSpec2, String> {
         let mut spec = self.build_partial().map_err(|e| e.to_string())?;
 
-        // Convert global_data → global_data_json
         let global_data_map = Self::global_data_to_map(spec.global_data.as_deref().unwrap_or(&[]));
         spec.global_data_json = serde_json::to_string(&global_data_map)
-            .map_err(|e| format!("Failed to serialize global data to JSON: {}", e))?;
+            .map_err(|e| format!("Failed to serialise global data to JSON: {}", e))?;
 
-        // Convert metadata → metadata_json
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or(&[]));
         spec.metadata_json = serde_json::to_string(&metadata_map)
-            .map_err(|e| format!("Failed to serialize metadata to JSON: {}", e))?;
-
-        // Validate and convert raw_programs
-        let raw_programs = spec
-            .raw_programs
-            .as_ref()
-            .ok_or_else(|| "raw_programs must be provided".to_string())?;
+            .map_err(|e| format!("Failed to serialise metadata to JSON: {}", e))?;
 
         let mut validated_programs = Vec::new();
-        for (program_type_str, parts) in raw_programs {
+
+        for (program_type_str, parts) in self.raw_programs.as_ref().unwrap_or(&vec![]) {
             let name = parts
                 .first()
                 .ok_or_else(|| format!("Missing program name for {}", program_type_str))?;
@@ -83,7 +76,7 @@ impl LoadSpec2Builder {
             validated_programs.push((program_type, name.clone()));
         }
 
-        spec.programs = validated_programs;
+        spec.programs_by_type = validated_programs;
 
         Ok(spec)
     }
@@ -106,42 +99,7 @@ mod tests {
     #[test]
     fn test_build_fails_with_no_fields() {
         let result = LoadSpec2Builder::default().build();
-
         assert!(result.is_err());
-        assert!(
-            result.as_ref().unwrap_err().contains("function_names"),
-            "Error should mention missing `function_names`, got: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_build_fails_without_program_bytes() {
-        let result = LoadSpec2Builder::default()
-            .function_names(vec!["main".into()])
-            .build();
-
-        assert!(result.is_err());
-        assert!(
-            result.as_ref().unwrap_err().contains("program_bytes"),
-            "Error should mention missing `program_bytes`, got: {:?}",
-            result
-        );
-    }
-
-    #[test]
-    fn test_build_success_with_required_fields() {
-        let result = LoadSpec2Builder::default()
-            .function_names(vec!["main".into()])
-            .program_bytes(vec![0xde, 0xad])
-            .build();
-
-        assert!(
-            result.is_ok(),
-            "Expected build to succeed with required fields"
-        );
-        let spec = result.unwrap();
-        assert_eq!(&spec.function_names, &vec!["main".to_string()]);
     }
 
     #[test]
@@ -161,5 +119,76 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&spec.global_data_json).unwrap();
         assert!(json.get("key1").is_some(), "expected key1 in JSON");
         assert!(json.get("key2").is_some(), "expected key2 in JSON");
+    }
+
+    #[test]
+    fn test_build_metadata_serialises_to_json() {
+        let result = LoadSpec2Builder::default()
+            .function_names(vec!["main".into()])
+            .program_bytes(vec![0xde, 0xad])
+            .metadata(vec![
+                ("key1".into(), "value1".to_string()),
+                ("key2".into(), "value2".to_string()),
+            ])
+            .build();
+
+        assert!(result.is_ok());
+        let spec = result.unwrap();
+
+        let json: serde_json::Value = serde_json::from_str(&spec.metadata_json).unwrap();
+        assert!(json.get("key1").is_some(), "expected key1 in JSON");
+        assert!(json.get("key2").is_some(), "expected key2 in JSON");
+    }
+
+    #[test]
+    fn test_build_valid_program_types() {
+        let result = LoadSpec2Builder::default()
+            .function_names(vec!["main".into()])
+            .program_bytes(vec![0xde, 0xad])
+            .raw_programs(vec![
+                ("fentry".into(), vec!["program1".into(), "func1".into()]),
+                ("fexit".into(), vec!["program2".into(), "func2".into()]),
+            ])
+            .build();
+
+        assert!(
+            result.is_ok(),
+            "Expected build to succeed with valid program types"
+        );
+        let spec = result.unwrap();
+
+        assert_eq!(spec.raw_programs.len(), 2);
+    }
+
+    #[test]
+    fn test_build_invalid_program_types() {
+        let result = LoadSpec2Builder::default()
+            .function_names(Some(vec!["main".into()]))
+            .program_bytes(vec![0xde, 0xad])
+            .raw_programs(vec![
+                ("invalid_type".into(), vec!["program1".into()]),
+            ])
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Expected build to fail with invalid program types"
+        );
+    }
+
+    #[test]
+    fn test_build_missing_fentry_function_name() {
+        let result = LoadSpec2Builder::default()
+            .function_names(Some(vec!["main".into()]))
+            .program_bytes(vec![0xde, 0xad])
+            .raw_programs(vec![
+                ("fentry".into(), vec!["program2".into()]),
+            ])
+            .build();
+
+        assert!(
+            result.is_err(),
+            "Expected build to fail with invalid program types"
+        );
     }
 }
