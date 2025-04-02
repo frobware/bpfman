@@ -310,13 +310,16 @@ fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
         config.signing().allow_unsigned,
     )?;
 
+    let source = Location::File(args.path.clone());
+
     let (program_bytes, function_names) = get_program_bytes_and_validate(
-        &Location::File(args.path.clone()),
+        &source,
         &mut image_manager,
         &args.programs,
     )?;
 
     let load_spec = LoadSpecBuilder::default()
+        .bytecode_source(source)
         .function_names(function_names)
         .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
         .map_owner_id(args.map_owner_id)
@@ -337,13 +340,16 @@ fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
         config.signing().allow_unsigned,
     )?;
 
+    let source = Location::Image((&args.pull_args).try_into()?);
+
     let (program_bytes, function_names) = get_program_bytes_and_validate(
-        &Location::Image((&args.pull_args).try_into()?),
+        &source,
         &mut image_manager,
         &args.programs,
     )?;
 
     let load_spec = LoadSpecBuilder::default()
+        .bytecode_source(source)
         .function_names(function_names)
         .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
         .map_owner_id(args.map_owner_id)
