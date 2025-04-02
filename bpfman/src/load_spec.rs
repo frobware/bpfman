@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use derive_builder::Builder;
 use serde_json;
 
+use crate::ProgramType;
+
 #[derive(Debug, Builder)]
 #[builder(pattern = "mutable", build_fn(name = "build_partial"))]
 pub struct LoadSpec2 {
@@ -31,6 +33,9 @@ pub struct LoadSpec2 {
 
     #[builder(setter(skip), default)]
     metadata_json: String,
+
+    #[builder(setter(skip), default)]
+    programs: Vec<(ProgramType, String)>,
 }
 
 impl LoadSpec2Builder {
@@ -46,6 +51,39 @@ impl LoadSpec2Builder {
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or(&[]));
         spec.metadata_json = serde_json::to_string(&metadata_map)
             .map_err(|e| format!("Failed to serialize metadata to JSON: {}", e))?;
+
+        // Validate and convert raw_programs
+        let raw_programs = spec
+            .raw_programs
+            .as_ref()
+            .ok_or_else(|| "raw_programs must be provided".to_string())?;
+
+        let mut validated_programs = Vec::new();
+        for (program_type_str, parts) in raw_programs {
+            let name = parts
+                .first()
+                .ok_or_else(|| format!("Missing program name for {}", program_type_str))?;
+
+            if matches!(program_type_str.as_str(), "fentry" | "fexit") && parts.len() != 2 {
+                return Err(format!(
+                    "Missing function name for {} program",
+                    program_type_str
+                ));
+            }
+
+            let fn_name = if matches!(program_type_str.as_str(), "fentry" | "fexit") {
+                parts.get(1).map(|s| s.as_str())
+            } else {
+                None
+            };
+
+            let program_type = ProgramType::from_str(program_type_str, fn_name)
+                .map_err(|e| format!("Invalid program type: {}", e))?;
+
+            validated_programs.push((program_type, name.clone()));
+        }
+
+        spec.programs = validated_programs;
 
         Ok(spec)
     }
