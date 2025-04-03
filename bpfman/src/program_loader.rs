@@ -34,6 +34,7 @@ use serde_json;
 use crate::{
     BpfmanError, ProgramType, calc_map_pin_path, create_map_pin_path,
     directories::*,
+    init_image_manager,
     k32::KernelU32,
     models::{BpfMap, BpfProgram},
     types::Location,
@@ -51,28 +52,6 @@ use crate::{
 /// It uses a **builder pattern** to construct instances of `LoadSpec`,
 /// allowing for flexible and incremental configuration of the struct's
 /// fields.
-///
-/// # Fields
-/// - **`bytecode_source`** (`Location`): The source of the eBPF program
-///   bytecode, either a file path or an image.
-/// - **`function_names`** (`Option<Vec<String>>`): A list of function names
-///   associated with the program. This is optional, and defaults to `None`.
-/// - **`global_data`** (`Option<Vec<(String, Vec<u8>)>>`): Optional global
-///   data for the program, where each entry is a key-value pair. Defaults
-///   to `None`.
-/// - **`metadata`** (`Option<Vec<(String, String)>>`): Optional metadata
-///   key-value pairs for the program. Defaults to `None`.
-/// - **`map_owner_id`** (`Option<u32>`): Optional ID for the map owner.
-///   Defaults to `None`.
-/// - **`program_bytes`** (`Vec<u8>`): The raw bytecode of the eBPF program.
-///   This field is required.
-/// - **`programs`** (`Vec<(String, Vec<String>)>`): A list of raw program
-///   definitions and associated function names. Defaults to an empty
-///   vector.
-///
-/// # Builder API
-/// The builder pattern allows you to incrementally configure the `LoadSpec`
-/// struct:
 ///
 /// ```rust
 /// use bpfman::program_loader::LoadSpecBuilder;
@@ -110,7 +89,7 @@ pub struct LoadSpec {
     map_owner_id: Option<u32>,
 
     #[builder(setter(into))]
-    program_bytes: Vec<u8>,
+    program_bytes: Option<Vec<u8>>,
 
     #[allow(dead_code)] // Not directly accessed, only used in build().
     #[builder(setter(into), default)]
@@ -317,7 +296,8 @@ fn build_bpfprogram_from_aya_program(
         password,
         map_pin_path: map_pin_path_str.to_string(),
         map_owner_id: spec.map_owner_id.map(KernelU32::from),
-        program_bytes: spec.program_bytes.to_vec(),
+        program_bytes: vec![],
+        // program_bytes: spec.program_bytes.to_vec(),
         metadata: spec.metadata_json.clone(),
         global_data: spec.global_data_json.clone(),
         retprobe: program_type.is_retprobe(),
@@ -534,11 +514,17 @@ fn load_program_into_kernel(
 /// - A program definition is invalid (e.g., missing function name).
 /// - An attempt to load a program into the kernel fails.
 pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, BpfmanError> {
+    let mut image_manager = init_image_manager()?;
+
+    let (program_bytes, _function_names) = spec
+        .bytecode_source
+        .get_program_bytes_no_sled(&mut image_manager)?;
+
     let mut bytecode_loader = aya::EbpfLoader::new();
     bytecode_loader.allow_unsupported_maps();
 
     let mut program_bytecode = bytecode_loader
-        .load(&spec.program_bytes)
+        .load(&program_bytes)
         .map_err(BpfmanError::BpfLoadError)?;
 
     let mut loaded_programs = Vec::new();
@@ -547,7 +533,6 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
         match load_program_into_kernel(program_type, fn_name, &mut program_bytecode, spec) {
             Ok(loaded) => loaded_programs.push(loaded),
             Err(err) => {
-                // Unload everything we managed to load
                 let unload_failures = unload_all(&loaded_programs);
 
                 return Err(BpfmanError::LoadFailed {

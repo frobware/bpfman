@@ -30,6 +30,7 @@ use crate::{
     errors::{BpfmanError, ParseError},
     multiprog::{DispatcherId, DispatcherInfo},
     oci_utils::image_manager::ImageManager,
+    setup,
     utils::{
         bool_to_bytes, bytes_to_bool, bytes_to_i32, bytes_to_string, bytes_to_u32, bytes_to_u64,
         bytes_to_usize, get_ifindex, nsid, sled_get, sled_get_option, sled_insert,
@@ -1407,6 +1408,18 @@ impl Location {
                 Ok((bytecode, bpf_function_names))
             }
         }
+    }
+
+    // TODO(frobware): this function and the preceding need to become
+    // one; when we drop SLED we can drop the requirement to need a
+    // root_db parameter. This only exists because in the new SQLite
+    // code paths we don't have (or want) a SLED DB handle.
+    pub fn get_program_bytes_no_sled(
+        &self,
+        image_manager: &mut ImageManager,
+    ) -> Result<(Vec<u8>, Vec<String>), BpfmanError> {
+        let (_config, root_db) = setup()?;
+        self.get_program_bytes(&root_db, image_manager)
     }
 }
 
