@@ -185,8 +185,14 @@ impl LoadArgs<'_> {
 
     fn get_global_data(&self) -> Option<Vec<(String, Vec<u8>)>> {
         match self {
-            LoadArgs::File(file_args) => file_args.global.as_deref().map(|g| Self::to_key_value_pairs(g)),
-            LoadArgs::Image(image_args) => image_args.global.as_deref().map(|g| Self::to_key_value_pairs(g)),
+            LoadArgs::File(file_args) => file_args
+                .global
+                .as_deref()
+                .map(|g| Self::to_key_value_pairs(g)),
+            LoadArgs::Image(image_args) => image_args
+                .global
+                .as_deref()
+                .map(|g| Self::to_key_value_pairs(g)),
         }
     }
 
@@ -289,11 +295,8 @@ fn sqlite_execute_load_common(source: Location, args: LoadArgs) -> anyhow::Resul
         config.signing().allow_unsigned,
     )?;
 
-    let (program_bytes, function_names) = get_program_bytes_and_validate(
-        &source,
-        &mut image_manager,
-        args.get_programs(),
-    )?;
+    let (program_bytes, function_names) =
+        get_program_bytes_and_validate(&source, &mut image_manager, args.get_programs())?;
 
     let load_spec = LoadSpecBuilder::default()
         .bytecode_source(source)

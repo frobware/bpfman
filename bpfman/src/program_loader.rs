@@ -699,5 +699,20 @@ mod tests {
                 "Expected build to fail with invalid program types"
             );
         }
+
+        #[test]
+        fn test_build_missing_fexit_function_name() {
+            let result = LoadSpecBuilder::default()
+                .bytecode_source(Location::File("path/to/bytecode".into()))
+                .function_names(Some(vec!["main".into()]))
+                .program_bytes(vec![0xde, 0xad])
+                .programs(vec![("fexit".into(), vec!["program2".into()])])
+                .build();
+
+            assert!(
+                result.is_err(),
+                "Expected build to fail with invalid program types"
+            );
+        }
     }
 }
