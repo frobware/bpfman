@@ -96,7 +96,7 @@ pub struct LoadSpec {
     #[builder(setter(into))]
     bytecode_source: Location,
 
-    #[allow(dead_code)] // TODO(frobware) - why?
+    #[allow(dead_code)] // Not directly accessed, only used in build().
     #[builder(setter(into))]
     function_names: Option<Vec<String>>,
 
@@ -112,7 +112,7 @@ pub struct LoadSpec {
     #[builder(setter(into))]
     program_bytes: Vec<u8>,
 
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Not directly accessed.
     #[builder(setter(into), default)]
     programs: Vec<(String, Vec<String>)>,
 
