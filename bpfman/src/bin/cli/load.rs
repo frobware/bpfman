@@ -248,7 +248,97 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
     }
 }
 
-fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
+// fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
+//     let (config, mut conn) = setup_with_sqlite()?;
+
+//     let mut image_manager = ImageManager::new(
+//         config.signing().verify_enabled,
+//         config.signing().allow_unsigned,
+//     )?;
+
+//     let source = Location::File(args.path.clone());
+
+//     let (program_bytes, function_names) =
+//         get_program_bytes_and_validate(&source, &mut image_manager, &args.programs)?;
+
+//     let load_spec = LoadSpecBuilder::default()
+//         .bytecode_source(source)
+//         .function_names(function_names)
+//         .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
+//         .map_owner_id(args.map_owner_id)
+//         .metadata(args.metadata.clone().unwrap_or_else(Vec::new))
+//         .program_bytes(program_bytes)
+//         .programs(args.programs.clone())
+//         .build()
+//         .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
+
+//     let result = load_ebpf_programs(&mut conn, &load_spec);
+//     handle_load_result(result)
+// }
+
+// fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
+//     let (config, mut conn) = setup_with_sqlite()?;
+//     let mut image_manager = ImageManager::new(
+//         config.signing().verify_enabled,
+//         config.signing().allow_unsigned,
+//     )?;
+
+//     let source = Location::Image((&args.pull_args).try_into()?);
+
+//     let (program_bytes, function_names) =
+//         get_program_bytes_and_validate(&source, &mut image_manager, &args.programs)?;
+
+//     let load_spec = LoadSpecBuilder::default()
+//         .bytecode_source(source)
+//         .function_names(function_names)
+//         .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
+//         .map_owner_id(args.map_owner_id)
+//         .metadata(args.metadata.clone().unwrap_or_else(Vec::new))
+//         .program_bytes(program_bytes)
+//         .programs(args.programs.clone())
+//         .build()
+//         .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
+
+//     let result = load_ebpf_programs(&mut conn, &load_spec);
+//     handle_load_result(result)
+// }
+
+enum LoadArgs<'a> {
+    File(&'a LoadFileArgs),
+    Image(&'a LoadImageArgs),
+}
+
+impl<'a> LoadArgs<'a> {
+    fn get_programs(&self) -> &[(String, Vec<String>)] {
+        match self {
+            LoadArgs::File(file_args) => &file_args.programs,
+            LoadArgs::Image(image_args) => &image_args.programs,
+        }
+    }
+
+    fn get_global_data(&self) -> Option<Vec<(String, Vec<u8>)>> {
+        match self {
+            LoadArgs::File(file_args) => file_args.global.as_deref().map(parse_global2),
+            LoadArgs::Image(image_args) => image_args.global.as_deref().map(parse_global2),
+        }
+    }
+
+    fn get_metadata(&self) -> Option<Vec<(String, String)>> {
+        match self {
+            LoadArgs::File(file_args) => file_args.metadata.clone(),
+            LoadArgs::Image(image_args) => image_args.metadata.clone(),
+        }
+    }
+
+    fn get_map_owner_id(&self) -> Option<u32> {
+        match self {
+            LoadArgs::File(file_args) => file_args.map_owner_id,
+            LoadArgs::Image(image_args) => image_args.map_owner_id,
+        }
+    }
+}
+
+fn sqlite_execute_load_common(source: Location, args: LoadArgs) -> anyhow::Result<()> {
     let (config, mut conn) = setup_with_sqlite()?;
 
     let mut image_manager = ImageManager::new(
@@ -256,19 +346,20 @@ fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
         config.signing().allow_unsigned,
     )?;
 
-    let source = Location::File(args.path.clone());
-
-    let (program_bytes, function_names) =
-        get_program_bytes_and_validate(&source, &mut image_manager, &args.programs)?;
+    let (program_bytes, function_names) = get_program_bytes_and_validate(
+        &source,
+        &mut image_manager,
+        &args.get_programs(),
+    )?;
 
     let load_spec = LoadSpecBuilder::default()
         .bytecode_source(source)
         .function_names(function_names)
-        .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
-        .map_owner_id(args.map_owner_id)
-        .metadata(args.metadata.clone().unwrap_or_else(Vec::new))
+        .global_data(args.get_global_data().unwrap_or_default())  // Using the enum method
+        .map_owner_id(args.get_map_owner_id())
+        .metadata(args.get_metadata().unwrap_or_else(Vec::new))  // Using the enum method
         .program_bytes(program_bytes)
-        .programs(args.programs.clone())
+        .programs(args.get_programs().to_vec())
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
 
@@ -276,29 +367,12 @@ fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
     handle_load_result(result)
 }
 
+fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
+    let source = Location::File(args.path.clone());
+    sqlite_execute_load_common(source, LoadArgs::File(args))
+}
+
 fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
-    let (config, mut conn) = setup_with_sqlite()?;
-    let mut image_manager = ImageManager::new(
-        config.signing().verify_enabled,
-        config.signing().allow_unsigned,
-    )?;
-
     let source = Location::Image((&args.pull_args).try_into()?);
-
-    let (program_bytes, function_names) =
-        get_program_bytes_and_validate(&source, &mut image_manager, &args.programs)?;
-
-    let load_spec = LoadSpecBuilder::default()
-        .bytecode_source(source)
-        .function_names(function_names)
-        .global_data(parse_global2(args.global.as_deref().unwrap_or(&[])))
-        .map_owner_id(args.map_owner_id)
-        .metadata(args.metadata.clone().unwrap_or_else(Vec::new))
-        .program_bytes(program_bytes)
-        .programs(args.programs.clone())
-        .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
-
-    let result = load_ebpf_programs(&mut conn, &load_spec);
-    handle_load_result(result)
+    sqlite_execute_load_common(source, LoadArgs::Image(args))
 }
