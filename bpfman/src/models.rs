@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of bpfman
 
-use anyhow::{Context, anyhow, bail};
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
-use log::info;
 
-use crate::{
-    k32::KernelU32, oci_utils::image_manager::ImageManager, setup, types::Location,
-    uintblob::U64Blob,
-};
+use crate::{k32::KernelU32, uintblob::U64Blob};
 
 // Diesel Derive Macros Explanation:
 //
@@ -254,47 +249,6 @@ impl BpfProgramMap {
 
         Ok(())
     }
-}
-
-pub fn get_program_bytes_and_validate(
-    location: &Location,
-    image_manager: &mut ImageManager,
-    requested_programs: &[(String, Vec<String>)],
-) -> anyhow::Result<(Vec<u8>, Vec<String>)> {
-    // XXX(frobware) - We need to refactor get_program_bytes() to not
-    // require a SLED db. For the moment just continue to pass a SLED
-    // DB handle.
-    let (_config, root_db) = setup()?;
-
-    let (program_bytes, function_names) = location
-        .get_program_bytes(&root_db, image_manager)
-        .context("Failed to retrieve eBPF program bytes")?;
-
-    if let Location::Image(image) = location {
-        info!(
-            "Loading program bytecode from container image: {}",
-            image.get_url()
-        );
-
-        for (prog_type, parts) in requested_programs {
-            let name = parts
-                .first()
-                .ok_or_else(|| anyhow!("Missing program name for type '{}'", prog_type))?;
-
-            if !function_names.contains(name) {
-                bail!(
-                    "Function '{}' not found in eBPF Image '{}'. Available: {:?}",
-                    name,
-                    image.get_url(),
-                    function_names
-                );
-            }
-        }
-    } else if let Location::File(path) = location {
-        info!("Loading program bytecode from file: {}", path);
-    }
-
-    Ok((program_bytes, function_names))
 }
 
 #[cfg(test)]

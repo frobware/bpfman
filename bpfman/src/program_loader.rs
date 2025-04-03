@@ -61,7 +61,6 @@ use crate::{
 ///     .bytecode_source(Location::File("path/to/program.o".to_string()))
 ///     .function_names(vec!["main".into()])
 ///     .global_data(vec![("key1".to_string(), b"value1".to_vec())])
-///     .program_bytes(vec![0xde, 0xad, 0xbe, 0xef])
 ///     .build();
 /// ```
 ///
@@ -88,9 +87,8 @@ pub struct LoadSpec {
     #[builder(default)]
     map_owner_id: Option<u32>,
 
-    #[builder(setter(into))]
-    program_bytes: Option<Vec<u8>>,
-
+    // #[builder(setter(into))]
+    // program_bytes: Option<Vec<u8>>,
     #[allow(dead_code)] // Not directly accessed, only used in build().
     #[builder(setter(into), default)]
     programs: Vec<(String, Vec<String>)>,
@@ -599,7 +597,7 @@ mod tests {
             let result = LoadSpecBuilder::default()
                 .bytecode_source(Location::File("path/to/bytecode".into()))
                 .function_names(vec!["main".into()])
-                .program_bytes(vec![0xde, 0xad])
+                //.program_bytes(vec![0xde, 0xad])
                 .global_data(vec![
                     ("key1".into(), b"value1".to_vec()),
                     ("key2".into(), b"value2".to_vec()),
@@ -619,7 +617,7 @@ mod tests {
             let result = LoadSpecBuilder::default()
                 .bytecode_source(Location::File("path/to/bytecode".into()))
                 .function_names(vec!["main".into()])
-                .program_bytes(vec![0xde, 0xad])
+                //.program_bytes(vec![0xde, 0xad])
                 .metadata(vec![
                     ("key1".into(), "value1".to_string()),
                     ("key2".into(), "value2".to_string()),
@@ -639,7 +637,7 @@ mod tests {
             let result = LoadSpecBuilder::default()
                 .bytecode_source(Location::File("path/to/bytecode".into()))
                 .function_names(vec!["main".into()])
-                .program_bytes(vec![0xde, 0xad])
+                //.program_bytes(vec![0xde, 0xad])
                 .programs(vec![
                     ("fentry".into(), vec!["program1".into(), "func1".into()]),
                     ("fexit".into(), vec!["program2".into(), "func2".into()]),
@@ -660,7 +658,7 @@ mod tests {
             let result = LoadSpecBuilder::default()
                 .bytecode_source(Location::File("path/to/bytecode".into()))
                 .function_names(Some(vec!["main".into()]))
-                .program_bytes(vec![0xde, 0xad])
+                //.program_bytes(vec![0xde, 0xad])
                 .programs(vec![("invalid_type".into(), vec!["program1".into()])])
                 .build();
 
@@ -675,7 +673,7 @@ mod tests {
             let result = LoadSpecBuilder::default()
                 .bytecode_source(Location::File("path/to/bytecode".into()))
                 .function_names(Some(vec!["main".into()]))
-                .program_bytes(vec![0xde, 0xad])
+                //.program_bytes(vec![0xde, 0xad])
                 .programs(vec![("fentry".into(), vec!["program2".into()])])
                 .build();
 
@@ -690,7 +688,7 @@ mod tests {
             let result = LoadSpecBuilder::default()
                 .bytecode_source(Location::File("path/to/bytecode".into()))
                 .function_names(Some(vec!["main".into()]))
-                .program_bytes(vec![0xde, 0xad])
+                //.program_bytes(vec![0xde, 0xad])
                 .programs(vec![("fexit".into(), vec!["program2".into()])])
                 .build();
 

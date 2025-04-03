@@ -8,8 +8,6 @@ use bpfman::{
     add_programs,
     errors::BpfmanError,
     load_ebpf_programs,
-    models::get_program_bytes_and_validate,
-    oci_utils::image_manager::ImageManager,
     program_loader::{LoadSpecBuilder, LoadedProgram},
     setup, setup_with_sqlite,
     types::{
@@ -256,6 +254,8 @@ impl LoadArgs<'_> {
 fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()> {
     match res {
         Ok(loaded) => {
+            // TODO(frobware) - print this nicely likely the
+            // non-sqlite execute_load_{file,image} do.
             println!("Successfully loaded {} program(s):", loaded.len());
             println!(
                 "{}",
@@ -323,23 +323,13 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
 }
 
 fn sqlite_execute_load_common(source: Location, args: LoadArgs) -> anyhow::Result<()> {
-    let (config, mut conn) = setup_with_sqlite()?;
-
-    let mut image_manager = ImageManager::new(
-        config.signing().verify_enabled,
-        config.signing().allow_unsigned,
-    )?;
-
-    let (program_bytes, function_names) =
-        get_program_bytes_and_validate(&source, &mut image_manager, args.get_programs())?;
+    let (_config, mut conn) = setup_with_sqlite()?;
 
     let load_spec = LoadSpecBuilder::default()
         .bytecode_source(source)
-        .function_names(function_names)
         .global_data(args.get_global_data().unwrap_or_default())
         .map_owner_id(args.get_map_owner_id())
         .metadata(args.get_metadata().unwrap_or_default())
-        .program_bytes(program_bytes)
         .programs(args.get_programs().to_vec())
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
