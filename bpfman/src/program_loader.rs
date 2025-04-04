@@ -25,7 +25,10 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Result;
-use aya::{Ebpf, maps::Map};
+use aya::{
+    Ebpf,
+    maps::{Map, MapData},
+};
 use chrono::Utc;
 use derive_builder::Builder;
 use serde::Serialize;
@@ -205,51 +208,63 @@ pub struct UnloadError {
     pub error: anyhow::Error,
 }
 
-fn build_bpfmap_from_aya_map(
-    data: &aya::maps::Map,
-    map_name: &str,
-) -> Result<BpfMap, aya::maps::MapError> {
-    let map_info = match data {
-        Map::Array(data)
-        | Map::BloomFilter(data)
-        | Map::CpuMap(data)
-        | Map::DevMap(data)
-        | Map::DevMapHash(data)
-        | Map::HashMap(data)
-        | Map::LpmTrie(data)
-        | Map::LruHashMap(data)
-        | Map::PerCpuArray(data)
-        | Map::PerCpuHashMap(data)
-        | Map::PerCpuLruHashMap(data)
-        | Map::PerfEventArray(data)
-        | Map::ProgramArray(data)
-        | Map::Queue(data)
-        | Map::RingBuf(data)
-        | Map::SockHash(data)
-        | Map::SockMap(data)
-        | Map::Stack(data)
-        | Map::StackTraceMap(data)
-        | Map::XskMap(data) => data.info()?,
-
-        Map::Unsupported(_) => {
-            return Err(aya::maps::MapError::Unsupported {
-                map_type: 0, // XXX(frobware) - is this OK?
-            });
-        }
-    };
-
-    let now = Utc::now();
+fn build_partial_bpfmap_from_obj(data: &MapData, name: &str) -> Result<BpfMap, BpfmanError> {
+    let info = data.info().map_err(BpfmanError::BpfMapInfoError)?;
 
     Ok(BpfMap {
-        id: map_info.id().into(),
-        name: map_name.to_string(),
-        map_type: Some(format!("{:?}", map_info.map_type()?)),
-        key_size: KernelU32::from(map_info.key_size()),
-        value_size: KernelU32::from(map_info.value_size()),
-        max_entries: KernelU32::from(map_info.max_entries()),
-        created_at: now.naive_utc(),
+        id: KernelU32::from(info.id()),
+        name: name.to_string(),
+        map_type: Some(format!(
+            "{:?}",
+            info.map_type().map_err(BpfmanError::BpfMapInfoError)?
+        )),
+        key_size: KernelU32::from(info.key_size()),
+        value_size: KernelU32::from(info.value_size()),
+        max_entries: KernelU32::from(info.max_entries()),
+        created_at: Utc::now().naive_utc(),
         updated_at: None,
     })
+}
+
+fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, BpfmanError> {
+    match data {
+        Map::Array(d)
+        | Map::BloomFilter(d)
+        | Map::CpuMap(d)
+        | Map::DevMap(d)
+        | Map::DevMapHash(d)
+        | Map::HashMap(d)
+        | Map::LpmTrie(d)
+        | Map::LruHashMap(d)
+        | Map::PerCpuArray(d)
+        | Map::PerCpuHashMap(d)
+        | Map::PerCpuLruHashMap(d)
+        | Map::PerfEventArray(d)
+        | Map::ProgramArray(d)
+        | Map::Queue(d)
+        | Map::RingBuf(d)
+        | Map::SockHash(d)
+        | Map::SockMap(d)
+        | Map::Stack(d)
+        | Map::StackTraceMap(d)
+        | Map::XskMap(d) => {
+            let info = d.info().map_err(BpfmanError::BpfMapInfoError)?;
+            Ok(BpfMap {
+                id: info.id().into(),
+                name: map_name.to_string(),
+                map_type: Some(format!(
+                    "{:?}",
+                    info.map_type().map_err(BpfmanError::BpfMapInfoError)?
+                )),
+                key_size: KernelU32::from(info.key_size()),
+                value_size: KernelU32::from(info.value_size()),
+                max_entries: KernelU32::from(info.max_entries()),
+                created_at: Utc::now().naive_utc(),
+                updated_at: None,
+            })
+        }
+        Map::Unsupported(data) => build_partial_bpfmap_from_obj(data, map_name),
+    }
 }
 
 fn build_bpfprogram_from_aya_program(
@@ -290,7 +305,7 @@ fn build_bpfprogram_from_aya_program(
 
     let kernel_loaded_at = prog_info
         .loaded_at()
-        .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339());
+        .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339());
 
     Ok(BpfProgram {
         id: prog_info.id().into(),
@@ -473,7 +488,7 @@ fn load_program_into_kernel(
         map.pin(map_fs_path.clone())
             .map_err(BpfmanError::UnableToPinMap)?;
 
-        maps.push(build_bpfmap_from_aya_map(map, map_name).map_err(BpfmanError::BpfMapInfoError)?);
+        maps.push(build_bpfmap_from_aya_map(map, map_name)?);
     }
 
     let map_pin_path_str = map_pin_path.to_string_lossy().to_string();
