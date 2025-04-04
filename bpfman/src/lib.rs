@@ -2278,9 +2278,7 @@ pub fn load_ebpf_programs(
 ) -> Result<Vec<LoadedProgram>, BpfmanError> {
     let loaded = program_loader::load_from_spec(spec)?;
 
-    use diesel::result::Error as DieselError;
-
-    if let Err(db_err) = conn.immediate_transaction::<_, DieselError, _>(|conn| {
+    if let Err(db_err) = conn.immediate_transaction::<_, diesel::result::Error, _>(|conn| {
         for program in &loaded {
             BpfProgram::insert_record(conn, &program.program)?;
             for map in &program.maps {
@@ -2292,9 +2290,9 @@ pub fn load_ebpf_programs(
     }) {
         let unload_failures = program_loader::unload_all(&loaded);
 
-        return Err(BpfmanError::LoadError {
-            cause: db_err.to_string(),
-            loaded,
+        return Err(BpfmanError::ProgramLoadError {
+            cause: Box::new(db_err),
+            loaded_before_failure: loaded,
             unload_failures,
         });
     }

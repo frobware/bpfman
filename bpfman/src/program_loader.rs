@@ -533,8 +533,8 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
             Err(err) => {
                 let unload_failures = unload_all(&loaded_programs);
 
-                return Err(BpfmanError::LoadFailed {
-                    cause: err.to_string(),
+                return Err(BpfmanError::ProgramLoadError {
+                    cause: Box::new(err),
                     loaded_before_failure: loaded_programs,
                     unload_failures,
                 });

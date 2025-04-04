@@ -264,8 +264,7 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
             );
             Ok(())
         }
-
-        Err(BpfmanError::LoadFailed {
+        Err(BpfmanError::ProgramLoadError {
             cause,
             loaded_before_failure,
             unload_failures,
@@ -289,35 +288,9 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
             );
             Err(anyhow::anyhow!(summary))
         }
-
-        Err(BpfmanError::LoadError {
-            cause,
-            loaded,
-            unload_failures,
-        }) => {
-            eprintln!("DB persistence failed: {cause}");
-            eprintln!(
-                "We had successfully loaded {} programs in the kernel.",
-                loaded.len()
-            );
-            if !unload_failures.is_empty() {
-                eprintln!("Unload also failed for some of them:");
-                for uf in &unload_failures {
-                    eprintln!(" - program_id={}, error={}", uf.program_id, uf.error);
-                }
-            }
-
-            let summary = format!(
-                "DbPersistFailed: {cause}; loaded {} programs; unload_failures={:?}",
-                loaded.len(),
-                unload_failures
-            );
-            Err(anyhow::anyhow!(summary))
-        }
-
         Err(other) => {
             eprintln!("Unhandled error: {other}");
-            Err(anyhow::Error::new(other))
+            Err(anyhow::anyhow!(other))
         }
     }
 }
