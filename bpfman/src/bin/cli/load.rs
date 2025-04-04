@@ -300,6 +300,7 @@ fn sqlite_execute_load_common(source: Location, args: LoadArgs) -> anyhow::Resul
 
     let load_spec = LoadSpecBuilder::default()
         .bytecode_source(source)
+        .function_names(vec![])
         .global_data(args.get_global_data().unwrap_or_default())
         .map_owner_id(args.get_map_owner_id())
         .metadata(args.get_metadata().unwrap_or_default())

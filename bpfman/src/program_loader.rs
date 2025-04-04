@@ -117,6 +117,18 @@ impl LoadSpecBuilder {
         spec.metadata_json = serde_json::to_string(&metadata_map)
             .map_err(|e| format!("Failed to serialise metadata to JSON: {}", e))?;
 
+        // Program types that require function name.
+        // XXX(frobware) - is this correct?
+        let needs_fn_name = [
+            "fentry",
+            "fexit",
+            "kprobe",
+            "kretprobe",
+            "uprobe",
+            "uretprobe",
+            "tracepoint",
+        ];
+
         let mut validated_programs = Vec::new();
 
         for (program_type_str, parts) in self.programs.as_ref().unwrap_or(&vec![]) {
@@ -124,20 +136,19 @@ impl LoadSpecBuilder {
                 .first()
                 .ok_or_else(|| format!("Missing program name for {}", program_type_str))?;
 
-            if matches!(program_type_str.as_str(), "fentry" | "fexit") && parts.len() != 2 {
-                return Err(format!(
-                    "Missing function name for {} program",
-                    program_type_str
-                ));
-            }
-
-            let fn_name = if matches!(program_type_str.as_str(), "fentry" | "fexit") {
-                parts.get(1).map(|s| s.as_str())
+            let fn_name = if needs_fn_name.contains(&program_type_str.as_str()) {
+                if parts.len() != 2 {
+                    return Err(format!(
+                        "Missing function name for {} program '{}'. Expected format: '{}:<program-name>:<fn-name>'",
+                        program_type_str, name, program_type_str
+                    ));
+                }
+                Some(parts[1].as_str())
             } else {
                 None
             };
 
-            let program_type = ProgramType::from_str(program_type_str, fn_name)
+            let program_type = ProgramType::from_type_and_fn_name(program_type_str, fn_name)
                 .map_err(|e| format!("Invalid program type: {}", e))?;
 
             validated_programs.push((program_type, name.clone()));
@@ -172,7 +183,7 @@ impl LoadSpecBuilder {
 /// interpreted in the context of subsequent unload operations.
 #[derive(Debug, Serialize)]
 pub struct LoadedProgram {
-    pub kind: ProgramType,
+    pub kind: ProgramType, // XXX(frobware): do we really need this?
     pub program: BpfProgram,
     pub maps: Vec<BpfMap>,
 }
@@ -350,19 +361,19 @@ fn load_program(
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Tracepoint => {
+        ProgramType::Tracepoint(_) => {
             let prog: &mut aya::programs::TracePoint = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Kprobe | ProgramType::Kretprobe => {
+        ProgramType::Kprobe(_) | ProgramType::Kretprobe(_) => {
             let prog: &mut aya::programs::KProbe = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Uprobe | ProgramType::Uretprobe => {
+        ProgramType::Uprobe(_) | ProgramType::Uretprobe(_) => {
             let prog: &mut aya::programs::UProbe = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
@@ -393,7 +404,8 @@ fn attempt_unload(_lp: &LoadedProgram) -> Result<()> {
     // TODO(frobware).
     // Circle back here when we address the `unload` bpfman command. We
     // may want to go through the public API (i.e., the front door).
-    todo!("Implement unload using sqlite interface");
+    // todo!("Implement unload using sqlite interface");
+    Ok(())
 }
 
 /// Loads an individual eBPF program into the kernel and returns

@@ -2145,35 +2145,42 @@ pub fn establish_sqlite_connection(database_url: &str) -> anyhow::Result<SqliteC
 // we're further along we may be able to drop this and use the
 // existing Program enum.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ProgramType {
     Xdp,
     Tc,
     Tcx,
-    Tracepoint,
-    Kprobe,
-    Kretprobe,
-    Uprobe,
-    Uretprobe,
-    Fentry(String), // function name
-    Fexit(String),  // function name
+    Tracepoint(String), // e.g., "syscalls:sys_enter_openat"
+    Kprobe(String),     // kernel symbol
+    Kretprobe(String),  // kernel symbol
+    Uprobe(String),     // function name or offset
+    Uretprobe(String),  // function name or offset
+    Fentry(String),     // BTF func name
+    Fexit(String),      // BTF func name
 }
 
 impl ProgramType {
-    pub fn from_str(prog_type: &str, fn_name: Option<&str>) -> anyhow::Result<Self> {
+    pub fn from_type_and_fn_name(prog_type: &str, fn_name: Option<&str>) -> anyhow::Result<Self> {
         match (prog_type, fn_name) {
             ("xdp", None) => Ok(Self::Xdp),
             ("tc", None) => Ok(Self::Tc),
             ("tcx", None) => Ok(Self::Tcx),
-            ("tracepoint", None) => Ok(Self::Tracepoint),
-            ("kprobe", None) => Ok(Self::Kprobe),
-            ("kretprobe", None) => Ok(Self::Kretprobe),
-            ("uprobe", None) => Ok(Self::Uprobe),
-            ("uretprobe", None) => Ok(Self::Uretprobe),
+            ("tracepoint", Some(name)) => Ok(Self::Tracepoint(name.to_owned())),
+            ("kprobe", Some(name)) => Ok(Self::Kprobe(name.to_owned())),
+            ("kretprobe", Some(name)) => Ok(Self::Kretprobe(name.to_owned())),
+            ("uprobe", Some(name)) => Ok(Self::Uprobe(name.to_owned())),
+            ("uretprobe", Some(name)) => Ok(Self::Uretprobe(name.to_owned())),
             ("fentry", Some(name)) => Ok(Self::Fentry(name.to_owned())),
             ("fexit", Some(name)) => Ok(Self::Fexit(name.to_owned())),
-            ("fentry" | "fexit", None) => {
-                Err(anyhow::anyhow!("Missing function name for '{}'", prog_type))
-            }
+
+            ("tracepoint", None) => Err(anyhow::anyhow!("Missing event name for 'tracepoint'")),
+            ("kprobe", None) => Err(anyhow::anyhow!("Missing function name for 'kprobe'")),
+            ("kretprobe", None) => Err(anyhow::anyhow!("Missing function name for 'kretprobe'")),
+            ("uprobe", None) => Err(anyhow::anyhow!("Missing function name for 'uprobe'")),
+            ("uretprobe", None) => Err(anyhow::anyhow!("Missing function name for 'uretprobe'")),
+            ("fentry", None) => Err(anyhow::anyhow!("Missing function name for 'fentry'")),
+            ("fexit", None) => Err(anyhow::anyhow!("Missing function name for 'fexit'")),
+
             _ => Err(anyhow::anyhow!(
                 "Unknown or unsupported BPF program type '{}'",
                 prog_type
@@ -2188,11 +2195,11 @@ impl std::fmt::Display for ProgramType {
             Self::Xdp => write!(f, "xdp"),
             Self::Tc => write!(f, "tc"),
             Self::Tcx => write!(f, "tcx"),
-            Self::Tracepoint => write!(f, "tracepoint"),
-            Self::Kprobe => write!(f, "kprobe"),
-            Self::Kretprobe => write!(f, "kretprobe"),
-            Self::Uprobe => write!(f, "uprobe"),
-            Self::Uretprobe => write!(f, "uretprobe"),
+            Self::Tracepoint(_) => write!(f, "tracepoint"),
+            Self::Kprobe(_) => write!(f, "kprobe"),
+            Self::Kretprobe(_) => write!(f, "kretprobe"),
+            Self::Uprobe(_) => write!(f, "uprobe"),
+            Self::Uretprobe(_) => write!(f, "uretprobe"),
             Self::Fentry(_) => write!(f, "fentry"),
             Self::Fexit(_) => write!(f, "fexit"),
         }
@@ -2200,31 +2207,23 @@ impl std::fmt::Display for ProgramType {
 }
 
 impl ProgramType {
-    pub fn aya_type(&self) -> &'static str {
-        // XXX(frobware) currently unused
-        match self {
-            Self::Xdp => "Xdp",
-            Self::Tc => "SchedClassifier",
-            Self::Tcx => "SchedClassifier",
-            Self::Tracepoint => "TracePoint",
-            Self::Kprobe | Self::Kretprobe => "KProbe",
-            Self::Uprobe | Self::Uretprobe => "UProbe",
-            Self::Fentry(_) => "FEntry",
-            Self::Fexit(_) => "FExit",
-        }
-    }
-
     pub fn is_retprobe(&self) -> Option<bool> {
         match self {
-            Self::Kretprobe | Self::Uretprobe => Some(true),
-            Self::Kprobe | Self::Uprobe => Some(false),
+            Self::Kretprobe(_) | Self::Uretprobe(_) => Some(true),
+            Self::Kprobe(_) | Self::Uprobe(_) => Some(false),
             _ => None,
         }
     }
 
     pub fn fn_name(&self) -> Option<&str> {
         match self {
-            Self::Fentry(name) | Self::Fexit(name) => Some(name),
+            Self::Fentry(name)
+            | Self::Fexit(name)
+            | Self::Kprobe(name)
+            | Self::Kretprobe(name)
+            | Self::Uprobe(name)
+            | Self::Uretprobe(name)
+            | Self::Tracepoint(name) => Some(name),
             _ => None,
         }
     }
@@ -2253,8 +2252,7 @@ impl ProgramType {
 /// # Arguments
 ///
 /// - `conn`: A mutable SQLite connection to persist the program metadata.
-/// - `spec`: The specification (`LoadSpec`) describing which programs to load
-///           and how to configure them.
+/// - `spec`: The specification (`LoadSpec`) describing which programs to load and how to configure them.
 ///
 /// # Returns
 ///
