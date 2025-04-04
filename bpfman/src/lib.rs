@@ -2144,69 +2144,172 @@ pub fn establish_sqlite_connection(database_url: &str) -> anyhow::Result<SqliteC
 // change the existing Program enum, at least not initially. Once
 // we're further along we may be able to drop this and use the
 // existing Program enum.
+// #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+// #[serde(rename_all = "lowercase")]
+// pub enum ProgramType {
+//     Xdp,
+//     Tc,
+//     Tcx,
+//     Tracepoint(String), // e.g., "syscalls:sys_enter_openat"
+//     Kprobe(String),     // kernel symbol
+//     Kretprobe(String),  // kernel symbol
+//     Uprobe(String),     // function name or offset
+//     Uretprobe(String),  // function name or offset
+//     Fentry(String),     // BTF func name
+//     Fexit(String),      // BTF func name
+// }
+
+// impl ProgramType {
+//     pub fn from_type_and_fn_name(prog_type: &str, fn_name: Option<&str>) -> anyhow::Result<Self> {
+//         match (prog_type, fn_name) {
+//             ("xdp", None) => Ok(Self::Xdp),
+//             ("tc", None) => Ok(Self::Tc),
+//             ("tcx", None) => Ok(Self::Tcx),
+//             ("tracepoint", Some(name)) => Ok(Self::Tracepoint(name.to_owned())),
+//             ("kprobe", Some(name)) => Ok(Self::Kprobe(name.to_owned())),
+//             ("kretprobe", Some(name)) => Ok(Self::Kretprobe(name.to_owned())),
+//             ("uprobe", Some(name)) => Ok(Self::Uprobe(name.to_owned())),
+//             ("uretprobe", Some(name)) => Ok(Self::Uretprobe(name.to_owned())),
+//             ("fentry", Some(name)) => Ok(Self::Fentry(name.to_owned())),
+//             ("fexit", Some(name)) => Ok(Self::Fexit(name.to_owned())),
+
+//             ("tracepoint", None) => Err(anyhow::anyhow!("Missing event name for 'tracepoint'")),
+//             ("kprobe", None) => Err(anyhow::anyhow!("Missing function name for 'kprobe'")),
+//             ("kretprobe", None) => Err(anyhow::anyhow!("Missing function name for 'kretprobe'")),
+//             ("uprobe", None) => Err(anyhow::anyhow!("Missing function name for 'uprobe'")),
+//             ("uretprobe", None) => Err(anyhow::anyhow!("Missing function name for 'uretprobe'")),
+//             ("fentry", None) => Err(anyhow::anyhow!("Missing function name for 'fentry'")),
+//             ("fexit", None) => Err(anyhow::anyhow!("Missing function name for 'fexit'")),
+
+//             _ => Err(anyhow::anyhow!(
+//                 "Unknown or unsupported BPF program type '{}'",
+//                 prog_type
+//             )),
+//         }
+//     }
+// }
+
+// impl std::fmt::Display for ProgramType {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         match self {
+//             Self::Xdp => write!(f, "xdp"),
+//             Self::Tc => write!(f, "tc"),
+//             Self::Tcx => write!(f, "tcx"),
+//             Self::Tracepoint(_) => write!(f, "tracepoint"),
+//             Self::Kprobe(_) => write!(f, "kprobe"),
+//             Self::Kretprobe(_) => write!(f, "kretprobe"),
+//             Self::Uprobe(_) => write!(f, "uprobe"),
+//             Self::Uretprobe(_) => write!(f, "uretprobe"),
+//             Self::Fentry(_) => write!(f, "fentry"),
+//             Self::Fexit(_) => write!(f, "fexit"),
+//         }
+//     }
+// }
+
+// impl ProgramType {
+//     pub fn is_retprobe(&self) -> Option<bool> {
+//         match self {
+//             Self::Kretprobe(_) | Self::Uretprobe(_) => Some(true),
+//             Self::Kprobe(_) | Self::Uprobe(_) => Some(false),
+//             _ => None,
+//         }
+//     }
+
+//     pub fn fn_name(&self) -> Option<&str> {
+//         match self {
+//             Self::Fentry(name)
+//             | Self::Fexit(name)
+//             | Self::Kprobe(name)
+//             | Self::Kretprobe(name)
+//             | Self::Uprobe(name)
+//             | Self::Uretprobe(name)
+//             | Self::Tracepoint(name) => Some(name),
+//             _ => None,
+//         }
+//     }
+// }
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProgramType {
     Xdp,
     Tc,
     Tcx,
-    Tracepoint(String), // e.g., "syscalls:sys_enter_openat"
-    Kprobe(String),     // kernel symbol
-    Kretprobe(String),  // kernel symbol
-    Uprobe(String),     // function name or offset
-    Uretprobe(String),  // function name or offset
-    Fentry(String),     // BTF func name
-    Fexit(String),      // BTF func name
+    Tracepoint(String),     // Event name (e.g., "syscalls:sys_enter_openat").
+    Kprobe(String),         // Kernel symbol.
+    Kretprobe(String),      // Kernel symbol.
+    Uprobe(String),         // Function name or offset.
+    Uretprobe(String),      // Function name or offset.
+    Fentry(String, String), // eBPF func name, attach function.
+    Fexit(String, String),  // eBPF func name, attach function.
 }
 
 impl ProgramType {
-    pub fn from_type_and_fn_name(prog_type: &str, fn_name: Option<&str>) -> anyhow::Result<Self> {
-        match (prog_type, fn_name) {
-            ("xdp", None) => Ok(Self::Xdp),
-            ("tc", None) => Ok(Self::Tc),
-            ("tcx", None) => Ok(Self::Tcx),
-            ("tracepoint", Some(name)) => Ok(Self::Tracepoint(name.to_owned())),
-            ("kprobe", Some(name)) => Ok(Self::Kprobe(name.to_owned())),
-            ("kretprobe", Some(name)) => Ok(Self::Kretprobe(name.to_owned())),
-            ("uprobe", Some(name)) => Ok(Self::Uprobe(name.to_owned())),
-            ("uretprobe", Some(name)) => Ok(Self::Uretprobe(name.to_owned())),
-            ("fentry", Some(name)) => Ok(Self::Fentry(name.to_owned())),
-            ("fexit", Some(name)) => Ok(Self::Fexit(name.to_owned())),
+    /// Parse a program specification from a string like "fentry:test_fentry:do_unlinkat"
+    pub fn parse(program_str: &str) -> anyhow::Result<Self> {
+        let parts: Vec<&str> = program_str.split(':').collect();
 
-            ("tracepoint", None) => Err(anyhow::anyhow!("Missing event name for 'tracepoint'")),
-            ("kprobe", None) => Err(anyhow::anyhow!("Missing function name for 'kprobe'")),
-            ("kretprobe", None) => Err(anyhow::anyhow!("Missing function name for 'kretprobe'")),
-            ("uprobe", None) => Err(anyhow::anyhow!("Missing function name for 'uprobe'")),
-            ("uretprobe", None) => Err(anyhow::anyhow!("Missing function name for 'uretprobe'")),
-            ("fentry", None) => Err(anyhow::anyhow!("Missing function name for 'fentry'")),
-            ("fexit", None) => Err(anyhow::anyhow!("Missing function name for 'fexit'")),
+        if parts.is_empty() {
+            return Err(anyhow::anyhow!("Empty program specification"));
+        }
 
-            _ => Err(anyhow::anyhow!(
-                "Unknown or unsupported BPF program type '{}'",
-                prog_type
-            )),
+        let prog_type = parts[0];
+
+        let expected_parts = match prog_type {
+            "xdp" | "tc" | "tcx" => 1,
+            "tracepoint" | "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => 2,
+            "fentry" | "fexit" => 3,
+            _ => return Err(anyhow::anyhow!("Unknown program type: '{}'", prog_type)),
+        };
+
+        if parts.len() != expected_parts {
+            let format_hint = match expected_parts {
+                1 => format!("'{}' (no additional parameters)", prog_type),
+                2 => format!("'{}:<function-name>'", prog_type),
+                3 => format!("'{}:<function-name>:<attach-function>'", prog_type),
+                _ => unreachable!(),
+            };
+
+            return Err(anyhow::anyhow!(
+                "Invalid format for {} program, expected {}",
+                prog_type,
+                format_hint
+            ));
+        }
+
+        // All validation passed, create the appropriate variant
+        match prog_type {
+            "xdp" => Ok(Self::Xdp),
+            "tc" => Ok(Self::Tc),
+            "tcx" => Ok(Self::Tcx),
+            "tracepoint" => Ok(Self::Tracepoint(parts[1].to_string())),
+            "kprobe" => Ok(Self::Kprobe(parts[1].to_string())),
+            "kretprobe" => Ok(Self::Kretprobe(parts[1].to_string())),
+            "uprobe" => Ok(Self::Uprobe(parts[1].to_string())),
+            "uretprobe" => Ok(Self::Uretprobe(parts[1].to_string())),
+            "fentry" => Ok(Self::Fentry(parts[1].to_string(), parts[2].to_string())),
+            "fexit" => Ok(Self::Fexit(parts[1].to_string(), parts[2].to_string())),
+            _ => unreachable!(), // We already checked for unknown types above
         }
     }
-}
 
-impl std::fmt::Display for ProgramType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    /// Get a string representation of the program type
+    pub fn type_str(&self) -> &'static str {
         match self {
-            Self::Xdp => write!(f, "xdp"),
-            Self::Tc => write!(f, "tc"),
-            Self::Tcx => write!(f, "tcx"),
-            Self::Tracepoint(_) => write!(f, "tracepoint"),
-            Self::Kprobe(_) => write!(f, "kprobe"),
-            Self::Kretprobe(_) => write!(f, "kretprobe"),
-            Self::Uprobe(_) => write!(f, "uprobe"),
-            Self::Uretprobe(_) => write!(f, "uretprobe"),
-            Self::Fentry(_) => write!(f, "fentry"),
-            Self::Fexit(_) => write!(f, "fexit"),
+            Self::Xdp => "xdp",
+            Self::Tc => "tc",
+            Self::Tcx => "tcx",
+            Self::Tracepoint(_) => "tracepoint",
+            Self::Kprobe(_) => "kprobe",
+            Self::Kretprobe(_) => "kretprobe",
+            Self::Uprobe(_) => "uprobe",
+            Self::Uretprobe(_) => "uretprobe",
+            Self::Fentry(_, _) => "fentry",
+            Self::Fexit(_, _) => "fexit",
         }
     }
-}
 
-impl ProgramType {
+    /// Check if this program type is a return probe
     pub fn is_retprobe(&self) -> Option<bool> {
         match self {
             Self::Kretprobe(_) | Self::Uretprobe(_) => Some(true),
@@ -2215,17 +2318,47 @@ impl ProgramType {
         }
     }
 
+    /// Get the function name (applicable for types that need one)
     pub fn fn_name(&self) -> Option<&str> {
         match self {
-            Self::Fentry(name)
-            | Self::Fexit(name)
+            Self::Tracepoint(name)
             | Self::Kprobe(name)
             | Self::Kretprobe(name)
             | Self::Uprobe(name)
-            | Self::Uretprobe(name)
-            | Self::Tracepoint(name) => Some(name),
+            | Self::Uretprobe(name) => Some(name),
+            Self::Fentry(name, _) | Self::Fexit(name, _) => Some(name),
             _ => None,
         }
+    }
+
+    /// Get the attach function (applicable only for fentry/fexit)
+    pub fn attach_fn(&self) -> Option<&str> {
+        match self {
+            Self::Fentry(_, attach) | Self::Fexit(_, attach) => Some(attach),
+            _ => None,
+        }
+    }
+
+    /// Convert to a standardised program string representation
+    pub fn to_string(&self) -> String {
+        match self {
+            Self::Xdp => "xdp".to_string(),
+            Self::Tc => "tc".to_string(),
+            Self::Tcx => "tcx".to_string(),
+            Self::Tracepoint(name) => format!("tracepoint:{}", name),
+            Self::Kprobe(name) => format!("kprobe:{}", name),
+            Self::Kretprobe(name) => format!("kretprobe:{}", name),
+            Self::Uprobe(name) => format!("uprobe:{}", name),
+            Self::Uretprobe(name) => format!("uretprobe:{}", name),
+            Self::Fentry(func, attach) => format!("fentry:{}:{}", func, attach),
+            Self::Fexit(func, attach) => format!("fexit:{}:{}", func, attach),
+        }
+    }
+}
+
+impl std::fmt::Display for ProgramType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.type_str())
     }
 }
 

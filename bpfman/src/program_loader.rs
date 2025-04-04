@@ -117,41 +117,31 @@ impl LoadSpecBuilder {
         spec.metadata_json = serde_json::to_string(&metadata_map)
             .map_err(|e| format!("Failed to serialise metadata to JSON: {}", e))?;
 
-        // Program types that require function name.
-        // XXX(frobware) - is this correct?
-        let needs_fn_name = [
-            "fentry",
-            "fexit",
-            "kprobe",
-            "kretprobe",
-            "uprobe",
-            "uretprobe",
-            "tracepoint",
-        ];
+        println!("{:?}", self.programs);
 
+        // Parse and validate program types
         let mut validated_programs = Vec::new();
-
-        for (program_type_str, parts) in self.programs.as_ref().unwrap_or(&vec![]) {
+        for (prog_type, parts) in self.programs.as_ref().unwrap_or(&vec![]) {
+            // Get the program name
             let name = parts
                 .first()
-                .ok_or_else(|| format!("Missing program name for {}", program_type_str))?;
+                .ok_or_else(|| format!("Missing program name for {}", prog_type))?
+                .clone();
 
-            let fn_name = if needs_fn_name.contains(&program_type_str.as_str()) {
-                if parts.len() != 2 {
-                    return Err(format!(
-                        "Missing function name for {} program '{}'. Expected format: '{}:<program-name>:<fn-name>'",
-                        program_type_str, name, program_type_str
-                    ));
-                }
-                Some(parts[1].as_str())
+            // Reconstruct the program string for parsing.
+            let program_str = if parts.is_empty() {
+                prog_type.clone()
             } else {
-                None
+                format!("{}:{}", prog_type, parts.join(":"))
             };
 
-            let program_type = ProgramType::from_type_and_fn_name(program_type_str, fn_name)
+            // Use ProgramType::parse for validation
+            let program_type = ProgramType::parse(&program_str)
                 .map_err(|e| format!("Invalid program type: {}", e))?;
 
-            validated_programs.push((program_type, name.clone()));
+            println!("{:?}", program_type);
+
+            validated_programs.push((program_type, name));
         }
 
         spec.programs_by_type = validated_programs;
@@ -245,7 +235,6 @@ fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::
 fn build_bpfprogram_from_aya_program(
     prog_info: &aya::programs::ProgramInfo,
     program_type: &ProgramType,
-    name: &str,
     spec: &LoadSpec,
     map_pin_path_str: &str,
 ) -> Result<BpfProgram, BpfmanError> {
@@ -282,10 +271,14 @@ fn build_bpfprogram_from_aya_program(
         .loaded_at()
         .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339());
 
+    let prog_name = program_type
+        .fn_name()
+        .ok_or_else(|| BpfmanError::BpfFunctionNameNotValid("<none>".to_string()))?;
+
     Ok(BpfProgram {
         id: prog_info.id().into(),
-        name: name.to_owned(),
-        kind: program_type.to_string(),
+        name: prog_name.to_owned(),
+        kind: program_type.type_str().to_owned(),
         state: "loaded".to_string(),
         location_type: location_type.to_string(),
         file_path,
@@ -295,7 +288,7 @@ fn build_bpfprogram_from_aya_program(
         password,
         map_pin_path: map_pin_path_str.to_string(),
         map_owner_id: spec.map_owner_id.map(KernelU32::from),
-        program_bytes: vec![],  // TODO(frobware) XXX
+        program_bytes: vec![], // TODO(frobware) XXX
         // program_bytes: spec.program_bytes.to_vec(),
         metadata: spec.metadata_json.clone(),
         global_data: spec.global_data_json.clone(),
@@ -369,20 +362,20 @@ fn load_program(
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Fentry(fn_name) => {
+        ProgramType::Fentry(_, attach_name) => {
             let btf = aya::Btf::from_sys_fs().map_err(BpfmanError::BtfError)?;
             let prog: &mut aya::programs::FEntry = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
-            prog.load(fn_name, &btf)
+            prog.load(attach_name, &btf)
                 .map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Fexit(fn_name) => {
+        ProgramType::Fexit(_, attach_name) => {
             let btf = aya::Btf::from_sys_fs().map_err(BpfmanError::BtfError)?;
             let prog: &mut aya::programs::FExit = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
-            prog.load(fn_name, &btf)
+            prog.load(attach_name, &btf)
                 .map_err(BpfmanError::BpfProgramError)?;
         }
     };
@@ -426,14 +419,16 @@ fn attempt_unload(_lp: &LoadedProgram) -> Result<()> {
 /// - If the kernel rejects the program.
 fn load_program_into_kernel(
     program_type: &ProgramType,
-    name: &str,
     program_bytecode: &mut Ebpf,
     spec: &LoadSpec,
 ) -> Result<LoadedProgram, BpfmanError> {
-    // Retrieve the raw program by name.
+    let prog_name = program_type
+        .fn_name()
+        .ok_or_else(|| BpfmanError::BpfFunctionNameNotValid("<none>".to_string()))?;
+
     let ebpf_program = program_bytecode
-        .program_mut(name)
-        .ok_or_else(|| BpfmanError::BpfFunctionNameNotValid(name.to_string()))?;
+        .program_mut(prog_name)
+        .ok_or_else(|| BpfmanError::BpfFunctionNameNotValid(prog_name.to_string()))?;
 
     load_program(program_type, ebpf_program)?;
 
@@ -468,7 +463,7 @@ fn load_program_into_kernel(
 
     let map_pin_path_str = map_pin_path.to_string_lossy().to_string();
     let bpf_prog =
-        build_bpfprogram_from_aya_program(&prog_info, program_type, name, spec, &map_pin_path_str);
+        build_bpfprogram_from_aya_program(&prog_info, program_type, spec, &map_pin_path_str);
 
     Ok(LoadedProgram {
         kind: program_type.clone(),
@@ -529,8 +524,9 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
 
     let mut loaded_programs = Vec::new();
 
-    for (program_type, fn_name) in &spec.programs_by_type {
-        match load_program_into_kernel(program_type, fn_name, &mut program_bytecode, spec) {
+    for (program_type, _) in &spec.programs_by_type {
+        println!("{}", program_type);
+        match load_program_into_kernel(program_type, &mut program_bytecode, spec) {
             Ok(loaded) => loaded_programs.push(loaded),
             Err(err) => {
                 let unload_failures = unload_all(&loaded_programs);
