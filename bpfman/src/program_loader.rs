@@ -208,16 +208,15 @@ pub struct UnloadError {
     pub error: anyhow::Error,
 }
 
-fn build_partial_bpfmap_from_obj(data: &MapData, name: &str) -> Result<BpfMap, BpfmanError> {
-    let info = data.info().map_err(BpfmanError::BpfMapInfoError)?;
-
+fn build_partial_bpfmap_from_obj(
+    data: &MapData,
+    name: &str,
+) -> Result<BpfMap, aya::maps::MapError> {
+    let info = data.info()?;
     Ok(BpfMap {
         id: KernelU32::from(info.id()),
         name: name.to_string(),
-        map_type: Some(format!(
-            "{:?}",
-            info.map_type().map_err(BpfmanError::BpfMapInfoError)?
-        )),
+        map_type: Some(format!("{:?}", info.map_type()?)),
         key_size: KernelU32::from(info.key_size()),
         value_size: KernelU32::from(info.value_size()),
         max_entries: KernelU32::from(info.max_entries()),
@@ -226,7 +225,7 @@ fn build_partial_bpfmap_from_obj(data: &MapData, name: &str) -> Result<BpfMap, B
     })
 }
 
-fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, BpfmanError> {
+fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::maps::MapError> {
     match data {
         Map::Array(d)
         | Map::BloomFilter(d)
@@ -248,14 +247,11 @@ fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, Bpfma
         | Map::Stack(d)
         | Map::StackTraceMap(d)
         | Map::XskMap(d) => {
-            let info = d.info().map_err(BpfmanError::BpfMapInfoError)?;
+            let info = d.info()?;
             Ok(BpfMap {
                 id: info.id().into(),
                 name: map_name.to_string(),
-                map_type: Some(format!(
-                    "{:?}",
-                    info.map_type().map_err(BpfmanError::BpfMapInfoError)?
-                )),
+                map_type: Some(format!("{:?}", info.map_type()?)),
                 key_size: KernelU32::from(info.key_size()),
                 value_size: KernelU32::from(info.value_size()),
                 max_entries: KernelU32::from(info.max_entries()),
@@ -488,7 +484,7 @@ fn load_program_into_kernel(
         map.pin(map_fs_path.clone())
             .map_err(BpfmanError::UnableToPinMap)?;
 
-        maps.push(build_bpfmap_from_aya_map(map, map_name)?);
+        maps.push(build_bpfmap_from_aya_map(map, map_name).map_err(BpfmanError::BpfMapInfoError)?);
     }
 
     let map_pin_path_str = map_pin_path.to_string_lossy().to_string();
