@@ -25,10 +25,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use anyhow::Result;
-use aya::{
-    Ebpf,
-    maps::{Map, MapData},
-};
+use aya::{Ebpf, maps::Map};
 use chrono::Utc;
 use derive_builder::Builder;
 use serde::Serialize;
@@ -208,25 +205,8 @@ pub struct UnloadError {
     pub error: anyhow::Error,
 }
 
-fn build_partial_bpfmap_from_obj(
-    data: &MapData,
-    name: &str,
-) -> Result<BpfMap, aya::maps::MapError> {
-    let info = data.info()?;
-    Ok(BpfMap {
-        id: KernelU32::from(info.id()),
-        name: name.to_string(),
-        map_type: Some(format!("{:?}", info.map_type()?)),
-        key_size: KernelU32::from(info.key_size()),
-        value_size: KernelU32::from(info.value_size()),
-        max_entries: KernelU32::from(info.max_entries()),
-        created_at: Utc::now().naive_utc(),
-        updated_at: None,
-    })
-}
-
 fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::maps::MapError> {
-    match data {
+    let info = match data {
         Map::Array(d)
         | Map::BloomFilter(d)
         | Map::CpuMap(d)
@@ -246,21 +226,20 @@ fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::
         | Map::SockMap(d)
         | Map::Stack(d)
         | Map::StackTraceMap(d)
-        | Map::XskMap(d) => {
-            let info = d.info()?;
-            Ok(BpfMap {
-                id: info.id().into(),
-                name: map_name.to_string(),
-                map_type: Some(format!("{:?}", info.map_type()?)),
-                key_size: KernelU32::from(info.key_size()),
-                value_size: KernelU32::from(info.value_size()),
-                max_entries: KernelU32::from(info.max_entries()),
-                created_at: Utc::now().naive_utc(),
-                updated_at: None,
-            })
-        }
-        Map::Unsupported(data) => build_partial_bpfmap_from_obj(data, map_name),
-    }
+        | Map::XskMap(d) => d.info()?,
+        Map::Unsupported(d) => d.info()?,
+    };
+
+    Ok(BpfMap {
+        id: info.id().into(),
+        name: map_name.to_string(),
+        map_type: Some(format!("{:?}", info.map_type()?)),
+        key_size: KernelU32::from(info.key_size()),
+        value_size: KernelU32::from(info.value_size()),
+        max_entries: KernelU32::from(info.max_entries()),
+        created_at: Utc::now().naive_utc(),
+        updated_at: None,
+    })
 }
 
 fn build_bpfprogram_from_aya_program(
@@ -316,7 +295,7 @@ fn build_bpfprogram_from_aya_program(
         password,
         map_pin_path: map_pin_path_str.to_string(),
         map_owner_id: spec.map_owner_id.map(KernelU32::from),
-        program_bytes: vec![],
+        program_bytes: vec![],  // TODO(frobware) XXX
         // program_bytes: spec.program_bytes.to_vec(),
         metadata: spec.metadata_json.clone(),
         global_data: spec.global_data_json.clone(),
