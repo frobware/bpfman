@@ -272,7 +272,7 @@ fn build_bpfprogram_from_aya_program(
         .map(|t| chrono::DateTime::<Utc>::from(t).to_rfc3339());
 
     let prog_name = program_type
-        .fn_name()
+        .function_name()
         .ok_or_else(|| BpfmanError::BpfFunctionNameNotValid("<none>".to_string()))?;
 
     Ok(BpfProgram {
@@ -293,7 +293,7 @@ fn build_bpfprogram_from_aya_program(
         metadata: spec.metadata_json.clone(),
         global_data: spec.global_data_json.clone(),
         retprobe: program_type.is_retprobe(),
-        fn_name: program_type.fn_name().map(String::from),
+        fn_name: program_type.function_name().map(String::from),
         kernel_name,
         kernel_program_type: prog_info
             .program_type()
@@ -332,7 +332,7 @@ fn load_program(
     ebpf_program: &mut aya::programs::Program,
 ) -> Result<(), BpfmanError> {
     match program_type {
-        ProgramType::Xdp => {
+        ProgramType::Xdp { function_name: _ } => {
             let prog: &mut aya::programs::Xdp = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
@@ -344,38 +344,44 @@ fn load_program(
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Tracepoint(_) => {
+        ProgramType::Tracepoint { function_name: _ } => {
             let prog: &mut aya::programs::TracePoint = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Kprobe(_) | ProgramType::Kretprobe(_) => {
+        ProgramType::Kprobe { function_name: _ } | ProgramType::Kretprobe { function_name: _ } => {
             let prog: &mut aya::programs::KProbe = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Uprobe(_) | ProgramType::Uretprobe(_) => {
+        ProgramType::Uprobe { function_name: _ } | ProgramType::Uretprobe { function_name: _ } => {
             let prog: &mut aya::programs::UProbe = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
             prog.load().map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Fentry(_, attach_name) => {
+        ProgramType::Fentry {
+            function_name: _,
+            attach_function,
+        } => {
             let btf = aya::Btf::from_sys_fs().map_err(BpfmanError::BtfError)?;
             let prog: &mut aya::programs::FEntry = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
-            prog.load(attach_name, &btf)
+            prog.load(attach_function, &btf)
                 .map_err(BpfmanError::BpfProgramError)?;
         }
-        ProgramType::Fexit(_, attach_name) => {
+        ProgramType::Fexit {
+            function_name: _,
+            attach_function,
+        } => {
             let btf = aya::Btf::from_sys_fs().map_err(BpfmanError::BtfError)?;
             let prog: &mut aya::programs::FExit = ebpf_program
                 .try_into()
                 .map_err(BpfmanError::BpfProgramError)?;
-            prog.load(attach_name, &btf)
+            prog.load(attach_function, &btf)
                 .map_err(BpfmanError::BpfProgramError)?;
         }
     };
@@ -418,19 +424,19 @@ fn attempt_unload(_lp: &LoadedProgram) -> Result<()> {
 /// - If the program fails to convert into its expected type.
 /// - If the kernel rejects the program.
 fn load_program_into_kernel(
-    program_type: &ProgramType,
-    program_bytecode: &mut Ebpf,
+    program: &ProgramType,
+    bytecode: &mut Ebpf,
     spec: &LoadSpec,
 ) -> Result<LoadedProgram, BpfmanError> {
-    let prog_name = program_type
-        .fn_name()
+    let prog_name = program
+        .function_name()
         .ok_or_else(|| BpfmanError::BpfFunctionNameNotValid("<none>".to_string()))?;
 
-    let ebpf_program = program_bytecode
+    let ebpf_program = bytecode
         .program_mut(prog_name)
         .ok_or_else(|| BpfmanError::BpfFunctionNameNotValid(prog_name.to_string()))?;
 
-    load_program(program_type, ebpf_program)?;
+    load_program(program, ebpf_program)?;
 
     // Retrieve the program info after loading.
     let prog_info = ebpf_program.info().map_err(BpfmanError::BpfProgramError)?;
@@ -448,7 +454,7 @@ fn load_program_into_kernel(
 
     // Collect map metadata.
     let mut maps = Vec::new();
-    for (map_name, map) in program_bytecode.maps_mut() {
+    for (map_name, map) in bytecode.maps_mut() {
         if !should_map_be_pinned(map_name) {
             continue;
         }
@@ -462,11 +468,10 @@ fn load_program_into_kernel(
     }
 
     let map_pin_path_str = map_pin_path.to_string_lossy().to_string();
-    let bpf_prog =
-        build_bpfprogram_from_aya_program(&prog_info, program_type, spec, &map_pin_path_str);
+    let bpf_prog = build_bpfprogram_from_aya_program(&prog_info, program, spec, &map_pin_path_str);
 
     Ok(LoadedProgram {
-        kind: program_type.clone(),
+        kind: program.clone(),
         program: bpf_prog?,
         maps,
     })
@@ -525,7 +530,7 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
     let mut loaded_programs = Vec::new();
 
     for (program_type, _) in &spec.programs_by_type {
-        println!("{}", program_type);
+        println!("{}", program_type.to_string());
         match load_program_into_kernel(program_type, &mut program_bytecode, spec) {
             Ok(loaded) => loaded_programs.push(loaded),
             Err(err) => {

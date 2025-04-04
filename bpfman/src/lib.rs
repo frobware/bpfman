@@ -2232,20 +2232,37 @@ pub fn establish_sqlite_connection(database_url: &str) -> anyhow::Result<SqliteC
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProgramType {
-    Xdp,
+    Fentry {
+        function_name: String,
+        attach_function: String,
+    },
+    Fexit {
+        function_name: String,
+        attach_function: String,
+    },
+    Kprobe {
+        function_name: String,
+    },
+    Kretprobe {
+        function_name: String,
+    },
+    Tracepoint {
+        function_name: String,
+    },
     Tc,
     Tcx,
-    Tracepoint(String),     // Event name (e.g., "syscalls:sys_enter_openat").
-    Kprobe(String),         // Kernel symbol.
-    Kretprobe(String),      // Kernel symbol.
-    Uprobe(String),         // Function name or offset.
-    Uretprobe(String),      // Function name or offset.
-    Fentry(String, String), // eBPF func name, attach function.
-    Fexit(String, String),  // eBPF func name, attach function.
+    Uprobe {
+        function_name: String,
+    },
+    Uretprobe {
+        function_name: String,
+    },
+    Xdp {
+        function_name: String,
+    },
 }
 
 impl ProgramType {
-    /// Parse a program specification from a string like "fentry:test_fentry:do_unlinkat"
     pub fn parse(program_str: &str) -> anyhow::Result<Self> {
         let parts: Vec<&str> = program_str.split(':').collect();
 
@@ -2253,108 +2270,221 @@ impl ProgramType {
             return Err(anyhow::anyhow!("Empty program specification"));
         }
 
-        let prog_type = parts[0];
-
-        let expected_parts = match prog_type {
-            "xdp" | "tc" | "tcx" => 1,
-            "tracepoint" | "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => 2,
-            "fentry" | "fexit" => 3,
-            _ => return Err(anyhow::anyhow!("Unknown program type: '{}'", prog_type)),
-        };
-
-        if parts.len() != expected_parts {
-            let format_hint = match expected_parts {
-                1 => format!("'{}' (no additional parameters)", prog_type),
-                2 => format!("'{}:<function-name>'", prog_type),
-                3 => format!("'{}:<function-name>:<attach-function>'", prog_type),
-                _ => unreachable!(),
-            };
-
-            return Err(anyhow::anyhow!(
-                "Invalid format for {} program, expected {}",
-                prog_type,
-                format_hint
-            ));
-        }
-
-        // All validation passed, create the appropriate variant
-        match prog_type {
-            "xdp" => Ok(Self::Xdp),
+        match parts[0] {
+            "xdp" if parts.len() == 2 => Ok(Self::Xdp {
+                function_name: parts[1].to_string(),
+            }),
             "tc" => Ok(Self::Tc),
             "tcx" => Ok(Self::Tcx),
-            "tracepoint" => Ok(Self::Tracepoint(parts[1].to_string())),
-            "kprobe" => Ok(Self::Kprobe(parts[1].to_string())),
-            "kretprobe" => Ok(Self::Kretprobe(parts[1].to_string())),
-            "uprobe" => Ok(Self::Uprobe(parts[1].to_string())),
-            "uretprobe" => Ok(Self::Uretprobe(parts[1].to_string())),
-            "fentry" => Ok(Self::Fentry(parts[1].to_string(), parts[2].to_string())),
-            "fexit" => Ok(Self::Fexit(parts[1].to_string(), parts[2].to_string())),
-            _ => unreachable!(), // We already checked for unknown types above
+            "tracepoint" if parts.len() >= 2 => Ok(Self::Tracepoint {
+                function_name: parts[1..].join(":"),
+            }),
+            "kprobe" if parts.len() == 2 => Ok(Self::Kprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "kretprobe" if parts.len() == 2 => Ok(Self::Kretprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "uprobe" if parts.len() == 2 => Ok(Self::Uprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "uretprobe" if parts.len() == 2 => Ok(Self::Uretprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "fentry" if parts.len() == 3 => Ok(Self::Fentry {
+                function_name: parts[1].to_string(),
+                attach_function: parts[2].to_string(),
+            }),
+            "fexit" if parts.len() == 3 => Ok(Self::Fexit {
+                function_name: parts[1].to_string(),
+                attach_function: parts[2].to_string(),
+            }),
+            other => Err(anyhow::anyhow!("Invalid or unsupported type: {other}")),
         }
     }
 
-    /// Get a string representation of the program type
     pub fn type_str(&self) -> &'static str {
         match self {
-            Self::Xdp => "xdp",
+            Self::Fentry { .. } => "fentry",
+            Self::Fexit { .. } => "fexit",
+            Self::Kprobe { .. } => "kprobe",
+            Self::Kretprobe { .. } => "kretprobe",
+            Self::Tracepoint { .. } => "tracepoint",
             Self::Tc => "tc",
             Self::Tcx => "tcx",
-            Self::Tracepoint(_) => "tracepoint",
-            Self::Kprobe(_) => "kprobe",
-            Self::Kretprobe(_) => "kretprobe",
-            Self::Uprobe(_) => "uprobe",
-            Self::Uretprobe(_) => "uretprobe",
-            Self::Fentry(_, _) => "fentry",
-            Self::Fexit(_, _) => "fexit",
+            Self::Uprobe { .. } => "uprobe",
+            Self::Uretprobe { .. } => "uretprobe",
+            Self::Xdp { .. } => "xdp",
         }
     }
 
-    /// Check if this program type is a return probe
+    pub fn function_name(&self) -> Option<&str> {
+        match self {
+            Self::Fentry { function_name, .. }
+            | Self::Fexit { function_name, .. }
+            | Self::Kprobe { function_name }
+            | Self::Kretprobe { function_name }
+            | Self::Uprobe { function_name }
+            | Self::Uretprobe { function_name }
+            | Self::Xdp { function_name }
+            | Self::Tracepoint { function_name } => Some(function_name),
+            _ => None,
+        }
+    }
+
+    pub fn attach_function(&self) -> Option<&str> {
+        match self {
+            Self::Fentry {
+                attach_function, ..
+            }
+            | Self::Fexit {
+                attach_function, ..
+            } => Some(attach_function),
+            _ => None,
+        }
+    }
+
     pub fn is_retprobe(&self) -> Option<bool> {
         match self {
-            Self::Kretprobe(_) | Self::Uretprobe(_) => Some(true),
-            Self::Kprobe(_) | Self::Uprobe(_) => Some(false),
+            Self::Kretprobe { .. } | Self::Uretprobe { .. } => Some(true),
+            Self::Kprobe { .. } | Self::Uprobe { .. } => Some(false),
             _ => None,
         }
     }
 
-    /// Get the function name (applicable for types that need one)
-    pub fn fn_name(&self) -> Option<&str> {
-        match self {
-            Self::Tracepoint(name)
-            | Self::Kprobe(name)
-            | Self::Kretprobe(name)
-            | Self::Uprobe(name)
-            | Self::Uretprobe(name) => Some(name),
-            Self::Fentry(name, _) | Self::Fexit(name, _) => Some(name),
-            _ => None,
-        }
-    }
-
-    /// Get the attach function (applicable only for fentry/fexit)
-    pub fn attach_fn(&self) -> Option<&str> {
-        match self {
-            Self::Fentry(_, attach) | Self::Fexit(_, attach) => Some(attach),
-            _ => None,
-        }
-    }
-
-    /// Convert to a standardised program string representation
     pub fn to_string(&self) -> String {
         match self {
-            Self::Xdp => "xdp".to_string(),
+            Self::Xdp { function_name } => format!("xdp:{}", function_name),
             Self::Tc => "tc".to_string(),
             Self::Tcx => "tcx".to_string(),
-            Self::Tracepoint(name) => format!("tracepoint:{}", name),
-            Self::Kprobe(name) => format!("kprobe:{}", name),
-            Self::Kretprobe(name) => format!("kretprobe:{}", name),
-            Self::Uprobe(name) => format!("uprobe:{}", name),
-            Self::Uretprobe(name) => format!("uretprobe:{}", name),
-            Self::Fentry(func, attach) => format!("fentry:{}:{}", func, attach),
-            Self::Fexit(func, attach) => format!("fexit:{}:{}", func, attach),
+            Self::Tracepoint { function_name } => format!("tracepoint:{}", function_name),
+            Self::Kprobe { function_name } => format!("kprobe:{}", function_name),
+            Self::Kretprobe { function_name } => format!("kretprobe:{}", function_name),
+            Self::Uprobe { function_name } => format!("uprobe:{}", function_name),
+            Self::Uretprobe { function_name } => format!("uretprobe:{}", function_name),
+            Self::Fentry {
+                function_name,
+                attach_function,
+            } => format!("fentry:{}:{}", function_name, attach_function),
+            Self::Fexit {
+                function_name,
+                attach_function,
+            } => format!("fexit:{}:{}", function_name, attach_function),
         }
     }
 }
+
+// impl ProgramType {
+//     /// Parse a program specification from a string like "fentry:test_fentry:do_unlinkat"
+//     pub fn parse(program_str: &str) -> anyhow::Result<Self> {
+//         let parts: Vec<&str> = program_str.split(':').collect();
+
+//         if parts.is_empty() {
+//             return Err(anyhow::anyhow!("Empty program specification"));
+//         }
+
+//         let prog_type = parts[0];
+
+//         let expected_parts = match prog_type {
+//             "xdp" | "tc" | "tcx" => 1,
+//             "tracepoint" | "kprobe" | "kretprobe" | "uprobe" | "uretprobe" => 2,
+//             "fentry" | "fexit" => 3,
+//             _ => return Err(anyhow::anyhow!("Unknown program type: '{}'", prog_type)),
+//         };
+
+//         if parts.len() != expected_parts {
+//             let format_hint = match expected_parts {
+//                 1 => format!("'{}' (no additional parameters)", prog_type),
+//                 2 => format!("'{}:<function-name>'", prog_type),
+//                 3 => format!("'{}:<function-name>:<attach-function>'", prog_type),
+//                 _ => unreachable!(),
+//             };
+
+//             return Err(anyhow::anyhow!(
+//                 "Invalid format for {} program, expected {}",
+//                 prog_type,
+//                 format_hint
+//             ));
+//         }
+
+//         // All validation passed, create the appropriate variant
+//         match prog_type {
+//             "xdp" => Ok(Self::Xdp),
+//             "tc" => Ok(Self::Tc),
+//             "tcx" => Ok(Self::Tcx),
+//             "tracepoint" => Ok(Self::Tracepoint(parts[1].to_string())),
+//             "kprobe" => Ok(Self::Kprobe(parts[1].to_string())),
+//             "kretprobe" => Ok(Self::Kretprobe(parts[1].to_string())),
+//             "uprobe" => Ok(Self::Uprobe(parts[1].to_string())),
+//             "uretprobe" => Ok(Self::Uretprobe(parts[1].to_string())),
+//             "fentry" => Ok(Self::Fentry(parts[1].to_string(), parts[2].to_string())),
+//             "fexit" => Ok(Self::Fexit(parts[1].to_string(), parts[2].to_string())),
+//             _ => unreachable!(), // We already checked for unknown types above
+//         }
+//     }
+
+//     /// Get a string representation of the program type
+//     pub fn type_str(&self) -> &'static str {
+//         match self {
+//             Self::Xdp => "xdp",
+//             Self::Tc => "tc",
+//             Self::Tcx => "tcx",
+//             Self::Tracepoint(_) => "tracepoint",
+//             Self::Kprobe(_) => "kprobe",
+//             Self::Kretprobe(_) => "kretprobe",
+//             Self::Uprobe(_) => "uprobe",
+//             Self::Uretprobe(_) => "uretprobe",
+//             Self::Fentry(_, _) => "fentry",
+//             Self::Fexit(_, _) => "fexit",
+//         }
+//     }
+
+//     /// Check if this program type is a return probe
+//     pub fn is_retprobe(&self) -> Option<bool> {
+//         match self {
+//             Self::Kretprobe(_) | Self::Uretprobe(_) => Some(true),
+//             Self::Kprobe(_) | Self::Uprobe(_) => Some(false),
+//             _ => None,
+//         }
+//     }
+
+//     /// Get the function name (applicable for types that need one)
+//     pub fn fn_name(&self) -> Option<&str> {
+//         match self {
+//             Self::Tracepoint(name)
+//             | Self::Kprobe(name)
+//             | Self::Kretprobe(name)
+//             | Self::Uprobe(name)
+//             | Self::Uretprobe(name) => Some(name),
+//             Self::Fentry(name, _) | Self::Fexit(name, _) => Some(name),
+//             _ => None,
+//         }
+//     }
+
+//     /// Get the attach function (applicable only for fentry/fexit)
+//     pub fn attach_fn(&self) -> Option<&str> {
+//         match self {
+//             Self::Fentry(_, attach) | Self::Fexit(_, attach) => Some(attach),
+//             _ => None,
+//         }
+//     }
+
+//     /// Convert to a standardised program string representation
+//     pub fn to_string(&self) -> String {
+//         match self {
+//             Self::Xdp => "xdp".to_string(),
+//             Self::Tc => "tc".to_string(),
+//             Self::Tcx => "tcx".to_string(),
+//             Self::Tracepoint(name) => format!("tracepoint:{}", name),
+//             Self::Kprobe(name) => format!("kprobe:{}", name),
+//             Self::Kretprobe(name) => format!("kretprobe:{}", name),
+//             Self::Uprobe(name) => format!("uprobe:{}", name),
+//             Self::Uretprobe(name) => format!("uretprobe:{}", name),
+//             Self::Fentry(func, attach) => format!("fentry:{}:{}", func, attach),
+//             Self::Fexit(func, attach) => format!("fexit:{}:{}", func, attach),
+//         }
+//     }
+// }
 
 impl std::fmt::Display for ProgramType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2429,4 +2559,113 @@ pub fn load_ebpf_programs(
     }
 
     Ok(loaded)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProgramType;
+
+    struct Case<'a> {
+        input: &'a str,
+        display: &'a str,
+        type_str: &'a str,
+        function_name: Option<&'a str>,
+        attach_function: Option<&'a str>,
+        is_retprobe: Option<bool>,
+    }
+
+    #[test]
+    fn test_program_type_parsing() {
+        let cases = vec![
+            Case {
+                input: "fentry:test_fentry:do_unlinkat",
+                display: "fentry:test_fentry:do_unlinkat",
+                type_str: "fentry",
+                function_name: Some("test_fentry"),
+                attach_function: Some("do_unlinkat"),
+                is_retprobe: None,
+            },
+            Case {
+                input: "fexit:test_fexit:do_unlinkat",
+                display: "fexit:test_fexit:do_unlinkat",
+                type_str: "fexit",
+                function_name: Some("test_fexit"),
+                attach_function: Some("do_unlinkat"),
+                is_retprobe: None,
+            },
+            Case {
+                input: "kprobe:do_sys_open",
+                display: "kprobe:do_sys_open",
+                type_str: "kprobe",
+                function_name: Some("do_sys_open"),
+                attach_function: None,
+                is_retprobe: Some(false),
+            },
+            Case {
+                input: "kretprobe:do_sys_open",
+                display: "kretprobe:do_sys_open",
+                type_str: "kretprobe",
+                function_name: Some("do_sys_open"),
+                attach_function: None,
+                is_retprobe: Some(true),
+            },
+            Case {
+                input: "uprobe:main",
+                display: "uprobe:main",
+                type_str: "uprobe",
+                function_name: Some("main"),
+                attach_function: None,
+                is_retprobe: Some(false),
+            },
+            Case {
+                input: "uretprobe:main",
+                display: "uretprobe:main",
+                type_str: "uretprobe",
+                function_name: Some("main"),
+                attach_function: None,
+                is_retprobe: Some(true),
+            },
+            Case {
+                input: "tracepoint:sched:sched_switch",
+                display: "tracepoint:sched:sched_switch",
+                type_str: "tracepoint",
+                function_name: Some("sched:sched_switch"),
+                attach_function: None,
+                is_retprobe: None,
+            },
+            Case {
+                input: "xdp:pass",
+                display: "xdp:pass",
+                type_str: "xdp",
+                function_name: Some("pass"),
+                attach_function: None,
+                is_retprobe: None,
+            },
+            Case {
+                input: "tc",
+                display: "tc",
+                type_str: "tc",
+                function_name: None,
+                attach_function: None,
+                is_retprobe: None,
+            },
+            Case {
+                input: "tcx",
+                display: "tcx",
+                type_str: "tcx",
+                function_name: None,
+                attach_function: None,
+                is_retprobe: None,
+            },
+        ];
+
+        for case in cases {
+            let pt = ProgramType::parse(case.input).unwrap();
+            assert_eq!(pt.to_string(), case.display, "{}", case.input);
+            assert_eq!(pt.type_str(), case.type_str, "{}", case.input);
+            assert_eq!(pt.function_name(), case.function_name, "{}", case.input);
+            assert_eq!(pt.attach_function(), case.attach_function, "{}", case.input);
+            assert_eq!(pt.is_retprobe(), case.is_retprobe, "{}", case.input);
+        }
+    }
 }
