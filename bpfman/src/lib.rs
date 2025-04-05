@@ -60,7 +60,7 @@ mod multiprog;
 mod netlink;
 mod oci_utils;
 pub mod program_loader;
-pub mod schema;
+mod schema;
 mod static_program;
 pub mod types;
 pub mod uintblob;
