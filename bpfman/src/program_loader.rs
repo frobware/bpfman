@@ -93,16 +93,38 @@ pub struct LoadSpec {
     metadata_json: String,
 }
 
+/// Represents errors encountered during the construction of a
+/// `LoadSpec`.
+///
+/// These errors may occur during the builder's `build()` process,
+/// either due to missing required fields or failures during
+/// serialisation of data to JSON.
 #[derive(Debug, Error)]
 pub enum LoadSpecError {
+    /// Indicates that one or more required fields were not
+    /// initialised before calling `build()`. The inner string
+    /// describes the missing fields, as reported by `derive_builder`.
     #[error("failed to build partial LoadSpec: {0}")]
     UninitialisedFields(String),
 
+    /// An error occurred while serialising the global data map to a
+    /// JSON string.
+    ///
+    /// This usually indicates invalid input in the `global_data`
+    /// field of the builder. The underlying `serde_json::Error` is
+    /// preserved as the source.
     #[error("error serialising global data to JSON")]
-    GlobalDataJson(#[from] serde_json::Error),
+    GlobalDataSerialisation(#[from] serde_json::Error),
 
+    /// An error occurred while serialising the metadata map to a JSON
+    /// string.
+    ///
+    /// Unlike `GlobalDataJson`, this wraps the source explicitly in a
+    /// named field so that it doesn’t conflict with the `#[from]`
+    /// path used earlier.
     #[error("error serialising metadata to JSON")]
-    MetadataJson {
+    MetadataSerialisation {
+        /// The original error returned by `serde_json::to_string`.
         #[source]
         source: serde_json::Error,
     },
@@ -117,13 +139,13 @@ impl LoadSpecBuilder {
         let global_data_map =
             Self::global_data_to_map(spec.global_data.as_deref().unwrap_or_default());
 
-        spec.global_data_json =
-            serde_json::to_string(&global_data_map).map_err(LoadSpecError::GlobalDataJson)?;
+        spec.global_data_json = serde_json::to_string(&global_data_map)
+            .map_err(LoadSpecError::GlobalDataSerialisation)?;
 
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or_default());
 
         spec.metadata_json = serde_json::to_string(&metadata_map)
-            .map_err(|e| LoadSpecError::MetadataJson { source: e })?;
+            .map_err(|e| LoadSpecError::MetadataSerialisation { source: e })?;
 
         Ok(spec)
     }
