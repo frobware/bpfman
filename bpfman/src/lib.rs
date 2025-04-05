@@ -55,7 +55,7 @@ pub mod config;
 mod dispatcher_config;
 pub mod errors;
 mod k32;
-pub mod models;
+mod models;
 mod multiprog;
 mod netlink;
 mod oci_utils;
