@@ -2189,34 +2189,16 @@ pub enum ProgramType {
 }
 
 impl ProgramType {
-    pub fn parse(program_str: &str) -> anyhow::Result<Self> {
+    pub fn parse(program_str: &str) -> Result<Self, BpfmanError> {
         let parts: Vec<&str> = program_str.split(':').collect();
 
-        if parts.is_empty() {
-            return Err(anyhow::anyhow!("Empty program specification"));
+        if parts.is_empty() || parts[0].is_empty() {
+            return Err(BpfmanError::InvalidProgramSpecification(
+                program_str.to_string(),
+            ));
         }
 
         match parts[0] {
-            "xdp" if parts.len() == 2 => Ok(Self::Xdp {
-                function_name: parts[1].to_string(),
-            }),
-            "tc" => Ok(Self::Tc),
-            "tcx" => Ok(Self::Tcx),
-            "tracepoint" if parts.len() >= 2 => Ok(Self::Tracepoint {
-                function_name: parts[1..].join(":"),
-            }),
-            "kprobe" if parts.len() == 2 => Ok(Self::Kprobe {
-                function_name: parts[1].to_string(),
-            }),
-            "kretprobe" if parts.len() == 2 => Ok(Self::Kretprobe {
-                function_name: parts[1].to_string(),
-            }),
-            "uprobe" if parts.len() == 2 => Ok(Self::Uprobe {
-                function_name: parts[1].to_string(),
-            }),
-            "uretprobe" if parts.len() == 2 => Ok(Self::Uretprobe {
-                function_name: parts[1].to_string(),
-            }),
             "fentry" if parts.len() == 3 => Ok(Self::Fentry {
                 function_name: parts[1].to_string(),
                 attach_function: parts[2].to_string(),
@@ -2225,7 +2207,29 @@ impl ProgramType {
                 function_name: parts[1].to_string(),
                 attach_function: parts[2].to_string(),
             }),
-            other => Err(anyhow::anyhow!("Invalid or unsupported type: {other}")),
+            "kprobe" if parts.len() == 2 => Ok(Self::Kprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "kretprobe" if parts.len() == 2 => Ok(Self::Kretprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "tc" if parts.len() == 1 => Ok(Self::Tc),
+            "tcx" if parts.len() == 1 => Ok(Self::Tcx),
+            "tracepoint" if parts.len() >= 2 => Ok(Self::Tracepoint {
+                function_name: parts[1..].join(":"),
+            }),
+            "uprobe" if parts.len() == 2 => Ok(Self::Uprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "uretprobe" if parts.len() == 2 => Ok(Self::Uretprobe {
+                function_name: parts[1].to_string(),
+            }),
+            "xdp" if parts.len() == 2 => Ok(Self::Xdp {
+                function_name: parts[1].to_string(),
+            }),
+            _ => Err(BpfmanError::InvalidProgramSpecification(
+                program_str.to_string(),
+            )),
         }
     }
 

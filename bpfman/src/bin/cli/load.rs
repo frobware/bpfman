@@ -250,7 +250,7 @@ impl LoadArgs<'_> {
             .collect()
     }
 
-    fn parse_program_types(&self) -> anyhow::Result<Vec<ProgramType>> {
+    fn parse_program_types(&self) -> Result<Vec<ProgramType>, BpfmanError> {
         self.get_programs()
             .iter()
             .map(|(kind, parts)| {
@@ -260,7 +260,6 @@ impl LoadArgs<'_> {
                     format!("{}:{}", kind, parts.join(":"))
                 };
                 ProgramType::parse(&s)
-                    .map_err(|e| anyhow::anyhow!("Invalid program '{}': {}", s, e))
             })
             .collect()
     }
