@@ -8,11 +8,10 @@ use bpfman::{
     add_programs,
     errors::BpfmanError,
     load_ebpf_programs,
-    program_loader::{LoadSpecBuilder, LoadedProgram},
+    program_loader::{LoadSpecBuilder, LoadedProgram, UnloadError},
     setup, setup_with_sqlite,
     types::{
-        FentryProgram, FexitProgram, KprobeProgram, Link, Location, METADATA_APPLICATION_TAG,
-        Program, ProgramData, TcProgram, TcxProgram, TracepointProgram, UprobeProgram, XdpProgram,
+        FentryProgram, FexitProgram, KprobeProgram, Link, Location, Program, ProgramData, TcProgram, TcxProgram, TracepointProgram, UprobeProgram, XdpProgram, METADATA_APPLICATION_TAG
     },
 };
 use log::warn;
@@ -210,10 +209,6 @@ fn parse_global(global: &Option<Vec<GlobalArg>>) -> HashMap<String, Vec<u8>> {
 fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()> {
     match res {
         Ok(loaded) => {
-            // TODO(frobware) - print this as the the non-sqlite
-            // execute_load_{file,image} do. For now, seeing it as
-            // JSON is OK as it verifies all the fields we set on the
-            // DB.
             println!("Successfully loaded {} program(s):", loaded.len());
             println!(
                 "{}",
@@ -222,6 +217,7 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
             );
             Ok(())
         }
+
         Err(BpfmanError::ProgramLoadError {
             cause,
             loaded_before_failure,
@@ -232,10 +228,15 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
                 "{} programs were loaded before the failure",
                 loaded_before_failure.len()
             );
+
             if !unload_failures.is_empty() {
                 eprintln!("Some of them also failed to unload:");
-                for uf in &unload_failures {
-                    eprintln!(" - program_id={}, error={}", uf.program_id, uf.error);
+                for failure in &unload_failures {
+                    match failure {
+                        UnloadError::Failure { program_id, source } => {
+                            eprintln!(" - program_id={}, error={source}", program_id);
+                        }
+                    }
                 }
             }
 
@@ -246,6 +247,7 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
             );
             Err(anyhow::anyhow!(summary))
         }
+
         Err(other) => {
             eprintln!("Unhandled error: {other}");
             Err(anyhow::anyhow!(other))

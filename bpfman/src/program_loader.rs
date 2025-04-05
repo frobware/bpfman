@@ -24,12 +24,12 @@
 //! [aya]: https://github.com/aya-rs/aya
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::{Context, Result};
 use aya::{Ebpf, maps::Map};
 use chrono::Utc;
 use derive_builder::Builder;
 use serde::Serialize;
 use serde_json;
+use thiserror::Error;
 
 use crate::{
     BpfmanError, calc_map_pin_path, create_map_pin_path,
@@ -93,20 +93,37 @@ pub struct LoadSpec {
     metadata_json: String,
 }
 
+#[derive(Debug, Error)]
+pub enum LoadSpecError {
+    #[error("failed to build partial LoadSpec: {0}")]
+    UninitialisedFields(String),
+
+    #[error("error serialising global data to JSON")]
+    GlobalDataJson(#[from] serde_json::Error),
+
+    #[error("error serialising metadata to JSON")]
+    MetadataJson {
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
 impl LoadSpecBuilder {
-    pub fn build(&mut self) -> anyhow::Result<LoadSpec> {
-        let mut spec = self.build_partial().context("building partial LoadSpec")?;
+    pub fn build(&mut self) -> Result<LoadSpec, LoadSpecError> {
+        let mut spec = self
+            .build_partial()
+            .map_err(|e| LoadSpecError::UninitialisedFields(e.to_string()))?;
 
         let global_data_map =
             Self::global_data_to_map(spec.global_data.as_deref().unwrap_or_default());
 
         spec.global_data_json =
-            serde_json::to_string(&global_data_map).context("serialising global data to JSON")?;
+            serde_json::to_string(&global_data_map).map_err(LoadSpecError::GlobalDataJson)?;
 
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or_default());
 
-        spec.metadata_json =
-            serde_json::to_string(&metadata_map).context("serialising metadata to JSON")?;
+        spec.metadata_json = serde_json::to_string(&metadata_map)
+            .map_err(|e| LoadSpecError::MetadataJson { source: e })?;
 
         Ok(spec)
     }
@@ -140,21 +157,14 @@ pub struct LoadedProgram {
     pub maps: Vec<BpfMap>,
 }
 
-/// Represents an error encountered when unloading an eBPF program
-/// from the kernel.
-///
-/// This structure is used to capture and report details about
-/// failures during the unload (rollback) process. For example, if a
-/// previously loaded program cannot be properly removed from the
-/// kernel during error handling, an `UnloadError` is generated for
-/// that programme.
-#[derive(Debug)]
-pub struct UnloadError {
-    pub program_id: KernelU32,
-    /// The underlying error encountered during the unload operation.
-    /// This error is stored as an `anyhow::Error` to allow downstream
-    /// callers to inspect or downcast it if needed.
-    pub error: anyhow::Error,
+#[derive(Debug, thiserror::Error)]
+pub enum UnloadError {
+    #[error("Failed to unload program {program_id}: {source}")]
+    Failure {
+        program_id: KernelU32,
+        #[source]
+        source: BpfmanError,
+    },
 }
 
 fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::maps::MapError> {
@@ -351,12 +361,14 @@ fn load_program(
     Ok(())
 }
 
-fn attempt_unload(_lp: &LoadedProgram) -> Result<()> {
-    // TODO(frobware).
-    // Circle back here when we address the `unload` bpfman command. We
-    // may want to go through the public API (i.e., the front door).
-    // todo!("Implement unload using sqlite interface");
-    Ok(())
+fn attempt_unload(_lp: &LoadedProgram) -> Result<(), BpfmanError> {
+    // TODO(frobware). Circle back here when we address the `unload`
+    // bpfman command. We may want to go through the public API (i.e.,
+    // the front door).
+
+    Err(BpfmanError::InternalError(
+        "attempt_unload is not yet implemented".into(),
+    ))
 }
 
 /// Loads an individual eBPF program into the kernel and returns
@@ -528,18 +540,15 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
 /// A vector of `UnloadError` instances detailing any failures
 /// encountered during the unload process.
 pub(crate) fn unload_all(programs: &[LoadedProgram]) -> Vec<UnloadError> {
-    let mut failures = Vec::new();
-
-    for lp in programs {
-        if let Err(e) = attempt_unload(lp) {
-            failures.push(UnloadError {
+    programs
+        .iter()
+        .filter_map(|lp| {
+            attempt_unload(lp).err().map(|e| UnloadError::Failure {
                 program_id: lp.program.id,
-                error: e,
-            });
-        }
-    }
-
-    failures
+                source: e,
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
