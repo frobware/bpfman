@@ -2262,32 +2262,28 @@ impl ProgramType {
             _ => None,
         }
     }
-
-    pub fn to_string(&self) -> String {
-        match self {
-            Self::Xdp { function_name } => format!("xdp:{}", function_name),
-            Self::Tc => "tc".to_string(),
-            Self::Tcx => "tcx".to_string(),
-            Self::Tracepoint { function_name } => format!("tracepoint:{}", function_name),
-            Self::Kprobe { function_name } => format!("kprobe:{}", function_name),
-            Self::Kretprobe { function_name } => format!("kretprobe:{}", function_name),
-            Self::Uprobe { function_name } => format!("uprobe:{}", function_name),
-            Self::Uretprobe { function_name } => format!("uretprobe:{}", function_name),
-            Self::Fentry {
-                function_name,
-                attach_function,
-            } => format!("fentry:{}:{}", function_name, attach_function),
-            Self::Fexit {
-                function_name,
-                attach_function,
-            } => format!("fexit:{}:{}", function_name, attach_function),
-        }
-    }
 }
 
 impl std::fmt::Display for ProgramType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.type_str())
+        match self {
+            Self::Xdp { function_name } => write!(f, "xdp:{}", function_name),
+            Self::Tc => write!(f, "tc"),
+            Self::Tcx => write!(f, "tcx"),
+            Self::Tracepoint { function_name } => write!(f, "tracepoint:{}", function_name),
+            Self::Kprobe { function_name } => write!(f, "kprobe:{}", function_name),
+            Self::Kretprobe { function_name } => write!(f, "kretprobe:{}", function_name),
+            Self::Uprobe { function_name } => write!(f, "uprobe:{}", function_name),
+            Self::Uretprobe { function_name } => write!(f, "uretprobe:{}", function_name),
+            Self::Fentry {
+                function_name,
+                attach_function,
+            } => write!(f, "fentry:{}:{}", function_name, attach_function),
+            Self::Fexit {
+                function_name,
+                attach_function,
+            } => write!(f, "fexit:{}:{}", function_name, attach_function),
+        }
     }
 }
 
