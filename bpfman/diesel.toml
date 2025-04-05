@@ -2,7 +2,7 @@
 # Copyright Authors of bpfman
 
 [print_schema]
-file = "src/schema.rs"
+file = "src/db/schema.rs"
 with_docs = false
 
 # https://github.com/diesel-rs/diesel/issues/852.

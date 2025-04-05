@@ -17,4 +17,4 @@ diesel migration run \
 
 diesel print-schema \
        --config-file "$script_dir/diesel.toml" \
-       > "$script_dir/src/schema.rs"
+       > "$script_dir/src/db/schema.rs"

@@ -25,10 +25,10 @@ use aya::{
         uprobe::UProbeLink,
     },
 };
+use db::{BpfMap, BpfProgram, BpfProgramMap};
 use diesel::{prelude::*, sqlite::SqliteConnection};
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use log::{debug, error, info, warn};
-use models::{BpfMap, BpfProgram, BpfProgramMap};
 use multiprog::{TcDispatcher, XdpDispatcher};
 use program_loader::{LoadSpec, LoadedProgram};
 use sled::{Config as SledConfig, Db};
@@ -55,12 +55,10 @@ pub mod config;
 pub mod db;
 mod dispatcher_config;
 pub mod errors;
-mod models;
 mod multiprog;
 mod netlink;
 mod oci_utils;
 pub mod program_loader;
-mod schema;
 mod static_program;
 pub mod types;
 pub mod utils;

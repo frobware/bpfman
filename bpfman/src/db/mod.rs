@@ -13,6 +13,10 @@
 //! If a type appears in `crate::db`, it's part of the crate's
 //! intended public interface.
 
+mod models;
+pub mod schema;
 mod types;
 
+pub use models::{BpfLink, BpfMap, BpfProgram, BpfProgramMap};
+pub use schema::{bpf_links, bpf_maps, bpf_program_maps, bpf_programs};
 pub use types::{KernelU32, U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UnsignedIntBlobError};

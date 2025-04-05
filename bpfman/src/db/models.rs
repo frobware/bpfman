@@ -42,7 +42,7 @@ use crate::db::{KernelU32, U64Blob};
     Identifiable,
     Queryable,
 )]
-#[diesel(table_name = crate::schema::bpf_programs)]
+#[diesel(table_name = crate::db::bpf_programs)]
 #[diesel(primary_key(id))]
 pub struct BpfProgram {
     pub id: KernelU32,
@@ -81,7 +81,7 @@ pub struct BpfProgram {
 
 #[derive(Debug, AsChangeset, Insertable, Identifiable, Queryable)]
 #[diesel(belongs_to(BpfProgram, foreign_key = program_id))]
-#[diesel(table_name = crate::schema::bpf_links)]
+#[diesel(table_name = crate::db::bpf_links)]
 #[diesel(primary_key(id))]
 pub struct BpfLink {
     pub id: KernelU32,
@@ -96,7 +96,7 @@ pub struct BpfLink {
 #[derive(
     Debug, AsChangeset, Insertable, Identifiable, Queryable, serde::Serialize, serde::Deserialize,
 )]
-#[diesel(table_name = crate::schema::bpf_maps)]
+#[diesel(table_name = crate::db::bpf_maps)]
 #[diesel(primary_key(id))]
 pub struct BpfMap {
     pub id: KernelU32,
@@ -112,7 +112,7 @@ pub struct BpfMap {
 #[derive(Debug, Queryable, Selectable, Associations)]
 #[diesel(belongs_to(BpfProgram, foreign_key = program_id))]
 #[diesel(belongs_to(BpfMap, foreign_key = map_id))]
-#[diesel(table_name = crate::schema::bpf_program_maps)]
+#[diesel(table_name = crate::db::bpf_program_maps)]
 pub struct BpfProgramMap {
     pub program_id: KernelU32,
     pub map_id: KernelU32,
@@ -144,15 +144,15 @@ impl BpfProgram {
         conn: &mut SqliteConnection,
         program: &BpfProgram,
     ) -> QueryResult<BpfProgram> {
-        diesel::insert_into(crate::schema::bpf_programs::table)
+        diesel::insert_into(crate::db::bpf_programs::table)
             .values(program)
-            .returning(crate::schema::bpf_programs::all_columns)
+            .returning(crate::db::bpf_programs::all_columns)
             .get_result(conn)
     }
 
     /// Returns all BPF programs in the database.
     pub fn find_all(conn: &mut SqliteConnection) -> QueryResult<Vec<BpfProgram>> {
-        use crate::schema::bpf_programs::dsl::*;
+        use crate::db::bpf_programs::dsl::*;
         bpf_programs.load(conn)
     }
 
@@ -161,13 +161,13 @@ impl BpfProgram {
         conn: &mut SqliteConnection,
         search_id: KernelU32,
     ) -> QueryResult<BpfProgram> {
-        use crate::schema::bpf_programs::dsl::*;
+        use crate::db::bpf_programs::dsl::*;
         bpf_programs.filter(id.eq(search_id)).first(conn)
     }
 
     /// Updates an existing BPF program record.
     pub fn update_record(&mut self, conn: &mut SqliteConnection) -> QueryResult<()> {
-        use crate::schema::bpf_programs::dsl::*;
+        use crate::db::bpf_programs::dsl::*;
 
         let updated: BpfProgram = diesel::update(bpf_programs.filter(id.eq(self.id)))
             .set(&*self)
@@ -180,7 +180,7 @@ impl BpfProgram {
     /// Deletes a BPF program by its ID. Returns true if a record was
     /// deleted, false if no record matched the ID.
     pub fn delete_record(conn: &mut SqliteConnection, delete_id: KernelU32) -> QueryResult<bool> {
-        use crate::schema::bpf_programs::dsl::*;
+        use crate::db::bpf_programs::dsl::*;
 
         let num_deleted = diesel::delete(bpf_programs.filter(id.eq(delete_id))).execute(conn)?;
 
@@ -211,7 +211,7 @@ impl BpfMap {
         conn: &mut SqliteConnection,
         map: &BpfMap,
     ) -> QueryResult<usize> {
-        diesel::insert_into(crate::schema::bpf_maps::table)
+        diesel::insert_into(crate::db::bpf_maps::table)
             .values(map)
             .on_conflict_do_nothing()
             .execute(conn)
@@ -223,7 +223,7 @@ impl BpfLink {
         conn: &mut SqliteConnection,
         link: &BpfLink,
     ) -> Result<(), diesel::result::Error> {
-        diesel::insert_into(crate::schema::bpf_links::table)
+        diesel::insert_into(crate::db::bpf_links::table)
             .values(link)
             .execute(conn)?;
 
@@ -237,7 +237,7 @@ impl BpfProgramMap {
         program_id: KernelU32,
         map_id: KernelU32,
     ) -> Result<(), diesel::result::Error> {
-        use crate::schema::bpf_program_maps;
+        use crate::db::bpf_program_maps;
 
         diesel::insert_into(bpf_program_maps::table)
             .values((
@@ -312,7 +312,7 @@ impl Default for BpfLink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{establish_sqlite_connection, models::BpfProgram};
+    use crate::{db::BpfProgram, establish_sqlite_connection};
 
     fn setup_test_db() -> SqliteConnection {
         let database_url = ":memory:";
@@ -554,10 +554,7 @@ mod tests {
     /// 7. Delete prog2 — remaining mapping and map are deleted.
     /// 8. Confirm bpf_maps is now empty.
     fn test_program_map_cascade_deletes_map_only_when_unused() {
-        use crate::{
-            models::{BpfMap, BpfProgram, BpfProgramMap},
-            schema::*,
-        };
+        use crate::db::{BpfMap, BpfProgram, BpfProgramMap, *};
 
         let mut conn = setup_test_db();
 

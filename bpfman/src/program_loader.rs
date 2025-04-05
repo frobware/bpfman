@@ -33,10 +33,9 @@ use thiserror::Error;
 
 use crate::{
     BpfmanError, calc_map_pin_path, create_map_pin_path,
-    db::{KernelU32, U64Blob},
+    db::{BpfMap, BpfProgram, KernelU32, U64Blob},
     directories::*,
     init_image_manager,
-    models::{BpfMap, BpfProgram},
     types::{Location, ProgramType},
     utils::should_map_be_pinned,
 };
