@@ -4,7 +4,8 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
-use crate::db::{KernelU32, U64Blob};
+use crate::db::prelude::*;
+
 // Diesel Derive Macros Explanation:
 //
 // - AsChangeset: Lets you update existing rows by setting columns to
@@ -554,7 +555,12 @@ mod tests {
     /// 7. Delete prog2 — remaining mapping and map are deleted.
     /// 8. Confirm bpf_maps is now empty.
     fn test_program_map_cascade_deletes_map_only_when_unused() {
-        use crate::db::{BpfMap, BpfProgram, BpfProgramMap, *};
+        use crate::db::{
+            bpf_maps::dsl::bpf_maps,
+            bpf_program_maps::dsl::{
+                bpf_program_maps, map_id as map_id_col, program_id as program_id_col,
+            },
+        };
 
         let mut conn = setup_test_db();
 
@@ -587,7 +593,6 @@ mod tests {
         };
         BpfProgram::insert_record(&mut conn, &prog1).unwrap();
 
-        // Insert second program.
         let prog2 = BpfProgram {
             id: 102u32.into(),
             name: "prog2".into(),
@@ -608,9 +613,9 @@ mod tests {
         BpfProgramMap::insert_record(&mut conn, prog2.id, shared_map.id).unwrap();
 
         // Confirm both join rows exist.
-        let mappings: Vec<(KernelU32, KernelU32)> = bpf_program_maps::table
-            .select((bpf_program_maps::program_id, bpf_program_maps::map_id))
-            .order_by(bpf_program_maps::program_id)
+        let mappings: Vec<(KernelU32, KernelU32)> = bpf_program_maps
+            .select((program_id_col, map_id_col))
+            .order_by(program_id_col)
             .load(&mut conn)
             .unwrap();
         assert_eq!(
@@ -622,9 +627,8 @@ mod tests {
         // Delete first program.
         BpfProgram::delete_record(&mut conn, prog1.id).unwrap();
 
-        // Confirm only second mapping remains.
-        let mappings: Vec<(KernelU32, KernelU32)> = bpf_program_maps::table
-            .select((bpf_program_maps::program_id, bpf_program_maps::map_id))
+        let mappings: Vec<(KernelU32, KernelU32)> = bpf_program_maps
+            .select((program_id_col, map_id_col))
             .load(&mut conn)
             .unwrap();
         assert_eq!(
@@ -634,15 +638,13 @@ mod tests {
         );
 
         // Confirm map still exists.
-        let maps: Vec<BpfMap> = bpf_maps::table.load(&mut conn).unwrap();
+        let maps: Vec<BpfMap> = bpf_maps.load(&mut conn).unwrap();
         assert_eq!(maps.len(), 1, "Expected shared map to still exist");
 
-        // Delete second program.
         BpfProgram::delete_record(&mut conn, prog2.id).unwrap();
 
-        // Confirm join table is empty.
-        let mappings: Vec<(KernelU32, KernelU32)> = bpf_program_maps::table
-            .select((bpf_program_maps::program_id, bpf_program_maps::map_id))
+        let mappings: Vec<(KernelU32, KernelU32)> = bpf_program_maps
+            .select((program_id_col, map_id_col))
             .load(&mut conn)
             .unwrap();
         assert!(
@@ -651,7 +653,7 @@ mod tests {
         );
 
         // Confirm shared map is now deleted.
-        let maps: Vec<BpfMap> = bpf_maps::table.load(&mut conn).unwrap();
+        let maps: Vec<BpfMap> = bpf_maps.load(&mut conn).unwrap();
         assert!(
             maps.is_empty(),
             "Expected shared map to be deleted after all program references removed"

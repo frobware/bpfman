@@ -14,6 +14,7 @@
 //! intended public interface.
 
 mod models;
+pub mod prelude;
 pub mod schema;
 mod types;
 
