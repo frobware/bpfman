@@ -6,7 +6,7 @@
 //! Intended for glob-importing in downstream modules:
 //!
 //! ```rust
-//! use crate::db::prelude::*;
+//! use bpfman::db::prelude::*;
 //! ```
 //!
 //! This module exposes domain-level types and column wrappers, but
