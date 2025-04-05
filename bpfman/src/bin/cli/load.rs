@@ -11,7 +11,8 @@ use bpfman::{
     program_loader::{LoadSpecBuilder, LoadedProgram, UnloadError},
     setup, setup_with_sqlite,
     types::{
-        FentryProgram, FexitProgram, KprobeProgram, Link, Location, Program, ProgramData, TcProgram, TcxProgram, TracepointProgram, UprobeProgram, XdpProgram, METADATA_APPLICATION_TAG
+        FentryProgram, FexitProgram, KprobeProgram, Link, Location, METADATA_APPLICATION_TAG,
+        Program, ProgramData, TcProgram, TcxProgram, TracepointProgram, UprobeProgram, XdpProgram,
     },
 };
 use log::warn;
