@@ -20,5 +20,5 @@
 //! implementation details (directory layout, submodule structure)
 //! private.
 
-mod k32;
-pub use self::k32::KernelU32;
+mod ku32;
+pub use self::ku32::KernelU32;
