@@ -39,7 +39,7 @@ use utils::{initialize_bpfman, tc_dispatcher_id, xdp_dispatcher_id};
 use crate::{
     config::Config,
     directories::*,
-    errors::BpfmanError,
+    errors::{BpfmanError, ParseError},
     multiprog::{Dispatcher, DispatcherId, DispatcherInfo},
     oci_utils::image_manager::ImageManager,
     types::{
@@ -2189,13 +2189,13 @@ pub enum ProgramType {
 }
 
 impl ProgramType {
-    pub fn parse(program_str: &str) -> Result<Self, BpfmanError> {
+    pub fn parse(program_str: &str) -> Result<Self, ParseError> {
         let parts: Vec<&str> = program_str.split(':').collect();
 
-        if parts.is_empty() || parts[0].is_empty() {
-            return Err(BpfmanError::InvalidProgramSpecification(
-                program_str.to_string(),
-            ));
+        if parts.is_empty() {
+            return Err(ParseError::InvalidProgramType {
+                program: program_str.to_string(),
+            });
         }
 
         match parts[0] {
@@ -2213,11 +2213,11 @@ impl ProgramType {
             "kretprobe" if parts.len() == 2 => Ok(Self::Kretprobe {
                 function_name: parts[1].to_string(),
             }),
-            "tc" if parts.len() == 1 => Ok(Self::Tc),
-            "tcx" if parts.len() == 1 => Ok(Self::Tcx),
             "tracepoint" if parts.len() >= 2 => Ok(Self::Tracepoint {
                 function_name: parts[1..].join(":"),
             }),
+            "tc" if parts.len() == 1 => Ok(Self::Tc),
+            "tcx" if parts.len() == 1 => Ok(Self::Tcx),
             "uprobe" if parts.len() == 2 => Ok(Self::Uprobe {
                 function_name: parts[1].to_string(),
             }),
@@ -2227,9 +2227,9 @@ impl ProgramType {
             "xdp" if parts.len() == 2 => Ok(Self::Xdp {
                 function_name: parts[1].to_string(),
             }),
-            _ => Err(BpfmanError::InvalidProgramSpecification(
-                program_str.to_string(),
-            )),
+            _ => Err(ParseError::InvalidProgramType {
+                program: program_str.to_string(),
+            }),
         }
     }
 

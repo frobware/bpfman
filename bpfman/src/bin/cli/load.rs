@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use anyhow::{Result, bail};
 use bpfman::{
     ProgramType, add_programs,
-    errors::BpfmanError,
+    errors::{BpfmanError, ParseError},
     load_ebpf_programs,
     program_loader::{LoadSpecBuilder, LoadedProgram},
     setup, setup_with_sqlite,
@@ -250,7 +250,7 @@ impl LoadArgs<'_> {
             .collect()
     }
 
-    fn parse_program_types(&self) -> Result<Vec<ProgramType>, BpfmanError> {
+    fn parse_program_types(&self) -> Result<Vec<ProgramType>, ParseError> {
         self.get_programs()
             .iter()
             .map(|(kind, parts)| {

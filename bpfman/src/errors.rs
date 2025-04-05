@@ -104,10 +104,6 @@ pub enum BpfmanError {
         /// Any errors encountered during rollback (unloading).
         unload_failures: Vec<UnloadError>,
     },
-    #[error("Invalid program type specifier: {0}")]
-    InvalidProgramType(String),
-    #[error("Invalid program specification: {0}")]
-    InvalidProgramSpecification(String),
 }
 
 #[derive(Error, Debug)]
