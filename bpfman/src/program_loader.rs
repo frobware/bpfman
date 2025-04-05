@@ -95,19 +95,18 @@ pub struct LoadSpec {
 
 impl LoadSpecBuilder {
     pub fn build(&mut self) -> anyhow::Result<LoadSpec> {
-        let mut spec = self
-            .build_partial()
-            .map_err(|e| anyhow::anyhow!(e.to_string()))
-            .context("failed to build partial LoadSpec")?;
+        let mut spec = self.build_partial().context("building partial LoadSpec")?;
 
         let global_data_map =
             Self::global_data_to_map(spec.global_data.as_deref().unwrap_or_default());
-        spec.global_data_json = serde_json::to_string(&global_data_map)
-            .context("failed to serialise global data to JSON")?;
+
+        spec.global_data_json =
+            serde_json::to_string(&global_data_map).context("serialising global data to JSON")?;
 
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or_default());
+
         spec.metadata_json =
-            serde_json::to_string(&metadata_map).context("failed to serialise metadata to JSON")?;
+            serde_json::to_string(&metadata_map).context("serialising metadata to JSON")?;
 
         Ok(spec)
     }
