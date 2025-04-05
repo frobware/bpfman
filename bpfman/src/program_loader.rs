@@ -32,12 +32,12 @@ use serde::Serialize;
 use serde_json;
 
 use crate::{
-    BpfmanError, ProgramType, calc_map_pin_path, create_map_pin_path,
+    BpfmanError, calc_map_pin_path, create_map_pin_path,
     directories::*,
     init_image_manager,
     k32::KernelU32,
     models::{BpfMap, BpfProgram},
-    types::Location,
+    types::{Location, ProgramType},
     uintblob::U64Blob,
     utils::should_map_be_pinned,
 };
@@ -105,35 +105,6 @@ impl LoadSpecBuilder {
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or_default());
         spec.metadata_json = serde_json::to_string(&metadata_map)
             .map_err(|e| format!("Failed to serialise metadata to JSON: {}", e))?;
-
-        println!("{:?}", self.programs);
-
-        // // Parse and validate program types
-        // let mut validated_programs = Vec::new();
-        // for (prog_type, parts) in self.programs.as_ref().unwrap_or(&vec![]) {
-        //     // Get the program name
-        //     let name = parts
-        //         .first()
-        //         .ok_or_else(|| format!("Missing program name for {}", prog_type))?
-        //         .clone();
-
-        //     // Reconstruct the program string for parsing.
-        //     let program_str = if parts.is_empty() {
-        //         prog_type.clone()
-        //     } else {
-        //         format!("{}:{}", prog_type, parts.join(":"))
-        //     };
-
-        //     // Use ProgramType::parse for validation
-        //     let program_type = ProgramType::parse(&program_str)
-        //         .map_err(|e| format!("Invalid program type: {}", e))?;
-
-        //     println!("{:?}", program_type);
-
-        //     validated_programs.push((program_type, name));
-        // }
-
-        // spec.programs_by_type = validated_programs;
 
         Ok(spec)
     }
@@ -572,7 +543,10 @@ pub(crate) fn unload_all(programs: &[LoadedProgram]) -> Vec<UnloadError> {
 #[cfg(test)]
 mod tests {
     mod load_spec {
-        use crate::{ProgramType, program_loader::LoadSpecBuilder, types::Location};
+        use crate::{
+            program_loader::LoadSpecBuilder,
+            types::{Location, ProgramType},
+        };
 
         fn valid_programs() -> Vec<ProgramType> {
             vec![ProgramType::Tcx]

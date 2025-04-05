@@ -5,14 +5,15 @@ use std::collections::HashMap;
 
 use anyhow::{Result, bail};
 use bpfman::{
-    ProgramType, add_programs,
+    add_programs,
     errors::{BpfmanError, ParseError},
     load_ebpf_programs,
     program_loader::{LoadSpecBuilder, LoadedProgram},
     setup, setup_with_sqlite,
     types::{
         FentryProgram, FexitProgram, KprobeProgram, Link, Location, METADATA_APPLICATION_TAG,
-        Program, ProgramData, TcProgram, TcxProgram, TracepointProgram, UprobeProgram, XdpProgram,
+        Program, ProgramData, ProgramType, TcProgram, TcxProgram, TracepointProgram, UprobeProgram,
+        XdpProgram,
     },
 };
 use log::warn;
