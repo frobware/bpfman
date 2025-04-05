@@ -1,20 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of bpfman
 
-//! Internal submodule for database-specific wrapper types.
+//! Column-level database types and wrappers.
 //!
-//! This module contains helper types for integrating non-standard
-//! Rust types into Diesel models, such as:
+//! This internal module defines helper types used in Diesel models
+//! for representing non-standard Rust values in SQLite:
 //!
-//! - [`KernelU32`]: for storing unsigned `u32` values in SQLite `BIGINT` columns
-//! - [`U64Blob`], [`U128Blob`]: for storing larger unsigned integers in `BLOB` columns
+//! - [`KernelU32`]: stores `u32` values in SQLite `BIGINT` columns
+//! - [`U64Blob`], [`U128Blob`], etc.: store fixed-size integers in
+//!   BLOB columns with strict encoding
 //!
-//! These types are re-exported at the `db` module level, and this
-//! module itself is kept private. Callers should prefer: `use
-//! crate::db::KernelU32` rather than referring to deeply nested
-//! paths. This allows us to flatten the external API while keeping
-//! implementation details (directory layout, submodule structure)
-//! private.
+//! These wrappers provide:
+//!
+//! - Type safety for numeric IDs and identifiers
+//! - Fixed-size binary encoding (for BLOB columns)
+//! - Integration with Diesel (`ToSql`, `FromSql`, `AsExpression`, etc.)
+//! - Deserialisation-time size checks and conversions
+//!
+//! These are *not* domain types like [`BpfProgram`] or [`BpfMap`].
+//! For those, see the per-entity modules (`bpf_program.rs`, etc.).
+//!
+//! All types here are re-exported at the `crate::db` level, so users
+//! can write `use crate::db::KernelU32` without referring to
+//! implementation details.
 
 mod ku32;
 mod uintblob;
