@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+
+# sudo BPFMAN_USE_SQLITE="${BPFMAN_USE_SQLITE:-1}" RUST_LOG=debug ./target/debug/bpfman load image \
+#   --image-url quay.io/bpfman-bytecode/fentry:latest \
+#   --programs fentry:test_fentry:do_unlinkat fexit:test_fexit:do_unlinkat
+
+sudo BPFMAN_USE_SQLITE="${BPFMAN_USE_SQLITE:-1}" RUST_LOG=debug ./target/debug/bpfman \
+     load file \
+     --path ~/src/github.com/frobware/bpfman-hacks/stats/bpf/fentry.o \
+     --programs fentry:test_fentry:do_unlinkat \
+     --programs fexit:test_fexit:do_unlinkat
