@@ -254,8 +254,10 @@ impl LoadArgs<'_> {
 fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()> {
     match res {
         Ok(loaded) => {
-            // TODO(frobware) - print this nicely likely the
-            // non-sqlite execute_load_{file,image} do.
+            // TODO(frobware) - print this as the the non-sqlite
+            // execute_load_{file,image} do. For now, seeing it as
+            // JSON is OK as it verifies all the fields we set on the
+            // DB.
             println!("Successfully loaded {} program(s):", loaded.len());
             println!(
                 "{}",
@@ -300,7 +302,6 @@ fn sqlite_execute_load_common(source: Location, args: LoadArgs) -> anyhow::Resul
 
     let load_spec = LoadSpecBuilder::default()
         .bytecode_source(source)
-        .function_names(vec![])
         .global_data(args.get_global_data().unwrap_or_default())
         .map_owner_id(args.get_map_owner_id())
         .metadata(args.get_metadata().unwrap_or_default())
