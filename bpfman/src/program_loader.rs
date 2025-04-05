@@ -131,6 +131,31 @@ pub enum LoadSpecError {
 }
 
 impl LoadSpecBuilder {
+    /// Finalises the [`LoadSpecBuilder`] into a complete [`LoadSpec`]
+    /// instance.
+    ///
+    /// This method performs the following:
+    ///
+    /// 1. Calls [`Self::build_partial`] to perform structural
+    ///    validation and assemble a `LoadSpec`.
+    /// 2. Serialises the optional
+    ///    [`global_data`](LoadSpecBuilder::global_data) and
+    ///    [`metadata`](LoadSpecBuilder::metadata) fields to JSON
+    ///    strings for storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`LoadSpecError`](crate::program_loader::LoadSpecError) if:
+    ///
+    /// - Required fields are missing ([`LoadSpecError::UninitialisedFields`]).
+    /// - JSON serialisation of global data fails ([`LoadSpecError::GlobalDataSerialisation`]).
+    /// - JSON serialisation of metadata fails ([`LoadSpecError::MetadataSerialisation`]).
+    ///
+    /// # Returns
+    ///
+    /// A fully constructed
+    /// [`LoadSpec`](crate::program_loader::LoadSpec) ready for use in
+    /// loading eBPF programs.
     pub fn build(&mut self) -> Result<LoadSpec, LoadSpecError> {
         let mut spec = self
             .build_partial()
@@ -150,10 +175,20 @@ impl LoadSpecBuilder {
         Ok(spec)
     }
 
+    /// Converts a list of `(key, value)` byte arrays into a
+    /// [`HashMap<String, Vec<u8>>`](std::collections::HashMap).
+    ///
+    /// Used to convert [`LoadSpecBuilder::global_data`] into a
+    /// serialisable map format before encoding it as JSON.
     fn global_data_to_map(data: &[(String, Vec<u8>)]) -> HashMap<String, Vec<u8>> {
         data.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 
+    /// Converts a list of `(key, value)` string pairs into a
+    /// [`HashMap<String, String>`](std::collections::HashMap).
+    ///
+    /// Used to convert [`LoadSpecBuilder::metadata`] into a
+    /// serialisable map format before encoding it as JSON.
     fn metadata_to_map(data: &[(String, String)]) -> HashMap<String, String> {
         data.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
@@ -189,6 +224,11 @@ pub enum UnloadError {
     },
 }
 
+/// Converts an [`aya::maps::Map`] into a [`BpfMap`] by extracting
+/// metadata such as ID, type, key/value sizes, and max entries.
+///
+/// This is used during program load to persist map metadata in the
+/// database for later inspection or bookkeeping.
 fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::maps::MapError> {
     let info = match data {
         Map::Array(d)
@@ -226,6 +266,13 @@ fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::
     })
 }
 
+/// Constructs a [`BpfProgram`] from a loaded
+/// [`aya::programs::ProgramInfo`] and the corresponding
+/// [`ProgramType`] and [`LoadSpec`].
+///
+/// This extracts both kernel metadata and user-supplied fields (e.g.,
+/// global data, metadata, source path) to produce a fully populated
+/// `BpfProgram` ready for DB persistence.
 fn build_bpfprogram_from_aya_program(
     prog_info: &aya::programs::ProgramInfo,
     program_type: &ProgramType,
@@ -477,8 +524,8 @@ fn load_program_into_kernel(
 /// registering programs.
 ///
 /// This function takes a `LoadSpec`, which contains information about
-/// the bytecode source, function mappings, metadata, and other
-/// parameters. It performs the following steps:
+/// the bytecode source, metadata, and other parameters. It performs
+/// the following steps:
 ///
 /// 1. Creates an `EbpfLoader` to parse and prepare the bytecode.
 /// 2. Loads the bytecode into an `Ebpf` instance, representing the
