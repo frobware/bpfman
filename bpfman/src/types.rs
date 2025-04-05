@@ -3879,8 +3879,8 @@ impl_get_metadata!(
 /// The CLI expects one or more program specifications in the form:
 ///
 /// ```text
-/// <TYPE>:<FUNC_NAME>
-/// <TYPE>:<FUNC_NAME>:<ATTACH_FUNC>  (for fentry/fexit)
+/// <TYPE>:<FUNC-NAME>
+/// <TYPE>:<FUNC-NAME>:<ATTACH-FUNC>  (for fentry/fexit)
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
