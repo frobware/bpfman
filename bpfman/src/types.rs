@@ -1388,7 +1388,7 @@ pub enum Location {
 }
 
 impl Location {
-    pub fn get_program_bytes(
+    fn get_program_bytes(
         &self,
         root_db: &Db,
         image_manager: &mut ImageManager,
@@ -1412,9 +1412,9 @@ impl Location {
 
     // TODO(frobware): this function and the preceding need to become
     // one; when we drop SLED we can drop the requirement to need a
-    // root_db parameter. This only exists because in the new SQLite
-    // code paths we don't have (or want) a SLED DB handle.
-    pub fn get_program_bytes_no_sled(
+    // root_db parameter. This function only exists because in the new
+    // SQLite code paths we don't have (or want) a SLED DB handle.
+    pub(crate) fn get_program_bytes_no_sled(
         &self,
         image_manager: &mut ImageManager,
     ) -> Result<(Vec<u8>, Vec<String>), BpfmanError> {
