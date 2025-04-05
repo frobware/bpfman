@@ -2140,6 +2140,21 @@ pub fn establish_sqlite_connection(database_url: &str) -> anyhow::Result<SqliteC
     Ok(conn)
 }
 
+/// Represents a declarative specification for an eBPF program,
+/// mirroring the CLI `--programs` argument format.
+///
+/// Each variant of `ProgramType` corresponds to a supported eBPF
+/// program type, optionally including associated metadata such as the
+/// eBPF function name and/or the kernel attach function.
+///
+/// # CLI Format
+///
+/// The CLI expects one or more program specifications in the form:
+///
+/// ```text
+/// <TYPE>:<FUNC_NAME>
+/// <TYPE>:<FUNC_NAME>:<ATTACH_FUNC>  (for fentry/fexit)
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProgramType {
