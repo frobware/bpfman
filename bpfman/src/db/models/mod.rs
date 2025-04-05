@@ -10,30 +10,22 @@
 //! Each entity (program, map, link, etc.) has its own submodule for
 //! clarity and separation of concerns.
 
-// Diesel Derive Macros Explanation:
+// Diesel Trait Derivations
 //
-// - AsChangeset: Lets you update existing rows by setting columns to
-//   struct fields, e.g. `diesel::update(table).set(...)`.
+// These traits are commonly derived on Diesel model structs to enable
+// interaction with the database:
 //
-// - Associations: Allows Diesel to handle table relationships (for
-//   example, `belongs_to`, `has_many`) based on the struct.
+// - [`diesel::Queryable`]: Loads rows from the database into Rust structs.
+// - [`diesel::Insertable`]: Enables inserting structs as new rows.
+// - [`diesel::Identifiable`]: Associates a struct with a primary key.
+// - [`diesel::AsChangeset`]: Updates rows by mapping struct fields to columns.
+// - [`diesel::associations::HasTable`]: Required by various table operations.
+// - [`diesel::Associations`]: Enables modelling relationships (`belongs_to`, etc.).
+// - [`diesel::Selectable`]: Enables typed column projections.
+// - [`diesel::QueryableByName`]: Used with raw SQL queries via `sql_query(...)`.
 //
-// - Identifiable: Associates the struct with a primary key, aiding
-//   lookups by ID or establishing relations.
-//
-// - Insertable: Allows inserting new rows into a table using
-//   `insert_into(...)` with `.values(...)`.
-//
-// - Queryable: Permits loading rows from a table into this struct,
-//   typically using `table.load::<Struct>(...)`.
-//
-// - QueryableByName: Needed only if you use raw SQL queries via
-//   `sql_query("...").load::<Struct>(...)`. It matches fields in
-//   custom SQL statements to this struct.
-//
-// - Selectable: Adds typed projections so that
-//   `table.select(Struct::as_select())` does a compile-time check
-//   verifying columns match the struct.
+// These traits are usually brought into scope with `use
+// diesel::prelude::*`.
 
 mod bpf_link;
 mod bpf_map;
