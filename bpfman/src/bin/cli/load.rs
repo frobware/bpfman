@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use bpfman::{
     add_programs,
     errors::BpfmanError,
@@ -253,28 +253,26 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
     }
 }
 
-fn sqlite_execute_load_common(source: Location, args: LoadArgs) -> anyhow::Result<()> {
+fn sqlite_execute_load_common(args: LoadArgs) -> anyhow::Result<()> {
     let (_config, mut conn) = setup_with_sqlite()?;
 
     let load_spec = LoadSpecBuilder::default()
-        .bytecode_source(source)
+        .bytecode_source(args.get_source()?)
         .global_data(args.get_global_data().unwrap_or_default())
         .map_owner_id(args.get_map_owner_id())
         .metadata(args.get_metadata().unwrap_or_default())
         .programs(args.parse_program_types()?)
         .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
+        .with_context(|| "building LoadSpec")?;
 
     let result = load_ebpf_programs(&mut conn, &load_spec);
     handle_load_result(result)
 }
 
 fn sqlite_execute_load_file(args: &LoadFileArgs) -> anyhow::Result<()> {
-    let source = Location::File(args.path.clone());
-    sqlite_execute_load_common(source, LoadArgs::File(args))
+    sqlite_execute_load_common(LoadArgs::File(args))
 }
 
 fn sqlite_execute_load_image(args: &LoadImageArgs) -> anyhow::Result<()> {
-    let source = Location::Image((&args.pull_args).try_into()?);
-    sqlite_execute_load_common(source, LoadArgs::Image(args))
+    sqlite_execute_load_common(LoadArgs::Image(args))
 }

@@ -9,7 +9,7 @@ use std::{
 
 use bpfman::{
     errors::ParseError,
-    types::{BpfProgType, ProgramType},
+    types::{BpfProgType, Location, ProgramType},
 };
 use clap::{ArgGroup, Args, Parser, Subcommand};
 use hex::FromHex;
@@ -879,8 +879,8 @@ pub(crate) fn parse_program_type(
 }
 
 /// Represents either a local or image-based eBPF program load
-/// request. This enum abstracts over `LoadFileArgs` and
-/// `LoadImageArgs`, allowing shared logic to operate generically on
+/// request. This enum abstracts over [`LoadFileArgs`] and
+/// [`LoadImageArgs`], allowing shared logic to operate generically on
 /// both.
 pub(crate) enum LoadArgs<'a> {
     File(&'a LoadFileArgs),
@@ -888,6 +888,13 @@ pub(crate) enum LoadArgs<'a> {
 }
 
 impl LoadArgs<'_> {
+    pub(crate) fn get_source(&self) -> anyhow::Result<Location> {
+        match self {
+            LoadArgs::File(args) => Ok(Location::File(args.path.clone())),
+            LoadArgs::Image(args) => Ok((&args.pull_args).try_into().map(Location::Image)?),
+        }
+    }
+
     pub(crate) fn get_programs(&self) -> &[(String, Vec<String>)] {
         match self {
             LoadArgs::File(file_args) => &file_args.programs,

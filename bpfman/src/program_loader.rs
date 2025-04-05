@@ -24,7 +24,7 @@
 //! [aya]: https://github.com/aya-rs/aya
 use std::{collections::HashMap, path::PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use aya::{Ebpf, maps::Map};
 use chrono::Utc;
 use derive_builder::Builder;
@@ -94,17 +94,20 @@ pub struct LoadSpec {
 }
 
 impl LoadSpecBuilder {
-    pub fn build(&mut self) -> Result<LoadSpec, String> {
-        let mut spec = self.build_partial().map_err(|e| e.to_string())?;
+    pub fn build(&mut self) -> anyhow::Result<LoadSpec> {
+        let mut spec = self
+            .build_partial()
+            .map_err(|e| anyhow::anyhow!(e.to_string()))
+            .context("failed to build partial LoadSpec")?;
 
         let global_data_map =
             Self::global_data_to_map(spec.global_data.as_deref().unwrap_or_default());
         spec.global_data_json = serde_json::to_string(&global_data_map)
-            .map_err(|e| format!("Failed to serialise global data to JSON: {}", e))?;
+            .context("failed to serialise global data to JSON")?;
 
         let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or_default());
-        spec.metadata_json = serde_json::to_string(&metadata_map)
-            .map_err(|e| format!("Failed to serialise metadata to JSON: {}", e))?;
+        spec.metadata_json =
+            serde_json::to_string(&metadata_map).context("failed to serialise metadata to JSON")?;
 
         Ok(spec)
     }
