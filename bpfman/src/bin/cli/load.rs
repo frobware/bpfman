@@ -6,20 +6,19 @@ use std::collections::HashMap;
 use anyhow::{Result, bail};
 use bpfman::{
     add_programs,
-    errors::{BpfmanError, ParseError},
+    errors::BpfmanError,
     load_ebpf_programs,
     program_loader::{LoadSpecBuilder, LoadedProgram},
     setup, setup_with_sqlite,
     types::{
         FentryProgram, FexitProgram, KprobeProgram, Link, Location, METADATA_APPLICATION_TAG,
-        Program, ProgramData, ProgramType, TcProgram, TcxProgram, TracepointProgram, UprobeProgram,
-        XdpProgram,
+        Program, ProgramData, TcProgram, TcxProgram, TracepointProgram, UprobeProgram, XdpProgram,
     },
 };
 use log::warn;
 
 use crate::{
-    args::{GlobalArg, LoadFileArgs, LoadImageArgs, LoadSubcommand},
+    args::{GlobalArg, LoadArgs, LoadFileArgs, LoadImageArgs, LoadSubcommand},
     table::ProgTable,
 };
 
@@ -206,64 +205,6 @@ fn parse_global(global: &Option<Vec<GlobalArg>>) -> HashMap<String, Vec<u8>> {
         }
     }
     global_data
-}
-
-enum LoadArgs<'a> {
-    File(&'a LoadFileArgs),
-    Image(&'a LoadImageArgs),
-}
-
-impl LoadArgs<'_> {
-    fn get_programs(&self) -> &[(String, Vec<String>)] {
-        match self {
-            LoadArgs::File(file_args) => &file_args.programs,
-            LoadArgs::Image(image_args) => &image_args.programs,
-        }
-    }
-
-    fn get_global_data(&self) -> Option<Vec<(String, Vec<u8>)>> {
-        match self {
-            LoadArgs::File(file_args) => file_args.global.as_deref().map(Self::to_key_value_pairs),
-            LoadArgs::Image(image_args) => {
-                image_args.global.as_deref().map(Self::to_key_value_pairs)
-            }
-        }
-    }
-
-    fn get_metadata(&self) -> Option<Vec<(String, String)>> {
-        match self {
-            LoadArgs::File(file_args) => file_args.metadata.clone(),
-            LoadArgs::Image(image_args) => image_args.metadata.clone(),
-        }
-    }
-
-    fn get_map_owner_id(&self) -> Option<u32> {
-        match self {
-            LoadArgs::File(file_args) => file_args.map_owner_id,
-            LoadArgs::Image(image_args) => image_args.map_owner_id,
-        }
-    }
-
-    fn to_key_value_pairs(global: &[GlobalArg]) -> Vec<(String, Vec<u8>)> {
-        global
-            .iter()
-            .map(|arg| (arg.name.clone(), arg.value.clone()))
-            .collect()
-    }
-
-    fn parse_program_types(&self) -> Result<Vec<ProgramType>, ParseError> {
-        self.get_programs()
-            .iter()
-            .map(|(kind, parts)| {
-                let s = if parts.is_empty() {
-                    kind.clone()
-                } else {
-                    format!("{}:{}", kind, parts.join(":"))
-                };
-                ProgramType::parse(&s)
-            })
-            .collect()
-    }
 }
 
 fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()> {
