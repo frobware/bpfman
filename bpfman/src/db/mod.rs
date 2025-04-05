@@ -5,17 +5,7 @@
 //!
 //! This module re-exports types and helpers used throughout the
 //! crate, flattening the module structure so consumers can simply
-//! use:
-//!
-//! ```rust
 //! use crate::db::KernelU32;
-//! ```
-//!
-//! ...rather than referring to deeply nested paths like:
-//!
-//! ```rust
-//! use crate::db::types::k32::KernelU32;
-//! ```
 //!
 //! The `types` module and its internal submodules are kept private to
 //! encourage consistent usage and avoid exposing internal structure.
@@ -25,4 +15,4 @@
 
 mod types;
 
-pub use types::KernelU32;
+pub use types::{KernelU32, U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UnsignedIntBlobError};

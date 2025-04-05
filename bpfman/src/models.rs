@@ -4,8 +4,7 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
-use crate::{db::KernelU32, uintblob::U64Blob};
-
+use crate::db::{KernelU32, U64Blob};
 // Diesel Derive Macros Explanation:
 //
 // - AsChangeset: Lets you update existing rows by setting columns to

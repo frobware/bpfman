@@ -10,15 +10,16 @@
 //! - [`U64Blob`], [`U128Blob`]: for storing larger unsigned integers in `BLOB` columns
 //!
 //! These types are re-exported at the `db` module level, and this
-//! module itself is kept private. Callers should prefer:
-//!
-//! ```rust
-//! use crate::db::KernelU32;
-//! ```
-//!
-//! This allows us to flatten the external API while keeping
+//! module itself is kept private. Callers should prefer: `use
+//! crate::db::KernelU32` rather than referring to deeply nested
+//! paths. This allows us to flatten the external API while keeping
 //! implementation details (directory layout, submodule structure)
 //! private.
 
 mod ku32;
-pub use self::ku32::KernelU32;
+mod uintblob;
+
+pub use self::{
+    ku32::KernelU32,
+    uintblob::{U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UnsignedIntBlobError},
+};
