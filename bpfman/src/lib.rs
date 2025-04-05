@@ -54,7 +54,7 @@ use crate::{
 pub mod config;
 mod dispatcher_config;
 pub mod errors;
-pub mod k32;
+mod k32;
 pub mod models;
 mod multiprog;
 mod netlink;
