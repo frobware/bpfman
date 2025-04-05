@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, bail};
 use bpfman::{
-    add_programs,
+    ProgramType, add_programs,
     errors::BpfmanError,
     load_ebpf_programs,
     program_loader::{LoadSpecBuilder, LoadedProgram},
@@ -249,6 +249,21 @@ impl LoadArgs<'_> {
             .map(|arg| (arg.name.clone(), arg.value.clone()))
             .collect()
     }
+
+    fn parse_program_types(&self) -> anyhow::Result<Vec<ProgramType>> {
+        self.get_programs()
+            .iter()
+            .map(|(kind, parts)| {
+                let s = if parts.is_empty() {
+                    kind.clone()
+                } else {
+                    format!("{}:{}", kind, parts.join(":"))
+                };
+                ProgramType::parse(&s)
+                    .map_err(|e| anyhow::anyhow!("Invalid program '{}': {}", s, e))
+            })
+            .collect()
+    }
 }
 
 fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()> {
@@ -305,7 +320,7 @@ fn sqlite_execute_load_common(source: Location, args: LoadArgs) -> anyhow::Resul
         .global_data(args.get_global_data().unwrap_or_default())
         .map_owner_id(args.get_map_owner_id())
         .metadata(args.get_metadata().unwrap_or_default())
-        .programs(args.get_programs().to_vec())
+        .programs(args.parse_program_types()?)
         .build()
         .map_err(|e| anyhow::anyhow!("Failed to build LoadSpec: {}", e))?;
 

@@ -73,6 +73,9 @@ pub struct LoadSpec {
     #[builder(setter(into))]
     bytecode_source: Location,
 
+    #[builder(default)]
+    programs: Vec<ProgramType>,
+
     #[builder(setter(strip_option), default)]
     global_data: Option<Vec<(String, Vec<u8>)>>,
 
@@ -82,19 +85,12 @@ pub struct LoadSpec {
     #[builder(default)]
     map_owner_id: Option<u32>,
 
-    #[allow(dead_code)] // Not directly accessed, only used in build().
-    #[builder(setter(into), default)]
-    programs: Vec<(String, Vec<String>)>,
-
     // The following fields are computed in build().
     #[builder(setter(skip), default = "String::from(\"{}\")")]
     global_data_json: String,
 
     #[builder(setter(skip), default = "String::from(\"{}\")")]
     metadata_json: String,
-
-    #[builder(setter(skip), default)]
-    programs_by_type: Vec<(ProgramType, String)>,
 }
 
 impl LoadSpecBuilder {
@@ -112,32 +108,32 @@ impl LoadSpecBuilder {
 
         println!("{:?}", self.programs);
 
-        // Parse and validate program types
-        let mut validated_programs = Vec::new();
-        for (prog_type, parts) in self.programs.as_ref().unwrap_or(&vec![]) {
-            // Get the program name
-            let name = parts
-                .first()
-                .ok_or_else(|| format!("Missing program name for {}", prog_type))?
-                .clone();
+        // // Parse and validate program types
+        // let mut validated_programs = Vec::new();
+        // for (prog_type, parts) in self.programs.as_ref().unwrap_or(&vec![]) {
+        //     // Get the program name
+        //     let name = parts
+        //         .first()
+        //         .ok_or_else(|| format!("Missing program name for {}", prog_type))?
+        //         .clone();
 
-            // Reconstruct the program string for parsing.
-            let program_str = if parts.is_empty() {
-                prog_type.clone()
-            } else {
-                format!("{}:{}", prog_type, parts.join(":"))
-            };
+        //     // Reconstruct the program string for parsing.
+        //     let program_str = if parts.is_empty() {
+        //         prog_type.clone()
+        //     } else {
+        //         format!("{}:{}", prog_type, parts.join(":"))
+        //     };
 
-            // Use ProgramType::parse for validation
-            let program_type = ProgramType::parse(&program_str)
-                .map_err(|e| format!("Invalid program type: {}", e))?;
+        //     // Use ProgramType::parse for validation
+        //     let program_type = ProgramType::parse(&program_str)
+        //         .map_err(|e| format!("Invalid program type: {}", e))?;
 
-            println!("{:?}", program_type);
+        //     println!("{:?}", program_type);
 
-            validated_programs.push((program_type, name));
-        }
+        //     validated_programs.push((program_type, name));
+        // }
 
-        spec.programs_by_type = validated_programs;
+        // spec.programs_by_type = validated_programs;
 
         Ok(spec)
     }
@@ -522,9 +518,8 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
 
     let mut loaded_programs = Vec::new();
 
-    for (program_type, _) in &spec.programs_by_type {
-        println!("{}", program_type.to_string());
-        match load_program_into_kernel(program_type, &mut program_bytecode, spec) {
+    for program in &spec.programs {
+        match load_program_into_kernel(program, &mut program_bytecode, spec) {
             Ok(loaded) => loaded_programs.push(loaded),
             Err(err) => {
                 let unload_failures = unload_all(&loaded_programs);
@@ -577,10 +572,11 @@ pub(crate) fn unload_all(programs: &[LoadedProgram]) -> Vec<UnloadError> {
 #[cfg(test)]
 mod tests {
     mod load_spec {
-        // Importing to test the builder as an external client would
-        // use it. The alternative would be to use integration tests
-        // to simulate the full end-to-end flow.
-        use crate::{program_loader::LoadSpecBuilder, types::Location};
+        use crate::{ProgramType, program_loader::LoadSpecBuilder, types::Location};
+
+        fn valid_programs() -> Vec<ProgramType> {
+            vec![ProgramType::Tcx]
+        }
 
         #[test]
         fn test_build_fails_with_no_fields() {
@@ -596,6 +592,7 @@ mod tests {
                     ("key1".into(), b"value1".to_vec()),
                     ("key2".into(), b"value2".to_vec()),
                 ])
+                .programs(valid_programs())
                 .build();
 
             assert!(result.is_ok());
@@ -614,6 +611,7 @@ mod tests {
                     ("key1".into(), "value1".to_string()),
                     ("key2".into(), "value2".to_string()),
                 ])
+                .programs(valid_programs())
                 .build();
 
             assert!(result.is_ok());
@@ -622,64 +620,6 @@ mod tests {
             let json: serde_json::Value = serde_json::from_str(&spec.metadata_json).unwrap();
             assert!(json.get("key1").is_some(), "expected key1 in JSON");
             assert!(json.get("key2").is_some(), "expected key2 in JSON");
-        }
-
-        #[test]
-        fn test_build_valid_program_types() {
-            let result = LoadSpecBuilder::default()
-                .bytecode_source(Location::File("path/to/bytecode".into()))
-                .programs(vec![
-                    ("fentry".into(), vec!["program1".into(), "func1".into()]),
-                    ("fexit".into(), vec!["program2".into(), "func2".into()]),
-                ])
-                .build();
-
-            assert!(
-                result.is_ok(),
-                "Expected build to succeed with valid program types"
-            );
-            let spec = result.unwrap();
-
-            assert_eq!(spec.programs.len(), 2);
-        }
-
-        #[test]
-        fn test_build_invalid_program_types() {
-            let result = LoadSpecBuilder::default()
-                .bytecode_source(Location::File("path/to/bytecode".into()))
-                .programs(vec![("invalid_type".into(), vec!["program1".into()])])
-                .build();
-
-            assert!(
-                result.is_err(),
-                "Expected build to fail with invalid program types"
-            );
-        }
-
-        #[test]
-        fn test_build_missing_fentry_function_name() {
-            let result = LoadSpecBuilder::default()
-                .bytecode_source(Location::File("path/to/bytecode".into()))
-                .programs(vec![("fentry".into(), vec!["program2".into()])])
-                .build();
-
-            assert!(
-                result.is_err(),
-                "Expected build to fail with invalid program types"
-            );
-        }
-
-        #[test]
-        fn test_build_missing_fexit_function_name() {
-            let result = LoadSpecBuilder::default()
-                .bytecode_source(Location::File("path/to/bytecode".into()))
-                .programs(vec![("fexit".into(), vec!["program2".into()])])
-                .build();
-
-            assert!(
-                result.is_err(),
-                "Expected build to fail with invalid program types"
-            );
         }
     }
 }
