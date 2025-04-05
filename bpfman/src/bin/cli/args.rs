@@ -80,6 +80,9 @@ pub(crate) struct LoadFileArgs {
     ///                              uprobe, xdp]
     #[clap(long, verbatim_doc_comment, num_args(1..), value_parser=parse_program_type, required = true)]
     pub(crate) programs: Vec<(String, Vec<String>)>,
+    // TODO(frobware) - this could become more strongly-typed vis-a-vis stringly-typed.
+    // #[clap(value_parser = ProgramType::parse)]
+    // programs: Vec<ProgramType>
 
     /// Required: Location of local bytecode file
     /// Example: --path /run/bpfman/examples/go-xdp-counter/bpf_x86_bpfel.o
@@ -142,6 +145,9 @@ pub(crate) struct LoadImageArgs {
     ///                              uprobe, xdp]
     #[clap(long, verbatim_doc_comment, num_args(1..), value_parser=parse_program_type, required = true)]
     pub(crate) programs: Vec<(String, Vec<String>)>,
+    // TODO(frobware) - this could become more strongly-typed vis-a-vis stringly-typed.
+    // #[clap(value_parser = ProgramType::parse)]
+    // programs: Vec<ProgramType>
 
     /// Specify how the bytecode image should be pulled.
     #[command(flatten)]
