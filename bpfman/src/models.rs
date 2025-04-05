@@ -4,7 +4,7 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
-use crate::{db::types::k32::KernelU32, uintblob::U64Blob};
+use crate::{db::KernelU32, uintblob::U64Blob};
 
 // Diesel Derive Macros Explanation:
 //
