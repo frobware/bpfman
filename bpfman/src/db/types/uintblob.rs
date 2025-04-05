@@ -32,7 +32,7 @@
 //!
 //! ```rust
 //! # use diesel::prelude::*;
-//! # use bpfman::db::{U32Blob, U16Blob, UnsignedIntBlobError};
+//! # use bpfman::db::{U32Blob, U16Blob, UxBlobError};
 //! # table! {
 //! #     counters (id) {
 //! #         id -> Integer,
@@ -89,7 +89,7 @@
 //! // ERROR CASE: Attempting to read a U32Blob as U16Blob.
 //! let result = counters::table.find(1).first::<Counter16>(&mut conn);
 //!
-//! // This will fail with an UnsignedIntBlobError.
+//! // This will fail with an UxBlobError.
 //! assert!(result.is_err());
 //! let error = result.unwrap_err().to_string();
 //! assert!(error.contains("Invalid input size"));
@@ -107,13 +107,14 @@ use diesel::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Error type for decoding byte slices into unsigned integer wrappers.
+/// Error type for decoding byte slices into unsigned integer
+/// wrappers.
 ///
 /// These errors occur when validating binary input, typically read
 /// from SQLite BLOB columns, during deserialisation into typed
 /// wrappers like [`U32Blob`].
 #[derive(Debug, Clone, PartialEq)]
-pub enum UnsignedIntBlobError {
+pub enum UxBlobError {
     /// Error when the byte slice has an invalid size for the
     /// requested type.
     ///
@@ -133,7 +134,7 @@ pub enum UnsignedIntBlobError {
     },
 }
 
-impl std::fmt::Display for UnsignedIntBlobError {
+impl std::fmt::Display for UxBlobError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidSize {
@@ -151,10 +152,10 @@ impl std::fmt::Display for UnsignedIntBlobError {
     }
 }
 
-impl std::error::Error for UnsignedIntBlobError {}
+impl std::error::Error for UxBlobError {}
 
-impl From<UnsignedIntBlobError> for diesel::result::Error {
-    fn from(err: UnsignedIntBlobError) -> Self {
+impl From<UxBlobError> for diesel::result::Error {
+    fn from(err: UxBlobError) -> Self {
         diesel::result::Error::DeserializationError(Box::new(err))
     }
 }
@@ -220,14 +221,14 @@ macro_rules! define_uint_blob {
             /// [`TryInto`] to convert the slice to a
             /// fixed-size array, which automatically validates the
             /// length.
-            fn from_bytes(bytes: &[u8]) -> Result<Self, UnsignedIntBlobError> {
+            fn from_bytes(bytes: &[u8]) -> Result<Self, UxBlobError> {
                 const EXPECTED_SIZE: usize = std::mem::size_of::<$type>();
 
                 let array: Result<[u8; EXPECTED_SIZE], _> = bytes.try_into();
 
                 match array {
                     Ok(byte_array) => Ok($name(<$type>::from_be_bytes(byte_array))),
-                    Err(_) => Err(UnsignedIntBlobError::InvalidSize {
+                    Err(_) => Err(UxBlobError::InvalidSize {
                         expected: EXPECTED_SIZE,
                         actual: bytes.len(),
                         type_name: std::any::type_name::<$type>().to_string(),

@@ -24,4 +24,4 @@ pub use schema::{bpf_links, bpf_maps, bpf_program_maps, bpf_programs};
 // flatten the db module API.
 //
 // See also: `crate::db::prelude` for glob imports.
-pub use types::{KernelU32, U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UnsignedIntBlobError};
+pub use types::{KernelU32, U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UxBlobError};

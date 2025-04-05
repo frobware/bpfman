@@ -29,5 +29,5 @@ mod uintblob;
 
 pub use self::{
     ku32::KernelU32,
-    uintblob::{U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UnsignedIntBlobError},
+    uintblob::{U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UxBlobError},
 };

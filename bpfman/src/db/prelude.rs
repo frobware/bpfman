@@ -17,5 +17,5 @@
 
 pub use super::{
     BpfLink, BpfMap, BpfProgram, BpfProgramMap, KernelU32, U8Blob, U16Blob, U32Blob, U64Blob,
-    U128Blob, UnsignedIntBlobError,
+    U128Blob, UxBlobError,
 };
