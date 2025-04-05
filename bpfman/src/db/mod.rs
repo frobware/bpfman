@@ -13,20 +13,12 @@
 //! If a type appears in `crate::db`, it's part of the crate's
 //! intended public interface.
 
-pub mod bpf_link;
-pub mod bpf_map;
-pub mod bpf_program;
-pub mod bpf_program_map;
+pub mod models;
 pub mod prelude;
 pub mod schema;
 mod types;
-
-pub use bpf_link::*;
-pub use bpf_map::*;
-pub use bpf_program::*;
-pub use bpf_program_map::*;
+pub use models::*;
 pub use schema::{bpf_links, bpf_maps, bpf_program_maps, bpf_programs};
-
 // Re-export database column types and wrappers for public use. These
 // types are defined in the private `types` module and exposed here to
 // flatten the db module API.
