@@ -51,7 +51,7 @@ env_logger = { workspace = true }
 flate2 = { workspace = true, features = ["zlib"] }
 hex = { workspace = true, features = ["std"] }
 lazy_static = { workspace = true }
-libsqlite3-sys = { workspace = true, features = ["bundled"] }
+libsqlite3-sys = { workspace = true, default-features = false }
 log = { workspace = true }
 netlink-packet-core = { workspace = true }
 netlink-packet-route = { workspace = true }
