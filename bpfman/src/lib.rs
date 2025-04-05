@@ -52,9 +52,9 @@ use crate::{
 };
 
 pub mod config;
+pub mod db;
 mod dispatcher_config;
 pub mod errors;
-mod k32;
 mod models;
 mod multiprog;
 mod netlink;
