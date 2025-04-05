@@ -58,7 +58,7 @@ pub mod k32;
 pub mod models;
 mod multiprog;
 mod netlink;
-pub mod oci_utils;
+mod oci_utils;
 pub mod program_loader;
 pub mod schema;
 mod static_program;
