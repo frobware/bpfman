@@ -389,8 +389,8 @@ mod tests {
         // Shared map inserted once.
         let shared_map = BpfMap {
             id: 900u32.into(),
-            name: "shared_map".to_string(),
-            map_type: Some("Array".to_string()),
+            name: "shared_map".to_owned(),
+            map_type: Some("Array".to_owned()),
             key_size: 4u32.into(),
             value_size: 64u32.into(),
             max_entries: 128u32.into(),
