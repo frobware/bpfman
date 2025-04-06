@@ -64,7 +64,7 @@ const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 /// - The connection cannot be established.
 /// - Any of the PRAGMA statements fail to execute.
 /// - One or more schema migrations fail to apply.
-pub fn establish_sqlite_connection(database_url: &str) -> Result<SqliteConnection, BpfmanError> {
+pub(crate) fn establish_sqlite_connection(database_url: &str) -> Result<SqliteConnection, BpfmanError> {
     let mut conn = SqliteConnection::establish(database_url).map_err(|e| {
         BpfmanError::SqliteConnectionError {
             database_url: database_url.to_string(),
