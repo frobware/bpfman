@@ -25,7 +25,18 @@ use aya::{
         uprobe::UProbeLink,
     },
 };
-use db::{BpfMap, BpfProgram, BpfProgramMap, establish_sqlite_connection};
+// Internal note: database model re-exports.
+//
+// Although the `db` module is deeply structured (e.g.
+// `db/models/bpf_program.rs`), we flatten and re-export the domain
+// types (`BpfProgram`, `BpfMap`, etc.) so they appear at the crate
+// root (`bpfman::BpfProgram`).
+//
+// This gives application code and binaries a clean, shallow and
+// intuitive interface, while allowing internal modules to remain
+// well-organised and focused on structure.
+pub use db::{BpfMap, BpfProgram, BpfProgramMap, establish_database_connection};
+pub use db::{KernelU32, U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UxBlobError};
 use diesel::sqlite::SqliteConnection;
 use log::{debug, error, info, warn};
 use multiprog::{TcDispatcher, XdpDispatcher};
@@ -51,7 +62,7 @@ use crate::{
 };
 
 pub mod config;
-pub mod db;
+mod db;
 mod dispatcher_config;
 pub mod errors;
 mod multiprog;
@@ -1247,7 +1258,7 @@ pub fn setup_with_sqlite() -> Result<(Config, SqliteConnection), BpfmanError> {
     debug!("BpfManager::setup()");
     Ok((
         open_config_file(),
-        establish_sqlite_connection(STDIR_SQLITE_DB)?,
+        establish_database_connection(STDIR_SQLITE_DB)?,
     ))
 }
 

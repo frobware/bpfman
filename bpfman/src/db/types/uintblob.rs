@@ -32,7 +32,7 @@
 //!
 //! ```rust
 //! # use diesel::prelude::*;
-//! # use bpfman::db::{U32Blob, U16Blob, UxBlobError};
+//! # use bpfman::{U32Blob, U16Blob, UxBlobError};
 //! # table! {
 //! #     counters (id) {
 //! #         id -> Integer,

@@ -4,7 +4,7 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
-use crate::db::prelude::*;
+use crate::db::KernelU32;
 
 #[derive(
     Debug,

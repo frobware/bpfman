@@ -33,6 +33,28 @@ pub use types::{KernelU32, U8Blob, U16Blob, U32Blob, U64Blob, U128Blob, UxBlobEr
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
+/// Internal note: This function is `pub` only to support integration
+/// tests and CLI binaries. It is not part of the stable public API
+/// and should be considered an implementation detail.
+///
+/// Ideally, this would remain `pub(crate)`, but Rust’s visibility
+/// rules require it to be `pub` for use outside the crate (e.g., in
+/// `src/bin/` or integration tests).
+///
+/// Why this is considered undesirable:
+///
+/// - Exposes low-level persistence machinery that is intended for
+///   internal use only.
+/// - Requires external consumers (e.g. tests, binaries) to be aware of
+///   Diesel internals, PRAGMA settings, and connection semantics.
+/// - Inconsistent with the higher-level abstractions provided elsewhere
+///   (such as `load_ebpf_programs`, which encapsulates both kernel and
+///   DB logic).
+/// - Becomes an API liability if the backing storage engine (e.g.
+///   Diesel) is ever swapped out or wrapped differently.
+///
+/// ---
+///
 /// Establish a new SQLite database connection and run pending
 /// migrations.
 ///
@@ -64,9 +86,7 @@ const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 /// - The connection cannot be established.
 /// - Any of the PRAGMA statements fail to execute.
 /// - One or more schema migrations fail to apply.
-pub(crate) fn establish_sqlite_connection(
-    database_url: &str,
-) -> Result<SqliteConnection, BpfmanError> {
+pub fn establish_database_connection(database_url: &str) -> Result<SqliteConnection, BpfmanError> {
     let mut conn = SqliteConnection::establish(database_url).map_err(|e| {
         BpfmanError::SqliteConnectionError {
             database_url: database_url.to_string(),

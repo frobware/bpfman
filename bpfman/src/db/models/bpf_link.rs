@@ -4,7 +4,7 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
-use crate::db::prelude::*;
+use crate::db::KernelU32;
 
 /// A persisted record for a BPF link that associates a program with a target.
 #[derive(Debug, AsChangeset, Insertable, Identifiable, Queryable)]

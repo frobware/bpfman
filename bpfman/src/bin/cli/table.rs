@@ -4,7 +4,7 @@
 use std::{collections::HashMap, path::PathBuf};
 
 use bpfman::{
-    db::{BpfMap, BpfProgram},
+    BpfMap, BpfProgram,
     errors::BpfmanError,
     types::{ImagePullPolicy, Link, Location, Program, ProgramData},
 };

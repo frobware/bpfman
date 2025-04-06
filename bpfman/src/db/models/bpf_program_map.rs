@@ -6,7 +6,7 @@
 
 use diesel::prelude::*;
 
-use crate::db::prelude::*;
+use crate::db::KernelU32;
 
 #[derive(Debug, Queryable, Selectable, Associations)]
 #[diesel(belongs_to(crate::db::BpfProgram, foreign_key = program_id))]

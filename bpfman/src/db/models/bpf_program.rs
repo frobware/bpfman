@@ -4,7 +4,7 @@
 use chrono::NaiveDateTime;
 use diesel::prelude::*;
 
-use crate::db::prelude::*;
+use crate::db::{KernelU32, U64Blob};
 
 #[derive(
     Clone,
@@ -136,10 +136,11 @@ impl Default for BpfProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BpfProgramMap, establish_database_connection};
 
     fn setup_test_db() -> SqliteConnection {
         let database_url = ":memory:";
-        crate::establish_sqlite_connection(database_url)
+        establish_database_connection(database_url)
             .expect("Failed to establish in-memory SQLite connection")
     }
 
@@ -366,10 +367,13 @@ mod tests {
     /// 7. Delete prog2 — remaining mapping and map are deleted.
     /// 8. Confirm bpf_maps is now empty.
     fn test_program_map_cascade_deletes_map_only_when_unused() {
-        use crate::db::{
-            bpf_maps::dsl::bpf_maps,
-            bpf_program_maps::dsl::{
-                bpf_program_maps, map_id as map_id_col, program_id as program_id_col,
+        use crate::{
+            BpfMap,
+            db::{
+                bpf_maps::dsl::bpf_maps,
+                bpf_program_maps::dsl::{
+                    bpf_program_maps, map_id as map_id_col, program_id as program_id_col,
+                },
             },
         };
 

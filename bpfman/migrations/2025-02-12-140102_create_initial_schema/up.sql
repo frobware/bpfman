@@ -118,7 +118,7 @@ PRAGMA foreign_keys = ON;
 --
 -- In application code (e.g., via Diesel), this PRAGMA is set at
 -- connection time for bpfman clients (see
--- establish_sqlite_connection()).
+-- establish_database_connection()).
 --
 -- But if you're using the SQLite CLI or scripts, foreign key
 -- constraints are **disabled by default** and must be enabled

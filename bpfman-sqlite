@@ -23,7 +23,7 @@
 #
 # In bpfman application code (e.g., via Diesel), this pragma is
 # enabled automatically during connection setup (see
-# `establish_sqlite_connection()`). But shell users and scripts must
+# `establish_database_connection()`). But shell users and scripts must
 # handle this themselves.
 #
 # Example (interactive):

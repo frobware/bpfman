@@ -5,8 +5,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 use bpfman::{
-    add_programs,
-    db::BpfProgram,
+    BpfProgram, add_programs,
     errors::BpfmanError,
     load_ebpf_programs,
     program_loader::{LoadSpecBuilder, LoadedProgram, UnloadError},
