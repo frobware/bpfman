@@ -49,7 +49,7 @@ command -v sqlite3 >/dev/null || {
 }
 
 if [ $# -lt 1 ]; then
-    echo "Usage: ${0##*/} /path/to/db.sqlite [ <SQLite-args>... ]" >&2
+    echo "Usage: ${0##*/} /path/to/db.sqlite [SQLITE-ARGS...]" >&2
     exit 1
 fi
 
