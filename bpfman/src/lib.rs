@@ -25,9 +25,8 @@ use aya::{
         uprobe::UProbeLink,
     },
 };
-use db::{establish_sqlite_connection, BpfMap, BpfProgram, BpfProgramMap};
-use diesel::{prelude::*, sqlite::SqliteConnection};
-use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+use db::{BpfMap, BpfProgram, BpfProgramMap, establish_sqlite_connection};
+use diesel::sqlite::SqliteConnection;
 use log::{debug, error, info, warn};
 use multiprog::{TcDispatcher, XdpDispatcher};
 use program_loader::{LoadSpec, LoadedProgram};
@@ -2079,80 +2078,6 @@ fn get_map(id: u32, root_db: &Db) -> Option<sled::Tree> {
         .into_iter()
         .find(|n| bytes_to_string(n) == format!("{}{}", MAP_PREFIX, id))
         .map(|n| root_db.open_tree(n).expect("unable to open map tree"))
-}
-
-pub const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
-
-/// Establish a new SQLite database connection and run pending
-/// migrations.
-///
-/// This function connects to the SQLite database at the provided URL,
-/// applies standard PRAGMA settings, and runs any unapplied schema
-/// migrations embedded in the binary.
-///
-/// The following PRAGMAs are set to configure the database's
-/// behaviour:
-///
-/// - `journal_mode = WAL`: Enables Write-Ahead Logging for improved
-///   concurrency and performance in multi-writer scenarios.
-/// - `busy_timeout = 5000`: Sets a 5-second timeout when the database
-///   is locked, to avoid immediate failure under contention.
-/// - `foreign_keys = ON`: Enforces foreign key constraints at the
-///   database level.
-///
-/// After applying PRAGMAs, all pending migrations are executed using
-/// `diesel_migrations::MigrationHarness::run_pending_migrations`.
-///
-/// # Arguments
-///
-/// * `database_url` – Path or URI to the SQLite database file.
-///
-/// # Errors
-///
-/// Returns a [`BpfmanError`] if:
-///
-/// - The connection cannot be established.
-/// - Any of the PRAGMA statements fail to execute.
-/// - One or more schema migrations fail to apply.
-pub fn old_establish_sqlite_connection(database_url: &str) -> Result<SqliteConnection, BpfmanError> {
-    let mut conn = SqliteConnection::establish(database_url).map_err(|e| {
-        BpfmanError::SqliteConnectionError {
-            database_url: database_url.to_string(),
-            source: e,
-        }
-    })?;
-
-    diesel::sql_query("PRAGMA journal_mode = WAL")
-        .execute(&mut conn)
-        .map_err(|e| BpfmanError::SqliteQueryError {
-            database_url: database_url.to_string(),
-            context: "setting WAL journal mode".into(),
-            source: e,
-        })?;
-
-    diesel::sql_query("PRAGMA busy_timeout = 5000")
-        .execute(&mut conn)
-        .map_err(|e| BpfmanError::SqliteQueryError {
-            database_url: database_url.to_string(),
-            context: "setting busy timeout".into(),
-            source: e,
-        })?;
-
-    diesel::sql_query("PRAGMA foreign_keys = ON")
-        .execute(&mut conn)
-        .map_err(|e| BpfmanError::SqliteQueryError {
-            database_url: database_url.to_string(),
-            context: "enabling foreign key support".into(),
-            source: e,
-        })?;
-
-    conn.run_pending_migrations(MIGRATIONS)
-        .map_err(|e| BpfmanError::SqliteMigrationError {
-            database_url: database_url.to_string(),
-            source: e,
-        })?;
-
-    Ok(conn)
 }
 
 /// Public API for loading and persisting eBPF programs.
