@@ -182,8 +182,8 @@ CREATE TABLE bpf_programs (
     program_bytes BLOB NOT NULL,
 
     -- Arbitrary key/value data stored as JSON.
-    metadata TEXT NOT NULL DEFAULT '{}',
-    global_data TEXT NOT NULL DEFAULT '{}',
+    metadata TEXT,
+    global_data TEXT,
 
     -- Type-specific fields:
     retprobe BOOLEAN,  -- Only for kprobe/uprobe; must be non-null when applicable.

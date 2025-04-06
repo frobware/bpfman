@@ -84,11 +84,11 @@ pub struct LoadSpec {
     map_owner_id: Option<u32>,
 
     // The following fields are computed in build().
-    #[builder(setter(skip), default = "String::from(\"{}\")")]
-    global_data_json: String,
+    #[builder(setter(skip))]
+    global_data_json: Option<String>,
 
-    #[builder(setter(skip), default = "String::from(\"{}\")")]
-    metadata_json: String,
+    #[builder(setter(skip))]
+    metadata_json: Option<String>,
 }
 
 /// Represents errors encountered during the construction of a
@@ -117,9 +117,9 @@ pub enum LoadSpecError {
     /// An error occurred while serialising the metadata map to a JSON
     /// string.
     ///
-    /// Unlike `GlobalDataJson`, this wraps the source explicitly in a
-    /// named field so that it doesn’t conflict with the `#[from]`
-    /// path used earlier.
+    /// Unlike `GlobalDataSerialisation`, this wraps the source
+    /// explicitly in a named field so that it doesn’t conflict with
+    /// the `#[from]` path used earlier.
     #[error("error serialising metadata to JSON")]
     MetadataSerialisation {
         /// The original error returned by `serde_json::to_string`.
@@ -159,16 +159,19 @@ impl LoadSpecBuilder {
             .build_partial()
             .map_err(|e| LoadSpecError::UninitialisedFields(e.to_string()))?;
 
-        let global_data_map =
-            Self::global_data_to_map(spec.global_data.as_deref().unwrap_or_default());
+        spec.global_data_json = match &spec.global_data {
+            Some(data) if !data.is_empty() => {
+                Some(serde_json::to_string(&Self::global_data_to_map(data))?)
+            }
+            _ => None,
+        };
 
-        spec.global_data_json = serde_json::to_string(&global_data_map)
-            .map_err(LoadSpecError::GlobalDataSerialisation)?;
-
-        let metadata_map = Self::metadata_to_map(spec.metadata.as_deref().unwrap_or_default());
-
-        spec.metadata_json = serde_json::to_string(&metadata_map)
-            .map_err(|e| LoadSpecError::MetadataSerialisation { source: e })?;
+        spec.metadata_json = match &spec.metadata {
+            Some(data) if !data.is_empty() => {
+                Some(serde_json::to_string(&Self::metadata_to_map(data))?)
+            }
+            _ => None,
+        };
 
         Ok(spec)
     }
@@ -329,8 +332,8 @@ fn build_bpfprogram_from_aya_program(
         map_pin_path: map_pin_path_str.to_owned(),
         map_owner_id: spec.map_owner_id.map(KernelU32::from),
         program_bytes: program_bytes.into(),
-        metadata: spec.metadata_json.to_owned(),
-        global_data: spec.global_data_json.to_owned(),
+        metadata: spec.metadata_json.clone(),
+        global_data: spec.global_data_json.clone(),
         retprobe: program_type.is_retprobe(),
         fn_name: program_type.function_name().map(String::from),
         kernel_name,
@@ -657,7 +660,14 @@ mod tests {
             assert!(result.is_ok());
             let spec = result.unwrap();
 
-            let json: serde_json::Value = serde_json::from_str(&spec.global_data_json).unwrap();
+            let json_str = spec
+                .global_data_json
+                .as_deref()
+                .expect("global_data_json should be present");
+
+            let json: serde_json::Value =
+                serde_json::from_str(json_str).expect("global_data_json should be valid JSON");
+
             assert!(json.get("key1").is_some(), "expected key1 in JSON");
             assert!(json.get("key2").is_some(), "expected key2 in JSON");
         }
@@ -676,7 +686,14 @@ mod tests {
             assert!(result.is_ok());
             let spec = result.unwrap();
 
-            let json: serde_json::Value = serde_json::from_str(&spec.metadata_json).unwrap();
+            let json_str = spec
+                .metadata_json
+                .as_deref()
+                .expect("metadata_json should be present");
+
+            let json: serde_json::Value =
+                serde_json::from_str(json_str).expect("metadata_json should be valid JSON");
+
             assert!(json.get("key1").is_some(), "expected key1 in JSON");
             assert!(json.get("key2").is_some(), "expected key2 in JSON");
         }

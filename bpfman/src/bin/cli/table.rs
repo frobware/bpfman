@@ -868,7 +868,7 @@ pub fn sqlite_print_program_list(programs: &[BpfProgram]) -> anyhow::Result<()> 
 
     for p in programs {
         let prog_id = p.id.to_string();
-        let application = extract_application(&p.metadata);
+        let application = extract_application(p.metadata.as_deref());
         let kind = p.kind.clone();
         let fn_name = p.kernel_name.clone().unwrap_or_else(|| "None".into());
 
@@ -910,8 +910,16 @@ pub fn sqlite_print_program_detail(p: &BpfProgram, maps: &[BpfMap]) -> anyhow::R
         }
     }
 
-    table.add_string("Global:".into(), Ok(p.global_data.clone()));
-    table.add_string("Metadata:".into(), Ok(p.metadata.clone()));
+    match &p.global_data {
+        Some(s) => table.add_string("Global:".into(), Ok(s.clone())),
+        None => table.add_string("Global:".into(), Ok("None".into())),
+    }
+
+    match &p.metadata {
+        Some(s) => table.add_string("Metadata:".into(), Ok(s.clone())),
+        None => table.add_string("Metadata:".into(), Ok("None".into())),
+    }
+
     table.add_string("Map Pin Path:".into(), Ok(p.map_pin_path.clone()));
 
     match p.map_owner_id {
@@ -919,7 +927,6 @@ pub fn sqlite_print_program_detail(p: &BpfProgram, maps: &[BpfMap]) -> anyhow::R
         None => table.add_string("Map Owner ID:".into(), Ok("None".into())),
     }
 
-    // List maps this program uses
     let used_maps: Vec<&BpfMap> = maps.iter().filter(|m| m.name == p.name).collect();
     if used_maps.is_empty() {
         table.0.add_row(vec!["Maps Used:", "None"]);
@@ -950,7 +957,7 @@ pub fn sqlite_print_program_detail(p: &BpfProgram, maps: &[BpfMap]) -> anyhow::R
         "Loaded At:".into(),
         Ok(p.kernel_loaded_at.clone().unwrap_or_default()),
     );
-    ktable.add_string("Tag:".into(), Ok(format!("{}", p.kernel_tag)));
+    ktable.add_string("Tag:".into(), Ok(format!("{:#x}", p.kernel_tag.get())));
     ktable.add_bool(
         "GPL Compatible:".into(),
         Ok(p.kernel_gpl_compatible.unwrap_or(false)),
@@ -990,9 +997,9 @@ pub fn sqlite_print_program_detail(p: &BpfProgram, maps: &[BpfMap]) -> anyhow::R
     Ok(())
 }
 
-fn extract_application(metadata: &str) -> String {
-    match serde_json::from_str::<serde_json::Value>(metadata) {
-        Ok(serde_json::Value::Object(map)) => map
+fn extract_application(metadata: Option<&str>) -> String {
+    match metadata.and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()) {
+        Some(serde_json::Value::Object(map)) => map
             .get("application")
             .and_then(|v| v.as_str())
             .unwrap_or("")

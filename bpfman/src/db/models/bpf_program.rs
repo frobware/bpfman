@@ -36,8 +36,8 @@ pub struct BpfProgram {
     #[diesel(sql_type = diesel::sql_types::Binary)]
     #[serde(skip)]
     pub program_bytes: Vec<u8>,
-    pub metadata: String,
-    pub global_data: String,
+    pub metadata: Option<String>,
+    pub global_data: Option<String>,
     pub retprobe: Option<bool>,
     pub fn_name: Option<String>,
     pub kernel_name: Option<String>,
@@ -112,8 +112,8 @@ impl Default for BpfProgram {
             map_pin_path: "".to_owned(),
             map_owner_id: None,
             program_bytes: vec![],
-            metadata: "{}".to_owned(),
-            global_data: "{}".to_owned(),
+            metadata: None,
+            global_data: None,
             retprobe: None,
             fn_name: None,
             kernel_name: None,
@@ -245,17 +245,6 @@ mod tests {
         // Assert that the modified copy equals the inserted record.
         assert_eq!(prog_for_assert, inserted_program);
 
-        // Verify JSON field defaults and validity.
-        {
-            assert_eq!(inserted_program.metadata, "{}");
-            assert_eq!(inserted_program.global_data, "{}");
-
-            serde_json::from_str::<serde_json::Value>(&inserted_program.metadata)
-                .expect("metadata should be valid JSON");
-            serde_json::from_str::<serde_json::Value>(&inserted_program.global_data)
-                .expect("global_data should be valid JSON");
-        }
-
         // Verify record retrieval using full Eq comparison.
         {
             let found_program = BpfProgram::find_record(&mut db_conn, prog_for_assert.id)
@@ -310,8 +299,8 @@ mod tests {
             map_pin_path: "/sys/fs/bpf/test_program".to_owned(),
             map_owner_id: Some(1234u32.into()),
             program_bytes: vec![0xAA, 0xBB, 0xCC],
-            metadata: "{}".to_owned(),
-            global_data: "{}".to_owned(),
+            metadata: Some("{}".to_owned()),
+            global_data: Some("{}".to_owned()),
             retprobe: Some(true),
             fn_name: Some("test_function".to_owned()),
             kernel_name: Some("test_kernel_prog".to_owned()),
@@ -409,8 +398,8 @@ mod tests {
             file_path: Some("/tmp/prog1.o".into()),
             map_pin_path: "/sys/fs/bpf/prog1".into(),
             program_bytes: vec![0x1],
-            metadata: "{}".into(),
-            global_data: "{}".into(),
+            metadata: Some("{}".into()),
+            global_data: Some("{}".into()),
             ..Default::default()
         };
         BpfProgram::insert_record(&mut conn, &prog1).unwrap();
@@ -424,8 +413,8 @@ mod tests {
             file_path: Some("/tmp/prog2.o".into()),
             map_pin_path: "/sys/fs/bpf/prog2".into(),
             program_bytes: vec![0x2],
-            metadata: "{}".into(),
-            global_data: "{}".into(),
+            metadata: Some("{}".into()),
+            global_data: Some("{}".into()),
             ..Default::default()
         };
         BpfProgram::insert_record(&mut conn, &prog2).unwrap();
