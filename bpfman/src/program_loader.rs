@@ -274,6 +274,7 @@ fn build_bpfmap_from_aya_map(data: &Map, map_name: &str) -> Result<BpfMap, aya::
 fn build_bpfprogram_from_aya_program(
     prog_info: &aya::programs::ProgramInfo,
     program_type: &ProgramType,
+    program_bytes: &[u8],
     spec: &LoadSpec,
     map_pin_path_str: &str,
 ) -> Result<BpfProgram, BpfmanError> {
@@ -319,18 +320,17 @@ fn build_bpfprogram_from_aya_program(
         name: prog_name.to_owned(),
         kind: program_type.type_str().to_owned(),
         state: "loaded".to_string(),
-        location_type: location_type.to_string(),
+        location_type: location_type.to_owned(),
         file_path,
         image_url,
         image_pull_policy,
         username,
         password,
-        map_pin_path: map_pin_path_str.to_string(),
+        map_pin_path: map_pin_path_str.to_owned(),
         map_owner_id: spec.map_owner_id.map(KernelU32::from),
-        program_bytes: vec![], // TODO(frobware) XXX
-        // program_bytes: spec.program_bytes.to_vec(),
-        metadata: spec.metadata_json.clone(),
-        global_data: spec.global_data_json.clone(),
+        program_bytes: program_bytes.into(),
+        metadata: spec.metadata_json.to_owned(),
+        global_data: spec.global_data_json.to_owned(),
         retprobe: program_type.is_retprobe(),
         fn_name: program_type.function_name().map(String::from),
         kernel_name,
@@ -466,6 +466,7 @@ fn attempt_unload(_lp: &LoadedProgram) -> Result<(), BpfmanError> {
 /// - If the kernel rejects the program.
 fn load_program_into_kernel(
     program: &ProgramType,
+    program_bytes: &[u8],
     bytecode: &mut Ebpf,
     spec: &LoadSpec,
 ) -> Result<LoadedProgram, BpfmanError> {
@@ -509,7 +510,7 @@ fn load_program_into_kernel(
     }
 
     let map_pin_path_str = map_pin_path.to_string_lossy().to_string();
-    let bpf_prog = build_bpfprogram_from_aya_program(&prog_info, program, spec, &map_pin_path_str);
+    let bpf_prog = build_bpfprogram_from_aya_program(&prog_info, program, program_bytes, spec, &map_pin_path_str);
 
     Ok(LoadedProgram {
         kind: program.clone(),
@@ -571,7 +572,7 @@ pub(crate) fn load_from_spec(spec: &LoadSpec) -> Result<Vec<LoadedProgram>, Bpfm
     let mut loaded_programs = Vec::new();
 
     for program in &spec.programs {
-        match load_program_into_kernel(program, &mut program_bytecode, spec) {
+        match load_program_into_kernel(program, &program_bytes, &mut program_bytecode, spec) {
             Ok(loaded) => loaded_programs.push(loaded),
             Err(err) => {
                 let unload_failures = unload_all(&loaded_programs);
