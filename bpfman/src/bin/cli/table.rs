@@ -863,7 +863,7 @@ impl std::fmt::Display for ProgTable {
     }
 }
 
-pub fn print_sqlite_program_list_sqlite(programs: &[BpfProgram]) -> anyhow::Result<()> {
+pub fn sqlite_print_program_list(programs: &[BpfProgram]) -> anyhow::Result<()> {
     let mut table = ProgTable::new_program_list();
 
     for p in programs {
@@ -882,7 +882,7 @@ pub fn print_sqlite_program_list_sqlite(programs: &[BpfProgram]) -> anyhow::Resu
     Ok(())
 }
 
-pub fn print_sqlite_program_detail_sqlite(p: &BpfProgram, maps: &[BpfMap]) -> anyhow::Result<()> {
+pub fn sqlite_print_program_detail(p: &BpfProgram, maps: &[BpfMap]) -> anyhow::Result<()> {
     let mut table = ProgTable::create_bpfman_state_table();
 
     table.add_string("BPF Function:".into(), Ok(p.name.clone()));

@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright Authors of bpfman
+
 -- Drop indexes added for performance improvements.
 
 DROP INDEX IF EXISTS idx_program_maps_map_id;

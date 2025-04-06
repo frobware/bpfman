@@ -1,4 +1,5 @@
--- Add useful indexes for join performance and common queries.
+-- SPDX-License-Identifier: Apache-2.0
+-- Copyright Authors of bpfman
 
 -- Index for quick lookups of all maps used by programs.
 CREATE INDEX idx_program_maps_map_id ON bpf_program_maps(map_id);

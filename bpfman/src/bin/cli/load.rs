@@ -20,7 +20,7 @@ use log::warn;
 
 use crate::{
     args::{GlobalArg, LoadArgs, LoadFileArgs, LoadImageArgs, LoadSubcommand},
-    table::{ProgTable, print_sqlite_program_detail_sqlite, print_sqlite_program_list_sqlite},
+    table::{ProgTable, sqlite_print_program_detail, sqlite_print_program_list},
 };
 
 impl LoadSubcommand {
@@ -222,10 +222,10 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
             if loaded.len() == 1 {
                 let p = &loaded[0].program;
                 let maps = &loaded[0].maps;
-                print_sqlite_program_detail_sqlite(p, maps)?;
+                sqlite_print_program_detail(p, maps)?;
             } else {
                 let programs: Vec<BpfProgram> = loaded.into_iter().map(|lp| lp.program).collect();
-                print_sqlite_program_list_sqlite(&programs)?;
+                sqlite_print_program_list(&programs)?;
             }
 
             Ok(())
