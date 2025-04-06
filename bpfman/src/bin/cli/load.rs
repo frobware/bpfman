@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use bpfman::{
     add_programs,
+    db::BpfProgram,
     errors::BpfmanError,
     load_ebpf_programs,
     program_loader::{LoadSpecBuilder, LoadedProgram, UnloadError},
@@ -19,7 +20,7 @@ use log::warn;
 
 use crate::{
     args::{GlobalArg, LoadArgs, LoadFileArgs, LoadImageArgs, LoadSubcommand},
-    table::ProgTable,
+    table::{ProgTable, print_sqlite_program_detail_sqlite, print_sqlite_program_list_sqlite},
 };
 
 impl LoadSubcommand {
@@ -211,11 +212,22 @@ fn handle_load_result(res: Result<Vec<LoadedProgram>, BpfmanError>) -> Result<()
     match res {
         Ok(loaded) => {
             println!("Successfully loaded {} program(s):", loaded.len());
+
             println!(
                 "{}",
                 serde_json::to_string_pretty(&loaded)
                     .unwrap_or_else(|_| "Failed to serialize loaded programs".to_string())
             );
+
+            if loaded.len() == 1 {
+                let p = &loaded[0].program;
+                let maps = &loaded[0].maps;
+                print_sqlite_program_detail_sqlite(p, maps)?;
+            } else {
+                let programs: Vec<BpfProgram> = loaded.into_iter().map(|lp| lp.program).collect();
+                print_sqlite_program_list_sqlite(&programs)?;
+            }
+
             Ok(())
         }
 

@@ -510,7 +510,13 @@ fn load_program_into_kernel(
     }
 
     let map_pin_path_str = map_pin_path.to_string_lossy().to_string();
-    let bpf_prog = build_bpfprogram_from_aya_program(&prog_info, program, program_bytes, spec, &map_pin_path_str);
+    let bpf_prog = build_bpfprogram_from_aya_program(
+        &prog_info,
+        program,
+        program_bytes,
+        spec,
+        &map_pin_path_str,
+    );
 
     Ok(LoadedProgram {
         kind: program.clone(),

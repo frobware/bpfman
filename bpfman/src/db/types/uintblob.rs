@@ -264,6 +264,18 @@ macro_rules! define_uint_blob {
                 Self::from_bytes(&blob).map_err(|e| e.into())
             }
         }
+
+        // Display for consistent user-facing output.
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(
+                    f,
+                    "{:0width$x}",
+                    self.0,
+                    width = std::mem::size_of::<$type>() * 2
+                )
+            }
+        }
     };
 }
 
