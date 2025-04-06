@@ -39,10 +39,12 @@
 # work — e.g., dependent rows will remain, and referential integrity
 # will be silently broken.
 
-set -euo pipefail
+set -o errexit
+set -o nounset
+set -o pipefail
 
 if [ $# -lt 1 ]; then
-    echo "Usage: ${0##*/} /path/to/db.sqlite [<sqlite3 ARGS>...]" >&2
+    echo "Usage: ${0##*/} /path/to/db.sqlite [ <SQLite-args>... ]" >&2
     exit 1
 fi
 
