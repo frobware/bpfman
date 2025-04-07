@@ -1,5 +1,11 @@
 [alias]
 xtask = "run --package xtask --"
 
-[env]
-LIBSQLITE3_SYS_USE_PKG_CONFIG = "1"
+# Uncomment the following env block to use the system's libsqlite3.so.
+# In bpfman/Cargo.toml we are using:
+#
+#  libsqlite3-sys = { workspace = true, features = ["bundled"] }
+#
+# which will compile sqlite from source.
+# [env]
+# LIBSQLITE3_SYS_USE_PKG_CONFIG = "1"
