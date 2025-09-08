@@ -1,0 +1,6 @@
+# Local-dev dockerignore - allows target/ directory for fast builds
+# target/ directory needed for copying host-built binaries
+/.git
+libbpf/
+*.log
+.dockerignore.bak
