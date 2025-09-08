@@ -1,0 +1,36 @@
+# Development Containerfile for bpfman hybrid build
+#
+# This uses a Nix-built base image with runtime dependencies,
+# then copies locally-built binaries for fast development iteration.
+#
+# Build workflow:
+#   1. nix-build base.nix  # Build base image (once)
+#   2. make or cargo build --profile dev  # Fast native build (~8s)
+#   3. podman build -f Containerfile.dev -t bpfman:dev .  # Fast copy (~2s)
+#
+# Prerequisites:
+#   - Base image built: nix-build base.nix
+#   - Binaries built: ./target/debug/bpfman*
+
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE:-bpfman-base:dev}
+
+# Copy locally-built debug binaries
+COPY ./target/debug/bpfman /usr/local/bin/bpfman
+COPY ./target/debug/bpfman-rpc /usr/local/bin/bpfman-rpc
+COPY ./target/debug/bpfman-ns /usr/local/bin/bpfman-ns
+
+# Copy additional binaries
+COPY ./target/debug/bpf-log-exporter /usr/local/bin/bpf-log-exporter
+COPY ./target/debug/bpf-metrics-exporter /usr/local/bin/bpf-metrics-exporter
+
+# Binaries are already executable from native build
+
+# Default to running bpfman-rpc
+ENTRYPOINT ["/usr/local/bin/bpfman-rpc"]
+CMD ["--timeout=0"]
+
+# Labels
+LABEL org.opencontainers.image.title="bpfman-dev"
+LABEL org.opencontainers.image.description="bpfman development image with locally-built binaries"
+LABEL build-method="nix-base + native-cargo + docker-copy"

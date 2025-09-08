@@ -28,21 +28,50 @@ RUN --mount=type=cache,target=/usr/src/bpfman/target/ \
     cargo install bindgen-cli
 
 WORKDIR /usr/src/bpfman
+
+# Copy manifests first for dependency caching optimization
+COPY Cargo.toml Cargo.lock ./
+COPY bpf-log-exporter/Cargo.toml ./bpf-log-exporter/
+COPY bpf-metrics-exporter/Cargo.toml ./bpf-metrics-exporter/
+COPY bpfman/Cargo.toml ./bpfman/
+COPY bpfman-api/Cargo.toml ./bpfman-api/
+COPY bpfman-ns/Cargo.toml ./bpfman-ns/
+COPY buildinfo/Cargo.toml ./buildinfo/
+COPY csi/Cargo.toml ./csi/
+COPY xtask/Cargo.toml ./xtask/
+COPY tests/integration-test/Cargo.toml ./tests/integration-test/
+
+# Create minimal source structure required for cargo fetch
+RUN mkdir -p bpf-log-exporter/src bpf-metrics-exporter/src bpfman/src/bin/cli bpfman-api/src/bin/rpc bpfman-ns/src buildinfo/src csi/src xtask/src tests/integration-test/src && \
+    echo 'fn main() {}' > bpf-log-exporter/src/main.rs && \
+    echo 'fn main() {}' > bpf-metrics-exporter/src/main.rs && \
+    echo 'fn main() {}' > bpfman/src/bin/cli/main.rs && \
+    echo 'fn main() {}' > bpfman-api/src/bin/rpc/main.rs && \
+    echo 'fn main() {}' > bpfman-ns/src/main.rs && \
+    echo 'fn main() {}' > buildinfo/src/lib.rs && \
+    echo 'fn main() {}' > csi/src/main.rs && \
+    echo 'fn main() {}' > xtask/src/main.rs && \
+    echo 'fn main() {}' > tests/integration-test/src/main.rs
+
+# Pre-build dependencies using cargo fetch to cache all dependencies
+# This dramatically speeds up rebuilds when only source code changes  
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo fetch
+
+# Copy the actual source code (optimized context via .dockerignore)
 COPY ./ /usr/src/bpfman
 
 # Compile bpfman cli, bpfman-ns, and bpfman-rpc binaries
 RUN --mount=type=cache,target=/usr/src/bpfman/target/ \
     --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release
+    cargo build
 
+# Copy binaries to a staging area in one go
 RUN --mount=type=cache,target=/usr/src/bpfman/target/ \
-    cp /usr/src/bpfman/target/release/bpfman ./bpfman/
-
-RUN --mount=type=cache,target=/usr/src/bpfman/target/ \
-    cp /usr/src/bpfman/target/release/bpfman-ns ./bpfman/
-
-RUN --mount=type=cache,target=/usr/src/bpfman/target/ \
-    cp /usr/src/bpfman/target/release/bpfman-rpc ./bpfman/
+    mkdir -p /tmp/bin && \
+    cp /usr/src/bpfman/target/debug/bpfman /tmp/bin/ && \
+    cp /usr/src/bpfman/target/debug/bpfman-ns /tmp/bin/ && \
+    cp /usr/src/bpfman/target/debug/bpfman-rpc /tmp/bin/
 
 #FROM fedora:40
 FROM ubuntu:24.04
@@ -54,6 +83,6 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/\* /tmp/\* /var/tmp/*
 
-COPY --from=bpfman-build  ./usr/src/bpfman/bpfman /usr/local/sbin/
+COPY --from=bpfman-build /tmp/bin/ /usr/local/sbin/
 
 ENTRYPOINT ["bpfman-rpc", "--timeout=0"]
