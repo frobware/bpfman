@@ -1,3 +1,6 @@
+# Development .dockerignore for hybrid builds
+# This allows target/debug/bpfman* binaries while ignoring everything else
+
 # Ignore Git files
 .git/
 .gitignore
@@ -5,10 +8,25 @@
 # Ignore large directories not needed in container
 libbpf/
 bpfman-operator/
-target/
-/target
 .output/
 examples/
+
+# Ignore most of target/ but allow debug binaries
+target/release/
+target/*/release/
+target/*/incremental/
+target/*/build/
+target/*/deps/
+target/*/examples/
+target/*/.fingerprint/
+target/debug/build/
+target/debug/deps/
+target/debug/examples/
+target/debug/incremental/
+target/debug/.fingerprint/
+target/debug/.cargo-lock
+target/debug/*.d
+target/debug/*.rlib
 
 # Ignore development and test artifacts
 *.log
@@ -18,7 +36,7 @@ test.log
 *.test
 peristence.test
 
-# Ignore development scripts and temporary files
+# Ignore development scripts and temporary files  
 bpfman-dev-*.sh
 create-test-container.sh
 run-test-in-container.sh
@@ -29,7 +47,7 @@ clippy-doodad.sh
 .direnv/
 .envrc
 
-# Ignore documentation build artifacts  
+# Ignore documentation build artifacts
 .fmf/
 docs/
 

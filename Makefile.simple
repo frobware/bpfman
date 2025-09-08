@@ -1,0 +1,79 @@
+# Simple Makefile for streamlined bpfman development
+# One-time setup: make base
+# Fast iterations: make (default)
+
+# Configuration
+FAST_IMAGE := bpfman-fast
+TAG := latest
+
+.PHONY: all base dev test run run-bpfman clean help
+
+# Default target - fast development build
+all: dev
+
+# One-time setup: build base image with dynamic dependencies
+base:
+	@echo "Building base image with dynamic dependencies..."
+	@./build-base.sh
+
+# Fast development cycle: cargo build + container build
+dev:
+	@echo "Fast development build..."
+	@time (cargo build && podman build -f Containerfile.fast -t $(FAST_IMAGE):$(TAG) .)
+
+# Test container functionality
+test:
+	@echo "Testing container..."
+	@podman run --rm $(FAST_IMAGE):$(TAG) --version
+	@podman run --rm --entrypoint=/usr/local/bin/bpfman $(FAST_IMAGE):$(TAG) --version
+
+# Run container with default entrypoint (bpfman-rpc)
+run:
+	@podman run --rm $(FAST_IMAGE):$(TAG) $(ARGS)
+
+# Run bpfman binary in container
+run-bpfman:
+	@podman run --rm --entrypoint=/usr/local/bin/bpfman $(FAST_IMAGE):$(TAG) $(ARGS)
+
+# Clean build artifacts
+clean:
+	@rm -rf ./target/debug/bpfman* || true
+	@podman rmi $(FAST_IMAGE):$(TAG) 2>/dev/null || true
+
+# Clean everything including base image and temp files
+clean-all: clean
+	@podman rmi bpfman-base:$(TAG) 2>/dev/null || true
+	@rm -rf ./nix-deps || true
+	@rm -f Containerfile.base || true
+	@cargo clean
+
+# Help
+help:
+	@echo "Simple bpfman development Makefile"
+	@echo ""
+	@echo "Setup (run once):"
+	@echo "  base         - Build base image with dynamic dependencies"
+	@echo ""
+	@echo "Development:"
+	@echo "  all          - Fast build: cargo + container (default)"
+	@echo "  dev          - Same as 'all'"
+	@echo ""
+	@echo "Testing:"
+	@echo "  test         - Test container functionality"
+	@echo "  run          - Run container (bpfman-rpc) with ARGS"
+	@echo "  run-bpfman   - Run bpfman binary with ARGS"
+	@echo ""
+	@echo "Utilities:"
+	@echo "  clean        - Clean build artifacts"
+	@echo "  clean-all    - Deep clean including base image"
+	@echo "  help         - Show this help"
+	@echo ""
+	@echo "Workflow:"
+	@echo "  1. make base    # One-time setup"
+	@echo "  2. make         # Fast development iterations"
+	@echo ""
+	@echo "Examples:"
+	@echo "  make base                   # Initial setup"
+	@echo "  make                        # Fast build"
+	@echo "  make run ARGS='--help'      # Run bpfman-rpc --help"
+	@echo "  make run-bpfman ARGS='--version'  # Run bpfman --version"

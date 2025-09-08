@@ -1,0 +1,21 @@
+# Simple hybrid build: minimal base + cargo binaries + dependencies
+FROM scratch
+
+# Copy the Nix store dependencies that the binaries need
+COPY ./nix-deps/nix /nix
+
+# Copy locally-built debug binaries
+COPY ./target/debug/bpfman /usr/local/bin/bpfman
+COPY ./target/debug/bpfman-rpc /usr/local/bin/bpfman-rpc
+COPY ./target/debug/bpfman-ns /usr/local/bin/bpfman-ns
+COPY ./target/debug/bpf-log-exporter /usr/local/bin/bpf-log-exporter
+COPY ./target/debug/bpf-metrics-exporter /usr/local/bin/bpf-metrics-exporter
+
+# Default to running bpfman-rpc
+ENTRYPOINT ["/usr/local/bin/bpfman-rpc"]
+CMD ["--timeout=0"]
+
+# Labels
+LABEL org.opencontainers.image.title="bpfman-simple"
+LABEL org.opencontainers.image.description="bpfman with minimal dependencies - cargo build + deps copy"
+LABEL build-method="cargo + ldd + copy"
