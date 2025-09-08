@@ -1,0 +1,14 @@
+# Fast iterative build - just copy binaries to base
+FROM bpfman-base:latest
+
+# Copy all locally-built debug binaries in one layer
+COPY ./target/debug/bpfman ./target/debug/bpfman-ns ./target/debug/bpfman-rpc /usr/local/bin/
+
+# Default to running bpfman-rpc
+ENTRYPOINT ["/usr/local/bin/bpfman-rpc"]
+CMD ["--timeout=0"]
+
+# Labels
+LABEL org.opencontainers.image.title="bpfman-fast"
+LABEL org.opencontainers.image.description="Fast iterative bpfman build"
+LABEL build-method="base + binary copy"

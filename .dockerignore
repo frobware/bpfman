@@ -1,3 +1,46 @@
-/.git 
-**/target
+# Ignore Git files
+.git/
+.gitignore
+
+# Ignore large directories not needed in container
 libbpf/
+bpfman-operator/
+target/
+/target
+!target/debug/bpfman
+!target/debug/bpfman-ns
+!target/debug/bpfman-rpc
+.output/
+examples/
+
+# Ignore development and test artifacts
+*.log
+test-*.sh
+*-test-*.sh
+test.log
+*.test
+peristence.test
+
+# Ignore development scripts and temporary files
+bpfman-dev-*.sh
+create-test-container.sh
+run-test-in-container.sh
+clippy-doodad.sh
+
+# Ignore IDE and development environment files
+.vscode/
+.direnv/
+.envrc
+
+# Ignore documentation build artifacts  
+.fmf/
+docs/
+
+# Ignore packaging and CI files not needed in container
+packaging/
+plans/
+.packit*
+.pre-commit-config.yaml
+.github/
+netlify.toml
+mkdocs.yml
