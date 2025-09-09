@@ -15,7 +15,7 @@ BASE_IMAGE := bpfman-base
 
 # Fast development cycle: cargo build + container build
 dev: cargo-build
-	$(OCI_BIN) build -f Containerfile.bpfman.local-dev -t $(BPFMAN_IMG) --ignorefile .dockerignore.local-dev .
+	$(OCI_BIN) build -f Containerfile.bpfman.local-dev -t $(BPFMAN_IMG) .
 
 # One-time setup: build base image with dynamic dependencies
 base: cargo-build

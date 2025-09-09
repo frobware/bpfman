@@ -1,3 +1,8 @@
 /.git 
-**/target
+# Allow specific binaries needed for local-dev builds
+# but exclude everything else from target/
+target/*
+!target/debug/bpfman
+!target/debug/bpfman-ns
+!target/debug/bpfman-rpc
 libbpf/
