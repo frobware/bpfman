@@ -20,7 +20,6 @@ path = "src/bin/cli/main.rs"
 
 [build-dependencies]
 buildinfo = { workspace = true }
-pkg-config = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true, features = ["std"] }

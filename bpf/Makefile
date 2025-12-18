@@ -1,7 +1,6 @@
-# Makefile for hermetic dispatcher builds
+# Makefile for eBPF dispatcher compilation
 
 LIBBPF_CFLAGS := $(shell pkg-config --cflags libbpf)
-LIBBPF_LIBS := $(shell pkg-config --libs libbpf)
 
 # Dynamic architecture detection using rustc (consistent with CARGO_CFG_TARGET_ARCH)
 TARGET_ARCH := $(shell rustc --print cfg | grep target_arch | cut -d'"' -f2)
@@ -19,44 +18,29 @@ else
 $(error Unsupported architecture: $(TARGET_ARCH))
 endif
 
-OUTPUT_DIR := .output
+# Build all BPF programs from .c files
+SOURCES := $(wildcard *.bpf.c)
+OBJECTS := $(SOURCES:.bpf.c=.bpf.o)
 
-DISPATCHERS := $(OUTPUT_DIR)/xdp_dispatcher_v2.bpf.o $(OUTPUT_DIR)/tc_dispatcher.bpf.o
-
-.PHONY: all
-all: $(DISPATCHERS)
-
-$(OUTPUT_DIR):
-	mkdir -p $@
+# Default target builds all BPF objects
+all: $(OBJECTS)
 
 # Pattern rule for building BPF objects
-$(OUTPUT_DIR)/%.bpf.o: bpf/%.bpf.c | $(OUTPUT_DIR)
+%.bpf.o: %.bpf.c
 	clang $(LIBBPF_CFLAGS) -g -O2 -target bpfel -c $(TARGET_ARCH_DEFINE) $< -o $@
 
-.PHONY: dispatchers
-dispatchers: $(DISPATCHERS)
+.PHONY: clean
+clean:
+	rm -f $(OBJECTS)
 
 .PHONY: test-pkgconfig
 test-pkgconfig:
 	pkg-config --exists libbpf
-
-.PHONY: test-build
-test-build: test-pkgconfig $(DISPATCHERS)
-
-.PHONY: clean
-clean:
-	rm -rf $(OUTPUT_DIR)
-
-.PHONY: build
-build: $(DISPATCHERS)
-	cargo build --package bpfman
 
 .PHONY: debug
 debug:
 	@echo "TARGET_ARCH: $(TARGET_ARCH)"
 	@echo "TARGET_ARCH_DEFINE: $(TARGET_ARCH_DEFINE)"
 	@echo "LIBBPF_CFLAGS: $(LIBBPF_CFLAGS)"
-	@echo "LIBBPF_LIBS: $(LIBBPF_LIBS)"
 	@which clang
-	@ls -la bpf/*.bpf.c
-	@ls -la $(OUTPUT_DIR)/ 2>/dev/null || true
+	@ls -la *.bpf.c

@@ -41,7 +41,7 @@ const TC_DISPATCHER_PRIORITY: u16 = 50; // Default TC priority for TC Dispatcher
 const TC_DISPATCHER_PROGRAM_NAME: &str = "tc_dispatcher";
 
 // Embedded TC dispatcher bytecode - replaces registry pulling for hermetic builds
-static TC_DISPATCHER_BYTES: &[u8] = include_bytes_aligned!("../../../.output/tc_dispatcher.bpf.o");
+static TC_DISPATCHER_BYTES: &[u8] = include_bytes_aligned!("../../../bpf/tc_dispatcher.bpf.o");
 
 /// These constants define the key of SLED DB
 const REVISION: &str = "revision";
