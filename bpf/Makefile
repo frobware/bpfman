@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright Authors of bpfman
+
 # Makefile for eBPF dispatcher compilation
 
 LIBBPF_CFLAGS := $(shell pkg-config --cflags libbpf)
