@@ -1,52 +1,40 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright Authors of bpfman
 
-# Makefile for eBPF dispatcher compilation
+# Makefile for eBPF dispatcher compilation.
 
 LIBBPF_CFLAGS := $(shell pkg-config --cflags libbpf)
 
 # Dynamic architecture detection using rustc (consistent with CARGO_CFG_TARGET_ARCH)
 TARGET_ARCH := $(shell rustc --print cfg | grep target_arch | cut -d'"' -f2)
+
 ifeq ($(TARGET_ARCH),x86_64)
-TARGET_ARCH_DEFINE := -D__TARGET_ARCH_x86
+  TARGET_ARCH_DEFINE := -D__TARGET_ARCH_x86
 else ifeq ($(TARGET_ARCH),i686)
-TARGET_ARCH_DEFINE := -D__TARGET_ARCH_x86
+  TARGET_ARCH_DEFINE := -D__TARGET_ARCH_x86
 else ifeq ($(TARGET_ARCH),aarch64)
-TARGET_ARCH_DEFINE := -D__TARGET_ARCH_arm64
+  TARGET_ARCH_DEFINE := -D__TARGET_ARCH_arm64
 else ifeq ($(TARGET_ARCH),powerpc64le)
-TARGET_ARCH_DEFINE := -D__TARGET_ARCH_powerpc
+  TARGET_ARCH_DEFINE := -D__TARGET_ARCH_powerpc
 else ifeq ($(TARGET_ARCH),s390x)
-TARGET_ARCH_DEFINE := -D__TARGET_ARCH_s390
+  TARGET_ARCH_DEFINE := -D__TARGET_ARCH_s390
 else
-$(error Unsupported architecture: $(TARGET_ARCH))
+  $(error Unsupported architecture: $(TARGET_ARCH))
 endif
 
-# Build all BPF programs from .c files
 SOURCES := $(wildcard *.bpf.c)
-
-# Use OUT_DIR if provided, otherwise build in current directory
-ifdef OUT_DIR
+# Use OUT_DIR if provided, otherwise use current working directory.
+OUT_DIR ?= $(PWD)
 OBJECTS := $(addprefix $(OUT_DIR)/,$(SOURCES:.bpf.c=.bpf.o))
 DEP_FILES := $(addprefix $(OUT_DIR)/,$(SOURCES:.bpf.c=.bpf.d))
-else
-OBJECTS := $(SOURCES:.bpf.c=.bpf.o)
-DEP_FILES := $(SOURCES:.bpf.c=.bpf.d)
-endif
 
-# Default target builds all BPF objects
 all: $(OBJECTS)
 
-# Pattern rule for building BPF objects with dependency tracking
-ifdef OUT_DIR
 $(OUT_DIR)/%.bpf.o: %.bpf.c Makefile | $(OUT_DIR)
 	clang $(LIBBPF_CFLAGS) -g -O2 -target bpfel -c $(TARGET_ARCH_DEFINE) -MD -MP -MF$(OUT_DIR)/$*.bpf.d $< -o $@
 
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)
-else
-%.bpf.o: %.bpf.c Makefile
-	clang $(LIBBPF_CFLAGS) -g -O2 -target bpfel -c $(TARGET_ARCH_DEFINE) -MD -MP -MF$*.bpf.d $< -o $@
-endif
 
 .PHONY: clean
 clean:
@@ -64,5 +52,4 @@ debug:
 	@which clang
 	@ls -la *.bpf.c
 
-# Include dependency files for header tracking
 -include $(DEP_FILES)
