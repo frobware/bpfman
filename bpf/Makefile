@@ -23,15 +23,30 @@ endif
 
 # Build all BPF programs from .c files
 SOURCES := $(wildcard *.bpf.c)
+
+# Use OUT_DIR if provided, otherwise build in current directory
+ifdef OUT_DIR
+OBJECTS := $(addprefix $(OUT_DIR)/,$(SOURCES:.bpf.c=.bpf.o))
+DEP_FILES := $(addprefix $(OUT_DIR)/,$(SOURCES:.bpf.c=.bpf.d))
+else
 OBJECTS := $(SOURCES:.bpf.c=.bpf.o)
 DEP_FILES := $(SOURCES:.bpf.c=.bpf.d)
+endif
 
 # Default target builds all BPF objects
 all: $(OBJECTS)
 
 # Pattern rule for building BPF objects with dependency tracking
+ifdef OUT_DIR
+$(OUT_DIR)/%.bpf.o: %.bpf.c Makefile | $(OUT_DIR)
+	clang $(LIBBPF_CFLAGS) -g -O2 -target bpfel -c $(TARGET_ARCH_DEFINE) -MD -MP -MF$(OUT_DIR)/$*.bpf.d $< -o $@
+
+$(OUT_DIR):
+	mkdir -p $(OUT_DIR)
+else
 %.bpf.o: %.bpf.c Makefile
 	clang $(LIBBPF_CFLAGS) -g -O2 -target bpfel -c $(TARGET_ARCH_DEFINE) -MD -MP -MF$*.bpf.d $< -o $@
+endif
 
 .PHONY: clean
 clean:

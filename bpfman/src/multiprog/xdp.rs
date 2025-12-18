@@ -35,7 +35,7 @@ pub(crate) const DEFAULT_PRIORITY: u32 = 50;
 const XDP_DISPATCHER_PROGRAM_NAME: &str = "xdp_dispatcher";
 
 // Embedded XDP dispatcher bytecode - replaces registry pulling for hermetic builds
-static XDP_DISPATCHER_BYTES: &[u8] = include_bytes_aligned!("../../../bpf/xdp_dispatcher_v2.bpf.o");
+static XDP_DISPATCHER_BYTES: &[u8] = include_bytes_aligned!(concat!(env!("OUT_DIR"), "/xdp_dispatcher_v2.bpf.o"));
 
 /// These constants define the key of SLED DB
 const REVISION: &str = "revision";
