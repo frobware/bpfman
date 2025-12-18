@@ -49,6 +49,15 @@ fn build_ebpf_files(
                 let mut out = PathBuf::from(&out_path);
                 out.push(p.file_stem().unwrap());
                 compile_with_clang(&p, &out, &include_path)?;
+
+                // For dispatcher files, create simple-named versions for include_bytes_aligned!
+                // Normal build creates arch-specific files (bpf_x86_bpfel.o), but embedding
+                // expects simple names (xdp_dispatcher_v2.bpf.o) for hermetic builds
+                if let Some(filename) = p.file_name().and_then(|n| n.to_str()) {
+                    if filename.contains("dispatcher") {
+                        compile_dispatcher_for_embedding(&p, &out_path, &include_path)?;
+                    }
+                }
             }
         }
     }
@@ -135,5 +144,53 @@ fn compile_with_clang<P: Clone + AsRef<Path>>(
         }
     }
 
+    Ok(())
+}
+
+/// Compile dispatcher for embedding with include_bytes_aligned!
+/// Creates simple filenames like xdp_dispatcher_v2.bpf.o for hermetic builds
+fn compile_dispatcher_for_embedding<P: Clone + AsRef<Path>>(
+    src: P,
+    out_dir: P,
+    include_path: P,
+) -> anyhow::Result<()> {
+    let clang = match env::var("CLANG") {
+        Ok(val) => val,
+        Err(_) => String::from("clang"),
+    };
+
+    // Create simple output filename for embedding (remove .c, keep .bpf.o)
+    let src_filename = src.as_ref().file_name().unwrap().to_str().unwrap();
+    let out_filename = src_filename.replace(".c", ".o");
+    let outfile = out_dir.as_ref().join(out_filename);
+
+    // Compile for x86 target as default for embedding
+    let mut cmd = Command::new(clang);
+    cmd.arg(format!("-I{}", include_path.as_ref().to_string_lossy()))
+        .arg("-g")
+        .arg("-O2")
+        .arg("-target")
+        .arg("bpfel")
+        .arg("-c")
+        .arg("-D__TARGET_ARCH_x86")
+        .arg(src.as_ref().as_os_str())
+        .arg("-o")
+        .arg(&outfile);
+
+    let output = cmd.output().context("Failed to execute clang for dispatcher embedding")?;
+    if !output.status.success() {
+        bail!(
+            "Failed to compile dispatcher for embedding: {}\n \
+            stdout=\n \
+            {}\n \
+            stderr=\n \
+            {}\n",
+            outfile.display(),
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap()
+        );
+    }
+
+    println!("Compiled dispatcher for embedding: {}", outfile.display());
     Ok(())
 }
