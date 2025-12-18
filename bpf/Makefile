@@ -21,17 +21,18 @@ endif
 # Build all BPF programs from .c files
 SOURCES := $(wildcard *.bpf.c)
 OBJECTS := $(SOURCES:.bpf.c=.bpf.o)
+DEP_FILES := $(SOURCES:.bpf.c=.bpf.d)
 
 # Default target builds all BPF objects
 all: $(OBJECTS)
 
-# Pattern rule for building BPF objects
-%.bpf.o: %.bpf.c
-	clang $(LIBBPF_CFLAGS) -g -O2 -target bpfel -c $(TARGET_ARCH_DEFINE) $< -o $@
+# Pattern rule for building BPF objects with dependency tracking
+%.bpf.o: %.bpf.c Makefile
+	clang $(LIBBPF_CFLAGS) -g -O2 -target bpfel -c $(TARGET_ARCH_DEFINE) -MD -MP -MF$*.bpf.d $< -o $@
 
 .PHONY: clean
 clean:
-	rm -f $(OBJECTS)
+	rm -f $(OBJECTS) $(DEP_FILES)
 
 .PHONY: test-pkgconfig
 test-pkgconfig:
@@ -44,3 +45,6 @@ debug:
 	@echo "LIBBPF_CFLAGS: $(LIBBPF_CFLAGS)"
 	@which clang
 	@ls -la *.bpf.c
+
+# Include dependency files for header tracking
+-include $(DEP_FILES)
