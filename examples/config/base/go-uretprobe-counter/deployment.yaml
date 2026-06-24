@@ -58,6 +58,7 @@ spec:
         - name: go-uretprobe-counter-maps
           csi:
             driver: csi.bpfman.io
+            readOnly: true
             volumeAttributes:
               csi.bpfman.io/program: go-uretprobe-counter-example
               csi.bpfman.io/maps: uretprobe_stats_map

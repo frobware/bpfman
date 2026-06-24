@@ -64,6 +64,7 @@ spec:
         - name: go-tc-counter-maps
           csi:
             driver: csi.bpfman.io
+            readOnly: true
             volumeAttributes:
               csi.bpfman.io/program: go-tc-counter-example
               csi.bpfman.io/maps: tc_stats_map

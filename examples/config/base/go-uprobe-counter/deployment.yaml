@@ -64,6 +64,7 @@ spec:
         - name: go-uprobe-counter-maps
           csi:
             driver: csi.bpfman.io
+            readOnly: true
             volumeAttributes:
               csi.bpfman.io/program: go-uprobe-counter-example
               csi.bpfman.io/maps: uprobe_stats_map

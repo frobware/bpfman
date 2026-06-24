@@ -64,6 +64,7 @@ spec:
         - name: go-xdp-counter-maps
           csi:
             driver: csi.bpfman.io
+            readOnly: true
             volumeAttributes:
               csi.bpfman.io/program: go-xdp-counter-example
               csi.bpfman.io/maps: xdp_stats_map
