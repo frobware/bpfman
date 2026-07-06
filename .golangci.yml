@@ -12,6 +12,13 @@ formatters:
     goimports:
       local-prefixes:
         - github.com/bpfman/bpfman
+  exclusions:
+    paths:
+      # The example applications predate this configuration and
+      # keep their original import grouping; they live in their
+      # own nested Go module and are not part of the root module
+      # this configuration serves.
+      - examples
 
 linters:
   default: none
