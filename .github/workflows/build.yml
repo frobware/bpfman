@@ -55,6 +55,16 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod go.sum
 
+      - name: Examples module check
+        # The examples live in their own nested Go module, outside
+        # the root module's package patterns, so their tidiness
+        # needs its own gate. Once per matrix, like the root check.
+        if: ${{ matrix.arch.arch == 'amd64' }}
+        run: |
+          cd examples
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
       # Go linting for the root module lives in the Go CI workflow
       # (go-ci.yaml), which pins golangci-lint and carries the
       # repository's .golangci.yml configuration.
