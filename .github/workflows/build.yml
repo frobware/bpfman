@@ -5,9 +5,12 @@ on: # yamllint disable-line rule:truthy
     branches: [main]
     tags:
       - v*
-  pull_request:
-    branches:
-      - main
+  # The pull_request trigger is temporarily disabled while the Go
+  # import iterates on its own CI; restore before this branch goes
+  # anywhere near upstream.
+  # pull_request:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 env:
