@@ -1,5 +1,7 @@
 # taplo wants to reorder commands in alphabetical order, but order is important here
-exclude = ["Cross.toml"]
+# config/, e2e/config/, and vendor/ arrived with the Go implementation
+# import and keep their original formatting.
+exclude = ["Cross.toml", "config/*.toml", "e2e/config/*.toml", "vendor/**"]
 
 [[rule]]
 

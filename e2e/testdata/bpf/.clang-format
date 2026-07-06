@@ -1,0 +1,3 @@
+# Imported Go-implementation C sources keep their own formatting
+# conventions; the repository clang-format gate does not apply.
+DisableFormat: true

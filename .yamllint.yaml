@@ -13,3 +13,12 @@ ignore:
   - vendor/*
   - examples/config/default/*/kustomization.yaml
   - examples/config/selinux/*/kustomization.yaml
+  # Files that arrived with the Go implementation import keep their
+  # original formatting: the shell testdata expect.yaml files are
+  # byte-exact test fixtures, and the remainder follow the imported
+  # tree's conventions.
+  - cmd/bpfman-shell/testdata/**/*.yaml
+  - .golangci.yml
+  - .github/workflows/go-ci.yaml
+  - .github/workflows/go-test.yaml
+  - .github/workflows/go-image.yaml
