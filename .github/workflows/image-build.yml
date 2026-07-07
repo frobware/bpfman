@@ -63,8 +63,132 @@ jobs:
           path: |
             ./bin/bpfman.tar.gz
 
-  # Build all the userspace images and push them to the registry. This includes bpfman
-  # as well as the go-*-counter examples.
+  # Build and push the bpfman daemon image via the repository's own
+  # image tooling (make build-image): the in-container multi-arch
+  # build also bakes the attestation metadata into the binary
+  # (IMAGE_REF, SIGNER_IDENTITY, OIDC_ISSUER), so `bpfman version`
+  # prints a ready-to-run cosign verify command for the image it
+  # shipped in. The push and signing are gated on push events; pull
+  # requests get a cache-only build.
+  build-and-push-bpfman-image:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write # needed for signing the images with GitHub OIDC Token
+    runs-on: ubuntu-24.04
+    env:
+      BPFMAN_IMG: ttl.sh/bpfman/bpfman:latest
+    steps:
+      - name: Checkout bpfman
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # @v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2 # @v3
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # @v3.8.2
+
+      - name: Login to quay.io/bpfman
+        uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # @v1
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(env.BPFMAN_IMG, 'quay.io') }}
+        with:
+          registry: quay.io
+          username: ${{ secrets.BPFMAN_USERNAME }}
+          password: ${{ secrets.BPFMAN_ROBOT_TOKEN }}
+
+      - name: Build and push multi-arch image
+        env:
+          BUILD_DATE: ${{ github.event.head_commit.timestamp }}
+        run: |
+          make build-image \
+            EXTRA_GO_LDFLAGS="-s -w" \
+            IMAGE_REF=ttl.sh/bpfman/bpfman \
+            SIGNER_IDENTITY=https://github.com/${{ github.repository }}/.github/workflows/image-build.yml@${{ github.ref }} \
+            OIDC_ISSUER=https://token.actions.githubusercontent.com \
+            PLATFORMS=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x \
+            ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && 'PUSH=1' || '' }} \
+            BUILDX_EXTRA_ARGS="--cache-from type=gha --cache-to type=gha,mode=max --metadata-file=${RUNNER_TEMP}/buildx-meta.json"
+
+      - name: Sign published image with cosign
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        run: |
+          make cosign-sign \
+            BUILDX_METADATA_FILE="${RUNNER_TEMP}/buildx-meta.json"
+
+  verify-bpfman-image:
+    name: Verify bpfman image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    needs: build-and-push-bpfman-image
+    if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    env:
+      # Must match the BPFMAN_IMG used in build-and-push-bpfman-image;
+      # this job pulls the image that job pushed.
+      BPFMAN_IMG: ttl.sh/bpfman/bpfman:latest
+    steps:
+      - name: Verify image metadata
+        run: |
+          output=$(docker run --rm -e BPFMAN_MODE= "$BPFMAN_IMG" version)
+          echo "$output"
+          echo "$output" | grep -q "${{ github.sha }}" || { echo "FAIL: expected git commit ${{ github.sha }}"; exit 1; }
+          echo "$output" | grep -q "${{ github.event.head_commit.timestamp }}" || { echo "FAIL: expected build date ${{ github.event.head_commit.timestamp }}"; exit 1; }
+          echo "$output" | grep -q "${{ matrix.platform }}" || { echo "FAIL: expected platform ${{ matrix.platform }}"; exit 1; }
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # @v3.8.2
+
+      - name: Verify cosign signature
+        # Asserts a sigstore signature exists on the published
+        # image, that it was issued by the GitHub Actions OIDC
+        # provider, that the signing identity is this workflow on
+        # this repository, and that the signature was made by the
+        # current commit rather than a prior run's stale signature
+        # on the floating :latest tag.
+        run: |
+          set -euo pipefail
+          cosign verify "$BPFMAN_IMG" \
+            --certificate-identity-regexp 'https://github\.com/${{ github.repository }}/\.github/workflows/image-build\.yml@.*' \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            > "${RUNNER_TEMP}/cosign-verify.json"
+          actual_sha=$(jq -r '.[0].optional.githubWorkflowSha' "${RUNNER_TEMP}/cosign-verify.json")
+          if [ "${actual_sha}" != "${{ github.sha }}" ]; then
+            echo "FAIL: signature is from sha=${actual_sha}, expected ${{ github.sha }}" >&2
+            jq '.[0].optional' "${RUNNER_TEMP}/cosign-verify.json" >&2
+            exit 1
+          fi
+          echo "Signature verified: githubWorkflowSha=${actual_sha}"
+
+      - name: Verify cosign signature via binary's embedded attestation
+        # Self-consistency check between the attestation the binary
+        # carries in its version output and the signature actually
+        # applied: a typo in IMAGE_REF or SIGNER_IDENTITY in the
+        # build args fails here even though the direct verification
+        # above would pass.
+        run: |
+          set -euo pipefail
+          docker run --rm -e BPFMAN_MODE= "$BPFMAN_IMG" version \
+            | grep ^Attestation: \
+            | sed 's/^Attestation: *//' \
+            | sh \
+            > "${RUNNER_TEMP}/embedded-verify.json"
+          actual_sha=$(jq -r '.[0].optional.githubWorkflowSha' "${RUNNER_TEMP}/embedded-verify.json")
+          if [ "${actual_sha}" != "${{ github.sha }}" ]; then
+            echo "FAIL: embedded-attestation verify returned sha=${actual_sha}, expected ${{ github.sha }}" >&2
+            jq '.[0].optional' "${RUNNER_TEMP}/embedded-verify.json" >&2
+            exit 1
+          fi
+          echo "Embedded attestation verified: githubWorkflowSha=${actual_sha}"
+
+  # Build all the userspace example images and push them to the registry.
   build-and-push-userspace-images:
     permissions:
       contents: read
@@ -76,19 +200,6 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - registry: ttl.sh
-            repository: bpfman
-            image: bpfman
-            dockerfile: ./Dockerfile.bpfman
-            context: .
-            tags: |
-              type=ref,event=branch
-              type=ref,event=tag
-              type=ref,event=pr
-              type=sha,format=long
-              # set latest tag for default branch
-              type=raw,value=latest,enable={{is_default_branch}}
-
           - registry: ttl.sh
             repository: bpfman-userspace
             image: go-xdp-counter
@@ -214,14 +325,6 @@ jobs:
 
       - name: Install cosign
         uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # @v3.8.2
-
-      - name: Login to quay.io/bpfman
-        uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # @v1
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && matrix.image.registry == 'quay.io' && matrix.image.repository == 'bpfman'}}
-        with:
-          registry: ${{ matrix.image.registry }}
-          username: ${{ secrets.BPFMAN_USERNAME }}
-          password: ${{ secrets.BPFMAN_ROBOT_TOKEN }}
 
       - name: Login to quay.io/bpfman-userspace
         uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # @v1
