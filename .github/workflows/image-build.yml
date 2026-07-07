@@ -1,11 +1,12 @@
 name: bpfman-image-build
 
-# The registry for every image is temporarily ttl.sh (anonymous,
-# ephemeral) instead of quay.io while the Go implementation import
-# proves the release pipeline end to end. The repository layout,
-# image names, tag rules, and signing are unchanged; restoring the
-# canonical destination is a matter of flipping the registry values
-# back to quay.io, which re-arms the login steps automatically.
+# IMAGE_REGISTRY below selects the destination for every image.
+# It is temporarily ttl.sh (anonymous, ephemeral) instead of
+# quay.io while the Go implementation import proves the release
+# pipeline end to end. The repository layout, image names, tag
+# rules, and signing are unchanged; restoring the canonical
+# destination is the one-line flip back to quay.io, which re-arms
+# the login steps automatically.
 
 on: # yamllint disable-line rule:truthy
   push:
@@ -19,6 +20,9 @@ on: # yamllint disable-line rule:truthy
       - Containerfile.bytecode.multi.arch
       - examples/**/container-deployment/Containerfile**
   workflow_dispatch:
+
+env:
+  IMAGE_REGISTRY: ttl.sh
 
 jobs:
   # Build bpfman and store the bpfman CLI binary in artifacts for the
@@ -76,9 +80,10 @@ jobs:
       packages: write
       id-token: write # needed for signing the images with GitHub OIDC Token
     runs-on: ubuntu-24.04
-    env:
-      BPFMAN_IMG: ttl.sh/bpfman/bpfman:latest
     steps:
+      - name: Set image reference
+        run: echo "BPFMAN_IMG=${IMAGE_REGISTRY}/bpfman/bpfman:latest" >> "$GITHUB_ENV"
+
       - name: Checkout bpfman
         uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # @v4
 
@@ -90,7 +95,7 @@ jobs:
 
       - name: Login to quay.io/bpfman
         uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # @v1
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && startsWith(env.BPFMAN_IMG, 'quay.io') }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.IMAGE_REGISTRY == 'quay.io' }}
         with:
           registry: quay.io
           username: ${{ secrets.BPFMAN_USERNAME }}
@@ -102,7 +107,7 @@ jobs:
         run: |
           make build-image \
             EXTRA_GO_LDFLAGS="-s -w" \
-            IMAGE_REF=ttl.sh/bpfman/bpfman \
+            IMAGE_REF="${BPFMAN_IMG%:*}" \
             SIGNER_IDENTITY=https://github.com/${{ github.repository }}/.github/workflows/image-build.yml@${{ github.ref }} \
             OIDC_ISSUER=https://token.actions.githubusercontent.com \
             PLATFORMS=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x \
@@ -130,11 +135,12 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
             platform: linux/arm64
-    env:
-      # Must match the BPFMAN_IMG used in build-and-push-bpfman-image;
-      # this job pulls the image that job pushed.
-      BPFMAN_IMG: ttl.sh/bpfman/bpfman:latest
     steps:
+      - name: Set image reference
+        # Must match the BPFMAN_IMG used in build-and-push-bpfman-image;
+        # this job pulls the image that job pushed.
+        run: echo "BPFMAN_IMG=${IMAGE_REGISTRY}/bpfman/bpfman:latest" >> "$GITHUB_ENV"
+
       - name: Verify image metadata
         run: |
           output=$(docker run --rm -e BPFMAN_MODE= "$BPFMAN_IMG" version)
@@ -200,8 +206,7 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-xdp-counter
             context: .
             dockerfile: ./examples/go-xdp-counter/container-deployment/Containerfile.go-xdp-counter
@@ -213,8 +218,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-tc-counter
             context: .
             dockerfile: ./examples/go-tc-counter/container-deployment/Containerfile.go-tc-counter
@@ -226,8 +230,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-tcx-counter
             context: .
             dockerfile: ./examples/go-tcx-counter/container-deployment/Containerfile.go-tcx-counter
@@ -239,8 +242,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            # build_language: go - Not building locally, so don't install go tools
+          - # build_language: go - Not building locally, so don't install go tools
             repository: bpfman-userspace
             image: go-tracepoint-counter
             context: .
@@ -253,8 +255,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-kprobe-counter
             context: .
             dockerfile: ./examples/go-kprobe-counter/container-deployment/Containerfile.go-kprobe-counter
@@ -266,8 +267,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-uprobe-counter
             context: .
             dockerfile: ./examples/go-uprobe-counter/container-deployment/Containerfile.go-uprobe-counter
@@ -279,8 +279,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-uretprobe-counter
             context: .
             dockerfile: ./examples/go-uretprobe-counter/container-deployment/Containerfile.go-uretprobe-counter
@@ -292,8 +291,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-target
             context: .
             dockerfile: ./examples/go-target/container-deployment/Containerfile.go-target
@@ -305,8 +303,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            repository: bpfman-userspace
+          - repository: bpfman-userspace
             image: go-app-counter
             context: .
             dockerfile: ./examples/go-app-counter/container-deployment/Containerfile.go-app-counter
@@ -328,9 +325,9 @@ jobs:
 
       - name: Login to quay.io/bpfman-userspace
         uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # @v1
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && matrix.image.registry == 'quay.io' && matrix.image.repository == 'bpfman-userspace'}}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.IMAGE_REGISTRY == 'quay.io' && matrix.image.repository == 'bpfman-userspace'}}
         with:
-          registry: ${{ matrix.image.registry }}
+          registry: ${{ env.IMAGE_REGISTRY }}
           username: ${{ secrets.BPFMAN_USERSPACE_USERNAME }}
           password: ${{ secrets.BPFMAN_USERSPACE_ROBOT_TOKEN }}
 
@@ -338,7 +335,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # @v5.7.0
         with:
-          images: ${{ matrix.image.registry }}/${{ matrix.image.repository }}/${{ matrix.image.image }}
+          images: ${{ env.IMAGE_REGISTRY }}/${{ matrix.image.repository }}/${{ matrix.image.image }}
           tags: ${{ matrix.image.tags }}
 
       - name: Set up QEMU
@@ -382,8 +379,7 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-xdp-counter
@@ -398,8 +394,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-tc-counter
@@ -414,8 +409,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-tcx-counter
@@ -430,8 +424,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-tracepoint-counter
@@ -446,8 +439,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-kprobe-counter
@@ -462,8 +454,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-uprobe-counter
@@ -478,8 +469,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-uretprobe-counter
@@ -494,8 +484,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: go
+          - build_language: go
             bpf_build_wrapper: go
             repository: bpfman-bytecode
             image: go-app-counter
@@ -510,8 +499,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: xdp_pass
@@ -526,8 +514,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: xdp_pass_private
@@ -542,8 +529,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: tc_pass
@@ -558,8 +544,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: tcx_test
@@ -574,8 +559,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: tracepoint
@@ -590,8 +574,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: uprobe
@@ -606,8 +589,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: uretprobe
@@ -622,8 +604,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: kprobe
@@ -638,8 +619,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: kretprobe
@@ -654,8 +634,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: fentry
@@ -670,8 +649,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: fexit
@@ -686,8 +664,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman-bytecode
             image: app-test
@@ -702,8 +679,7 @@ jobs:
               # set latest tag for default branch
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman
             image: xdp-dispatcher
@@ -717,8 +693,7 @@ jobs:
               type=sha,format=long
               type=raw,value=latest,enable={{is_default_branch}}
 
-          - registry: ttl.sh
-            build_language: rust
+          - build_language: rust
             bpf_build_wrapper: rust
             repository: bpfman
             image: tc-dispatcher
@@ -779,17 +754,17 @@ jobs:
 
       - name: Login to quay.io/bpfman
         uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # @v1
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && matrix.image.registry == 'quay.io' && matrix.image.repository == 'bpfman'}}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.IMAGE_REGISTRY == 'quay.io' && matrix.image.repository == 'bpfman'}}
         with:
-          registry: ${{ matrix.image.registry }}
+          registry: ${{ env.IMAGE_REGISTRY }}
           username: ${{ secrets.BPFMAN_USERNAME }}
           password: ${{ secrets.BPFMAN_ROBOT_TOKEN }}
 
       - name: Login to quay.io/bpfman-bytecode
         uses: redhat-actions/podman-login@4934294ad0449894bcd1e9f191899d7292469603 # @v1
-        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && matrix.image.registry == 'quay.io' && matrix.image.repository == 'bpfman-bytecode' }}
+        if: ${{ (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && env.IMAGE_REGISTRY == 'quay.io' && matrix.image.repository == 'bpfman-bytecode' }}
         with:
-          registry: ${{ matrix.image.registry }}
+          registry: ${{ env.IMAGE_REGISTRY }}
           username: ${{ secrets.BPFMAN_BYTECODE_USERNAME }}
           password: ${{ secrets.BPFMAN_BYTECODE_ROBOT_TOKEN }}
 
@@ -806,7 +781,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@902fa8ec7d6ecbf8d84d538b9b233a880e428804 # @v5.7.0
         with:
-          images: ${{ matrix.image.registry }}/${{ matrix.image.repository }}/${{ matrix.image.image }}
+          images: ${{ env.IMAGE_REGISTRY }}/${{ matrix.image.repository }}/${{ matrix.image.image }}
           tags: ${{ matrix.image.tags }}
 
       - name: Set up QEMU
