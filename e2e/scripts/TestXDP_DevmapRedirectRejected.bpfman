@@ -1,0 +1,18 @@
+# -*- mode: bpfman -*-
+#
+# Given: an XDP program compiled as a devmap redirect target
+# (SEC("xdp/devmap"), which cilium/ebpf parses with expected attach type
+# BPF_XDP_DEVMAP)
+#
+# When: it is loaded through bpfman
+#
+# Then: bpfman rejects it at load. bpfman attaches XDP programs to
+# interfaces via the dispatcher; devmap/cpumap redirect targets are a
+# different attach model it does not support. The distinction is invisible
+# in the section name (all xdp* sections share one kernel program type),
+# so the rejection relies on the AttachType cilium/ebpf parsed, not on the
+# section string.
+
+let rejected <- bpfman program load file testdata/bpf/xdp_devmap.bpf.o --programs xdp:xdp_devmap_redirect
+assert not $rejected.ok
+assert contains $rejected.stderr "unsupported XDP attach type"

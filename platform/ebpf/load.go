@@ -106,6 +106,15 @@ func (k *kernelAdapter) Load(ctx context.Context, spec bpfman.LoadSpec, bpffs fs
 	}
 	license := progSpec.License
 
+	// bpfman attaches XDP programs to interfaces via the dispatcher, so
+	// reject the devmap/cpumap redirect-target variants at load rather
+	// than mislabelling them as ordinary XDP. cilium/ebpf has parsed the
+	// distinction into AttachType; inferProgramType, keyed on the section
+	// name, would collapse it to plain XDP.
+	if unsupportedXDPAttach(progSpec.Type, progSpec.AttachType) {
+		return bpfman.LoadOutput{}, fmt.Errorf("program %q uses an unsupported XDP attach type (%s): bpfman attaches XDP programs to interfaces, not devmap/cpumap redirect targets", spec.ProgramName(), progSpec.AttachType)
+	}
+
 	// Determine program type: prefer user-specified type, fall back to ELF inference.
 	// The user's CLI specification (e.g., --programs kretprobe:func) takes precedence
 	// because a kprobe program CAN be attached as either entry or return probe.

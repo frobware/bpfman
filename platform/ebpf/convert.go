@@ -96,6 +96,24 @@ func declaredTypeMatchesSection(declared, inferred bpfman.ProgramType) bool {
 	return sectionFamily(declared) == sectionFamily(inferred)
 }
 
+// unsupportedXDPAttach reports whether a loaded program is an XDP variant
+// bpfman cannot use: the devmap and cpumap redirect targets. bpfman
+// attaches XDP programs to interfaces through the freplace dispatcher; a
+// program compiled with SEC("xdp/devmap") or SEC("xdp/cpumap") (or their
+// .frags forms) is a redirect target for a devmap/cpumap entry, not an
+// interface program.
+//
+// All XDP section families share one kernel program type, so
+// inferProgramType, which keys off the section name, cannot tell them
+// apart -- and the section name alone cannot either, since "xdp/devmap" is
+// ambiguous with an interface program named "devmap" unless one replays
+// cilium/ebpf's ordered section matching. cilium/ebpf has already resolved
+// this into ProgramSpec.AttachType, so we read that: BPF_XDP for an
+// interface program, BPF_XDP_DEVMAP / BPF_XDP_CPUMAP for a redirect target.
+func unsupportedXDPAttach(t ebpf.ProgramType, at ebpf.AttachType) bool {
+	return t == ebpf.XDP && (at == ebpf.AttachXDPDevMap || at == ebpf.AttachXDPCPUMap)
+}
+
 // bootTime returns the system boot time by reading /proc/stat.
 // Falls back to time.Now() if /proc/stat cannot be read.
 func bootTime() time.Time {
