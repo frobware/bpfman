@@ -1,0 +1,26 @@
+# -*- mode: bpfman -*-
+#
+# Given: kprobe/uprobe programs compiled as multi-attach or session
+# probes (SEC("kprobe.multi/..."), SEC("uprobe.multi/..."),
+# SEC("kprobe.session/...")), which cilium/ebpf parses with expected
+# attach types BPF_TRACE_KPROBE_MULTI / UPROBE_MULTI / KPROBE_SESSION
+#
+# When: each is loaded through bpfman
+#
+# Then: bpfman rejects it at load. bpfman attaches kprobe and uprobe
+# programs individually via perf_event; multi-attach and session probes
+# are a different model it does not support. All three share the kprobe
+# kernel program type, so the rejection relies on the AttachType
+# cilium/ebpf parsed, not on the section string.
+
+let km <- bpfman program load file testdata/bpf/probe_multi_session.bpf.o --programs kprobe:kprobe_multi_probe
+assert not $km.ok
+assert contains $km.stderr "unsupported attach type"
+
+let um <- bpfman program load file testdata/bpf/probe_multi_session.bpf.o --programs uprobe:uprobe_multi_probe
+assert not $um.ok
+assert contains $um.stderr "unsupported attach type"
+
+let ks <- bpfman program load file testdata/bpf/probe_multi_session.bpf.o --programs kprobe:kprobe_session_probe
+assert not $ks.ok
+assert contains $ks.stderr "unsupported attach type"

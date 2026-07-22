@@ -15,4 +15,5 @@
 
 let rejected <- bpfman program load file testdata/bpf/xdp_devmap.bpf.o --programs xdp:xdp_devmap_redirect
 assert not $rejected.ok
-assert contains $rejected.stderr "unsupported XDP attach type"
+assert contains $rejected.stderr "unsupported attach type"
+assert contains $rejected.stderr "devmap/cpumap redirect targets"

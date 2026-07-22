@@ -106,13 +106,14 @@ func (k *kernelAdapter) Load(ctx context.Context, spec bpfman.LoadSpec, bpffs fs
 	}
 	license := progSpec.License
 
-	// bpfman attaches XDP programs to interfaces via the dispatcher, so
-	// reject the devmap/cpumap redirect-target variants at load rather
-	// than mislabelling them as ordinary XDP. cilium/ebpf has parsed the
-	// distinction into AttachType; inferProgramType, keyed on the section
-	// name, would collapse it to plain XDP.
-	if unsupportedXDPAttach(progSpec.Type, progSpec.AttachType) {
-		return bpfman.LoadOutput{}, fmt.Errorf("program %q uses an unsupported XDP attach type (%s): bpfman attaches XDP programs to interfaces, not devmap/cpumap redirect targets", spec.ProgramName(), progSpec.AttachType)
+	// Reject program variants bpfman can load but cannot attach (XDP
+	// devmap/cpumap redirect targets, kprobe/uprobe multi-attach and
+	// session probes) at load rather than mislabelling them as their
+	// supported sibling. inferProgramType, keyed on the section name,
+	// would collapse them; cilium/ebpf has parsed the distinction into
+	// AttachType, so consult that.
+	if reason := unsupportedAttachReason(progSpec.Type, progSpec.AttachType); reason != "" {
+		return bpfman.LoadOutput{}, fmt.Errorf("program %q uses an unsupported attach type (%s): %s", spec.ProgramName(), progSpec.AttachType, reason)
 	}
 
 	// Determine program type: prefer user-specified type, fall back to ELF inference.

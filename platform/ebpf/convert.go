@@ -96,22 +96,38 @@ func declaredTypeMatchesSection(declared, inferred bpfman.ProgramType) bool {
 	return sectionFamily(declared) == sectionFamily(inferred)
 }
 
-// unsupportedXDPAttach reports whether a loaded program is an XDP variant
-// bpfman cannot use: the devmap and cpumap redirect targets. bpfman
-// attaches XDP programs to interfaces through the freplace dispatcher; a
-// program compiled with SEC("xdp/devmap") or SEC("xdp/cpumap") (or their
-// .frags forms) is a redirect target for a devmap/cpumap entry, not an
-// interface program.
+// unsupportedAttachReason returns a human-readable reason when a program is
+// a variant bpfman can load into the kernel but cannot attach, or "" when
+// the program is supported.
 //
-// All XDP section families share one kernel program type, so
-// inferProgramType, which keys off the section name, cannot tell them
-// apart -- and the section name alone cannot either, since "xdp/devmap" is
-// ambiguous with an interface program named "devmap" unless one replays
-// cilium/ebpf's ordered section matching. cilium/ebpf has already resolved
-// this into ProgramSpec.AttachType, so we read that: BPF_XDP for an
-// interface program, BPF_XDP_DEVMAP / BPF_XDP_CPUMAP for a redirect target.
-func unsupportedXDPAttach(t ebpf.ProgramType, at ebpf.AttachType) bool {
-	return t == ebpf.XDP && (at == ebpf.AttachXDPDevMap || at == ebpf.AttachXDPCPUMap)
+// bpfman classifies programs from the ELF section name via
+// inferProgramType, which cannot see the expected attach type. Several
+// section families share one kernel program type and differ only in an
+// AttachType that cilium/ebpf has already parsed, and the section name
+// alone cannot recover it without replaying cilium/ebpf's ordered
+// matching (e.g. "xdp/devmap" is ambiguous with an interface program named
+// "devmap"). We consult AttachType here so an unsupported variant is
+// refused at load with a clear message instead of being mislabelled as its
+// supported sibling and failing obscurely at attach.
+//
+//   - XDP devmap/cpumap redirect targets (SEC("xdp/devmap") and the
+//     cpumap and .frags forms): AttachType BPF_XDP_DEVMAP / BPF_XDP_CPUMAP.
+//     bpfman attaches XDP programs to interfaces, not to map entries.
+//   - kprobe/uprobe multi-attach and session probes
+//     (SEC("kprobe.multi/..."), SEC("uprobe.multi/..."),
+//     SEC("kprobe.session/...")): AttachType BPF_TRACE_KPROBE_MULTI /
+//     BPF_TRACE_UPROBE_MULTI / BPF_TRACE_KPROBE_SESSION. All share the
+//     kprobe kernel program type; bpfman attaches these individually via
+//     perf_event.
+func unsupportedAttachReason(t ebpf.ProgramType, at ebpf.AttachType) string {
+	switch {
+	case t == ebpf.XDP && (at == ebpf.AttachXDPDevMap || at == ebpf.AttachXDPCPUMap):
+		return "bpfman attaches XDP programs to interfaces, not devmap/cpumap redirect targets"
+	case t == ebpf.Kprobe && (at == ebpf.AttachTraceKprobeMulti || at == ebpf.AttachTraceUprobeMulti || at == ebpf.AttachTraceKprobeSession):
+		return "bpfman attaches kprobe and uprobe programs individually via perf_event, not as multi-attach or session probes"
+	}
+
+	return ""
 }
 
 // bootTime returns the system boot time by reading /proc/stat.
