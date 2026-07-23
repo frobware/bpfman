@@ -7,10 +7,15 @@ name: lsm e2e (nested VM)
 # bpf) and cannot be rebooted mid-job, so the lsm tests otherwise skip.
 # We nest a VM instead: reuse the runner's own kernel (already
 # CONFIG_BPF_LSM=y) and boot it with "lsm=...,bpf" appended, sharing
-# the runner rootfs so the checked-out tree, the apt/preinstalled
-# toolchain, and the warmed build caches are all present in the guest.
-# Then run only the lsm tests inside. No nix: the same apt + make path
-# the ordinary e2e jobs use; the nested VM is the only delta.
+# the runner rootfs so the checked-out tree, the toolchain, and the
+# built artefacts are all present in the guest. Then run only the lsm
+# tests inside. No nix: the same apt + make path an ordinary developer
+# uses; the nested VM is the only delta.
+#
+# The ordinary e2e jobs build BPF bytecode in a Fedora container (where
+# asm/ headers live at /usr/include/asm). We build on the ubuntu host
+# instead, so we need libbpf-dev + linux-libc-dev and must point
+# BPF_CFLAGS at ubuntu's multiarch asm/ dir.
 #
 # Push to this branch (no PR) to run; nothing else triggers on it.
 
@@ -22,6 +27,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # ubuntu-latest is x86_64; -target bpfel clang needs the multiarch
+  # asm/ headers (from linux-libc-dev) added explicitly.
+  BPF_CFLAGS: -I/usr/include/x86_64-linux-gnu
+
 jobs:
   lsm-e2e-vm:
     name: lsm e2e (nested VM)
@@ -29,19 +39,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.0
 
-      - name: Install e2e toolchain deps (as the normal e2e jobs do)
+      - name: Install toolchain + BPF build deps + nested-VM tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential dwarves kmod "linux-headers-$(uname -r)"
-
-      - name: Install nested-VM tooling
-        run: |
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 busybox-static
+            build-essential dwarves kmod "linux-headers-$(uname -r)" \
+            clang llvm libbpf-dev linux-libc-dev \
+            qemu-system-x86 busybox-static
           pipx install virtme-ng          # the one new tool; swap for hand-rolled qemu if unwanted
 
-      - name: Build on the host (binaries + BPF objects; warms the caches the guest reuses)
-        run: make
+      - name: Build on the host (surfaces build errors outside the VM)
+        run: |
+          make bpfman-compile
+          make build-e2e-grpc build-e2e-scripts
 
       - name: Sanity -- the bare runner has no bpf-LSM (so tests would skip here)
         run: |
@@ -56,8 +66,8 @@ jobs:
         run: |
           set -euxo pipefail
           # virtme-ng: reuse the runner kernel, append bpf to the LSM order,
-          # share the rootfs (--pwd runs in the checked-out tree), run as
-          # root, and propagate the guest command's exit code back out.
+          # share the rootfs (--pwd runs in the checked-out tree, artefacts
+          # already built above), run as root, propagate the exit code out.
           # Guest is root, so the Makefile's internal sudo is a no-op. /run
           # is a fresh tmpfs in the guest, so no stale-DB collisions.
           vng --run "/boot/vmlinuz-$(uname -r)" \
@@ -66,6 +76,7 @@ jobs:
               -- bash -euxo pipefail -c '
                 echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
                 grep -qw bpf /sys/kernel/security/lsm
+                export BPF_CFLAGS="-I/usr/include/x86_64-linux-gnu"
                 make test-e2e-grpc    TEST="TestParallel_GRPC/lsm"
                 make test-e2e-scripts TEST="TestBPFManScripts/scripts/TestLsm_"
               '
