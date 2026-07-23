@@ -1,0 +1,71 @@
+name: lsm e2e (nested VM)
+
+# Dev-loop workflow. Run the lsm e2e under a kernel with bpf in the
+# active LSM list.
+#
+# Hosted runners boot without bpf-LSM (/sys/kernel/security/lsm lacks
+# bpf) and cannot be rebooted mid-job, so the lsm tests otherwise skip.
+# We nest a VM instead: reuse the runner's own kernel (already
+# CONFIG_BPF_LSM=y) and boot it with "lsm=...,bpf" appended, sharing
+# the runner rootfs so the checked-out tree, the apt/preinstalled
+# toolchain, and the warmed build caches are all present in the guest.
+# Then run only the lsm tests inside. No nix: the same apt + make path
+# the ordinary e2e jobs use; the nested VM is the only delta.
+#
+# Push to this branch (no PR) to run; nothing else triggers on it.
+
+on:
+  push:
+    branches: [lsm-e2e-vm]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lsm-e2e-vm:
+    name: lsm e2e (nested VM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+
+      - name: Install e2e toolchain deps (as the normal e2e jobs do)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential dwarves kmod "linux-headers-$(uname -r)"
+
+      - name: Install nested-VM tooling
+        run: |
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 busybox-static
+          pipx install virtme-ng          # the one new tool; swap for hand-rolled qemu if unwanted
+
+      - name: Build on the host (binaries + BPF objects; warms the caches the guest reuses)
+        run: make
+
+      - name: Sanity -- the bare runner has no bpf-LSM (so tests would skip here)
+        run: |
+          echo -n "host lsm: "; cat /sys/kernel/security/lsm; echo
+          if grep -qw bpf /sys/kernel/security/lsm; then
+            echo "unexpected: bare runner already has bpf-LSM"
+          else
+            echo "expected: no bpf on the bare runner -- that is what the VM fixes"
+          fi
+
+      - name: Run the lsm e2e inside a VM booted with bpf-LSM
+        run: |
+          set -euxo pipefail
+          # virtme-ng: reuse the runner kernel, append bpf to the LSM order,
+          # share the rootfs (--pwd runs in the checked-out tree), run as
+          # root, and propagate the guest command's exit code back out.
+          # Guest is root, so the Makefile's internal sudo is a no-op. /run
+          # is a fresh tmpfs in the guest, so no stale-DB collisions.
+          vng --run "/boot/vmlinuz-$(uname -r)" \
+              --append "lsm=lockdown,capability,landlock,yama,apparmor,bpf" \
+              --user root --cpus 2 --memory 4G --pwd --verbose \
+              -- bash -euxo pipefail -c '
+                echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
+                grep -qw bpf /sys/kernel/security/lsm
+                make test-e2e-grpc    TEST="TestParallel_GRPC/lsm"
+                make test-e2e-scripts TEST="TestBPFManScripts/scripts/TestLsm_"
+              '
