@@ -1,0 +1,60 @@
+name: Probe LSM
+
+# Throwaway diagnostic. Report the active LSM stack and the kernel's
+# CONFIG_LSM / CONFIG_BPF_LSM defaults across every GitHub-hosted image
+# we can select via runs-on, on both arches. The question it answers:
+# does any selectable runner boot with "bpf" in the active LSM list
+# (/sys/kernel/security/lsm)? That is the precondition for attaching a
+# BPF_PROG_TYPE_LSM program, and thus for the lsm e2e tests to run
+# rather than skip. Delete this workflow and its branch once answered.
+
+on:
+  push:
+    branches: [probe-lsm-list]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-22.04
+          - ubuntu-24.04
+          - ubuntu-latest
+          - ubuntu-22.04-arm
+          - ubuntu-24.04-arm
+    steps:
+      - name: Report kernel and LSM configuration
+        run: |
+          echo "runner label: ${{ matrix.runner }}"
+          echo "kernel:       $(uname -rm)"
+          . /etc/os-release && echo "os:           ${PRETTY_NAME}"
+          echo
+
+          echo "active LSM list (/sys/kernel/security/lsm):"
+          cat /sys/kernel/security/lsm
+          echo
+          echo
+
+          echo "kernel config (CONFIG_LSM / CONFIG_BPF_LSM):"
+          cfg="/boot/config-$(uname -r)"
+          if [ -r "${cfg}" ]; then
+            grep -E '^CONFIG_(LSM=|BPF_LSM=)' "${cfg}" || echo "(not present in ${cfg})"
+          elif [ -r /proc/config.gz ]; then
+            zcat /proc/config.gz | grep -E '^CONFIG_(LSM=|BPF_LSM=)' || echo "(not present in /proc/config.gz)"
+          else
+            echo "(no readable kernel config)"
+          fi
+          echo
+
+          if grep -qw bpf /sys/kernel/security/lsm; then
+            echo "RESULT: bpf IS in the active LSM list -> lsm e2e tests would RUN here"
+          else
+            echo "RESULT: bpf is NOT in the active LSM list -> lsm e2e tests SKIP here"
+          fi
