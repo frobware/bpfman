@@ -40,13 +40,25 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential dwarves kmod "linux-headers-$(uname -r)" \
             clang llvm libbpf-dev gcc-multilib libelf-dev \
+            linux-tools-generic \
             qemu-system-x86 busybox-static
           pipx install virtme-ng          # the one new tool; swap for hand-rolled qemu if unwanted
+          # bpftool: symlink the linux-tools-generic binary directly (the
+          # /usr/sbin wrapper dispatches on uname -r and Canonical's azure
+          # tools package is often empty). Mirrors go-test.yaml. On the
+          # shared rootfs, so the guest sees it too.
+          bpf_bin=$(ls /usr/lib/linux-tools/*-generic/bpftool | head -n 1)
+          sudo ln -sf "$bpf_bin" /usr/local/bin/bpftool
+          bpftool version
 
       - name: Build on the host (surfaces build errors outside the VM)
         run: |
           make bpfman-compile
           make build-e2e-grpc build-e2e-scripts
+          # Build the e2e kmod on the host (same kernel version as the
+          # guest); the guest only insmods it. TestParallel_GRPC gates on
+          # this module being present.
+          make e2e-kmod-build
 
       - name: Sanity -- the bare runner has no bpf-LSM (so tests would skip here)
         run: |
@@ -81,6 +93,10 @@ jobs:
                 ulimit -n 1048576 2>/dev/null || ulimit -n "$(ulimit -Hn)"
                 echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
                 grep -qw bpf /sys/kernel/security/lsm
+                # Load the host-built kmod into the guest kernel (build is
+                # already satisfied, so this only insmods). TestParallel_GRPC
+                # skips unless it is present.
+                make e2e-kmod-insmod
                 # Run the host-built binaries; do NOT rebuild in the guest.
                 # virtme shares the rootfs over 9p (virtiofsd absent), and a
                 # go build over 9p exhausts fids ("too many open files"). The
