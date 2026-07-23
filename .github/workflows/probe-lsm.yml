@@ -1,18 +1,19 @@
 name: Probe LSM
 
-# Throwaway diagnostic. Two questions:
+# Throwaway diagnostic.
 #
-#   probe:      does any GitHub-hosted image boot with "bpf" in the
-#               active LSM list (/sys/kernel/security/lsm)? That is the
-#               precondition for attaching a BPF_PROG_TYPE_LSM program,
-#               and thus for the lsm e2e tests to run rather than skip.
+# Established already: no GitHub-hosted image boots with "bpf" in the
+# active LSM list (/sys/kernel/security/lsm), so BPF_PROG_TYPE_LSM
+# programs cannot be attached directly and the lsm e2e tests skip. And
+# a hosted runner cannot be rebooted mid-job, so editing grub to add
+# bpf to the boot-time lsm= list is a dead end.
 #
-#   nested-vm:  since hosted runners cannot be rebooted mid-job, can we
-#               instead nest a VM inside the runner that boots with bpf
-#               in its LSM order? The runner's own kernel already has
-#               CONFIG_BPF_LSM=y; bpf is only missing from its boot-time
-#               lsm= list. We reuse that kernel in a KVM guest with
-#               "lsm=...,bpf" appended and print the guest's LSM list.
+# This job tests the remaining option: nest a KVM guest inside the
+# runner that boots with bpf in its LSM order. The runner's own kernel
+# already has CONFIG_BPF_LSM=y; bpf is only missing from its boot-time
+# lsm= list. We reuse that kernel in a guest with "lsm=...,bpf"
+# appended and a tiny busybox initramfs, then print the guest's LSM
+# list. Also report /dev/kvm, since the approach depends on nested KVM.
 #
 # Delete this workflow and its branch once answered.
 
@@ -25,48 +26,6 @@ permissions:
   contents: read
 
 jobs:
-  probe:
-    name: ${{ matrix.runner }}
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner:
-          - ubuntu-22.04
-          - ubuntu-24.04
-          - ubuntu-latest
-          - ubuntu-22.04-arm
-          - ubuntu-24.04-arm
-    steps:
-      - name: Report kernel and LSM configuration
-        run: |
-          echo "runner label: ${{ matrix.runner }}"
-          echo "kernel:       $(uname -rm)"
-          . /etc/os-release && echo "os:           ${PRETTY_NAME}"
-          echo
-
-          echo "active LSM list (/sys/kernel/security/lsm):"
-          cat /sys/kernel/security/lsm
-          echo
-          echo
-
-          echo "kernel config (CONFIG_LSM / CONFIG_BPF_LSM):"
-          cfg="/boot/config-$(uname -r)"
-          if [ -r "${cfg}" ]; then
-            grep -E '^CONFIG_(LSM=|BPF_LSM=)' "${cfg}" || echo "(not present in ${cfg})"
-          elif [ -r /proc/config.gz ]; then
-            zcat /proc/config.gz | grep -E '^CONFIG_(LSM=|BPF_LSM=)' || echo "(not present in /proc/config.gz)"
-          else
-            echo "(no readable kernel config)"
-          fi
-          echo
-
-          if grep -qw bpf /sys/kernel/security/lsm; then
-            echo "RESULT: bpf IS in the active LSM list -> lsm e2e tests would RUN here"
-          else
-            echo "RESULT: bpf is NOT in the active LSM list -> lsm e2e tests SKIP here"
-          fi
-
   nested-vm:
     name: nested-vm (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
@@ -97,13 +56,13 @@ jobs:
       - name: Build a minimal initramfs that prints the guest LSM list
         run: |
           set -eux
-          mkdir -p irfs/bin
+          mkdir -p irfs/bin irfs/proc irfs/sys irfs/dev
           cp "$(command -v busybox)" irfs/bin/busybox
           cat > irfs/init <<'INIT'
           #!/bin/busybox sh
-          /bin/busybox mount -t proc none /proc 2>/dev/null
-          /bin/busybox mount -t sysfs none /sys 2>/dev/null
-          /bin/busybox mount -t securityfs none /sys/kernel/security 2>/dev/null
+          /bin/busybox mount -t proc none /proc
+          /bin/busybox mount -t sysfs none /sys
+          /bin/busybox mount -t securityfs none /sys/kernel/security
           echo "===GUEST-PROBE-BEGIN==="
           echo "guest kernel:  $(/bin/busybox uname -rm)"
           echo "guest cmdline: $(/bin/busybox cat /proc/cmdline)"
