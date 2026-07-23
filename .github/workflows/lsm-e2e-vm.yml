@@ -56,6 +56,12 @@ jobs:
         run: |
           make bpfman-compile
           make build-e2e-scripts
+          # run-e2e-scripts prepends bin/ to PATH, so a bpftool there wins
+          # over Ubuntu's /usr/sbin/bpftool wrapper (which dispatches on
+          # uname -r and fails on the azure kernel). TestLsm_LinkRoundTrip
+          # calls bpftool map dump.
+          bpf_bin=$(ls /usr/lib/linux-tools/*-generic/bpftool | head -n 1)
+          ln -sf "$bpf_bin" bin/bpftool
 
       - name: Sanity -- the bare runner has no bpf-LSM (so tests would skip here)
         run: |
