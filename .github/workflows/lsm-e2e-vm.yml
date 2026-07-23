@@ -55,11 +55,7 @@ jobs:
       - name: Build on the host (surfaces build errors outside the VM)
         run: |
           make bpfman-compile
-          make build-e2e-grpc build-e2e-scripts
-          # Build the e2e kmod on the host (same kernel version as the
-          # guest); the guest only insmods it. TestParallel_GRPC gates on
-          # this module being present.
-          make e2e-kmod-build
+          make build-e2e-scripts
 
       - name: Sanity -- the bare runner has no bpf-LSM (so tests would skip here)
         run: |
@@ -81,11 +77,12 @@ jobs:
           #
           # vng runs under sudo: it must read /boot/vmlinuz (root-only) and
           # /dev/kvm. Preserve PATH so sudo finds the pipx-installed vng.
-          # We use virtme's default 9p rootfs share: slow (the gRPC run
-          # takes several minutes over 9p) but reliable. virtiofsd would be
-          # faster but virtme-ng 1.41 hangs waiting for virtiofsd 1.10 to
-          # start. timeout + job timeout-minutes bound any hang.
-          sudo timeout -k 60 1200 env "PATH=$PATH" vng --run "/boot/vmlinuz-$(uname -r)" \
+          # virtme shares the rootfs over 9p (virtiofsd would be faster but
+          # virtme-ng 1.41 hangs waiting for virtiofsd 1.10 to start). The
+          # lsm .bpfman scripts are light enough to be quick over 9p; the
+          # heavier gRPC stress test is impractical over 9p and is left out
+          # (revisit once virtiofs works). timeout bounds any hang.
+          sudo timeout -k 60 600 env "PATH=$PATH" vng --run "/boot/vmlinuz-$(uname -r)" \
               --append "lsm=lockdown,capability,landlock,yama,apparmor,bpf" \
               --user root --cpus 2 --memory 4G --verbose \
               -- bash -euxo pipefail -c '
@@ -98,15 +95,8 @@ jobs:
                 ulimit -n 1048576 2>/dev/null || ulimit -n "$(ulimit -Hn)"
                 echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
                 grep -qw bpf /sys/kernel/security/lsm
-                # Load the host-built kmod into the guest kernel (build is
-                # already satisfied, so this only insmods). TestParallel_GRPC
-                # skips unless it is present.
-                make e2e-kmod-insmod
-                # Run the host-built binaries; do NOT rebuild in the guest.
-                # virtme shares the rootfs over 9p (virtiofsd absent), and a
-                # go build over 9p exhausts fids ("too many open files"). The
-                # run-e2e-* targets have no build prerequisites -- they just
-                # exec the pre-built test binaries built on the host above.
-                make run-e2e-grpc    TEST="TestParallel_GRPC/lsm"          STRESS_COUNT=1
+                # Run the host-built script test binary; do NOT rebuild in
+                # the guest. run-e2e-scripts has no build prerequisites -- it
+                # just execs bin/e2e-scripts.test built on the host above.
                 make run-e2e-scripts TEST="TestBPFManScripts/scripts/TestLsm_" STRESS_COUNT=1
               '
