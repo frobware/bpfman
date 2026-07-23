@@ -1,12 +1,20 @@
 name: Probe LSM
 
-# Throwaway diagnostic. Report the active LSM stack and the kernel's
-# CONFIG_LSM / CONFIG_BPF_LSM defaults across every GitHub-hosted image
-# we can select via runs-on, on both arches. The question it answers:
-# does any selectable runner boot with "bpf" in the active LSM list
-# (/sys/kernel/security/lsm)? That is the precondition for attaching a
-# BPF_PROG_TYPE_LSM program, and thus for the lsm e2e tests to run
-# rather than skip. Delete this workflow and its branch once answered.
+# Throwaway diagnostic. Two questions:
+#
+#   probe:      does any GitHub-hosted image boot with "bpf" in the
+#               active LSM list (/sys/kernel/security/lsm)? That is the
+#               precondition for attaching a BPF_PROG_TYPE_LSM program,
+#               and thus for the lsm e2e tests to run rather than skip.
+#
+#   nested-vm:  since hosted runners cannot be rebooted mid-job, can we
+#               instead nest a VM inside the runner that boots with bpf
+#               in its LSM order? The runner's own kernel already has
+#               CONFIG_BPF_LSM=y; bpf is only missing from its boot-time
+#               lsm= list. We reuse that kernel in a KVM guest with
+#               "lsm=...,bpf" appended and print the guest's LSM list.
+#
+# Delete this workflow and its branch once answered.
 
 on:
   push:
@@ -57,4 +65,91 @@ jobs:
             echo "RESULT: bpf IS in the active LSM list -> lsm e2e tests would RUN here"
           else
             echo "RESULT: bpf is NOT in the active LSM list -> lsm e2e tests SKIP here"
+          fi
+
+  nested-vm:
+    name: nested-vm (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-latest
+    steps:
+      - name: KVM availability and host LSM (for contrast)
+        run: |
+          echo "runner:        ${{ matrix.runner }}"
+          echo "host kernel:   $(uname -rm)"
+          echo -n "host lsm:      "; cat /sys/kernel/security/lsm; echo
+          grep -E '^CONFIG_(LSM=|BPF_LSM=)' "/boot/config-$(uname -r)" 2>/dev/null || true
+          echo
+          if [ -e /dev/kvm ]; then
+            echo "/dev/kvm:      present ($(ls -l /dev/kvm))"
+          else
+            echo "/dev/kvm:      MISSING -> will fall back to TCG (slower, still works for this tiny boot)"
+          fi
+
+      - name: Install QEMU and initramfs tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 busybox-static cpio
+
+      - name: Build a minimal initramfs that prints the guest LSM list
+        run: |
+          set -eux
+          mkdir -p irfs/bin
+          cp "$(command -v busybox)" irfs/bin/busybox
+          cat > irfs/init <<'INIT'
+          #!/bin/busybox sh
+          /bin/busybox mount -t proc none /proc 2>/dev/null
+          /bin/busybox mount -t sysfs none /sys 2>/dev/null
+          /bin/busybox mount -t securityfs none /sys/kernel/security 2>/dev/null
+          echo "===GUEST-PROBE-BEGIN==="
+          echo "guest kernel:  $(/bin/busybox uname -rm)"
+          echo "guest cmdline: $(/bin/busybox cat /proc/cmdline)"
+          echo -n "guest lsm:     "; /bin/busybox cat /sys/kernel/security/lsm 2>/dev/null || echo "<securityfs unavailable>"
+          if /bin/busybox cat /sys/kernel/security/lsm 2>/dev/null | /bin/busybox grep -qw bpf; then
+            echo "GUEST RESULT: bpf ACTIVE in the guest -> BPF_PROG_TYPE_LSM attach would work here"
+          else
+            echo "GUEST RESULT: bpf NOT active in the guest"
+          fi
+          echo "===GUEST-PROBE-END==="
+          /bin/busybox poweroff -f
+          INIT
+          chmod +x irfs/init
+          (cd irfs && find . -print0 | cpio --null -o --format=newc 2>/dev/null | gzip -9) > initramfs.cpio.gz
+          ls -l initramfs.cpio.gz
+
+      - name: Stage the host kernel as a readable copy
+        run: |
+          set -eux
+          sudo cp "/boot/vmlinuz-$(uname -r)" vmlinuz
+          sudo chmod +r vmlinuz
+          ls -l vmlinuz
+
+      - name: Boot a nested VM with lsm=...,bpf and capture the guest LSM list
+        run: |
+          set -uxo pipefail
+          if [ -e /dev/kvm ]; then ACCEL=kvm; CPU=host; else ACCEL=tcg; CPU=max; fi
+          echo "accel=${ACCEL} cpu=${CPU}"
+          # Reuse the runner's own kernel (CONFIG_BPF_LSM=y) but boot it
+          # with bpf appended to the LSM order. rdinit=/init boots straight
+          # into the busybox initramfs; no root filesystem needed.
+          sudo timeout 180 qemu-system-x86_64 \
+            -accel "${ACCEL}" -cpu "${CPU}" -m 1024 -smp 2 \
+            -display none -serial stdio -monitor none -no-reboot \
+            -kernel vmlinuz -initrd initramfs.cpio.gz \
+            -append "console=ttyS0,115200 earlyprintk=serial,ttyS0 lsm=lockdown,capability,landlock,yama,apparmor,bpf rdinit=/init panic=-1" \
+            2>&1 | tee vm-serial.log || true
+
+          echo
+          echo "==================== extracted guest result ===================="
+          sed -n '/===GUEST-PROBE-BEGIN===/,/===GUEST-PROBE-END===/p' vm-serial.log || true
+          echo "================================================================"
+          if grep -q 'GUEST RESULT: bpf ACTIVE' vm-serial.log; then
+            echo "PROVEN: a nested VM on this hosted runner boots with bpf in the active LSM list."
+            echo "So the lsm e2e could run in CI inside such a guest, without rebooting the runner."
+          else
+            echo "NOT PROVEN: bpf did not show active in the guest -- inspect the serial log above."
+            exit 1
           fi
