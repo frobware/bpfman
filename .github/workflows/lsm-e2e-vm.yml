@@ -72,8 +72,9 @@ jobs:
           # is a fresh tmpfs in the guest, so no stale-DB collisions.
           vng --run "/boot/vmlinuz-$(uname -r)" \
               --append "lsm=lockdown,capability,landlock,yama,apparmor,bpf" \
-              --user root --cpus 2 --memory 4G --pwd --verbose \
+              --user root --cpus 2 --memory 4G --verbose \
               -- bash -euxo pipefail -c '
+                cd "'"$PWD"'"
                 echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
                 grep -qw bpf /sys/kernel/security/lsm
                 export BPF_CFLAGS="-I/usr/include/x86_64-linux-gnu"
