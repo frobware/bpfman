@@ -73,6 +73,11 @@ jobs:
               --user root --cpus 2 --memory 4G --verbose \
               -- bash -euxo pipefail -c '
                 cd "'"$PWD"'"
+                # Guest runs as root, but virtme leaves /root read-only
+                # (it overlays /home, /usr, /tmp, ... not /root). Point HOME
+                # at the runner home, which is overlaid (writable) and holds
+                # the warm go build/module caches from the host build.
+                export HOME="'"$HOME"'"
                 echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
                 grep -qw bpf /sys/kernel/security/lsm
                 make test-e2e-grpc    TEST="TestParallel_GRPC/lsm"
