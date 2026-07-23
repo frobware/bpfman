@@ -31,7 +31,7 @@ jobs:
   lsm-e2e-vm:
     name: lsm e2e (nested VM)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7.0.0
 
@@ -42,7 +42,7 @@ jobs:
             build-essential dwarves kmod "linux-headers-$(uname -r)" \
             clang llvm libbpf-dev gcc-multilib libelf-dev \
             linux-tools-generic \
-            qemu-system-x86 busybox-static virtiofsd
+            qemu-system-x86 busybox-static
           pipx install virtme-ng          # the one new tool; swap for hand-rolled qemu if unwanted
           # bpftool: symlink the linux-tools-generic binary directly (the
           # /usr/sbin wrapper dispatches on uname -r and Canonical's azure
@@ -81,10 +81,11 @@ jobs:
           #
           # vng runs under sudo: it must read /boot/vmlinuz (root-only) and
           # /dev/kvm. Preserve PATH so sudo finds the pipx-installed vng.
-          # virtiofsd (installed above) lets virtme share the rootfs over
-          # virtiofs rather than 9p, which is far faster and avoids 9p fid
-          # exhaustion. timeout bounds a hang to a clean failure.
-          sudo timeout 900 env "PATH=$PATH" vng --run "/boot/vmlinuz-$(uname -r)" \
+          # We use virtme's default 9p rootfs share: slow (the gRPC run
+          # takes several minutes over 9p) but reliable. virtiofsd would be
+          # faster but virtme-ng 1.41 hangs waiting for virtiofsd 1.10 to
+          # start. timeout + job timeout-minutes bound any hang.
+          sudo timeout -k 60 1200 env "PATH=$PATH" vng --run "/boot/vmlinuz-$(uname -r)" \
               --append "lsm=lockdown,capability,landlock,yama,apparmor,bpf" \
               --user root --cpus 2 --memory 4G --verbose \
               -- bash -euxo pipefail -c '
