@@ -65,7 +65,10 @@ jobs:
           # propagate the exit code out. Guest is root, so the Makefile's
           # internal sudo is a no-op. /run is a fresh tmpfs in the guest, so
           # no stale-DB collisions.
-          vng --run "/boot/vmlinuz-$(uname -r)" \
+          #
+          # vng runs under sudo: it must read /boot/vmlinuz (root-only) and
+          # /dev/kvm. Preserve PATH so sudo finds the pipx-installed vng.
+          sudo env "PATH=$PATH" vng --run "/boot/vmlinuz-$(uname -r)" \
               --append "lsm=lockdown,capability,landlock,yama,apparmor,bpf" \
               --user root --cpus 2 --memory 4G --verbose \
               -- bash -euxo pipefail -c '
