@@ -101,6 +101,12 @@ jobs:
                 ulimit -n 1048576 2>/dev/null || ulimit -n "$(ulimit -Hn)"
                 echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
                 grep -qw bpf /sys/kernel/security/lsm
+                # virtme overlays /tmp, and opening a file on overlayfs fires
+                # security_file_open twice (overlay inode + real inode). The
+                # lsm fixture opens its target under os.MkdirTemp -> /tmp, so
+                # its opens would double-count (100 vs 50). A plain tmpfs over
+                # /tmp restores one file_open per open.
+                mount -t tmpfs tmpfs /tmp
                 # Run the host-built script test binary; do NOT rebuild in
                 # the guest. run-e2e-scripts has no build prerequisites -- it
                 # just execs bin/e2e-scripts.test built on the host above.
