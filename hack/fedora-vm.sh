@@ -96,9 +96,13 @@ else
     if [[ ! -f "$base_image" ]]; then
         echo "==> downloading $(basename "$base_image")"
         # The archive server drops long transfers; -C - resumes the
-        # .part across attempts (and across harness reruns).
+        # .part across attempts (and across harness reruns). The
+        # progress meter is tty-only: in CI it floods the log and
+        # defeats live log streaming.
+        curl_progress=()
+        [[ -t 2 ]] || curl_progress=(--no-progress-meter)
         for attempt in 1 2 3 4 5; do
-            curl -fSL -C - --retry 3 -o "$base_image.part" "$FEDORA_IMAGE_URL" && break
+            curl -fSL -C - --retry 3 "${curl_progress[@]}" -o "$base_image.part" "$FEDORA_IMAGE_URL" && break
             [[ "$attempt" == 5 ]] && { echo "error: download failed after $attempt attempts" >&2; exit 1; }
             echo "==> download interrupted; resuming ($attempt/5)" >&2
             sleep 3
