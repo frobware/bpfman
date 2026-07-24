@@ -41,6 +41,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             qemu-system-x86 qemu-utils virtiofsd genisoimage
+          # noble ships the binary in /usr/libexec, off PATH.
+          sudo ln -sf /usr/libexec/virtiofsd /usr/local/bin/virtiofsd
           # The harness needs virtiofsd's --translate-uid/--translate-gid
           # (1.9+); noble ships 1.10.
           virtiofsd --version
