@@ -10,6 +10,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
+	"golang.org/x/sys/unix"
 
 	"github.com/bpfman/bpfman"
 	"github.com/bpfman/bpfman/kernel"
@@ -291,19 +292,24 @@ func (k *kernelAdapter) DetachLink(ctx context.Context, linkPinPath bpfman.LinkP
 
 // waitKernelLinkGone polls until the kernel link object with the
 // given ID has been released, bounded so a wedged reference can
-// never hang teardown. Treat any lookup error as gone: ENOENT is
-// the expected terminal state, and anything else means we cannot
-// observe the object either way.
+// never hang teardown. The ID exposes three states: alive (an FD
+// comes back), dying (EAGAIN: the refcount already hit zero but
+// the deferred release has not run -- the program can still fire
+// on its hook), and gone (ENOENT: the ID has left the table).
+// Only the third terminates the wait; treating EAGAIN as gone
+// returns into the very window this wait exists to outlive.
 func (k *kernelAdapter) waitKernelLinkGone(ctx context.Context, id link.ID, pin string) {
 	const deadline = 3 * time.Second
 	backoff := time.Millisecond
 	start := time.Now()
 	for {
 		l, err := link.NewFromID(id)
-		if err != nil {
+		if err != nil && !errors.Is(err, unix.EAGAIN) {
 			return
 		}
-		_ = l.Close()
+		if err == nil {
+			_ = l.Close()
+		}
 
 		if time.Since(start) >= deadline {
 			k.logger.Warn("kernel link still present after detach wait", "link_pin_path", pin, "kernel_link_id", id, "waited", deadline)
