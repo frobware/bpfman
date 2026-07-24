@@ -51,10 +51,12 @@ fi
 
 if [[ "$stage" != build ]]; then
     # The lsm gRPC lifecycle sub-test (TestParallel_GRPC gates on the
-    # kmod loaded here) and the whole .bpfman script corpus -- not
-    # just TestLsm_*, so an lsm script that misses the naming
-    # convention still runs on a bpf-LSM kernel.
+    # kmod loaded here) and the lsm .bpfman scripts. The full corpus
+    # would also catch lsm scripts that miss the naming convention,
+    # but under the race detector it makes each run too slow while
+    # the detach-teardown fix is still being soak-tested; widen it
+    # again once the fast loop matters less than the coverage.
     make e2e-kmod-reload
     make test-e2e-grpc TEST='TestParallel_GRPC/lsm' STRESS_COUNT=1
-    make test-e2e-scripts STRESS_COUNT=5
+    make test-e2e-scripts TEST='TestBPFManScripts/scripts/TestLsm_' STRESS_COUNT=5
 fi
