@@ -29,14 +29,29 @@ if ! grep -qw bpf /sys/kernel/security/lsm; then
     exit 1
 fi
 
+# An optional stage argument narrows the run so CI can surface build
+# and test as separate steps (each in its own VM boot): "build"
+# compiles the binaries, test binaries and kmod; "test" loads the
+# kmod and runs the tests, expecting a prior build on the share; no
+# argument does both.
+stage="${1:-all}"
+case "$stage" in
+    all|build|test) ;;
+    *) echo "usage: $0 [build|test]" >&2; exit 2 ;;
+esac
+
 hack/install-fedora-deps.sh
 
-# Build binaries, the e2e test binaries, and the e2e kmod up front.
-make bpfman-compile
-make build-e2e-grpc build-e2e-scripts
-make e2e-kmod-reload
+if [[ "$stage" != test ]]; then
+    make bpfman-compile
+    make build-e2e-grpc build-e2e-scripts
+    make e2e-kmod-build
+fi
 
-# The lsm gRPC lifecycle sub-test (TestParallel_GRPC gates on the kmod
-# loaded above) and the two lsm .bpfman scripts.
-make test-e2e-grpc    TEST='TestParallel_GRPC/lsm'              STRESS_COUNT=1
-make test-e2e-scripts TEST='TestBPFManScripts/scripts/TestLsm_' STRESS_COUNT=1
+if [[ "$stage" != build ]]; then
+    # The lsm gRPC lifecycle sub-test (TestParallel_GRPC gates on the
+    # kmod loaded here) and the two lsm .bpfman scripts.
+    make e2e-kmod-reload
+    make test-e2e-grpc    TEST='TestParallel_GRPC/lsm'              STRESS_COUNT=1
+    make test-e2e-scripts TEST='TestBPFManScripts/scripts/TestLsm_' STRESS_COUNT=1
+fi
