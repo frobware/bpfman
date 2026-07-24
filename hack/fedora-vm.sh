@@ -11,8 +11,10 @@
 # building/testing inside Fedora gives the native BPF toolchain
 # (clang/libbpf-devel/bpftool) with no cross-distro workarounds.
 #
-# Host requirements: qemu-system-x86_64, virtiofsd (the Rust daemon),
-# genisoimage, ssh, ssh-keygen, qemu-img, curl, and /dev/kvm.
+# Host requirements: qemu-system-<arch> (x86_64 and aarch64), virtiofsd
+# (the Rust daemon), genisoimage, ssh, ssh-keygen, qemu-img, curl, and
+# /dev/kvm. The guest arch follows the host by default so KVM applies;
+# VM_ARCH crosses over to TCG for smoke tests.
 #
 # Usage:
 #   hack/fedora-vm.sh [options] [--run "<command>"]
@@ -38,6 +40,7 @@
 #
 # Environment:
 #   FEDORA_IMAGE_URL  base image URL fetched when --image is omitted
+#   VM_ARCH           guest arch (default: host arch; cross-arch = TCG)
 #   VM_CACHE_DIR      base-image cache dir
 #   VM_MEMORY (4G), VM_CPUS (nproc), SSH_PORT (2222), BOOT_TIMEOUT (300)
 #   VIRTFS_FAST       1 = cache=always,writeback (near-native, default);
@@ -46,7 +49,39 @@
 
 set -euo pipefail
 
-: "${FEDORA_IMAGE_URL:=https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/x86_64/images/Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2}"
+# Guest architecture: defaults to the host's (KVM requires the two to
+# match). VM_ARCH=aarch64 on an x86_64 host (or vice versa) runs under
+# TCG emulation -- an order of magnitude slower, useful only for
+# smoke-testing the other architecture's bring-up. Cross-arch TCG has
+# no host CPU to mirror, so it gets qemu's fullest emulated CPU.
+: "${VM_ARCH:=$(uname -m)}"
+arch=$VM_ARCH
+cpu=host
+x86_cpu=host,migratable=no,+invtsc
+if [[ "$arch" != "$(uname -m)" ]]; then
+    cpu=max
+    x86_cpu=max
+    echo "warning: VM_ARCH=$arch != host $(uname -m); using TCG emulation (slow)" >&2
+fi
+# shellcheck disable=SC2054  # commas are qemu option syntax, not element separators
+case "$arch" in
+    x86_64)
+        qemu_bin=qemu-system-x86_64
+        arch_args=(-machine q35,accel=kvm:tcg -cpu "$x86_cpu"
+                   -rtc base=utc,clock=host,driftfix=slew
+                   -global kvm-pit.lost_tick_policy=discard)
+        ;;
+    aarch64)
+        qemu_bin=qemu-system-aarch64
+        # The virt machine has no default firmware; the edk2 image
+        # ships with qemu and resolves via its firmware search path.
+        arch_args=(-machine virt,accel=kvm:tcg,gic-version=max -cpu "$cpu"
+                   -bios edk2-aarch64-code.fd)
+        ;;
+    *) echo "error: unsupported architecture: $arch" >&2; exit 1 ;;
+esac
+
+: "${FEDORA_IMAGE_URL:=https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Cloud/${arch}/images/Fedora-Cloud-Base-Generic-44-1.7.${arch}.qcow2}"
 : "${VM_CACHE_DIR:=${XDG_CACHE_HOME:-$HOME/.cache}/bpfman-fedora-vm}"
 : "${VM_MEMORY:=4G}"
 : "${VM_CPUS:=$(nproc)}"
@@ -68,7 +103,7 @@ while [[ $# -gt 0 ]]; do
         --image) image="$2"; shift 2 ;;
         --provision) provision_cmd="$2"; shift 2 ;;
         --run) run_cmd="$2"; shift 2 ;;
-        -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -82,7 +117,7 @@ if [[ -d /nix/store ]] && ! printf '%s\n' "${vol_specs[@]}" | grep -q '^/nix\(:\
     vol_specs+=("/nix:/nix:ro")
 fi
 
-for tool in qemu-system-x86_64 virtiofsd genisoimage ssh ssh-keygen qemu-img curl; do
+for tool in "$qemu_bin" virtiofsd genisoimage ssh ssh-keygen qemu-img curl; do
     command -v "$tool" >/dev/null || { echo "error: '$tool' not on PATH" >&2; exit 1; }
 done
 [[ -e /dev/kvm ]] || echo "warning: /dev/kvm absent; qemu will use TCG (slow)" >&2
@@ -238,8 +273,8 @@ fail() { echo "$1" >&2; [[ -n "$SERIAL_LOG" ]] && { echo "--- serial (tail) ---"
 
 start_vm() { # $1: boot disk (qcow2)
     start_virtiofsd
-    qemu-system-x86_64 \
-        -machine q35,accel=kvm:tcg -cpu host,migratable=no,+invtsc \
+    "$qemu_bin" \
+        "${arch_args[@]}" \
         -smp "$VM_CPUS" -m "$VM_MEMORY" \
         -object "memory-backend-memfd,id=mem,size=$VM_MEMORY,share=on" \
         -numa node,memdev=mem \
@@ -249,8 +284,6 @@ start_vm() { # $1: boot disk (qcow2)
         -netdev "user,id=net0,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" \
         -device virtio-net-pci,netdev=net0 \
         -device virtio-rng-pci \
-        -rtc base=utc,clock=host,driftfix=slew \
-        -global kvm-pit.lost_tick_policy=discard \
         -display none -nographic "${serial[@]}" &
     qemu_pid=$!
 }
