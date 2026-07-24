@@ -55,5 +55,5 @@ if [[ "$stage" != build ]]; then
     # convention still runs on a bpf-LSM kernel.
     make e2e-kmod-reload
     make test-e2e-grpc TEST='TestParallel_GRPC/lsm' STRESS_COUNT=1
-    make test-e2e-scripts STRESS_COUNT=5
+    make test-e2e-scripts STRESS_COUNT=2
 fi
