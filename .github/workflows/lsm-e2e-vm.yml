@@ -1,21 +1,22 @@
-name: lsm e2e (nested VM)
+name: lsm e2e (Fedora VM)
 
-# Dev-loop workflow. Run the lsm e2e under a kernel with bpf in the
-# active LSM list.
+# Run the full lsm e2e -- the gRPC lifecycle stress sub-test and the
+# lsm .bpfman scripts -- under a kernel with bpf in the active LSM
+# list.
 #
 # Hosted runners boot without bpf-LSM (/sys/kernel/security/lsm lacks
-# bpf) and cannot be rebooted mid-job, so the lsm tests otherwise skip.
-# We nest a VM instead: reuse the runner's own kernel (already
-# CONFIG_BPF_LSM=y) and boot it with "lsm=...,bpf" appended, sharing
-# the runner rootfs so the checked-out tree, the toolchain, and the
-# built artefacts are all present in the guest. Then run only the lsm
-# tests inside. No nix: the same apt + make path an ordinary developer
-# uses; the nested VM is the only delta.
+# bpf) and cannot be rebooted mid-job, so the lsm tests otherwise
+# skip. hack/fedora-vm.sh boots a Fedora cloud VM (stock Fedora
+# kernels ship bpf-LSM active), shares the checkout into the guest
+# over virtiofs, and runs hack/lsm-e2e.sh inside. The guest builds
+# with Fedora's native BPF toolchain, so nothing beyond the VM
+# tooling is installed on the runner.
 #
-# The BPF build deps mirror build.yml's "Install dependencies" step --
-# clang llvm libbpf-dev gcc-multilib libelf-dev -- so clang finds the
-# asm/ UAPI headers without hardcoding an include path. The e2e runtime
-# deps (dwarves, kmod, linux-headers) match the ordinary e2e jobs.
+# Two caches keep the steady-state run short: the harness caches the
+# base image and a provisioned disk (dependencies pre-installed,
+# keyed on hack/install-fedora-deps.sh content) under
+# ~/.cache/bpfman-fedora-vm, and the guest Go build cache persists in
+# .gocache on the share.
 #
 # Push to this branch (no PR) to run; nothing else triggers on it.
 
@@ -29,86 +30,62 @@ permissions:
 
 jobs:
   lsm-e2e-vm:
-    name: lsm e2e (nested VM)
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
+    name: lsm e2e (Fedora VM)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7.0.0
 
-      - name: Install toolchain + BPF build deps + nested-VM tooling
+      - name: Install VM tooling
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential dwarves kmod "linux-headers-$(uname -r)" \
-            clang llvm libbpf-dev gcc-multilib libelf-dev \
-            linux-tools-generic \
-            qemu-system-x86 busybox-static
-          pipx install virtme-ng          # the one new tool; swap for hand-rolled qemu if unwanted
-          # bpftool: symlink the linux-tools-generic binary directly (the
-          # /usr/sbin wrapper dispatches on uname -r and Canonical's azure
-          # tools package is often empty). Mirrors go-test.yaml. On the
-          # shared rootfs, so the guest sees it too.
-          bpf_bin=$(ls /usr/lib/linux-tools/*-generic/bpftool | head -n 1)
-          sudo ln -sf "$bpf_bin" /usr/local/bin/bpftool
-          bpftool version
+            qemu-system-x86 qemu-utils virtiofsd genisoimage
+          # The harness needs virtiofsd's --translate-uid/--translate-gid
+          # (1.9+); noble ships 1.10.
+          virtiofsd --version
 
-      - name: Build on the host (surfaces build errors outside the VM)
+      - name: Open up KVM and unprivileged user namespaces
         run: |
-          make bpfman-compile
-          make build-e2e-scripts
-          # run-e2e-scripts prepends bin/ to PATH, so a bpftool there wins
-          # over Ubuntu's /usr/sbin/bpftool wrapper (which dispatches on
-          # uname -r and fails on the azure kernel). TestLsm_LinkRoundTrip
-          # calls bpftool map dump.
-          bpf_bin=$(ls /usr/lib/linux-tools/*-generic/bpftool | head -n 1)
-          ln -sf "$bpf_bin" bin/bpftool
+          # Standard x64 Linux runners expose /dev/kvm but root-only.
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -la /dev/kvm
+          # Ubuntu 24.04 confines unprivileged user namespaces behind
+          # AppArmor; unprivileged virtiofsd sandboxes itself in one.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Sanity -- the bare runner has no bpf-LSM (so tests would skip here)
+      - name: Sanity -- the bare runner has no bpf-LSM (that is what the VM fixes)
         run: |
           echo -n "host lsm: "; cat /sys/kernel/security/lsm; echo
-          if grep -qw bpf /sys/kernel/security/lsm; then
-            echo "unexpected: bare runner already has bpf-LSM"
-          else
-            echo "expected: no bpf on the bare runner -- that is what the VM fixes"
-          fi
+          ! grep -qw bpf /sys/kernel/security/lsm
 
-      - name: Run the lsm e2e inside a VM booted with bpf-LSM
-        run: |
-          set -euxo pipefail
-          # virtme-ng: reuse the runner kernel, append bpf to the LSM order,
-          # share the rootfs (artefacts already built above), run as root,
-          # propagate the exit code out. Guest is root, so the Makefile's
-          # internal sudo is a no-op. /run is a fresh tmpfs in the guest, so
-          # no stale-DB collisions.
-          #
-          # vng runs under sudo: it must read /boot/vmlinuz (root-only) and
-          # /dev/kvm. Preserve PATH so sudo finds the pipx-installed vng.
-          # virtme shares the rootfs over 9p (virtiofsd would be faster but
-          # virtme-ng 1.41 hangs waiting for virtiofsd 1.10 to start). The
-          # lsm .bpfman scripts are light enough to be quick over 9p; the
-          # heavier gRPC stress test is impractical over 9p and is left out
-          # (revisit once virtiofs works). timeout bounds any hang.
-          sudo timeout -k 60 600 env "PATH=$PATH" vng --run "/boot/vmlinuz-$(uname -r)" \
-              --append "lsm=lockdown,capability,landlock,yama,apparmor,bpf" \
-              --user root --cpus 2 --memory 4G --verbose \
-              -- bash -euxo pipefail -c '
-                cd "'"$PWD"'"
-                # Guest runs as root, but virtme leaves /root read-only
-                # (it overlays /home, /usr, /tmp, ... not /root). Point HOME
-                # at the runner home, which is overlaid (writable) and holds
-                # the warm go build/module caches from the host build.
-                export HOME="'"$HOME"'"
-                ulimit -n 1048576 2>/dev/null || ulimit -n "$(ulimit -Hn)"
-                echo -n "guest lsm: "; cat /sys/kernel/security/lsm; echo
-                grep -qw bpf /sys/kernel/security/lsm
-                # virtme overlays /tmp, and opening a file on overlayfs fires
-                # security_file_open twice (overlay inode + real inode). The
-                # lsm fixture opens its target under os.MkdirTemp -> /tmp, so
-                # its opens would double-count (100 vs 50). A plain tmpfs over
-                # /tmp restores one file_open per open.
-                mount -t tmpfs tmpfs /tmp
-                # Run the host-built script test binary; do NOT rebuild in
-                # the guest. run-e2e-scripts has no build prerequisites -- it
-                # just execs bin/e2e-scripts.test built on the host above.
-                make run-e2e-scripts TEST="TestBPFManScripts/scripts/TestLsm_" STRESS_COUNT=1
-              '
+      - name: Cache base image and provisioned disk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bpfman-fedora-vm
+          key: fedora-vm-${{ hashFiles('hack/fedora-vm.sh', 'hack/install-fedora-deps.sh') }}
+          restore-keys: fedora-vm-
+
+      - name: Cache guest Go build cache
+        uses: actions/cache@v4
+        with:
+          path: .gocache
+          key: lsm-gocache-${{ github.sha }}
+          restore-keys: lsm-gocache-
+
+      - name: Run the lsm e2e in a Fedora VM
+        env:
+          VIRTFS_FAST: "1"
+          SERIAL_LOG: /tmp/guest-serial.log
+        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run hack/lsm-e2e.sh
+
+      - name: Upload guest serial log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-serial-log
+          path: /tmp/guest-serial.log
+          if-no-files-found: ignore
