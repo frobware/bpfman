@@ -39,7 +39,12 @@ guard listed <- bpfman link list -o json
 assert ($listed |> jq "[.links[] | select(.id == ${link.record.id})] | length") == 1
 assert ($listed |> jq "[.links[] | select(.program_id == ${prog.record.program_id})] | length") == 1
 
-guard klinks <- bpftool link list -j
+# Tolerate a non-zero bpftool exit: enumerating all links races any
+# concurrent teardown elsewhere in the parallel corpus (a link whose
+# refcount reached zero but whose deferred release has not finished
+# yields EAGAIN and a {"error": ...} entry). The valid entries are
+# still emitted, and the assertion below only needs ours.
+guard klinks <- exec sh -c "bpftool link list -j || true"
 assert ($klinks.stdout |> jq "fromjson | [ .[] | select(.id == ${link.record.kernel_link_id}) ] | length") == 1
 
 # The kernel listing proves the link object exists; the counter
