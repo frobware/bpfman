@@ -184,6 +184,10 @@ start_virtiofsd() {
         [[ "$ok" == 1 ]] && return 0
         sleep 0.1
     done
+    for i in "${!v_host[@]}"; do
+        echo "--- virtiofsd vol$i (${v_host[$i]}) log tail ---" >&2
+        tail -5 "$work/vol$i.log" >&2 || true
+    done
     fail "virtiofsd sockets never appeared"
 }
 
