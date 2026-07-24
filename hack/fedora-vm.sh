@@ -254,6 +254,9 @@ mounts:
 ${mount_lines}  - [ "tmpfs", "/tmp", "tmpfs", "size=8G,mode=1777", "0", "0" ]
 runcmd:
   - setenforce 0 || true
+  # Parallel Go test linking over the virtiofs share exhausts the
+  # guest's default system-wide file table (ENFILE).
+  - sysctl -w fs.file-max=2097152 || true
 ${mkdir_lines}  - [ chown, "${USER}:", "/home/${USER}" ]
   - systemctl enable --now sshd || systemctl enable --now ssh
 EOF
