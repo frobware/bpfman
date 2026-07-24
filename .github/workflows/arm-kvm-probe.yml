@@ -5,7 +5,13 @@ name: arm64 runner KVM probe
 # virtiofsd needs, before building an arm64 leg of the lsm e2e
 # matrix on top. Dispatch-only; delete once the facts are known.
 
+# The push trigger (filtered to this file) exists to register the
+# workflow: dispatch-only workflows on a non-default branch are not
+# indexed and cannot be dispatched at all.
 on:
+  push:
+    branches: [lsm-e2e-vm]
+    paths: ['.github/workflows/arm-kvm-probe.yml']
   workflow_dispatch:
 
 permissions:
