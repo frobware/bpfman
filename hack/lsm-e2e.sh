@@ -31,9 +31,9 @@ fi
 
 # An optional stage argument narrows the run so CI can surface build
 # and test as separate steps (each in its own VM boot): "build"
-# compiles the binaries, test binaries and kmod; "test" loads the
-# kmod and runs the tests, expecting a prior build on the share; no
-# argument does both.
+# compiles the binaries, test binaries and kmod, then runs the unit
+# tests; "test" loads the kmod and runs the e2e tests, expecting a
+# prior build on the share; no argument does both.
 stage="${1:-all}"
 case "$stage" in
     all|build|test) ;;
@@ -46,6 +46,7 @@ if [[ "$stage" != test ]]; then
     make bpfman-compile
     make build-e2e-grpc build-e2e-scripts
     make e2e-kmod-build
+    make test
 fi
 
 if [[ "$stage" != build ]]; then
