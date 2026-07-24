@@ -90,11 +90,24 @@ jobs:
           key: lsm-gocache-${{ github.sha }}
           restore-keys: lsm-gocache-
 
-      - name: Run the lsm e2e in a Fedora VM
+      # Three separate steps, each its own VM boot against the cached
+      # provisioned disk, so the stages are visible as they complete.
+      - name: Provision the Fedora VM disk
+        env:
+          SERIAL_LOG: /tmp/guest-serial.log
+        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh
+
+      - name: Build the lsm e2e artefacts in the VM
         env:
           VIRTFS_FAST: "1"
           SERIAL_LOG: /tmp/guest-serial.log
-        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run hack/lsm-e2e.sh
+        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh build'
+
+      - name: Run the lsm e2e tests in the VM
+        env:
+          VIRTFS_FAST: "1"
+          SERIAL_LOG: /tmp/guest-serial.log
+        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh test'
 
       - name: Upload guest serial log
         if: failure()
