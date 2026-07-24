@@ -70,6 +70,12 @@ jobs:
           # Ubuntu 24.04 confines unprivileged user namespaces behind
           # AppArmor; unprivileged virtiofsd sandboxes itself in one.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # virtiofsd pins an O_PATH fd per inode the guest touches
+          # (repo + vendor + Go cache); the runner's default file
+          # table is small enough to exhaust, and the guest sees the
+          # host's ENFILE verbatim through FUSE.
+          sudo sysctl -w fs.file-max=4194304
+          ulimit -Hn
 
       - name: Sanity -- the bare runner has no bpf-LSM (that is what the VM fixes)
         run: |
@@ -97,17 +103,24 @@ jobs:
           SERIAL_LOG: /tmp/guest-serial.log
         run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh
 
+      # prlimit is per-step: each run script is a fresh shell, and
+      # virtiofsd (started by the harness) inherits the raised hard
+      # limit from it.
       - name: Build the lsm e2e artefacts in the VM
         env:
           VIRTFS_FAST: "1"
           SERIAL_LOG: /tmp/guest-serial.log
-        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh build'
+        run: |
+          sudo prlimit --pid $$ --nofile=1048576:1048576
+          hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh build'
 
       - name: Run the lsm e2e tests in the VM
         env:
           VIRTFS_FAST: "1"
           SERIAL_LOG: /tmp/guest-serial.log
-        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh test'
+        run: |
+          sudo prlimit --pid $$ --nofile=1048576:1048576
+          hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh test'
 
       - name: Upload guest serial log
         if: failure()
