@@ -40,11 +40,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            qemu-system-x86 qemu-utils virtiofsd genisoimage
-          # noble ships the binary in /usr/libexec, off PATH.
-          sudo ln -sf /usr/libexec/virtiofsd /usr/local/bin/virtiofsd
-          # The harness needs virtiofsd's --translate-uid/--translate-gid
-          # (1.9+); noble ships 1.10.
+            qemu-system-x86 qemu-utils genisoimage libseccomp-dev libcap-ng-dev
+
+      - name: Cache virtiofsd binary
+        uses: actions/cache@v4
+        with:
+          path: ~/virtiofsd-bin
+          key: virtiofsd-1.13.2
+
+      - name: Build virtiofsd
+        run: |
+          # The harness needs virtiofsd's --translate-uid/--translate-gid,
+          # added in 1.13; noble packages 1.10, so build from crates.io
+          # with the runner's Rust toolchain (cached across runs).
+          if [[ ! -x ~/virtiofsd-bin/bin/virtiofsd ]]; then
+            cargo install virtiofsd --version 1.13.2 --root ~/virtiofsd-bin
+          fi
+          sudo ln -sf ~/virtiofsd-bin/bin/virtiofsd /usr/local/bin/virtiofsd
           virtiofsd --version
 
       - name: Open up KVM and unprivileged user namespaces
