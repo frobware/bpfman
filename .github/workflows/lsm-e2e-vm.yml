@@ -97,17 +97,22 @@ jobs:
           SERIAL_LOG: /tmp/guest-serial.log
         run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh
 
+      # RACE=1 propagates through the guest shell into make (RACE ?=),
+      # race-building bpfman and the test binaries; the guest links
+      # dynamically, so the devshell's static-glibc -race caveat does
+      # not apply. Build and test must agree on it, or the test step's
+      # prerequisite re-link would quietly drop -race.
       - name: Build the lsm e2e artefacts in the VM
         env:
           VIRTFS_FAST: "1"
           SERIAL_LOG: /tmp/guest-serial.log
-        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh build'
+        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'RACE=1 hack/lsm-e2e.sh build'
 
       - name: Run the lsm e2e tests in the VM
         env:
           VIRTFS_FAST: "1"
           SERIAL_LOG: /tmp/guest-serial.log
-        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'hack/lsm-e2e.sh test'
+        run: hack/fedora-vm.sh --provision hack/install-fedora-deps.sh --run 'RACE=1 hack/lsm-e2e.sh test'
 
       - name: Upload guest serial log
         if: failure()
