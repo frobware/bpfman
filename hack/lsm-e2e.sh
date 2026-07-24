@@ -58,5 +58,5 @@ if [[ "$stage" != build ]]; then
     # again once the fast loop matters less than the coverage.
     make e2e-kmod-reload
     make test-e2e-grpc TEST='TestParallel_GRPC/lsm' STRESS_COUNT=1
-    make test-e2e-scripts TEST='TestBPFManScripts/scripts/TestLsm_' STRESS_COUNT=5
+    make test-e2e-scripts TEST='TestBPFManScripts/scripts/TestLsm_' STRESS_COUNT=10
 fi
