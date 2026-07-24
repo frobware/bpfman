@@ -81,13 +81,27 @@ assert fail bpfman link get $linkID
 guard listedAfter <- bpfman link list -o json
 assert_link_absent $listedAfter $linkID
 
-# After detach the program no longer observes the hook, so firing the
-# probe again leaves the counter untouched.
+# The kernel unhooks the program asynchronously after detach (the
+# trampoline unlink drains behind RCU grace periods, with no
+# userspace-visible completion), so first poll until the hook is
+# provably quiet: a probe fire that leaves the counter unchanged.
+poll timeout 5s every 100ms {
+    guard q1 <- bpftool map dump id $mapID -j
+    let qBefore = $q1.stdout |> jq $counterFilter
+    guard _ <- lsm fire $probe 1
+    guard q2 <- bpftool map dump id $mapID -j
+    let qAfter = $q2.stdout |> jq $counterFilter
+    retry "waiting for lsm hook to quiesce after detach" unless $qBefore == $qAfter
+}
+
+# The hook is quiet; a full volley must leave the counter untouched.
+guard stableDump <- bpftool map dump id $mapID -j
+let stable = $stableDump.stdout |> jq $counterFilter
 guard _ <- lsm fire $probe $count
 guard detachedDump <- bpftool map dump id $mapID -j
 let afterDetach = $detachedDump.stdout |> jq $counterFilter
-print "lsm after-detach count=${afterDetach} want=${after}"
-assert $afterDetach == $after
+print "lsm after-detach count=${afterDetach} want=${stable}"
+assert $afterDetach == $stable
 
 bpfman program unload $pid
 assert fail bpfman program get $prog
