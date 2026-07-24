@@ -30,9 +30,8 @@
 #   kp  counts waves 1+2   = 2 * N
 #   krp counts wave 1      = 1 * N
 #
-# Between detach and the next wave a brief sleep lets the perf-link RCU
-# grace period close; perf-link applies to the kp/krp pair, while
-# tracepoint detach is effectively synchronous.
+# Detach waits for the kernel link's release before returning, so
+# each wave can fire immediately after the preceding detach.
 
 import ../lib.bpfman
 
@@ -74,13 +73,11 @@ guard _ <- kfunc fire $fn $n
 
 # Detach krp first.
 bpfman link detach $link_krp
-sleep 0.1
 
 # --- Wave 2: tp, kp attached; krp detached ---
 guard _ <- kfunc fire $fn $n
 
 bpfman link detach $link_kp
-sleep 0.1
 
 # --- Wave 3: only tp attached ---
 guard _ <- kfunc fire $fn $n

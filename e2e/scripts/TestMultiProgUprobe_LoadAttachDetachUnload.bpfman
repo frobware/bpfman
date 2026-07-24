@@ -45,13 +45,11 @@ let counter_filter = "fromjson | .[0].formatted.value | tonumber"
 guard _ <- uprobe fire $n
 
 bpfman link detach $link_c
-sleep 0.1
 
 # --- Wave 2: a, b attached; c detached ---
 guard _ <- uprobe fire $n
 
 bpfman link detach $link_b
-sleep 0.1
 
 # --- Wave 3: only a attached ---
 guard _ <- uprobe fire $n

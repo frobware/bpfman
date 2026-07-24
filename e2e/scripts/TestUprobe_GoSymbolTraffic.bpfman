@@ -50,10 +50,6 @@ assert $count == $want
 bpfman link detach $link
 assert fail bpfman link get $linkID
 
-# Let any async detach teardown settle before establishing
-# the detached baseline.
-sleep 0.1
-
 guard dumpDetached <- bpftool map dump id $mapID -j
 let detached = $dumpDetached.stdout |> jq $counter_filter
 guard _ <- uprobe fire 1

@@ -53,7 +53,6 @@ assert $delta >= $events
 bpfman link detach $link
 assert fail bpfman link get $linkID
 
-sleep 0.1
 guard dumpDetached <- bpftool map dump id $mapID -j
 let detached = $dumpDetached.stdout |> jq $sumFilter
 guard _ <- uprobe fire $events

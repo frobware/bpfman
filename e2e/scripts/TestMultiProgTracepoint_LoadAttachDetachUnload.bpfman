@@ -53,14 +53,12 @@ guard _ <- kfunc fire $fn $n
 # next wave fires, otherwise some of wave 2's events could still hit
 # c's program.
 bpfman link detach $link_c
-sleep 0.1
 
 # --- Wave 2: a, b attached; c detached ---
 guard _ <- kfunc fire $fn $n
 
 # Detach b.
 bpfman link detach $link_b
-sleep 0.1
 
 # --- Wave 3: only a attached ---
 guard _ <- kfunc fire $fn $n
