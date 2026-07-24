@@ -283,12 +283,9 @@ func (k *kernelAdapter) DetachLink(ctx context.Context, linkPinPath bpfman.LinkP
 
 	// Stage 4: only the async-teardown types need the wait; a
 	// successful Detach already disconnected the program.
-	//
-	// TEMPORARY: stage 4 is disabled as a control experiment to
-	// reproduce the async-teardown flake in CI; revert this commit
-	// once the reproduction is observed.
-	_ = syncDetached
-	_ = kernelLinkID
+	if !syncDetached && kernelLinkID != 0 {
+		k.waitKernelLinkGone(ctx, kernelLinkID, pin)
+	}
 	return nil
 }
 
