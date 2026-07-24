@@ -29,6 +29,7 @@
 #                         resulting disk (keyed on the command, or on the
 #                         script's content when <cmd> names a file);
 #                         later runs boot from the cached disk directly.
+#                         With no --run, prepare the disk and exit.
 #   --run "<command>"     Run the command in the guest and exit with its
 #                         status. Without it, boots interactively.
 #
@@ -67,7 +68,7 @@ while [[ $# -gt 0 ]]; do
         --image) image="$2"; shift 2 ;;
         --provision) provision_cmd="$2"; shift 2 ;;
         --run) run_cmd="$2"; shift 2 ;;
-        -h|--help) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -300,6 +301,13 @@ if [[ -n "$provision_cmd" ]]; then
         mv "$prov_disk" "$provisioned"
     fi
     boot_base=$provisioned
+
+    # With --provision and no --run, preparing the cached disk is the
+    # job; exit rather than dropping into an interactive shell.
+    if [[ -z "$run_cmd" ]]; then
+        echo "==> provisioned disk ready: ${provisioned}"
+        exit 0
+    fi
 fi
 
 # Fresh per-run qcow2 overlay; grow it for build room (a provisioned
