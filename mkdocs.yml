@@ -84,6 +84,7 @@ nav:
   - Design:
       - Daemonless: design/daemonless.md
       - bpfman CRDs - Cluster vs Namespace Scoped: design/clusterVsNamespaceScoped.md
+      - Rust reimplementation using the Go design: design/rust-reimplementation.md
   - Blog:
       - blog/index.md
   - Community:
