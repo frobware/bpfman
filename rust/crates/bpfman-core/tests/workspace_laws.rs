@@ -104,6 +104,12 @@ fn workspace_members_are_registered_and_documented() {
         names, documented,
         "document each implemented crate exactly once in the registry"
     );
+    for &(name, tier) in TIERS {
+        assert!(
+            readme.contains(&format!("| `{name}` | {tier} |")),
+            "README tier for {name} must match the enforced tier {tier}"
+        );
+    }
 }
 
 #[test]

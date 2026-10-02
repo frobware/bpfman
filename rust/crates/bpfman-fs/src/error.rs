@@ -22,7 +22,8 @@ impl Error {
                 Some(code)
                     if code == rustix::io::Errno::LOOP.raw_os_error()
                         || code == rustix::io::Errno::XDEV.raw_os_error()
-                        || code == rustix::io::Errno::NOTDIR.raw_os_error() =>
+                        || code == rustix::io::Errno::NOTDIR.raw_os_error()
+                        || code == rustix::io::Errno::ISDIR.raw_os_error() =>
                 {
                     ErrorKind::UnsafeLayout
                 }

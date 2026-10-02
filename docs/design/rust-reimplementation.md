@@ -462,21 +462,33 @@ Clap constructs this type at the input boundary. Application operations accept
 `db/store.db` themselves. The default root is defined alongside the layout.
 Add further accessors when their consumers exist.
 
-A layout describes where files belong, not whether they exist. The filesystem
-adapter should separately refine it into readiness capabilities such as:
+A layout describes where files belong, not whether they exist.
+`RuntimeDirectory::open_or_create` refines it into an opened root capability,
+without acquiring a lock. This is not `ReadyRuntime`: it proves neither bpffs
+mount readiness nor managed-object existence. Future readiness types should
+express those additional observations separately.
 
-- `ReadyRuntime`, proving required directories exist and bpffs is mounted;
-- `ImageCache`, proving the cache root exists with the required permissions;
-  and
-- `WritePermit<'lock>`, granting mutation authority while the cross-process
-  writer lock is held.
+Mutation entry points requiring serialisation borrow `&RuntimeWriter<'_>` or
+are methods on that writer, rather than accepting a target path and an unrelated
+lock. `RuntimeDirectory::with_writer` acquires the runtime's lock, rechecks its
+inode identity, prepares the database directory, and only then lends the writer
+to a callback. It cannot be constructed or cloned by a caller, or escape that
+callback. The writer contains both the opened runtime and its low-level
+`WritePermit`; the target cannot be substituted. Nested operations borrow the
+same writer, rather than acquiring another lock. For example, database creation
+is `create_if_missing(&RuntimeWriter)`, not `create_if_missing(path, permit)`.
 
-Mutation entry points that require serialisation take a borrowed `WritePermit`,
-not a boolean or an undocumented calling convention. `bpfman-lock` constructs
-this capability only inside `with_write_lock` or an `InheritedWriteLock`'s
-`with_permit` callback. The permit has private fields, no public constructor,
-and no `Clone`; its lifetime prevents escape from that callback. It is permission
-to mutate, not an owning RAII guard or a historical “lock acquired” event.
+Opening/creating the root and lock file are necessarily lockless bootstrap
+operations. Database-directory preparation requires a writer internally; no
+public generic mkdir/delete API is exposed. Raw implementation helpers remain
+private. Compile-fail tests exercise authority construction, cloning, escape,
+unlocked calls, and the obsolete arbitrary-path-plus-permit combination.
+
+`bpfman-lock` still provides the lower-level `with_write_lock`,
+`with_write_lock_file`, and `InheritedWriteLock::with_permit` operations.
+Their `WritePermit` proves ownership of one file lock, not authority for any
+particular runtime. The filesystem capability acquires via an already opened
+descriptor; its diagnostic pathname is never reopened by the lock adapter.
 
 Acquisition uses the same `<runtime>/.lock` and exclusive `flock` protocol as
 Go. Timeout and cooperative cancellation govern acquisition only, not work
@@ -500,7 +512,7 @@ nothing about the evidence's representation and neither clones nor drops it.
 Failed observations are errors, never absence. The interpreter applies the
 decision within the same lock scope. This is a small explicit sequence, not a
 general startup state machine or a separate effect for every mkdir and SQL
-statement. The adapter's `create_if_missing` requires the permit, embeds the
+statement. The adapter's `create_if_missing` requires the runtime writer, embeds the
 authoritative Go migration SQL,
 and publishes a complete database without overwriting existing state. Existing
 databases are not implicitly repaired or migrated. `open_or_create_store`
@@ -518,25 +530,34 @@ runtime must hold an opened, verified root directory and resolve descendants
 relative to it, with no absolute-path override, parent traversal, symlink escape,
 or unintended mount crossing. Per-operation subtrees further narrow authority.
 Checking path strings and then reopening by absolute path is not sufficient.
-The current `RuntimeLayout` is configuration only: existing path-based lock and
-store opening do not yet provide this descriptor-enforced confinement. This
-must be addressed when introducing the prepared-runtime filesystem capability,
-before exposing managed-object mutation or deletion APIs.
+`RuntimeLayout` remains configuration only. `RuntimeDirectory` now holds an
+opened root and performs directory/lock operations through Linux `openat2`,
+with no symlinks or unintended descendant mount crossings. Root adoption may
+cross mount points such as `/run`; unsupported kernels fail closed. The lock
+must be a singly linked regular file, and replacement during acquisition is
+rejected before lending authority. Tests also cover symlinked roots/ancestors,
+root-path replacement, lock/database-directory replacement, and interoperation
+with the Go-compatible pathname flock protocol in another process.
 
-SQLite is a separate part of this confinement work. The bundled Unix VFS
-canonicalises filenames in `unixFullPathname`, following symlinks while
-assembling the path. Consequently, handing the default VFS a
-`/proc/self/fd/<directory>/store.db` pathname is not a substitute for a
-descriptor-relative storage adapter. Any confined implementation must cover
-the database and SQLite's journal, WAL, and shared-memory files, retaining Go
-locking and WAL interoperability. Preflight path checks or ignoring the WAL do
-not satisfy this requirement. No confined SQLite adapter is implemented yet.
+The filesystem capability adopts directory identity, not a permanently fixed
+pathname. This is cooperative locking, not a sandbox against other processes
+with authority to replace directories or lock inodes. Participants must keep
+the lock inode stable during operations; the acquisition recheck does not
+prevent arbitrary later external replacement.
+
+SQLite is intentionally a separate boundary. `bpfman-store-sqlite` uses ordinary
+rusqlite operations; SQLite owns database, journal, WAL, and shared-memory access.
+We do not implement a custom VFS or manually route those auxiliary files through
+managed-object cleanup. `RuntimeWriter::database_path` is an explicit pathname
+handoff, not descriptor-relative confinement against external replacement.
+Runtime directory authority and the SQLite adapter must not claim otherwise.
+WAL interoperability with Go remains required and tested.
 
 `bpfman-fs` owns the filesystem representation of runtime objects: both where
 they live and how they are created or removed. A future prepared-runtime
 capability should offer conceptual operations such as removing a program pin,
 a link pin, or a program's map directory, parameterised by typed identities and
-`&WritePermit`. The core emits object-level intent; the runtime routes it to
+`&RuntimeWriter`. The core emits object-level intent; the runtime routes it to
 that capability. Callers must not join path fragments or pass arbitrary paths
 for deletion. A layout change then remains local to the filesystem adapter.
 

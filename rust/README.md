@@ -34,10 +34,10 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-model` | 0 | Pure domain vocabulary, typed program kinds, and stored summaries |
 | `bpfman-core` | 1 | Pure listing selection and store-opening decisions; lifecycle machines will follow |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
-| `bpfman-fs` | 2 | Validated runtime layout and centralised filesystem paths |
-| `bpfman-store-sqlite` | 2 | Go-compatible database creation and read-only queries through rusqlite |
-| `bpfman-runtime` | 3 | Observation gathering, pure selection, and application error translation |
-| `bpfman` | 5 | Typed Clap CLI and text/quiet listing presentation |
+| `bpfman-fs` | 2 | Runtime layout, opened-root capabilities, and root-bound write authority |
+| `bpfman-store-sqlite` | 3 | Go-compatible database creation and read-only queries through rusqlite |
+| `bpfman-runtime` | 4 | Observation gathering, pure selection, and application error translation |
+| `bpfman` | 5 | Typed Clap CLI, load request parsing, and text/quiet listing presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
 point down through tiers, pure normal dependency closures are explicitly
@@ -85,7 +85,8 @@ evidence: `UseExisting` carries the opened store, so it cannot disagree with a
 separate optional handle. Rejection also returns the evidence, keeping resource
 cleanup in the interpreter. Policy neither inspects nor drops that evidence;
 the core has no filesystem or SQLite dependencies and performs no I/O.
-The adapter's `create_if_missing` requires a borrowed `WritePermit`.
+The adapter's `create_if_missing` requires a borrowed `RuntimeWriter` and derives
+its target from that writer; an unrelated lock cannot authorise a supplied path.
 Creation builds a complete temporary database and publishes it without
 overwriting existing state. New database files are owner-readable/writable.
 Existing databases are never repaired or migrated. Subsequent reads check the
@@ -95,11 +96,25 @@ creation and test fixtures embed the Go migration SQL with `include_str!`.
 Direct file/directory removal calls are denied by the lint gate. Future runtime
 object removal belongs in a single private `bpfman-fs` module behind typed
 prepared-runtime operations, never a generic path-based public API. No object
-deletion API exists yet; descriptor-based confinement and the Go safety cases
-must be implemented and tested before adding one.
-The current layout and path-based setup are not a filesystem security boundary:
-confinement to a supplied root requires a verified directory-handle capability,
-including protection against symlinked ancestors and replacement races.
+deletion API exists yet. `RuntimeDirectory::open_or_create` opens/creates the
+root without acquiring the lock. Its `with_writer` method acquires the lock,
+checks that the lock inode has not changed, prepares the database directory,
+then lends a non-constructible, non-cloneable `RuntimeWriter` to the callback.
+That authority cannot escape the callback. Nested operations borrow the same
+writer rather than reacquiring it.
+
+Directory and lock operations use Linux `openat2`, reject symlink traversal,
+and forbid mount crossings below the adopted root. Kernels without `openat2`
+fail closed. Runtime adoption may cross mounts such as `/run`. Lock entries must
+be singly linked regular files. Tests cover symlinked roots/ancestors, lock and
+database-directory replacement, stale lock descriptors, and cross-process flock
+contention. Participants must keep the lock inode stable during callbacks.
+This is not proof that bpffs is mounted or that managed objects are ready.
+
+SQLite remains a separate boundary: rusqlite owns database and auxiliary-file
+I/O. Its pathname handoff is not protected against external filesystem
+replacement by our directory descriptor. There is no custom VFS, and managed
+object cleanup must never manipulate SQLite's journal, WAL, or shared-memory files.
 
 `--lock-timeout` / `BPFMAN_LOCK_TIMEOUT` accepts durations such as `30s` or
 `500ms`; the default is 30 seconds and `0` waits indefinitely. It bounds only
@@ -108,9 +123,19 @@ cancellation and owned inherited descriptors; CLI signal cancellation and
 namespace-helper process launching are not yet wired. No privileges are needed
 for a writable temporary runtime; `/run/bpfman` will normally require sudo.
 
-This first slice supports managed table and quiet-ID output only. Stored names
-are used directly (no kernel-name fallback). `--all`, JSON output, kernel link
-state filters, and lifecycle commands are not implemented and are rejected.
+Listing supports managed table and quiet-ID output only. Stored names
+are used directly (no kernel-name fallback). `--all`, JSON listing, kernel link
+state filters, and lifecycle execution are not implemented and are rejected.
+`program load file PATH` and `program load image IMAGE` parse typed requests,
+including repeated/comma-separated `--programs`, metadata, globals, application,
+nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
+options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
+exits with status 2; valid requests exit with status 1 and an explicit unsupported
+execution error, without runtime, database, registry, or kernel effects.
+Credentials are not echoed in auth diagnostics or help. Unlike Go, this parser
+requires the explicit file/image verb and rejects duplicate ELF selections,
+extraneous load-time targets, and zero map-owner IDs. OCI reference resolution
+and object-file validation remain execution responsibilities, not parser I/O.
 Consequently the typed DSL's automatic JSON requests cannot yet use this CLI;
 the full behavioural corpus is a later acceptance gate. Once the relevant
 commands are ready, build the Go shell/test runner and select the new binary:

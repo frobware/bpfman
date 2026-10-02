@@ -23,6 +23,39 @@ const MIGRATIONS: [(i64, &str); 2] = [
 /// Existing paths are never replaced, repaired, or migrated. Creation happens
 /// in a temporary sibling file, published without clobbering any competing
 /// creator's database. Callers must still validate existing state when reading.
+///
+/// Acquire authority once and borrow it for each operation:
+///
+/// ```no_run
+/// use bpfman_fs::RuntimeDirectory;
+/// use bpfman_lock::AcquireOptions;
+/// use bpfman_store_sqlite::create_if_missing;
+/// fn create(runtime: &RuntimeDirectory, options: AcquireOptions<'_>)
+///     -> Result<(), Box<dyn std::error::Error>> {
+///     runtime.with_writer(options, |writer| create_if_missing(&writer))??;
+///     Ok(())
+/// }
+/// ```
+///
+/// An unlocked directory is not write authority:
+///
+/// ```compile_fail
+/// use bpfman_fs::RuntimeDirectory;
+/// use bpfman_store_sqlite::create_if_missing;
+/// fn unlocked(runtime: &RuntimeDirectory) {
+///     create_if_missing(runtime);
+/// }
+/// ```
+///
+/// Nor is a path combined with an arbitrary lock:
+///
+/// ```compile_fail
+/// use bpfman_lock::WritePermit;
+/// use bpfman_store_sqlite::create_if_missing;
+/// fn mismatched(path: &std::path::Path, permit: &WritePermit<'_>) {
+///     create_if_missing(path, permit);
+/// }
+/// ```
 pub fn create_if_missing(writer: &bpfman_fs::RuntimeWriter<'_>) -> Result<(), Error> {
     create(&writer.database_path(), &MIGRATIONS).map_err(Error::from)
 }

@@ -43,6 +43,25 @@ pub struct RuntimeDirectory {
 ///     let writer = root.with_writer(options, |writer| writer);
 /// }
 /// ```
+///
+/// An unrelated low-level lock cannot be paired with a runtime by the caller:
+///
+/// ```compile_fail
+/// use bpfman_fs::{RuntimeDirectory, RuntimeWriter};
+/// use bpfman_lock::WritePermit;
+/// fn forge<'a>(runtime: &'a RuntimeDirectory, permit: WritePermit<'a>) -> RuntimeWriter<'a> {
+///     RuntimeWriter { runtime, _permit: permit }
+/// }
+/// ```
+///
+/// Authority cannot be cloned into another owner:
+///
+/// ```compile_fail
+/// use bpfman_fs::RuntimeWriter;
+/// fn duplicate<'a>(writer: &RuntimeWriter<'a>) -> RuntimeWriter<'a> {
+///     (*writer).clone()
+/// }
+/// ```
 pub struct RuntimeWriter<'scope> {
     runtime: &'scope RuntimeDirectory,
     _permit: bpfman_lock::WritePermit<'scope>,

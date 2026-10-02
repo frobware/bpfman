@@ -97,8 +97,9 @@ The architecture and compatibility goals are in
   Runtime `open_or_create_store` returns an opened store, not a path
   for a subsequent reopen. Observation errors are never treated as absence.
 - Runtime-object creation/removal must use conceptual operations owned by
-  `bpfman-fs`. Future prepared-runtime capabilities take typed object identities
-  and `&WritePermit`; do not expose generic `remove(&Path)` methods. Raw removal
+  `bpfman-fs`. Operations requiring serialisation borrow `&RuntimeWriter<'_>`
+  (or are methods on it), with typed object identities. Do not accept a target
+  path plus a separate lock permit or expose generic `remove(&Path)` methods. Raw removal
   calls are denied by Clippy; any eventual exception must be scoped to one
   private, audited removal module, not a whole crate. Keep lock files outside
   object cleanup. Dependency-owned temporary-file/SQLite cleanup is not an
@@ -112,16 +113,29 @@ The architecture and compatibility goals are in
 - Root confinement is stronger than root refusal. Every managed-object filesystem
   operation must be relative to a verified opened root, never an arbitrary
   absolute path, with no parent/symlink escape or unintended mount traversal.
-  Layout validation alone does not establish this. Implement and test that
-  capability before introducing managed-object mutation/removal APIs.
+  Layout validation alone does not establish this. `RuntimeDirectory` adopts
+  the descriptor without acquiring a lock; `with_writer` acquires the lock
+  before lending scoped, root-bound authority. Root/lock bootstrap is necessarily
+  lockless; preparing the database directory and database creation require the
+  writer. Bootstrap does not imply bpffs or managed-object readiness.
 - Use the Go-created SQLite schema early. Runtime may create a missing
   database under the Go-compatible writer lock; store reads remain read-only.
   Never repair or migrate existing state implicitly. Embed the actual Go
   migration SQL with `include_str!` for creation and fixtures.
-- Mutating adapters require a borrowed, non-forgeable `WritePermit`. Acquire
-  the same `<runtime>/.lock` flock as Go. Namespace helpers inherit a duplicated
+- Rusqlite owns database access and SQLite's journal/WAL/shared-memory lifecycle.
+  The database pathname handoff is not descriptor-relative confinement against
+  external filesystem replacement. Do not add a custom VFS or manipulate those
+  auxiliary files through managed-object cleanup APIs.
+- Mutating adapters that require serialisation borrow non-forgeable, root-bound
+  `RuntimeWriter` authority. `WritePermit` remains a lower-level lock primitive,
+  not sufficient application authority. Acquire the same `<runtime>/.lock` flock
+  as Go. Recheck its identity before lending a writer; callers must not replace
+  the lock while operations are active. Namespace helpers inherit a duplicated
   descriptor rather than acquiring by path. Close descriptors on scope exit;
   never explicitly unlock while inherited copies may still be alive.
+- Compile-fail tests cover forging, cloning, and escaping writer authority and
+  passing an unlocked runtime or a path-plus-permit to a mutating adapter. Pair
+  them with filesystem replacement/refusal and real flock contention tests.
 - Preserve the Go fake kernel's valuable scenarios. A stateful effect
   interpreter should track IDs, programs, links, pins, and dispatcher changes,
   reject invalid operations, and inject failures at explicit boundaries.

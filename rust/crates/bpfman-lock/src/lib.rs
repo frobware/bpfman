@@ -1,7 +1,9 @@
 //! Cross-process writer lock compatible with Go's `lock` package.
 //!
-//! Mutating adapters accept a borrowed [`WritePermit`], not a boolean or raw
-//! descriptor. A permit cannot escape its callback. Helpers receive duplicated
+//! This crate supplies low-level [`WritePermit`] values, not root-bound runtime
+//! authority. `bpfman-fs` binds a permit to its opened root as `RuntimeWriter`;
+//! application mutations require that stronger capability. A permit cannot
+//! escape its callback. Helpers receive duplicated
 //! descriptors, never reacquire the lock by path. Descriptors are closed, not
 //! explicitly unlocked: inherited copies must keep the same lock alive.
 
@@ -27,7 +29,7 @@ pub struct AcquireOptions<'a> {
     pub cancelled: Option<&'a AtomicBool>,
 }
 
-/// Permission to mutate runtime state while the borrowed writer lock is held.
+/// Proof that this borrowed file's exclusive lock is held, without a runtime identity.
 ///
 /// It cannot be constructed by callers or returned from the callback:
 ///

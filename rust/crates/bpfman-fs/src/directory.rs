@@ -28,8 +28,8 @@ impl RuntimeDirectory {
     pub fn open_or_create(layout: RuntimeLayout) -> Result<Self, Error> {
         let filesystem =
             open("/", DIRECTORY, Mode::empty()).map_err(|e| io("open filesystem anchor", e))?;
-        let mut parent =
-            rustix::io::dup(&filesystem).map_err(|e| io("duplicate filesystem anchor", e))?;
+        let mut parent = rustix::io::fcntl_dupfd_cloexec(&filesystem, 0)
+            .map_err(|e| io("duplicate filesystem anchor", e))?;
         for component in layout.root().components() {
             if let Component::Normal(name) = component {
                 parent = ensure_directory(&parent, name, BENEATH)?;
@@ -56,6 +56,8 @@ impl RuntimeDirectory {
     ///
     /// The lock file must be a regular, singly linked file. The `db` directory
     /// is prepared under the lock. No API accepts another runtime's permit.
+    /// The lock identity is rechecked after acquisition; participants must not
+    /// replace it during the callback. This is cooperative locking, not a sandbox.
     pub fn with_writer<T>(
         &self,
         options: AcquireOptions<'_>,
@@ -69,6 +71,15 @@ impl RuntimeDirectory {
             CONFINED,
         )
         .map_err(|e| io("open runtime writer lock", e))?;
+        self.with_lock_file(fd, options, work)
+    }
+
+    fn with_lock_file<T>(
+        &self,
+        fd: OwnedFd,
+        options: AcquireOptions<'_>,
+        work: impl for<'scope> FnOnce(RuntimeWriter<'scope>) -> T,
+    ) -> Result<T, Error> {
         let stat = fstat(&fd).map_err(|e| io("inspect runtime writer lock", e))?;
         if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1 {
             return Err(Failure::Unsafe("writer lock must be a singly linked regular file").into());
@@ -78,11 +89,28 @@ impl RuntimeDirectory {
             &self.layout.lock_path(),
             options,
             |permit| {
-                ensure_directory(&self.root, DATABASE_DIRECTORY, CONFINED)?;
-                Ok(work(RuntimeWriter {
+                // A waiter may have opened the old inode before .lock was
+                // replaced. Do not lend authority for a now-unrelated lock.
+                let current = openat2(
+                    &self.root,
+                    LOCK_FILE,
+                    OFlags::PATH | OFlags::CLOEXEC,
+                    Mode::empty(),
+                    CONFINED,
+                )
+                .map_err(|e| io("recheck runtime writer lock", e))?;
+                let current = fstat(&current).map_err(|e| io("inspect acquired writer lock", e))?;
+                if (stat.st_dev, stat.st_ino) != (current.st_dev, current.st_ino)
+                    || current.st_nlink != 1
+                {
+                    return Err(Failure::Unsafe("writer lock changed during acquisition").into());
+                }
+                let writer = RuntimeWriter {
                     runtime: self,
                     _permit: permit,
-                }))
+                };
+                writer.prepare_database_directory()?;
+                Ok(work(writer))
             },
         )
         .map_err(Failure::Lock)?
@@ -90,6 +118,11 @@ impl RuntimeDirectory {
 }
 
 impl RuntimeWriter<'_> {
+    fn prepare_database_directory(&self) -> Result<(), Error> {
+        ensure_directory(&self.runtime.root, DATABASE_DIRECTORY, CONFINED)?;
+        Ok(())
+    }
+
     /// Go-compatible database filename for the separate rusqlite adapter.
     ///
     /// This is deliberately a pathname handoff, not a confined managed-object
@@ -155,6 +188,34 @@ mod tests {
         let error = openat2(&root, "proc", DIRECTORY, Mode::empty(), CONFINED)
             .expect_err("reject mount crossing");
         assert_eq!(error, rustix::io::Errno::XDEV);
+        Ok(())
+    }
+
+    #[test]
+    fn stale_lock_descriptor_cannot_lend_writer_authority() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temporary = tempfile::tempdir()?;
+        let layout = RuntimeLayout::try_from(temporary.path().to_owned())?;
+        let path = layout.lock_path();
+        let runtime = RuntimeDirectory::open_or_create(layout)?;
+        // Deterministic handoff: this is the fd a waiter opened before flock.
+        let old = openat2(
+            &runtime.root,
+            LOCK_FILE,
+            OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC,
+            Mode::from_raw_mode(0o600),
+            CONFINED,
+        )?;
+        std::fs::rename(&path, temporary.path().join("old-lock"))?;
+        std::fs::write(&path, b"replacement")?;
+        let called = std::cell::Cell::new(false);
+        let error = runtime
+            .with_lock_file(old, options(), |_| called.set(true))
+            .expect_err("lock inode was replaced");
+        assert_eq!(error.kind(), crate::ErrorKind::UnsafeLayout);
+        assert!(!called.get());
+        assert!(!temporary.path().join(DATABASE_DIRECTORY).exists());
+        assert_eq!(std::fs::read(path)?, b"replacement");
         Ok(())
     }
 }
