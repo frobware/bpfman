@@ -12,8 +12,8 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-core", 1),
     ("bpfman-lock", 1),
     ("bpfman-fs", 2),
-    ("bpfman-store-sqlite", 2),
-    ("bpfman-runtime", 3),
+    ("bpfman-store-sqlite", 3),
+    ("bpfman-runtime", 4),
     ("bpfman", 5),
 ];
 const PURE: &[&str] = &["bpfman-model", "bpfman-core"];
@@ -161,9 +161,9 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
         for dep in normal_dependencies(meta, id) {
             let dependency = string(&package(meta, dep)["name"]);
             match dependency {
-                "rustix" => assert_eq!(
-                    name, "bpfman-lock",
-                    "lock syscalls belong in the lock adapter"
+                "rustix" => assert!(
+                    matches!(name, "bpfman-lock" | "bpfman-fs"),
+                    "filesystem and lock syscalls belong in their adapters"
                 ),
                 "rusqlite" | "libsqlite3-sys" => assert_eq!(
                     name, "bpfman-store-sqlite",

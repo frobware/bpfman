@@ -14,7 +14,7 @@ pub(super) enum Failure {
     #[error(transparent)]
     Store(bpfman_store_sqlite::Error),
     #[error(transparent)]
-    Lock(bpfman_lock::Error),
+    Filesystem(bpfman_fs::Error),
 }
 
 pub(super) fn store_error(source: bpfman_store_sqlite::Error) -> Error {
@@ -29,16 +29,15 @@ pub(super) fn store_error(source: bpfman_store_sqlite::Error) -> Error {
     }
 }
 
-pub(super) fn lock_error(source: bpfman_lock::Error) -> Error {
+pub(super) fn filesystem_error(source: bpfman_fs::Error) -> Error {
     let kind = match source.kind() {
-        bpfman_lock::ErrorKind::TimedOut => ErrorKind::TimedOut,
-        bpfman_lock::ErrorKind::Cancelled => ErrorKind::Cancelled,
-        bpfman_lock::ErrorKind::Reentrant | bpfman_lock::ErrorKind::Unavailable => {
-            ErrorKind::Unavailable
-        }
+        bpfman_fs::ErrorKind::TimedOut => ErrorKind::TimedOut,
+        bpfman_fs::ErrorKind::Cancelled => ErrorKind::Cancelled,
+        bpfman_fs::ErrorKind::UnsafeLayout => ErrorKind::InvalidState,
+        bpfman_fs::ErrorKind::Unavailable => ErrorKind::Unavailable,
     };
     Error {
         kind,
-        source: Failure::Lock(source),
+        source: Failure::Filesystem(source),
     }
 }

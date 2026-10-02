@@ -36,6 +36,9 @@ fn run(cli: cli::Cli) -> anyhow::Result<()> {
             let programs = bpfman_runtime::list_programs(&cli.layout, &filter, cli.lock_timeout)?;
             output::programs(&mut io::stdout().lock(), &programs, args.quiet, args.output)?;
         }
+        cli::Command::Program {
+            command: cli::ProgramCommand::Load { source },
+        } => source.execute()?,
     }
     Ok(())
 }

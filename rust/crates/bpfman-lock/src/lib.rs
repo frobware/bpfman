@@ -11,7 +11,7 @@ mod acquire;
 mod error;
 mod inherited;
 
-pub use acquire::with_write_lock;
+pub use acquire::{with_write_lock, with_write_lock_file};
 
 /// Environment variable used by Go and Rust helpers to identify an inherited fd.
 pub const WRITER_LOCK_FD_ENV: &str = "BPFMAN_WRITER_LOCK_FD";

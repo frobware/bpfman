@@ -7,6 +7,8 @@ use clap::{
     builder::{PathBufValueParser, PossibleValuesParser, TypedValueParser},
 };
 
+mod load;
+
 #[derive(Parser)]
 #[command(name = "bpfman", version, about, max_term_width = 80)]
 pub(super) struct Cli {
@@ -22,7 +24,7 @@ pub(super) struct Cli {
 
 #[derive(Subcommand)]
 pub(super) enum Command {
-    /// Inspect managed BPF programs.
+    /// Manage BPF programs (loading currently supports parsing only).
     Program {
         #[command(subcommand)]
         command: ProgramCommand,
@@ -37,6 +39,11 @@ pub(super) enum ProgramCommand {
     /// attachment-state filtering will arrive with kernel observation support.
     /// A missing database is created under the runtime writer lock.
     List(ListArgs),
+    /// Parse a load request; execution is not implemented yet.
+    Load {
+        #[command(subcommand)]
+        source: load::LoadCommand,
+    },
 }
 
 #[derive(Args)]
@@ -126,7 +133,13 @@ mod tests {
         ])?;
         let Command::Program {
             command: ProgramCommand::List(args),
-        } = cli.command;
+        } = cli.command
+        else {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::InvalidSubcommand,
+                "expected list",
+            ));
+        };
         assert_eq!(
             args.types,
             [

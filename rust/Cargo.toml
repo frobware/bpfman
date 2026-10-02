@@ -18,6 +18,7 @@ bpfman-fs = { path = "crates/bpfman-fs" }
 bpfman-store-sqlite = { path = "crates/bpfman-store-sqlite" }
 bpfman-runtime = { path = "crates/bpfman-runtime" }
 anyhow = "1"
+base64 = "0.22"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 rustix = { version = "1", features = ["fs"] }

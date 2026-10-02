@@ -22,8 +22,8 @@ const MIGRATIONS: [(i64, &str); 2] = [
 /// Existing paths are never replaced, repaired, or migrated. Creation happens
 /// in a temporary sibling file, published without clobbering any competing
 /// creator's database. Callers must still validate existing state when reading.
-pub fn create_if_missing(path: &Path, _permit: &bpfman_lock::WritePermit<'_>) -> Result<(), Error> {
-    create(path, &MIGRATIONS).map_err(Error::from)
+pub fn create_if_missing(writer: &bpfman_fs::RuntimeWriter<'_>) -> Result<(), Error> {
+    create(&writer.database_path(), &MIGRATIONS).map_err(Error::from)
 }
 
 fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
@@ -41,7 +41,6 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
-    std::fs::create_dir_all(parent).map_err(filesystem)?;
     let temporary = tempfile::NamedTempFile::new_in(parent).map_err(filesystem)?;
     let mut connection = Connection::open(temporary.path())?;
     let tx = connection.transaction()?;

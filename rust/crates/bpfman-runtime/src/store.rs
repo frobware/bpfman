@@ -3,28 +3,28 @@
 use std::time::Duration;
 
 use bpfman_core::{StoreObservation, StoreOpenPlan, plan_store_open};
-use bpfman_fs::RuntimeLayout;
-use bpfman_lock::{AcquireOptions, with_write_lock};
+use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
+use bpfman_lock::AcquireOptions;
 use bpfman_store_sqlite::{SCHEMA_VERSION, Store};
 
 use crate::{
     Error, ErrorKind,
-    error::{Failure, lock_error, store_error},
+    error::{Failure, filesystem_error, store_error},
 };
 
 pub(super) fn open_or_create_store(
     layout: &RuntimeLayout,
     timeout: Duration,
 ) -> Result<Store, Error> {
-    let database = layout.database_path();
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).map_err(filesystem_error)?;
     // Match Go's layout and serialise first-touch creation with both implementations.
-    with_write_lock(
-        &layout.lock_path(),
+    runtime.with_writer(
         AcquireOptions {
             timeout,
             cancelled: None,
         },
-        |permit| {
+        |writer| {
+            let database = writer.database_path();
             // Observation and execution share the lock. Never interpret a failed
             // observation as absence, or return a path to be reopened later.
             let observed = match Store::inspect(&database).map_err(store_error)? {
@@ -36,7 +36,7 @@ pub(super) fn open_or_create_store(
             };
             match plan_store_open(observed, SCHEMA_VERSION) {
                 StoreOpenPlan::Create => {
-                    bpfman_store_sqlite::create_if_missing(&database, &permit)
+                    bpfman_store_sqlite::create_if_missing(&writer)
                         .map_err(store_error)?;
                     Store::open(&database).map_err(store_error)
                 }
@@ -52,5 +52,5 @@ pub(super) fn open_or_create_store(
             }
         },
     )
-    .map_err(lock_error)?
+    .map_err(filesystem_error)?
 }

@@ -2,6 +2,10 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::{LayoutError, RuntimeLayout};
 
+pub(super) const LOCK_FILE: &str = ".lock";
+pub(super) const DATABASE_DIRECTORY: &str = "db";
+const DATABASE_FILE: &str = "store.db";
+
 impl TryFrom<PathBuf> for RuntimeLayout {
     type Error = LayoutError;
 
@@ -41,11 +45,11 @@ impl RuntimeLayout {
 
     /// Global cross-process writer lock shared with the Go implementation.
     pub fn lock_path(&self) -> PathBuf {
-        self.root.join(".lock")
+        self.root.join(LOCK_FILE)
     }
 
     /// SQLite database shared with the Go implementation.
     pub fn database_path(&self) -> PathBuf {
-        self.root.join("db").join("store.db")
+        self.root.join(DATABASE_DIRECTORY).join(DATABASE_FILE)
     }
 }

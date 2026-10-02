@@ -3,8 +3,10 @@
 //! Constructing a layout performs no I/O and proves only that its root is a
 //! validated absolute path, not that directories exist or bpffs is mounted.
 
-use std::path::PathBuf;
+use std::{os::fd::OwnedFd, path::PathBuf};
 
+mod directory;
+mod error;
 mod layout;
 
 /// Default runtime root, shared by front ends rather than duplicated there.
@@ -17,6 +19,53 @@ pub const DEFAULT_RUNTIME_ROOT: &str = "/run/bpfman";
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeLayout {
     root: PathBuf,
+}
+
+/// An opened runtime root, not proof that bpffs is mounted or objects exist.
+///
+/// Managed filesystem operations stay relative to this directory descriptor.
+/// SQLite remains a separate pathname-based adapter; this is not a sandbox for
+/// SQLite or for other processes with authority to mutate the same filesystem.
+pub struct RuntimeDirectory {
+    root: OwnedFd,
+    layout: RuntimeLayout,
+}
+
+/// Mutation authority bound to exactly one runtime's opened root and lock.
+///
+/// There is no public constructor, target substitution, or permit extraction.
+/// The authority cannot escape its callback:
+///
+/// ```compile_fail
+/// use bpfman_fs::RuntimeDirectory;
+/// use bpfman_lock::AcquireOptions;
+/// fn escape(root: &RuntimeDirectory, options: AcquireOptions<'_>) {
+///     let writer = root.with_writer(options, |writer| writer);
+/// }
+/// ```
+pub struct RuntimeWriter<'scope> {
+    runtime: &'scope RuntimeDirectory,
+    _permit: bpfman_lock::WritePermit<'scope>,
+}
+
+/// Portable classification of filesystem and writer-acquisition failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ErrorKind {
+    /// The operating system could not complete the operation.
+    Unavailable,
+    /// The path violates confinement or has an unexpected object type.
+    UnsafeLayout,
+    /// The writer-lock acquisition budget expired.
+    TimedOut,
+    /// Writer-lock acquisition was cancelled.
+    Cancelled,
+}
+
+/// Filesystem boundary failure with private operating-system diagnostics.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct Error {
+    cause: error::Failure,
 }
 
 /// Invalid configuration rejected before any filesystem effects.

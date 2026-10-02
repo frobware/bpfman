@@ -71,6 +71,29 @@ pub fn with_write_lock<T>(
         .mode(0o600)
         .open(path)
         .map_err(|e| io_error(format!("open writer lock {}", path.display()), e))?;
+    acquire(file, path, options, started, work)
+}
+
+/// Acquire the writer lock using an already opened file, without reopening a path.
+///
+/// `label` is used only in diagnostics. The caller owns path resolution and
+/// verification; this function consumes the descriptor and closes it on exit.
+pub fn with_write_lock_file<T>(
+    file: File,
+    label: &Path,
+    options: AcquireOptions<'_>,
+    work: impl for<'lock> FnOnce(WritePermit<'lock>) -> T,
+) -> Result<T, Error> {
+    acquire(file, label, options, Instant::now(), work)
+}
+
+fn acquire<T>(
+    file: File,
+    path: &Path,
+    options: AcquireOptions<'_>,
+    started: Instant,
+    work: impl for<'lock> FnOnce(WritePermit<'lock>) -> T,
+) -> Result<T, Error> {
     let _active = ActiveScope::enter(&file)?;
     let mut backoff = Duration::from_millis(1);
     let mut attempted = false;

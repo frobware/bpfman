@@ -12,9 +12,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-bpfman-lock.workspace = true
+bpfman-fs.workspace = true
 bpfman-model.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tempfile.workspace = true
+
+[dev-dependencies]
+bpfman-lock.workspace = true
