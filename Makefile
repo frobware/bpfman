@@ -43,6 +43,8 @@ BIN_DIR ?= bin
 BPFMAN_PROTO_DIR := proto
 BPFMAN_PB_DIR := server/pb
 DOC_PORT ?= 6060
+# Explicitly selects the independent workspace; the root manifest is legacy.
+RUST_MANIFEST := rust/Cargo.toml
 # Canonical bpfman-shell sources that should be formatter-owned. The
 # e2e corpus is the broad runnable script set; outside e2e, include
 # individual positive fixtures deliberately. Do not glob
@@ -619,6 +621,8 @@ help:
 	@echo "  clean-mrproper              Like 'clean', plus wipe Go's shared build/test/fuzz caches (~/.cache/go-build); affects all Go projects on this machine"
 	@echo ""
 	@echo "Testing:"
+	@printf "  %-31s %s\n" "rust-check" "Check the new Rust workspace (format, clippy, tests, docs)"
+	@printf "  %-31s %s\n" "test-e2e-selection" "Verify CLI selection for the script runner without root"
 	@printf "  %-31s %s\n" "test" "Run all tests"
 	@printf "  %-31s %s\n" "test-all" "Run every host-side test surface in CI order (pre-push gate)"
 	@printf "  %-31s %s\n" "bpfman-shell-fmt" "Format canonical .bpfman files"
@@ -928,6 +932,9 @@ test-e2e-grpc: build-e2e-grpc
 # bin/e2e.test on a single host.
 
 E2E_SCRIPTS_TEST_BIN := $(BIN_DIR)/e2e-scripts.test
+# Both the typed shell builtin and raw `exec bpfman` must reach this binary.
+# Use a path to an executable named bpfman, not a command with arguments.
+BPFMAN_UNDER_TEST ?= $(BIN_DIR)/bpfman
 E2E_SCRIPTS_TEST_PKG := github.com/bpfman/bpfman/e2e/scriptrunner
 E2E_IMAGE_NO_VERIFY_CONFIG := $(abspath e2e/config/no-signature-verification.toml)
 BPFMAN_CONFIG ?=
@@ -1003,13 +1010,46 @@ build-e2e-scripts: bpfman-compile bpfman-shell-compile $(E2E_SCRIPTS_TEST_BIN)
 # whatever PATH it inherits; no in-code path manipulation.
 .PHONY: run-e2e-scripts
 run-e2e-scripts:
-	sudo env PATH=$(abspath $(BIN_DIR)):$$PATH \
+	@test "$(notdir $(BPFMAN_UNDER_TEST))" = bpfman || { echo "BPFMAN_UNDER_TEST must name an executable called bpfman" >&2; exit 1; }
+	@test -x "$(abspath $(BPFMAN_UNDER_TEST))" || { echo "BPFMAN_UNDER_TEST is not executable: $(abspath $(BPFMAN_UNDER_TEST))" >&2; exit 1; }
+	sudo env PATH="$(patsubst %/,%,$(dir $(abspath $(BPFMAN_UNDER_TEST)))):$(abspath $(BIN_DIR)):$$PATH" \
+	    BPFMAN_BIN="$(abspath $(BPFMAN_UNDER_TEST))" \
 	    BPFMAN_E2E_DIR=$(abspath e2e) \
 	    BPFMAN_LOCK_TIMEOUT=$(if $(BPFMAN_LOCK_TIMEOUT),$(BPFMAN_LOCK_TIMEOUT),5m) \
 	    $(call forward-env,$(E2E_SCRIPTS_FORWARD_VARS)) \
 	    $(E2E_SCRIPTS_TEST_BIN) -test.v \
 	    -test.count=$(STRESS_COUNT) $(if $(filter-out 0,$(PARALLEL)),-test.parallel $(PARALLEL)) \
 	    -test.run "$(if $(TEST),$(TEST),TestBPFManScripts)"
+
+.PHONY: test-e2e-selection
+test-e2e-selection:
+	python3 -m unittest discover -s rust/tests -p 'test_e2e_selection.py'
+
+# Every Cargo entry point names the new manifest. These are opt-in while the
+# Go implementation remains the production build.
+.PHONY: rust-check rust-build rust-test rust-fmt rust-fmt-fix rust-lock rust-lint rust-doc
+rust-check: rust-fmt rust-lint rust-test rust-doc test-e2e-selection
+
+rust-build:
+	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked
+
+rust-test:
+	cargo test --manifest-path $(RUST_MANIFEST) --workspace --locked
+
+rust-fmt:
+	cargo fmt --manifest-path $(RUST_MANIFEST) --all -- --check
+
+rust-fmt-fix:
+	cargo fmt --manifest-path $(RUST_MANIFEST) --all
+
+rust-lock:
+	cargo generate-lockfile --manifest-path $(RUST_MANIFEST)
+
+rust-lint:
+	cargo clippy --manifest-path $(RUST_MANIFEST) --workspace --all-targets --all-features --locked -- -D warnings
+
+rust-doc:
+	RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path $(RUST_MANIFEST) --workspace --no-deps --locked
 
 # `run-e2e-scripts` lives in the recipe rather than the
 # prerequisite list because GNU make does not sequence

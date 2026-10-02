@@ -252,7 +252,8 @@ meaningful:
 | --- | --- | --- |
 | `bpfman-model` | Pure | IDs, validated requests, records, snapshots, paths, domain errors, and public views |
 | `bpfman-core` | Pure | Lifecycle machines, effect vocabulary, dispatcher planning, reconciliation, and rollback policy |
-| `bpfman-fs` | Effectful | Runtime layout, bpffs paths and scanning, bytecode publication, locking, and readiness capabilities |
+| `bpfman-fs` | Effectful | Runtime layout, bpffs paths and scanning, bytecode publication, and readiness capabilities |
+| `bpfman-lock` | Effectful | Go-compatible writer locking, borrowed write permits, and inherited descriptor ownership |
 | `bpfman-store-sqlite` | Effectful | SQLite schema, migrations, queries, and atomic persistence operations |
 | `bpfman-kernel-aya` | Effectful | Aya-backed program, map, link, dispatcher, netlink, tracefs, and namespace operations |
 | `bpfman-image-oci` | Effectful | OCI pull, cache, authentication, and signature-policy adapters |
@@ -448,17 +449,102 @@ link while changing the program it targets.
 
 ## Filesystem and locking capabilities
 
-Runtime layout is configuration, not a package global. The filesystem adapter
-should refine a configured layout into capability values such as:
+Runtime layout is configuration, not a package global. `bpfman-fs` owns an
+immutable `RuntimeLayout`, constructed through `TryFrom<PathBuf>` with private
+fields and no invalid default value. It validates an absolute, nonempty root
+and refuses filesystem-root aliases, then normalises it lexically like Go's
+`Layout`, without filesystem access or
+symlink resolution. Native non-UTF-8 paths remain supported.
+
+Clap constructs this type at the input boundary. Application operations accept
+`&RuntimeLayout`; they obtain the writer lock and database paths through
+`lock_path()` and `database_path()`, never by spelling out `.lock` or
+`db/store.db` themselves. The default root is defined alongside the layout.
+Add further accessors when their consumers exist.
+
+A layout describes where files belong, not whether they exist. The filesystem
+adapter should separately refine it into readiness capabilities such as:
 
 - `ReadyRuntime`, proving required directories exist and bpffs is mounted;
 - `ImageCache`, proving the cache root exists with the required permissions;
   and
-- `WriterLease<'a>`, proving the cross-process mutation lock is held.
+- `WritePermit<'lock>`, granting mutation authority while the cross-process
+  writer lock is held.
 
-Mutation entry points that require serialisation should require a writer lease
-rather than a boolean or an undocumented calling convention. The lease should
-not be clonable.
+Mutation entry points that require serialisation take a borrowed `WritePermit`,
+not a boolean or an undocumented calling convention. `bpfman-lock` constructs
+this capability only inside `with_write_lock` or an `InheritedWriteLock`'s
+`with_permit` callback. The permit has private fields, no public constructor,
+and no `Clone`; its lifetime prevents escape from that callback. It is permission
+to mutate, not an owning RAII guard or a historical “lock acquired” event.
+
+Acquisition uses the same `<runtime>/.lock` and exclusive `flock` protocol as
+Go. Timeout and cooperative cancellation govern acquisition only, not work
+already running under the lock. Same-thread re-entry fails fast. Helpers own a
+duplicated descriptor rather than reopening the path. Closing descriptors,
+without an explicit unlock, preserves the lock until the last inherited copy
+is closed. The helper launcher will explicitly map its close-on-exec duplicate
+and set the existing `BPFMAN_WRITER_LOCK_FD` protocol variable.
+
+A private runtime `setup` module acquires the lock before observing the store.
+The pure `plan_store_setup` function receives the observed schema version (or
+absence) and the supported version, and decides initialise/use/reject. Failed
+observations are errors, never absence. The interpreter applies the decision
+within the same lock scope. This is a small explicit sequence, not a general
+setup state machine or a separate effect for every mkdir and SQL statement.
+Initialisation requires the permit, embeds the authoritative Go migration SQL,
+and publishes a complete database without overwriting existing state. Existing
+databases are not implicitly repaired or migrated. Setup returns an opened
+store handle, not a path to reopen later, and releases the lock. Ordinary
+snapshot queries remain read-only and recheck the schema within their own
+transaction. CLI signal cancellation and namespace-helper launching are not
+implemented in this slice.
+
+### Object creation and deletion boundary
+
+The invariant is confinement to the supplied runtime root, not merely a blacklist
+of dangerous paths. Every managed-object lookup, creation, rename, and removal
+must remain within the directory authority adopted for that runtime. A prepared
+runtime must hold an opened, verified root directory and resolve descendants
+relative to it, with no absolute-path override, parent traversal, symlink escape,
+or unintended mount crossing. Per-operation subtrees further narrow authority.
+Checking path strings and then reopening by absolute path is not sufficient.
+The current `RuntimeLayout` is configuration only: existing path-based lock and
+store opening do not yet provide this descriptor-enforced confinement. This
+must be addressed when introducing the prepared-runtime filesystem capability,
+before exposing managed-object mutation or deletion APIs.
+
+`bpfman-fs` owns the filesystem representation of runtime objects: both where
+they live and how they are created or removed. A future prepared-runtime
+capability should offer conceptual operations such as removing a program pin,
+a link pin, or a program's map directory, parameterised by typed identities and
+`&WritePermit`. The core emits object-level intent; the runtime routes it to
+that capability. Callers must not join path fragments or pass arbitrary paths
+for deletion. A layout change then remains local to the filesystem adapter.
+
+One private removal module is the only workspace-owned home for unlink/rmdir
+and recursive deletion primitives. Clippy denies direct removal calls; any
+future exception is scoped to that module rather than its entire crate.
+Third-party temporary-file and SQLite cleanup remains dependency-owned and is
+not a way to delete managed objects. No object deletion API is implemented yet.
+
+The removal boundary must refuse `/`, the configured runtime root, bpffs mount
+root, and collection roots, including equivalent spellings. Every object target
+must be a strict owned descendant with the expected identity and object kind.
+Root refusal is a backend invariant as well as input validation; it must not
+depend solely on callers using the constructors correctly. The lock inode must
+never be unlinked as part of object cleanup.
+
+Preserve the tests in Go's `fs/safe_test.go` and `fs/bpffs_ops_test.go`: traversal
+outside the hierarchy, mount-root removal, malformed object names, and sibling
+preservation. Strengthen actual string-prefix coverage with `programs` versus
+`programsX`. Add filesystem-root aliases, symlinked ancestors/targets,
+unexpected file types, and replacement-race cases. Lexical checks or a
+canonicalise-then-delete sequence cannot by themselves prevent symlink races;
+the implementation must use anchored directory descriptors and constrained
+traversal, and must not cross unintended mount points. Refusal tests for host
+roots use pure validation or an instrumented syscall boundary, never a real
+destructive call. Actual deletion tests are confined to owned temporary trees.
 
 Program, link, map, dispatcher, and bytecode paths must be distinct types.
 Conversion back to a general path should occur only at the filesystem or kernel
@@ -573,11 +659,12 @@ There are two CLI execution paths in the corpus and both must select Rust:
 
 The parity runner must therefore set `BPFMAN_BIN` to the absolute Rust binary
 and put that binary's directory before the directory containing the Go-built
-`bpfman-shell` on `PATH`. Setting only `BPFMAN_BIN` silently leaves raw `exec
-bpfman` calls testing the Go binary. The existing Make target currently puts
-the Go build directory first and does not forward `BPFMAN_BIN`; a dedicated
-`BPFMAN_UNDER_TEST`-style Make knob should set both paths consistently before
-the first Rust vertical slice is admitted.
+`bpfman-shell` on `PATH`. Setting only `BPFMAN_BIN` silently leaves raw
+`exec bpfman` calls testing the Go binary. The `run-e2e-scripts` Make target now
+accepts `BPFMAN_UNDER_TEST`, defaulting to `$(BIN_DIR)/bpfman`, and sets both
+paths consistently inside `sudo`. The selected executable must be named
+`bpfman`. Unprivileged process-fixture tests exercise the selection paths;
+behavioural parity still requires the real CLI and kernel-backed corpus.
 
 The Go shell and script runner remain test infrastructure throughout the
 rewrite. They are intentionally outside the new Rust workspace and are allowed
@@ -631,6 +718,18 @@ partial failure. SQLite tests use temporary databases and the real schema.
 Kernel tests use the smallest available test boundary first and reserve a real
 kernel for behaviour that cannot be simulated meaningfully.
 
+Preserve the value of Go's stateful fake kernel (`manager/fake_kernel_test.go`).
+An in-memory effect interpreter should track IDs, programs, links, pins, and
+dispatcher revisions, enforce resource invariants, and support deterministic
+failure injection. This complements pure transition tests with full runtime
+tests for rollback ordering, resource lifetime, and residue. Real-kernel tests
+still establish verifier, syscall, namespace, and traffic guarantees.
+
+SQLite uses explicit SQL through `rusqlite`, following the successful Go store
+design. Tests embed the existing Go migration SQL with `include_str!`; there is
+one schema authority. An ORM and a second schema representation are unnecessary
+for this migration.
+
 ### Compatibility and differential tests
 
 Golden fixtures should cover:
@@ -674,8 +773,14 @@ Tests modelled on `rty` will enforce:
 
 ## Rust coding conventions
 
-The new workspace should begin with strict conventions rather than add them
-after code accumulates:
+The working guidelines are recorded in `rust/AGENTS.md`, adapted from `rty`.
+`lib.rs` and `mod.rs` remain thin facades for types, exported symbols, and API
+documentation; implementations live in private modules. `unreachable_pub` is
+part of the normal lint gate. Adapter-specific errors remain opaque and are
+translated to backend-independent application categories; library code uses
+`thiserror`, while the binary uses `anyhow` to render retained cause chains.
+
+The new workspace begins with these conventions:
 
 - Rust 2024 edition and a workspace-wide minimum supported Rust version;
 - workspace-owned dependency versions and lints;

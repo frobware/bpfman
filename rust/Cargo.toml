@@ -1,0 +1,39 @@
+[workspace]
+members = ["crates/bpfman-model", "crates/bpfman-core", "crates/bpfman-lock", "crates/bpfman-fs", "crates/bpfman-store-sqlite", "crates/bpfman-runtime", "crates/bpfman"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/bpfman/bpfman"
+publish = false
+
+[workspace.dependencies]
+bpfman-model = { path = "crates/bpfman-model" }
+bpfman-core = { path = "crates/bpfman-core" }
+bpfman-lock = { path = "crates/bpfman-lock" }
+bpfman-fs = { path = "crates/bpfman-fs" }
+bpfman-store-sqlite = { path = "crates/bpfman-store-sqlite" }
+bpfman-runtime = { path = "crates/bpfman-runtime" }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+rustix = { version = "1", features = ["fs"] }
+humantime = "2"
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "deny"
+unreachable_pub = "deny"
+
+[workspace.lints.clippy]
+disallowed_methods = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"

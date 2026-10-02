@@ -1,0 +1,20 @@
+[package]
+name = "bpfman-runtime"
+description = "Application operations composing pure policy and effect adapters"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bpfman-fs.workspace = true
+bpfman-lock.workspace = true
+bpfman-model.workspace = true
+bpfman-core.workspace = true
+bpfman-store-sqlite.workspace = true
+thiserror.workspace = true

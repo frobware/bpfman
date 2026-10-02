@@ -1,0 +1,119 @@
+# New Rust workspace
+
+This independent workspace implements the
+[Rust reimplementation design](../docs/design/rust-reimplementation.md).
+The repository-root Cargo workspace is legacy reference material. Always name
+this workspace's manifest explicitly:
+
+```sh
+make rust-check
+cargo test --manifest-path rust/Cargo.toml --workspace --locked
+```
+
+Rust 2024, minimum Rust 1.85. Build output and the lockfile belong to this
+workspace. `make rust-build`, `rust-test`, `rust-fmt`, `rust-lint`, and `rust-doc`
+all select it explicitly. `rust-fmt` checks formatting; to apply formatting,
+run `make rust-fmt-fix`. `make rust-lock` refreshes the new lockfile.
+Development conventions live in [AGENTS.md](AGENTS.md).
+
+## Implemented crate registry
+
+| Crate | Tier | Responsibility |
+| --- | --- | --- |
+| `bpfman-model` | 0 | Pure domain vocabulary, typed program kinds, and stored summaries |
+| `bpfman-core` | 1 | Pure listing selection and store setup decisions; lifecycle machines will follow |
+| `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
+| `bpfman-fs` | 2 | Validated runtime layout and centralised filesystem paths |
+| `bpfman-store-sqlite` | 2 | Go schema initialisation and read-only queries through rusqlite |
+| `bpfman-runtime` | 3 | Observation gathering, pure selection, and application error translation |
+| `bpfman` | 5 | Typed Clap CLI and text/quiet listing presentation |
+
+The model and core library targets are `no_std`. Workspace tests enforce that normal edges
+point down through tiers, pure normal dependency closures are explicitly
+reviewed, and local dependencies (including build, dev, optional, and
+target-specific declarations) stay inside `rust/`. Pure crate features require
+review too. Architecture tests may use the standard library and JSON decoding;
+those development dependencies do not enter the shipped core.
+
+`ProgramType` is a data-free discriminator for parsing and filtering. Requests
+and heterogeneous domain records should use payload-bearing enums; their kind
+is derived from the variant rather than stored as a second discriminator.
+
+The architecture tests inspect the resolved dependency graph. They do not
+prove arbitrary dependency code is free of I/O: admission to the pure closure
+requires source review. `no_std` additionally keeps ordinary standard-library
+I/O APIs out of these libraries.
+
+## CLI parity harness
+
+The production Go CLI remains the default under test. Build the new CLI with
+`make rust-build`. Go can load programs into a runtime, then Rust can list the
+managed records without kernel observation (with access to the runtime files):
+
+```sh
+rust/target/debug/bpfman --runtime-dir /run/bpfman program list
+rust/target/debug/bpfman program list -q --type xdp,tcx --application demo
+```
+
+The runtime defaults to `/run/bpfman` and accepts `BPFMAN_RUNTIME_DIR`.
+Clap constructs a validated `RuntimeLayout` from the native OS path. The layout
+owns the default root and the `root()`, `lock_path()`, and `database_path()`
+accessors; runtime operations take `&RuntimeLayout`, not an arbitrary path.
+Construction rejects empty/relative roots and filesystem-root aliases, and normalises paths lexically like
+Go, preserving non-UTF-8 names without filesystem I/O or symlink resolution.
+It describes locations, not proof that runtime setup has happened.
+`--type` accepts repeated, comma-separated, case-insensitive types;
+`--program-type` and `-p` are aliases. Startup acquires `<runtime>/.lock` using
+the same `flock` protocol as Go, then initialises a missing
+`<runtime>/db/store.db` at Go schema version 2. A private runtime `setup` module
+owns this sequence. Under the lock, it observes the existing schema, asks the
+core's `plan_store_setup` whether to initialise/use/reject, applies that decision,
+and returns an opened read-only `Store`. The store requires a borrowed
+`WritePermit` to initialise. The core has no paths, connections, or I/O.
+Initialisation builds a complete temporary database and publishes it without
+overwriting existing state. New database files are owner-readable/writable.
+Existing databases are never repaired or migrated. Subsequent reads check the
+schema in a read-only transaction on that handle after releasing the writer lock. Production
+initialisation and test fixtures embed the Go migration SQL with `include_str!`.
+
+Direct file/directory removal calls are denied by the lint gate. Future runtime
+object removal belongs in a single private `bpfman-fs` module behind typed
+prepared-runtime operations, never a generic path-based public API. No object
+deletion API exists yet; descriptor-based confinement and the Go safety cases
+must be implemented and tested before adding one.
+The current layout and path-based setup are not a filesystem security boundary:
+confinement to a supplied root requires a verified directory-handle capability,
+including protection against symlinked ancestors and replacement races.
+
+`--lock-timeout` / `BPFMAN_LOCK_TIMEOUT` accepts durations such as `30s` or
+`500ms`; the default is 30 seconds and `0` waits indefinitely. It bounds only
+acquisition, never work under the lock. The lock adapter supports cooperative
+cancellation and owned inherited descriptors; CLI signal cancellation and
+namespace-helper process launching are not yet wired. No privileges are needed
+for a writable temporary runtime; `/run/bpfman` will normally require sudo.
+
+This first slice supports managed table and quiet-ID output only. Stored names
+are used directly (no kernel-name fallback). `--all`, JSON output, kernel link
+state filters, and lifecycle commands are not implemented and are rejected.
+Consequently the typed DSL's automatic JSON requests cannot yet use this CLI;
+the full behavioural corpus is a later acceptance gate. Once the relevant
+commands are ready, build the Go shell/test runner and select the new binary:
+
+```sh
+make run-e2e-scripts BPFMAN_UNDER_TEST="$PWD/rust/target/debug/bpfman"
+```
+
+This run-only target requires prebuilt fixtures and an appropriate privileged
+test environment. It sets both `BPFMAN_BIN` and `PATH` inside `sudo` so typed
+DSL commands, raw `exec bpfman`, and nested shells agree. The selected executable
+must be named `bpfman`. Keep Go and Rust suite runs separate on a clean runtime.
+
+`make test-e2e-selection` tests this wiring without sudo or kernel effects,
+using fixture executables and the real Make recipe. CLI process tests also
+exercise the real Rust executable. Behavioural parity is not yet claimed.
+
+Next, add complete records and kernel observations for JSON listing and get.
+Then build a validated tracepoint request and explicit attach machine with
+pending-record creation, kernel attachment, finalisation, and compensation.
+Use the Go fake kernel's stateful scenarios and the existing tracepoint scripts
+as complementary runtime and outside-in acceptance tests.

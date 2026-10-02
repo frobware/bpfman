@@ -1,0 +1,12 @@
+# Production paths remain strict; test assertions may explain expected failure.
+allow-expect-in-tests = true
+
+# Deletion of runtime objects must go through conceptual, typed operations in
+# bpfman-fs. No current operation needs a raw removal call. When introduced,
+# permit the syscall only inside its private, audited removal module.
+disallowed-methods = [
+    { path = "std::fs::remove_file", reason = "Use typed object removal through bpfman-fs; never delete caller-supplied paths." },
+    { path = "std::fs::remove_dir", reason = "Use typed object removal through bpfman-fs; never delete caller-supplied paths." },
+    { path = "std::fs::remove_dir_all", reason = "Recursive deletion belongs only in the private bpfman-fs removal boundary." },
+    { path = "rustix::fs::unlinkat", reason = "Descriptor-relative deletion belongs only in the private bpfman-fs removal boundary." },
+]

@@ -1,0 +1,20 @@
+[package]
+name = "bpfman-store-sqlite"
+description = "Initialisation and access to the Go bpfman SQLite schema"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bpfman-lock.workspace = true
+bpfman-model.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
