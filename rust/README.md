@@ -31,12 +31,12 @@ unchanged; SQLite still uses rusqlite's bundled library.
 
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
-| `bpfman-model` | 0 | Pure domain vocabulary, typed program kinds, and stored summaries |
-| `bpfman-core` | 1 | Pure listing selection and store-opening decisions; lifecycle machines will follow |
+| `bpfman-model` | 0 | Pure domain vocabulary, payload-bearing program specifications, and stored summaries |
+| `bpfman-core` | 1 | Pure listing/store policy and single-program load/compensation continuations |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
 | `bpfman-fs` | 2 | Runtime layout, opened-root capabilities, and root-bound write authority |
 | `bpfman-store-sqlite` | 3 | Go-compatible database creation and read-only queries through rusqlite |
-| `bpfman-runtime` | 4 | Observation gathering, pure selection, and application error translation |
+| `bpfman-runtime` | 4 | Observation gathering, typed compensation interpretation, and application error translation |
 | `bpfman` | 5 | Typed Clap CLI, load request parsing, and text/quiet listing presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -46,9 +46,17 @@ target-specific declarations) stay inside `rust/`. Pure crate features require
 review too. Architecture tests may use the standard library and JSON decoding;
 those development dependencies do not enter the shipped core.
 
-`ProgramType` is a data-free discriminator for parsing and filtering. Requests
-and heterogeneous domain records should use payload-bearing enums; their kind
-is derived from the variant rather than stored as a second discriminator.
+`ProgramType` is a data-free discriminator for parsing and filtering.
+`ProgramSpec` is the payload-bearing domain selection now shared by CLI parsing
+and load policy: Fentry/Fexit require a target and LSM requires a hook. Its kind
+is derived from the variant, never stored as a second discriminator. `Symbol`
+validates names but is explicitly **not** filesystem path authority. Native
+source paths, image credentials, presentation options and Clap remain outside
+the pure model.
+
+Domain validation errors use `thiserror` with default features disabled. The
+reviewed pure dependency closure includes its no-std support and host-side
+derive dependencies; the architecture gate rejects enabling its `std` feature.
 
 The architecture tests inspect the resolved dependency graph. They do not
 prove arbitrary dependency code is free of I/O: admission to the pure closure
@@ -153,8 +161,63 @@ must be named `bpfman`. Keep Go and Rust suite runs separate on a clean runtime.
 using fixture executables and the real Make recipe. CLI process tests also
 exercise the real Rust executable. Behavioural parity is not yet claimed.
 
-Next, add complete records and kernel observations for JSON listing and get.
-Then build a validated tracepoint request and explicit attach machine with
-pending-record creation, kernel attachment, finalisation, and compensation.
-Use the Go fake kernel's stateful scenarios and the existing tracepoint scripts
-as complementary runtime and outside-in acceptance tests.
+## Single-program load policy (not yet executable by the CLI)
+
+The first load-policy increment follows Go's `manager/load.go`: load/pin,
+publish bytecode, then atomically persist the program and map-set membership.
+There is no pending database row and no attachment in this operation.
+
+`LoadProgram` yields `PublishBytecode` only after reported kernel success;
+publication yields `PersistProgram`. Each transition consumes its continuation.
+Private fields and compile-fail tests prevent forging, reusing, or advancing a
+continuation out of order. These are policy types, **not** substitutes for the
+runtime writer capability or proof the interpreter actually performed I/O.
+
+Rollback is a small instruction set, not a generic VM: `RemoveBytecode`,
+`RemoveProgramPin`, and `RemoveMapPin`. Instructions carry opaque ownership
+receipts, not paths or integer IDs authorising deletion. Each map pin is a
+separate instruction. Bytecode cleanup handles owned staging as well as published
+artifacts. A partial forward failure returns its original cause and unresolved
+acquisitions in `EffectFailure`, so cleanup is not just an implicit adapter
+promise. Borrowed/shared pins never produce owned cleanup receipts.
+
+`LoadRollback::next` yields one instruction and a consuming continuation whose
+failure type accepts only that resource's receipt type. Success consumes the
+receipt in the adapter; failure returns it. Either result resumes the pass.
+Failed instructions are accumulated separately, never retried inline. Bytecode
+artifacts are removed first, then the program pin, then map pins in reverse
+acquisition order. These operations must be independently safe; dependent
+directory cleanup and shared-reference release are not in this initial vocabulary.
+
+The terminal `LoadFailure` retains the original error, the complete attempt
+history, and only unresolved receipts. Instruction IDs are local to the load
+and stable across retries, linking failures to remaining work. `retry()` starts
+an explicit new pass over unresolved work only; earlier errors remain in the
+history even after recovery. No receipt or error is cloned or dropped by policy.
+Persistence must report failure only when the transaction has not committed.
+After a successful commit, output-delivery failure must not roll back the load.
+
+`bpfman-runtime::LoadCleanup` is the narrow, injectable filesystem-effects
+interface. `compensate_load` drives the instructions through it, with a
+`RuntimeWriter` required both by the driver and every mutating method. The loop
+does not propagate cleanup errors early: it attempts every instruction in the
+pass even when every cleanup fails. The real implementation must delegate to
+`bpfman-fs` and validate receipt/root identity; no real pin/bytecode implementation
+exists yet. Raw unlink/remove operations remain forbidden outside the private
+filesystem boundary. SQLite auxiliary files remain rusqlite's responsibility.
+
+The runtime tests exercise the production compensation driver with an injected
+stateful fake under real writer scopes. They cover all 32 combinations of failure
+across five instructions, partial forward work, repeated total failure, retry
+history, wrong-runtime refusal, preservation of unrelated/shared state, and
+non-cloneable receipt/error drop counts. Real-filesystem confinement tests remain
+in `bpfman-fs`; the fake cannot prove confinement or kernel lifetime semantics.
+Real-kernel behaviour, crash recovery, and cancellation budgets are not yet
+implemented for loading. A hanging/panicking adapter or process termination can
+prevent progress; Rust cannot prevent dropping/forgetting a continuation.
+`must_use`, compile-fail tests and interpreter tests complement type-level ordering.
+
+Next, implement the owned filesystem artifacts and real kernel/store adapters
+for one tracepoint from a local ELF, without attachment. Reject unsupported
+options before effects. Then add the get/JSON-list/unload surface required to
+run the unchanged tracepoint DSL scripts; load-policy tests alone are not parity.

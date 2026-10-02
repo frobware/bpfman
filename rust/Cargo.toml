@@ -25,7 +25,8 @@ rustix = { version = "1", features = ["fs"] }
 humantime = "2"
 serde_json = "1"
 tempfile = "3"
-thiserror = "2"
+# Error derives work with core::error::Error; pure crates must not enable std.
+thiserror = { version = "2", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

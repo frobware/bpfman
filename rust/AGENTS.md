@@ -59,6 +59,21 @@ The architecture and compatibility goals are in
   Go interface. Prefer small interfaces near their consumers.
 - Adapters own atomic database operations and local resource ownership. Keep
   cross-adapter compensation explicit, retaining primary and rollback failures.
+- Model compensation as domain instructions carrying owned receipts, not raw
+  path-based unlink/remove commands. Use consuming forward continuations for
+  dependencies and a small explicit instruction set for independent cleanup.
+  Success consumes a receipt in the adapter; failure returns unresolved ownership
+  with its cause. Partial forward failures must also return unresolved resources.
+- Attempt every independent compensation once per pass, even after failures.
+  Never propagate a cleanup error early or retry one instruction inline. Retain
+  the original operation error and all attempt history. Retry only unresolved
+  work in a separate, caller-budgeted pass. Dependent cleanup requires explicit
+  prerequisites; it must not be treated as an independent removal instruction.
+- Keep injectable filesystem-effect traits narrow and near the interpreter.
+  Mutating methods require runtime writer authority and typed owned receipts;
+  real implementations delegate managed-object I/O to `bpfman-fs`. Fakes inject
+  failures at individual domain effects, not just whole composite cleanup steps.
+  They do not replace real-filesystem confinement or real-kernel tests.
 
 ## Rust, errors, and CLI
 

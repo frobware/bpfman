@@ -2,9 +2,7 @@ use std::collections::BTreeSet;
 
 use clap::error::ErrorKind;
 
-use super::{
-    Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, ProgramSelection, parse,
-};
+use super::{Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, parse};
 
 impl LoadCommand {
     pub(crate) fn execute(self) -> anyhow::Result<()> {
@@ -83,24 +81,6 @@ impl LoadOptions {
     }
 }
 
-impl ProgramSelection {
-    fn name(&self) -> &str {
-        match self {
-            Self::Xdp(name)
-            | Self::Tc(name)
-            | Self::Tcx(name)
-            | Self::Tracepoint(name)
-            | Self::Kprobe(name)
-            | Self::Kretprobe(name)
-            | Self::Uprobe(name)
-            | Self::Uretprobe(name)
-            | Self::Fentry { name, .. }
-            | Self::Fexit { name, .. }
-            | Self::Lsm { name, .. } => &name.0,
-        }
-    }
-}
-
 impl LoadRequest {
     fn not_implemented(self) -> anyhow::Result<()> {
         // Consume the complete typed request, keeping it private until the
@@ -142,6 +122,7 @@ impl LoadRequest {
 mod tests {
     use super::*;
     use crate::cli::{Cli, Command, ProgramCommand};
+    use bpfman_model::ProgramSpec;
     use clap::Parser;
 
     fn request(args: &[&str]) -> Result<LoadRequest, clap::Error> {
@@ -185,9 +166,9 @@ mod tests {
             "json",
         ])?;
         assert!(matches!(req.source, LoadSource::File(_)));
-        assert!(matches!(req.first, ProgramSelection::Xdp(_)));
+        assert!(matches!(req.first, ProgramSpec::Xdp(_)));
         assert!(
-            matches!(&req.remaining[1], ProgramSelection::Fentry { target, .. } if target.0 == "do_open")
+            matches!(&req.remaining[1], ProgramSpec::Fentry { target, .. } if target.as_str() == "do_open")
         );
         assert_eq!(req.metadata["k"], "a=b,c");
         assert_eq!(req.metadata["bpfman.io/application"], "demo");
@@ -210,7 +191,7 @@ mod tests {
             "--registry-auth",
             "dXNlcjpwYXNzOndvcmQ=",
         ])?;
-        assert!(matches!(req.first, ProgramSelection::Lsm { .. }));
+        assert!(matches!(req.first, ProgramSpec::Lsm { .. }));
         match req.source {
             LoadSource::Image {
                 pull_policy,

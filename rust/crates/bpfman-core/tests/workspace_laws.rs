@@ -17,8 +17,16 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman", 5),
 ];
 const PURE: &[&str] = &["bpfman-model", "bpfman-core"];
-// Empty until a third-party normal dependency is reviewed for purity.
-const PURE_EXTERNAL: &[&str] = &[];
+// thiserror's no_std runtime support plus its host-side derive dependency
+// closure. These expand core::fmt/core::error implementations, not effects.
+const PURE_EXTERNAL: &[&str] = &[
+    "thiserror",
+    "thiserror-impl",
+    "proc-macro2",
+    "quote",
+    "syn",
+    "unicode-ident",
+];
 
 fn metadata() -> &'static Value {
     static METADATA: OnceLock<Value> = OnceLock::new();
@@ -211,6 +219,18 @@ fn pure_closures_have_only_reviewed_dependencies_and_features() {
                 PURE.contains(&dep) || PURE_EXTERNAL.contains(&dep),
                 "{name} reaches unreviewed {dep}"
             );
+            if dep == "thiserror" {
+                let node = array(&meta["resolve"]["nodes"])
+                    .iter()
+                    .find(|node| node["id"] == *id)
+                    .expect("resolved thiserror node");
+                assert!(
+                    !array(&node["features"])
+                        .iter()
+                        .any(|feature| feature == "std"),
+                    "pure errors must not enable thiserror's std feature"
+                );
+            }
             pending.extend(normal_dependencies(meta, id));
         }
     }

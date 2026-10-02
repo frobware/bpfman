@@ -2,6 +2,7 @@
 
 use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf};
 
+use bpfman_model::{ProgramSpec, Symbol};
 use clap::{Args, Subcommand, ValueEnum};
 
 mod parse;
@@ -48,7 +49,7 @@ pub(crate) struct ImageArgs {
 struct LoadOptions {
     /// TYPE:NAME; fentry/fexit/lsm require TYPE:NAME:TARGET. Repeat or use commas.
     #[arg(long, required = true, value_delimiter = ',', value_name = "TYPE:NAME[:TARGET]", value_parser = parse::program)]
-    programs: Vec<ProgramSelection>,
+    programs: Vec<ProgramSpec>,
     /// KEY=VALUE metadata; repeatable. Last value for a key wins.
     #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = parse::metadata)]
     metadata: Vec<Metadata>,
@@ -65,26 +66,6 @@ struct LoadOptions {
     #[arg(short, long, value_enum, default_value_t = LoadOutput::Text)]
     output: LoadOutput,
 }
-
-// These are private input/request types, not a public domain API. When loading
-// gains a runtime consumer, promote the domain vocabulary independently of Clap.
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum ProgramSelection {
-    Xdp(Symbol),
-    Tc(Symbol),
-    Tcx(Symbol),
-    Tracepoint(Symbol),
-    Kprobe(Symbol),
-    Kretprobe(Symbol),
-    Uprobe(Symbol),
-    Uretprobe(Symbol),
-    Fentry { name: Symbol, target: Symbol },
-    Fexit { name: Symbol, target: Symbol },
-    Lsm { name: Symbol, hook: Symbol },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct Symbol(String);
 
 #[derive(Clone, Debug)]
 struct Metadata(String, String);
@@ -125,8 +106,8 @@ enum LoadSource {
 
 struct LoadRequest {
     source: LoadSource,
-    first: ProgramSelection,
-    remaining: Vec<ProgramSelection>,
+    first: ProgramSpec,
+    remaining: Vec<ProgramSpec>,
     metadata: BTreeMap<String, String>,
     globals: BTreeMap<String, Vec<u8>>,
     map_owner_id: Option<NonZeroU32>,

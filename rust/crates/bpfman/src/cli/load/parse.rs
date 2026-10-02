@@ -1,17 +1,13 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bpfman_model::ProgramType;
 
-use super::{Global, Metadata, ProgramSelection, RegistryAuth, Symbol};
+use super::{Global, Metadata, ProgramSpec, RegistryAuth, Symbol};
 
 fn symbol(value: &str) -> Result<Symbol, String> {
-    let value = value.trim();
-    if value.is_empty() || value.contains([':', '\0']) {
-        return Err("names and targets must be nonempty and contain no colon or NUL".into());
-    }
-    Ok(Symbol(value.to_owned()))
+    Symbol::try_from(value.trim()).map_err(|error| error.to_string())
 }
 
-pub(super) fn program(value: &str) -> Result<ProgramSelection, String> {
+pub(super) fn program(value: &str) -> Result<ProgramSpec, String> {
     let mut fields = value.trim().split(':');
     let kind = fields.next().unwrap_or_default().trim().parse::<ProgramType>()
         .map_err(|_| "unknown program type; use xdp, tc, tcx, tracepoint, kprobe, kretprobe, uprobe, uretprobe, fentry, fexit, or lsm".to_owned())?;
@@ -24,9 +20,9 @@ pub(super) fn program(value: &str) -> Result<ProgramSelection, String> {
         ProgramType::Fentry | ProgramType::Fexit | ProgramType::Lsm => {
             let target = symbol(target.ok_or("fentry/fexit/lsm require TYPE:NAME:TARGET")?)?;
             Ok(match kind {
-                ProgramType::Fentry => ProgramSelection::Fentry { name, target },
-                ProgramType::Fexit => ProgramSelection::Fexit { name, target },
-                _ => ProgramSelection::Lsm { name, hook: target },
+                ProgramType::Fentry => ProgramSpec::Fentry { name, target },
+                ProgramType::Fexit => ProgramSpec::Fexit { name, target },
+                _ => ProgramSpec::Lsm { name, hook: target },
             })
         }
         _ => {
@@ -34,14 +30,14 @@ pub(super) fn program(value: &str) -> Result<ProgramSelection, String> {
                 return Err("a load-time target is only valid for fentry, fexit, or lsm".into());
             }
             Ok(match kind {
-                ProgramType::Xdp => ProgramSelection::Xdp(name),
-                ProgramType::Tc => ProgramSelection::Tc(name),
-                ProgramType::Tcx => ProgramSelection::Tcx(name),
-                ProgramType::Tracepoint => ProgramSelection::Tracepoint(name),
-                ProgramType::Kprobe => ProgramSelection::Kprobe(name),
-                ProgramType::Kretprobe => ProgramSelection::Kretprobe(name),
-                ProgramType::Uprobe => ProgramSelection::Uprobe(name),
-                ProgramType::Uretprobe => ProgramSelection::Uretprobe(name),
+                ProgramType::Xdp => ProgramSpec::Xdp(name),
+                ProgramType::Tc => ProgramSpec::Tc(name),
+                ProgramType::Tcx => ProgramSpec::Tcx(name),
+                ProgramType::Tracepoint => ProgramSpec::Tracepoint(name),
+                ProgramType::Kprobe => ProgramSpec::Kprobe(name),
+                ProgramType::Kretprobe => ProgramSpec::Kretprobe(name),
+                ProgramType::Uprobe => ProgramSpec::Uprobe(name),
+                ProgramType::Uretprobe => ProgramSpec::Uretprobe(name),
                 // The enclosing match has already handled these variants.
                 // No panic/unreachable fallback: construct valid targeted values above.
                 ProgramType::Fentry | ProgramType::Fexit | ProgramType::Lsm => {

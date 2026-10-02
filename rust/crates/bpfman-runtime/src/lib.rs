@@ -1,10 +1,55 @@
 //! Application operations: gather observations, then evaluate pure policy.
 
+mod compensation;
 mod error;
 mod list;
 mod store;
 
+pub use compensation::compensate_load;
 pub use list::list_programs;
+
+/// Narrow filesystem-effects boundary for failed-load cleanup.
+///
+/// The real implementation must delegate managed-object removal to `bpfman-fs`;
+/// it must not implement path traversal/unlinking here. Tests may inject a fake.
+/// Associated receipt types identify owned resources, not arbitrary paths. The
+/// implementation must check receipts belong to the supplied writer's root and
+/// retain unresolved receipts on failure, including partially completed work.
+/// Methods must be safe to attempt independently and must not remove shared or
+/// pre-existing resources. Container cleanup needing prerequisites is outside
+/// this interface. No guarantees about destroying kernel objects are implied
+/// by successfully removing pins.
+pub trait LoadCleanup {
+    /// Non-cloneable program-pin ownership receipt.
+    type ProgramPin;
+    /// Non-cloneable ownership receipt for a single map pin.
+    type MapPin;
+    /// Non-cloneable ownership receipt for staged or published bytecode.
+    type Bytecode;
+    /// Application-classified error; concrete backend causes stay private.
+    type Error: std::error::Error;
+
+    /// Remove this owned bytecode artifact; success consumes the receipt.
+    fn remove_bytecode(
+        &mut self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        receipt: Self::Bytecode,
+    ) -> Result<(), bpfman_core::EffectFailure<Self::Bytecode, Self::Error>>;
+
+    /// Remove this owned program pin; success consumes the receipt.
+    fn remove_program_pin(
+        &mut self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        receipt: Self::ProgramPin,
+    ) -> Result<(), bpfman_core::EffectFailure<Self::ProgramPin, Self::Error>>;
+
+    /// Remove exactly this owned map pin, not a whole map directory.
+    fn remove_map_pin(
+        &mut self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        receipt: Self::MapPin,
+    ) -> Result<(), bpfman_core::EffectFailure<Self::MapPin, Self::Error>>;
+}
 
 /// Backend-independent application failure classification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

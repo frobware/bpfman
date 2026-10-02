@@ -234,14 +234,47 @@ decision logic rerun implicitly by the database layer.
 
 ### Ownership within an adapter, compensation across adapters
 
-RAII should prevent leaks inside one adapter operation. An uncommitted Aya
-program, link, file, or temporary directory should clean itself up if an
-intermediate step fails.
+Use RAII for local handles inside an adapter operation. Persistent pins and
+filesystem artifacts require explicit, fallible cleanup: dropping a temporary
+directory or a pinned handle is not proof that its cleanup succeeded.
 
 Rollback across kernel, bpffs, SQLite, and the bytecode store must remain
 explicit. `Drop` cannot communicate a cleanup error and must not hide a failed
 cross-subsystem compensation. The operation machine records acquired resources
 and emits rollback effects in the required order.
+
+For single-program loading, keep forward dependencies in consuming typed
+continuations and use a small compensation instruction set: remove owned
+bytecode, remove an owned program pin, and remove one owned map pin. This is
+VM-like routing of domain effects, not a bytecode VM, register file, or generic
+transaction framework. Raw unlink/rmdir operations remain private to
+`bpfman-fs`; atomic store operations remain inside the SQLite adapter.
+
+Instructions carry non-cloneable ownership receipts, not merely paths or IDs.
+The adapter consumes a receipt on successful removal and returns unresolved
+ownership with its error on failure. Partial forward failures likewise return
+unresolved acquisitions. Borrowed/shared resources do not confer deletion
+authority. Removing a pin does not imply destruction of the kernel object.
+
+The runtime drives a narrow `LoadCleanup` trait, injected for tests, under
+`RuntimeWriter` authority. Both the driver and each mutating method require the
+writer. A real implementation must delegate managed-object I/O to `bpfman-fs`
+and verify receipt/root identity. The fake exercises the same driver; it does
+not replace confinement or real-kernel testing. The initial implementation
+provides this trait, driver and fake, not real pin/bytecode removal yet.
+
+Every independent compensation is attempted once per pass. Failure records its
+error and unresolved receipt, then continues; it does not propagate early or
+retry inline. The terminal report retains the primary failure, all attempt
+history, and unresolved instructions with stable per-operation identities.
+Explicit retries run only unresolved work and preserve earlier error history.
+Successful receipts cannot re-enter the retry set through the report.
+
+Do not add dependent cleanup, such as removing a containing directory or
+releasing shared ownership, to this independent instruction set without
+modelling its prerequisites and blocked work. Cancellation budgets, process
+termination and crash reconciliation remain interpreter/recovery concerns;
+type-level sequencing alone cannot guarantee cleanup eventually succeeds.
 
 ## Proposed crate structure
 
@@ -627,8 +660,11 @@ general report type. Error strings are context, not identity; gRPC status and
 CLI exit mapping must use structured variants.
 
 An operation failure should preserve its primary error and separately record
-rollback failures. A rollback failure must not replace the error that caused
-the rollback, but it must be observable in structured logs and tests.
+rollback failures in the returned report, not just in logs. A rollback failure
+must not replace the error that caused rollback or skip unrelated cleanup.
+Clean compensation and unresolved residue must be distinguishable. After a
+successful commit, a reporting failure is not permission to compensate the
+committed operation.
 
 ## Compatibility contract
 
