@@ -14,6 +14,10 @@ The architecture and compatibility goals are in
   Make targets: `rust-build`, `rust-fmt`, `rust-fmt-fix`, `rust-lint`,
   `rust-test`, `rust-doc`, and `rust-check`. Every target must name
   `rust/Cargo.toml` explicitly. `rust-lock` refreshes only the new lockfile.
+- Run those targets through `direnv exec .`. If `.envrc` selects the Go-oriented
+  `.#static` shell, use `direnv exec . env NIX_LDFLAGS= make ...` for Rust: that
+  shell's added static-glibc search path breaks ordinary dynamic Rust binaries.
+  Do not change the user's `.envrc` or the Go build environment to work around it.
 - Before handing off implementation changes, run `make rust-check` and inspect
   its exit status. Investigate failures; never skip or weaken a test to get a
   green result. Run relevant real-kernel acceptance tests when the implemented

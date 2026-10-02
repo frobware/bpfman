@@ -3,7 +3,10 @@ use crate::{Error, ErrorKind};
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
     #[error("{operation}")]
-    Io { operation: &'static str, source: std::io::Error },
+    Io {
+        operation: &'static str,
+        source: std::io::Error,
+    },
     #[error("unsafe runtime layout: {0}")]
     Unsafe(&'static str),
     #[error(transparent)]
@@ -16,9 +19,13 @@ impl Error {
         match &self.cause {
             Failure::Unsafe(_) => ErrorKind::UnsafeLayout,
             Failure::Io { source, .. } => match source.raw_os_error() {
-                Some(code) if code == rustix::io::Errno::LOOP.raw_os_error()
-                    || code == rustix::io::Errno::XDEV.raw_os_error()
-                    || code == rustix::io::Errno::NOTDIR.raw_os_error() => ErrorKind::UnsafeLayout,
+                Some(code)
+                    if code == rustix::io::Errno::LOOP.raw_os_error()
+                        || code == rustix::io::Errno::XDEV.raw_os_error()
+                        || code == rustix::io::Errno::NOTDIR.raw_os_error() =>
+                {
+                    ErrorKind::UnsafeLayout
+                }
                 _ => ErrorKind::Unavailable,
             },
             Failure::Lock(error) => match error.kind() {
@@ -31,9 +38,15 @@ impl Error {
 }
 
 impl From<Failure> for Error {
-    fn from(cause: Failure) -> Self { Self { cause } }
+    fn from(cause: Failure) -> Self {
+        Self { cause }
+    }
 }
 
 pub(super) fn io(operation: &'static str, source: impl Into<std::io::Error>) -> Error {
-    Failure::Io { operation, source: source.into() }.into()
+    Failure::Io {
+        operation,
+        source: source.into(),
+    }
+    .into()
 }

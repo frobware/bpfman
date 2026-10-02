@@ -17,8 +17,9 @@ const MIGRATIONS: [(i64, &str); 2] = [
     ),
 ];
 
-/// Create a missing database and its parent directories using Go's schema.
+/// Create a missing database using Go's schema and a runtime-bound writer.
 ///
+/// The runtime capability has already prepared the parent directory.
 /// Existing paths are never replaced, repaired, or migrated. Creation happens
 /// in a temporary sibling file, published without clobbering any competing
 /// creator's database. Callers must still validate existing state when reading.
@@ -76,6 +77,21 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creation_reports_filesystem_errors_without_backend_types()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let parent = directory.path().join("not-a-directory");
+        std::fs::write(&parent, b"preserve me")?;
+        // Exercise the adapter's error translation directly. The public API
+        // cannot accept an arbitrary destination or an unrelated lock anymore.
+        let error =
+            Error::from(create(&parent.join("store.db"), &MIGRATIONS).expect_err("invalid parent"));
+        assert_eq!(error.kind(), crate::ErrorKind::Unavailable);
+        assert_eq!(std::fs::read(parent)?, b"preserve me");
+        Ok(())
+    }
 
     #[test]
     fn failed_schema_creation_is_not_published() -> Result<(), Box<dyn std::error::Error>> {

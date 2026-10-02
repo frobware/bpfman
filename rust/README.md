@@ -6,8 +6,8 @@ The repository-root Cargo workspace is legacy reference material. Always name
 this workspace's manifest explicitly:
 
 ```sh
-make rust-check
-cargo test --manifest-path rust/Cargo.toml --workspace --locked
+direnv exec . make rust-check
+direnv exec . make rust-test
 ```
 
 Rust 2024, minimum Rust 1.85. Build output and the lockfile belong to this
@@ -15,6 +15,17 @@ workspace. `make rust-build`, `rust-test`, `rust-fmt`, `rust-lint`, and `rust-do
 all select it explicitly. `rust-fmt` checks formatting; to apply formatting,
 run `make rust-fmt-fix`. `make rust-lock` refreshes the new lockfile.
 Development conventions live in [AGENTS.md](AGENTS.md).
+
+If `.envrc` selects the Go-oriented `.#static` shell, clear its extra linker
+flags for Rust commands only:
+
+```sh
+direnv exec . env NIX_LDFLAGS= make rust-check rust-build
+```
+
+That shell adds static glibc to the library search path, which can produce
+crashing executables when used for ordinary dynamic Rust builds. Leave `.envrc`
+unchanged; SQLite still uses rusqlite's bundled library.
 
 ## Implemented crate registry
 

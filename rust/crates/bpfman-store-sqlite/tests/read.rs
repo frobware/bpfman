@@ -1,5 +1,6 @@
 //! Read-only contract against the Go migration SQL, with no kernel dependency.
 
+use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_store_sqlite::{ErrorKind, Store, create_if_missing};
 
 #[path = "../../../tests/support/mod.rs"]
@@ -11,15 +12,14 @@ fn read_programs(
     Store::open(path)?.read_programs()
 }
 
-fn create_store(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempfile::tempdir()?;
-    bpfman_lock::with_write_lock(
-        &directory.path().join(".lock"),
+fn create_store(layout: &RuntimeLayout) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = RuntimeDirectory::open_or_create(layout.clone())?;
+    runtime.with_writer(
         bpfman_lock::AcquireOptions {
             timeout: std::time::Duration::from_secs(1),
             cancelled: None,
         },
-        |permit| create_if_missing(path, &permit),
+        |writer| create_if_missing(&writer),
     )??;
     Ok(())
 }
@@ -66,7 +66,7 @@ fn refuses_old_and_new_schemas_without_migrating() -> Result<(), Box<dyn std::er
         db.connection
             .execute("UPDATE goose_db_version SET version_id = ?1", [version])?;
         let before = std::fs::read(&db.path)?;
-        create_store(&db.path)?;
+        create_store(&RuntimeLayout::try_from(db.runtime.clone())?)?;
         assert_eq!(
             read_programs(&db.path)
                 .expect_err("unsupported schema")
@@ -81,11 +81,12 @@ fn refuses_old_and_new_schemas_without_migrating() -> Result<(), Box<dyn std::er
 #[test]
 fn creates_go_schema_and_history_idempotently() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("runtime/db/store.db");
-    create_store(&path)?;
+    let layout = RuntimeLayout::try_from(directory.path().join("runtime"))?;
+    let path = layout.database_path();
+    create_store(&layout)?;
     assert!(read_programs(&path)?.is_empty());
     let before = std::fs::read(&path)?;
-    create_store(&path)?;
+    create_store(&layout)?;
     assert_eq!(before, std::fs::read(&path)?);
     let actual = rusqlite::Connection::open(&path)?;
     let expected = support::database()?;
@@ -112,35 +113,15 @@ fn creates_go_schema_and_history_idempotently() -> Result<(), Box<dyn std::error
 #[test]
 fn existing_empty_or_corrupt_files_are_never_repaired() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
-    let path = directory.path().join("store.db");
+    let layout = RuntimeLayout::try_from(directory.path().join("runtime"))?;
+    let path = layout.database_path();
+    std::fs::create_dir_all(path.parent().ok_or("missing database parent")?)?;
     for bytes in [b"".as_slice(), b"not a SQLite database".as_slice()] {
         std::fs::write(&path, bytes)?;
-        create_store(&path)?;
+        create_store(&layout)?;
         assert!(read_programs(&path).is_err());
         assert_eq!(std::fs::read(&path)?, bytes);
     }
-    Ok(())
-}
-
-#[test]
-fn creation_reports_filesystem_errors_without_backend_types()
--> Result<(), Box<dyn std::error::Error>> {
-    let directory = tempfile::tempdir()?;
-    let parent = directory.path().join("not-a-directory");
-    std::fs::write(&parent, b"preserve me")?;
-    bpfman_lock::with_write_lock(
-        &directory.path().join(".lock"),
-        bpfman_lock::AcquireOptions {
-            timeout: std::time::Duration::from_secs(1),
-            cancelled: None,
-        },
-        |permit| {
-            let error =
-                create_if_missing(&parent.join("store.db"), &permit).expect_err("invalid parent");
-            assert_eq!(error.kind(), ErrorKind::Unavailable);
-        },
-    )?;
-    assert_eq!(std::fs::read(&parent)?, b"preserve me");
     Ok(())
 }
 
