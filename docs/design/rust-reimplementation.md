@@ -486,16 +486,25 @@ without an explicit unlock, preserves the lock until the last inherited copy
 is closed. The helper launcher will explicitly map its close-on-exec duplicate
 and set the existing `BPFMAN_WRITER_LOCK_FD` protocol variable.
 
-A private runtime `setup` module acquires the lock before observing the store.
-The pure `plan_store_setup` function receives the observed schema version (or
-absence) and the supported version, and decides initialise/use/reject. Failed
-observations are errors, never absence. The interpreter applies the decision
-within the same lock scope. This is a small explicit sequence, not a general
-setup state machine or a separate effect for every mkdir and SQL statement.
-Initialisation requires the permit, embeds the authoritative Go migration SQL,
+A private runtime `open_or_create_store` operation acquires the lock before
+observing the store. The pure `plan_store_open` function receives a
+`StoreObservation<T>` and the supported schema version, and returns a
+`StoreOpenPlan<T>`: create, use existing, or reject incompatible state. Existing
+observations carry the version and opaque interpreter-owned evidence. The
+interpreter supplies its opened store as that evidence; `UseExisting(store)`
+returns it directly, rather than consulting a separate optional handle.
+There is no representable "use existing, but no store" combination and no
+runtime fallback error for it. Rejection also returns the evidence so any
+resource cleanup remains in the interpreter, not pure policy. The core knows
+nothing about the evidence's representation and neither clones nor drops it.
+Failed observations are errors, never absence. The interpreter applies the
+decision within the same lock scope. This is a small explicit sequence, not a
+general startup state machine or a separate effect for every mkdir and SQL
+statement. The adapter's `create_if_missing` requires the permit, embeds the
+authoritative Go migration SQL,
 and publishes a complete database without overwriting existing state. Existing
-databases are not implicitly repaired or migrated. Setup returns an opened
-store handle, not a path to reopen later, and releases the lock. Ordinary
+databases are not implicitly repaired or migrated. `open_or_create_store`
+returns an opened store handle, not a path to reopen later, and releases the lock. Ordinary
 snapshot queries remain read-only and recheck the schema within their own
 transaction. CLI signal cancellation and namespace-helper launching are not
 implemented in this slice.
@@ -513,6 +522,15 @@ The current `RuntimeLayout` is configuration only: existing path-based lock and
 store opening do not yet provide this descriptor-enforced confinement. This
 must be addressed when introducing the prepared-runtime filesystem capability,
 before exposing managed-object mutation or deletion APIs.
+
+SQLite is a separate part of this confinement work. The bundled Unix VFS
+canonicalises filenames in `unixFullPathname`, following symlinks while
+assembling the path. Consequently, handing the default VFS a
+`/proc/self/fd/<directory>/store.db` pathname is not a substitute for a
+descriptor-relative storage adapter. Any confined implementation must cover
+the database and SQLite's journal, WAL, and shared-memory files, retaining Go
+locking and WAL interoperability. Preflight path checks or ignoring the WAL do
+not satisfy this requirement. No confined SQLite adapter is implemented yet.
 
 `bpfman-fs` owns the filesystem representation of runtime objects: both where
 they live and how they are created or removed. A future prepared-runtime

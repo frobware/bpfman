@@ -84,9 +84,13 @@ The architecture and compatibility goals are in
   layout and obtain paths through its methods. Layout construction performs no
   I/O and does not imply filesystem readiness. Add accessors as consumers need
   them, rather than scattering joins or preemptively exposing every Go path.
-- Setup observations and policy execution share one writer-lock scope. The core
-  decides initialise/use/reject from schema observations without knowing paths,
-  SQLite, or resource handles. Runtime setup returns an opened store, not a path
+- Store observations and policy execution share one writer-lock scope. The core
+  decides create/use/reject from schema observations without knowing paths,
+  SQLite, or resource handles. It may move opaque interpreter-owned evidence
+  into a decision, but must never inspect, duplicate, or drop that evidence.
+  Existing-store decisions carry that evidence rather than requiring a parallel
+  optional store and a runtime check for an impossible combination.
+  Runtime `open_or_create_store` returns an opened store, not a path
   for a subsequent reopen. Observation errors are never treated as absence.
 - Runtime-object creation/removal must use conceptual operations owned by
   `bpfman-fs`. Future prepared-runtime capabilities take typed object identities
@@ -106,10 +110,10 @@ The architecture and compatibility goals are in
   absolute path, with no parent/symlink escape or unintended mount traversal.
   Layout validation alone does not establish this. Implement and test that
   capability before introducing managed-object mutation/removal APIs.
-- Use the Go-created SQLite schema early. Runtime setup may initialise a missing
+- Use the Go-created SQLite schema early. Runtime may create a missing
   database under the Go-compatible writer lock; store reads remain read-only.
   Never repair or migrate existing state implicitly. Embed the actual Go
-  migration SQL with `include_str!` for initialisation and fixtures.
+  migration SQL with `include_str!` for creation and fixtures.
 - Mutating adapters require a borrowed, non-forgeable `WritePermit`. Acquire
   the same `<runtime>/.lock` flock as Go. Namespace helpers inherit a duplicated
   descriptor rather than acquiring by path. Close descriptors on scope exit;

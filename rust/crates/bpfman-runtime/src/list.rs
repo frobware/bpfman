@@ -6,15 +6,15 @@ use bpfman_core::ProgramFilter;
 use bpfman_fs::RuntimeLayout;
 use bpfman_model::StoredProgramSummary;
 
-use crate::{Error, error::store_error, setup};
+use crate::{Error, error::store_error, store::open_or_create_store};
 
-/// Initialise missing state, read managed summaries, and apply pure selection.
+/// Open or create the store, read managed summaries, and apply pure selection.
 pub fn list_programs(
     layout: &RuntimeLayout,
     filter: &ProgramFilter,
     lock_timeout: Duration,
 ) -> Result<Vec<StoredProgramSummary>, Error> {
-    let mut store = setup::store(layout, lock_timeout)?;
+    let mut store = open_or_create_store(layout, lock_timeout)?;
     let programs = store.read_programs().map_err(store_error)?;
     Ok(bpfman_core::list_programs(programs, filter))
 }

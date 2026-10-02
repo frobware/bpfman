@@ -35,7 +35,7 @@ pub(super) enum ProgramCommand {
     ///
     /// This initial reader does not observe the kernel. JSON, --all, and
     /// attachment-state filtering will arrive with kernel observation support.
-    /// A missing database is initialised under the runtime writer lock.
+    /// A missing database is created under the runtime writer lock.
     List(ListArgs),
 }
 

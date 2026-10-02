@@ -2,14 +2,14 @@
 
 mod error;
 mod list;
-mod setup;
+mod store;
 
 pub use list::list_programs;
 
 /// Backend-independent application failure classification.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
-    /// Runtime state could not be initialised, opened, or read.
+    /// Runtime state could not be created, opened, or read.
     Unavailable,
     /// The writer lock could not be acquired within its wait budget.
     TimedOut,

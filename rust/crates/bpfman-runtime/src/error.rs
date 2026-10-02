@@ -11,8 +11,6 @@ impl Error {
 pub(super) enum Failure {
     #[error("schema version mismatch: database is at {found}, expected {expected}")]
     IncompatibleSchema { found: i64, expected: i64 },
-    #[error("setup selected an existing store without an observation")]
-    MissingSetupObservation,
     #[error(transparent)]
     Store(bpfman_store_sqlite::Error),
     #[error(transparent)]

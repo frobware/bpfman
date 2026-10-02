@@ -22,14 +22,11 @@ const MIGRATIONS: [(i64, &str); 2] = [
 /// Existing paths are never replaced, repaired, or migrated. Creation happens
 /// in a temporary sibling file, published without clobbering any competing
 /// creator's database. Callers must still validate existing state when reading.
-pub fn initialise_if_missing(
-    path: &Path,
-    _permit: &bpfman_lock::WritePermit<'_>,
-) -> Result<(), Error> {
-    initialise(path, &MIGRATIONS).map_err(Error::from)
+pub fn create_if_missing(path: &Path, _permit: &bpfman_lock::WritePermit<'_>) -> Result<(), Error> {
+    create(path, &MIGRATIONS).map_err(Error::from)
 }
 
-fn initialise(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
+fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
     let filesystem = |source| Failure::Filesystem {
         path: path.to_owned(),
         source,
@@ -89,7 +86,7 @@ mod tests {
             (1, "CREATE TABLE partial (id INTEGER);"),
             (2, "invalid SQL;"),
         ];
-        assert!(initialise(&path, &migrations).is_err());
+        assert!(create(&path, &migrations).is_err());
         assert!(!path.exists());
         assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
         Ok(())

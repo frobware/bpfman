@@ -9,7 +9,7 @@ impl Store {
     ///
     /// `None` means the path was absent. Existing empty/corrupt databases,
     /// dangling symlinks, and permission errors are failures, not absence.
-    /// Call under the writer lock when this observation drives setup decisions.
+    /// Call under the writer lock when this observation drives opening decisions.
     pub fn inspect(path: &Path) -> Result<Option<Self>, Error> {
         match std::fs::symlink_metadata(path) {
             Ok(_) => Self::open_observed(path).map(Some).map_err(Error::from),
@@ -24,8 +24,8 @@ impl Store {
 
     /// Open a required existing store and validate the supported schema.
     ///
-    /// Never creates files or applies migrations. Runtime setup uses this to
-    /// check the postcondition after initialisation while still under the lock.
+    /// Never creates files or applies migrations. Runtime uses this to
+    /// check the postcondition after creation while still under the lock.
     pub fn open(path: &Path) -> Result<Self, Error> {
         let store = Self::open_observed(path)?;
         require_supported(store.schema_version)?;

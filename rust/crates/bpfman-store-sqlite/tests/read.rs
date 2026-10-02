@@ -1,6 +1,6 @@
 //! Read-only contract against the Go migration SQL, with no kernel dependency.
 
-use bpfman_store_sqlite::{ErrorKind, Store, initialise_if_missing};
+use bpfman_store_sqlite::{ErrorKind, Store, create_if_missing};
 
 #[path = "../../../tests/support/mod.rs"]
 mod support;
@@ -11,7 +11,7 @@ fn read_programs(
     Store::open(path)?.read_programs()
 }
 
-fn initialise(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+fn create_store(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     bpfman_lock::with_write_lock(
         &directory.path().join(".lock"),
@@ -19,7 +19,7 @@ fn initialise(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> 
             timeout: std::time::Duration::from_secs(1),
             cancelled: None,
         },
-        |permit| initialise_if_missing(path, &permit),
+        |permit| create_if_missing(path, &permit),
     )??;
     Ok(())
 }
@@ -66,7 +66,7 @@ fn refuses_old_and_new_schemas_without_migrating() -> Result<(), Box<dyn std::er
         db.connection
             .execute("UPDATE goose_db_version SET version_id = ?1", [version])?;
         let before = std::fs::read(&db.path)?;
-        initialise(&db.path)?;
+        create_store(&db.path)?;
         assert_eq!(
             read_programs(&db.path)
                 .expect_err("unsupported schema")
@@ -79,13 +79,13 @@ fn refuses_old_and_new_schemas_without_migrating() -> Result<(), Box<dyn std::er
 }
 
 #[test]
-fn initialises_go_schema_and_history_idempotently() -> Result<(), Box<dyn std::error::Error>> {
+fn creates_go_schema_and_history_idempotently() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("runtime/db/store.db");
-    initialise(&path)?;
+    create_store(&path)?;
     assert!(read_programs(&path)?.is_empty());
     let before = std::fs::read(&path)?;
-    initialise(&path)?;
+    create_store(&path)?;
     assert_eq!(before, std::fs::read(&path)?);
     let actual = rusqlite::Connection::open(&path)?;
     let expected = support::database()?;
@@ -115,7 +115,7 @@ fn existing_empty_or_corrupt_files_are_never_repaired() -> Result<(), Box<dyn st
     let path = directory.path().join("store.db");
     for bytes in [b"".as_slice(), b"not a SQLite database".as_slice()] {
         std::fs::write(&path, bytes)?;
-        initialise(&path)?;
+        create_store(&path)?;
         assert!(read_programs(&path).is_err());
         assert_eq!(std::fs::read(&path)?, bytes);
     }
@@ -123,7 +123,7 @@ fn existing_empty_or_corrupt_files_are_never_repaired() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn initialisation_reports_filesystem_errors_without_backend_types()
+fn creation_reports_filesystem_errors_without_backend_types()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let parent = directory.path().join("not-a-directory");
@@ -135,8 +135,8 @@ fn initialisation_reports_filesystem_errors_without_backend_types()
             cancelled: None,
         },
         |permit| {
-            let error = initialise_if_missing(&parent.join("store.db"), &permit)
-                .expect_err("invalid parent");
+            let error =
+                create_if_missing(&parent.join("store.db"), &permit).expect_err("invalid parent");
             assert_eq!(error.kind(), ErrorKind::Unavailable);
         },
     )?;
@@ -205,7 +205,7 @@ fn inspection_distinguishes_absence_from_incompatible_or_broken_state()
 }
 
 #[test]
-fn reads_recheck_schema_after_setup_observation() -> Result<(), Box<dyn std::error::Error>> {
+fn reads_recheck_schema_after_opening_observation() -> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     let mut store = Store::open(&db.path)?;
     assert_eq!(store.schema_version(), 2);

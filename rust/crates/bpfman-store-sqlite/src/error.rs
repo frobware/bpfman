@@ -3,7 +3,7 @@ use crate::SCHEMA_VERSION;
 /// Backend-independent classification of a store failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
-    /// State could not be initialised, opened, or read.
+    /// State could not be created, opened, or read.
     Unavailable,
     /// State is uninitialised or uses an unsupported schema.
     IncompatibleSchema,

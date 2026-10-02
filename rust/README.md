@@ -21,10 +21,10 @@ Development conventions live in [AGENTS.md](AGENTS.md).
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
 | `bpfman-model` | 0 | Pure domain vocabulary, typed program kinds, and stored summaries |
-| `bpfman-core` | 1 | Pure listing selection and store setup decisions; lifecycle machines will follow |
+| `bpfman-core` | 1 | Pure listing selection and store-opening decisions; lifecycle machines will follow |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
 | `bpfman-fs` | 2 | Validated runtime layout and centralised filesystem paths |
-| `bpfman-store-sqlite` | 2 | Go schema initialisation and read-only queries through rusqlite |
+| `bpfman-store-sqlite` | 2 | Go-compatible database creation and read-only queries through rusqlite |
 | `bpfman-runtime` | 3 | Observation gathering, pure selection, and application error translation |
 | `bpfman` | 5 | Typed Clap CLI and text/quiet listing presentation |
 
@@ -64,17 +64,22 @@ Go, preserving non-UTF-8 names without filesystem I/O or symlink resolution.
 It describes locations, not proof that runtime setup has happened.
 `--type` accepts repeated, comma-separated, case-insensitive types;
 `--program-type` and `-p` are aliases. Startup acquires `<runtime>/.lock` using
-the same `flock` protocol as Go, then initialises a missing
-`<runtime>/db/store.db` at Go schema version 2. A private runtime `setup` module
-owns this sequence. Under the lock, it observes the existing schema, asks the
-core's `plan_store_setup` whether to initialise/use/reject, applies that decision,
-and returns an opened read-only `Store`. The store requires a borrowed
-`WritePermit` to initialise. The core has no paths, connections, or I/O.
-Initialisation builds a complete temporary database and publishes it without
+the same `flock` protocol as Go, then creates a missing
+`<runtime>/db/store.db` at Go schema version 2. The private runtime operation
+`open_or_create_store` owns this sequence. Under the lock, it observes the
+existing schema, asks the core's `plan_store_open` whether to create/use/reject,
+applies that decision, and returns an opened read-only `Store`.
+`StoreObservation<T>` and `StoreOpenPlan<T>` retain opaque interpreter-owned
+evidence: `UseExisting` carries the opened store, so it cannot disagree with a
+separate optional handle. Rejection also returns the evidence, keeping resource
+cleanup in the interpreter. Policy neither inspects nor drops that evidence;
+the core has no filesystem or SQLite dependencies and performs no I/O.
+The adapter's `create_if_missing` requires a borrowed `WritePermit`.
+Creation builds a complete temporary database and publishes it without
 overwriting existing state. New database files are owner-readable/writable.
 Existing databases are never repaired or migrated. Subsequent reads check the
 schema in a read-only transaction on that handle after releasing the writer lock. Production
-initialisation and test fixtures embed the Go migration SQL with `include_str!`.
+creation and test fixtures embed the Go migration SQL with `include_str!`.
 
 Direct file/directory removal calls are denied by the lint gate. Future runtime
 object removal belongs in a single private `bpfman-fs` module behind typed
