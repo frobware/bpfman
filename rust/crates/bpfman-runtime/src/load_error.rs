@@ -1,10 +1,11 @@
-use crate::{LoadError, LoadErrorKind, compensation::compensate_load, load::FilesystemCleanup};
+use crate::{
+    LoadError, LoadErrorKind,
+    compensation::compensate_load,
+    load::{Effects, FailureFor, LoadEffects},
+};
 use bpfman_core::{CompensationKind, LoadFailure, LoadRollback};
 use bpfman_fs::{Bytecode, MapDirectory, MapPin, ProgramPin, RuntimeWriter};
 use std::fmt;
-
-pub(super) type Rollback = LoadRollback<ProgramPin, MapPin, Bytecode, LoadCause>;
-pub(super) type Report = LoadFailure<ProgramPin, MapPin, Bytecode, LoadCause>;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum LoadCause {
@@ -30,19 +31,19 @@ pub(super) enum LoadCause {
     Json(#[source] serde_json::Error),
 }
 
-pub(super) enum Failure {
-    BeforeEffects(LoadCause),
+pub(super) enum Failure<P = ProgramPin, M = MapPin, B = Bytecode, D = MapDirectory, E = LoadCause> {
+    NoOwnedArtifacts(E),
     Compensated {
-        report: Report,
-        directory: Option<MapDirectory>,
-        directory_errors: Vec<LoadCause>,
+        report: Box<LoadFailure<P, M, B, E>>,
+        directory: Option<D>,
+        directory_attempts: Vec<Result<(), E>>,
     },
 }
 
 impl From<LoadCause> for LoadError {
     fn from(cause: LoadCause) -> Self {
         Self {
-            failure: Box::new(Failure::BeforeEffects(cause)),
+            failure: Box::new(Failure::NoOwnedArtifacts(cause)),
         }
     }
 }
@@ -51,7 +52,7 @@ impl LoadError {
     /// Application failure category; backend errors are available only as causes.
     pub fn kind(&self) -> LoadErrorKind {
         let cause = match self.failure.as_ref() {
-            Failure::BeforeEffects(c) => c,
+            Failure::NoOwnedArtifacts(c) => c,
             Failure::Compensated { report, .. } => report.primary(),
         };
         match cause {
@@ -63,7 +64,7 @@ impl LoadError {
     /// Number of owned resources still requiring cleanup (including a blocked map directory).
     pub fn unresolved(&self) -> usize {
         match self.failure.as_ref() {
-            Failure::BeforeEffects(_) => 0,
+            Failure::NoOwnedArtifacts(_) => 0,
             Failure::Compensated {
                 report, directory, ..
             } => report.remaining().len() + usize::from(directory.is_some()),
@@ -72,44 +73,63 @@ impl LoadError {
     /// Explicitly retry unresolved cleanup once, retaining the original error
     /// and all prior attempts. The supplied writer must belong to the same root.
     pub fn retry_cleanup(self, writer: &RuntimeWriter<'_>) -> Self {
-        match *self.failure {
-            Failure::BeforeEffects(_) => self,
-            Failure::Compensated {
-                report,
-                directory,
-                directory_errors,
-            } => finish(writer, report.retry(), directory, directory_errors),
+        Self {
+            failure: Box::new(retry(writer, &mut Effects, *self.failure)),
         }
     }
 }
 
-pub(super) fn finish(
+pub(super) fn retry<F: LoadEffects>(
     writer: &RuntimeWriter<'_>,
-    rollback: Rollback,
-    mut directory: Option<MapDirectory>,
-    mut directory_errors: Vec<LoadCause>,
-) -> LoadError {
-    let report = compensate_load(writer, &mut FilesystemCleanup, rollback);
-    // Explicit prerequisite: no unresolved map-pin instructions. Container
-    // cleanup is never an independent recursive-removal instruction.
+    effects: &mut F,
+    failure: FailureFor<F>,
+) -> FailureFor<F> {
+    match failure {
+        Failure::NoOwnedArtifacts(_) => failure,
+        Failure::Compensated {
+            report,
+            directory,
+            directory_attempts,
+        } => finish(
+            writer,
+            effects,
+            report.retry(),
+            directory,
+            directory_attempts,
+        ),
+    }
+}
+
+pub(super) fn finish<F: LoadEffects>(
+    writer: &RuntimeWriter<'_>,
+    effects: &mut F,
+    rollback: LoadRollback<F::ProgramPin, F::MapPin, F::Bytecode, F::Error>,
+    mut directory: Option<F::MapDirectory>,
+    mut directory_attempts: Vec<Result<(), F::Error>>,
+) -> FailureFor<F> {
+    let report = compensate_load(writer, effects, rollback);
+    // Explicit prerequisite: no unresolved map-pin instructions. A blocked
+    // container is retained without claiming that its removal was attempted.
     let maps_pending = report
         .remaining()
         .iter()
         .any(|p| p.instruction().kind() == CompensationKind::MapPin);
     if !maps_pending {
         if let Some(owned) = directory.take() {
-            if let Err(failure) = writer.remove_empty_map_directory(owned) {
-                directory = Some(failure.remaining);
-                directory_errors.push(failure.cause.into());
-            }
+            let outcome = match effects.remove_map_directory(writer, owned) {
+                Ok(()) => Ok(()),
+                Err(failure) => {
+                    directory = Some(failure.remaining);
+                    Err(failure.cause)
+                }
+            };
+            directory_attempts.push(outcome);
         }
     }
-    LoadError {
-        failure: Box::new(Failure::Compensated {
-            report,
-            directory,
-            directory_errors,
-        }),
+    Failure::Compensated {
+        report: Box::new(report),
+        directory,
+        directory_attempts,
     }
 }
 
@@ -123,7 +143,7 @@ impl fmt::Display for LoadError {
         write!(f, "load local tracepoint")?;
         if let Failure::Compensated {
             report,
-            directory_errors,
+            directory_attempts,
             ..
         } = self.failure.as_ref()
         {
@@ -134,7 +154,10 @@ impl fmt::Display for LoadError {
                     write_chain(f, cause)?;
                 }
             }
-            for cause in directory_errors {
+            for cause in directory_attempts
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+            {
                 write!(f, "; map-directory cleanup: ")?;
                 write_chain(f, cause)?;
             }
@@ -145,7 +168,7 @@ impl fmt::Display for LoadError {
 impl std::error::Error for LoadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(match self.failure.as_ref() {
-            Failure::BeforeEffects(c) => c,
+            Failure::NoOwnedArtifacts(c) => c,
             Failure::Compensated { report, .. } => report.primary(),
         })
     }

@@ -1036,6 +1036,11 @@ rust-build:
 rust-test:
 	cargo test --manifest-path $(RUST_MANIFEST) --workspace --locked
 
+# Exercise the same load interpreter used by the CLI, with injected effects.
+.PHONY: rust-test-load-compensation
+rust-test-load-compensation:
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-runtime --locked --lib load::tests:: -- --nocapture --test-threads=1
+
 rust-fmt:
 	cargo fmt --manifest-path $(RUST_MANIFEST) --all -- --check
 

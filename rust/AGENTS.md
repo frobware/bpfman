@@ -157,6 +157,11 @@ The architecture and compatibility goals are in
   interpreter should track IDs, programs, links, pins, and dispatcher changes,
   reject invalid operations, and inject failures at explicit boundaries.
   Pair pure transition tests with runtime/fake tests for ordering and residue.
+- Fault-injection tests for loading must enter the production forward interpreter
+  through its private effect boundary, then exercise its production compensation
+  finaliser. A test-only forward plan is not evidence that CLI orchestration
+  retains partial acquisitions. Cross forward and cleanup failures; assert
+  residue, blocked dependent cleanup, all outcomes, and explicit retry history.
 - Keep real-kernel tests for guarantees the fake cannot establish: verifier,
   syscalls, namespaces, traffic, and kernel lifetime semantics.
 - Reuse the unchanged `e2e/scripts/*.bpfman` corpus via the Go shell runner.

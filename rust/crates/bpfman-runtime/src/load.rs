@@ -1,13 +1,22 @@
 use crate::{
-    LoadCleanup, LoadError,
+    LoadError,
     kernel::LocalObject,
-    load_error::{LoadCause, finish},
+    load_error::{Failure, LoadCause, finish},
 };
 use bpfman_core::{EffectFailure, KernelAcquisitions, LoadProgram};
-use bpfman_fs::{Bytecode, MapPin, ProgramPin, RuntimeDirectory, RuntimeLayout, RuntimeWriter};
+use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::{ProgramSpec, StoredProgramSummary, Symbol};
 use std::{collections::BTreeMap, path::Path, time::Duration};
+
+mod effects;
+mod real;
+#[cfg(test)]
+mod tests;
+
+use effects::Inputs;
+pub(super) use effects::{FailureFor, LoadEffects};
+pub(super) use real::Effects;
 
 /// Load one tracepoint from a local ELF, without attaching it. The exact bytes
 /// parsed before runtime setup are both loaded and published. Private maps are
@@ -37,34 +46,49 @@ pub fn load_tracepoint(
                 timeout,
                 cancelled: None,
             },
-            |writer| load(&writer, &object, source_text, name, metadata, &created_at),
+            |writer| {
+                run(
+                    &writer,
+                    &mut Effects,
+                    &Inputs {
+                        object: &object,
+                        source: source_text,
+                        name: &name,
+                        metadata,
+                        created_at: &created_at,
+                    },
+                )
+                .map_err(|failure| LoadError {
+                    failure: Box::new(failure),
+                })
+            },
         )
         .map_err(LoadCause::from)?
 }
 
-fn load(
+// This is the only forward interpreter, used by the CLI and fault-injection
+// tests alike. The policy continuations and compensation driver are unchanged.
+fn run<F: LoadEffects>(
     writer: &RuntimeWriter<'_>,
-    object: &LocalObject,
-    source: &str,
-    name: Symbol,
-    metadata: &BTreeMap<String, String>,
-    created_at: &str,
-) -> Result<StoredProgramSummary, LoadError> {
-    // Observe/open once under the same writer scope as all later mutations.
-    let _store = crate::store::open_store(writer).map_err(LoadCause::Open)?;
-    let filesystem = writer.prepare_load().map_err(LoadCause::from)?;
-    let operation = LoadProgram::new(ProgramSpec::Tracepoint(name.clone()));
-    let mut bpf = object.load(&name)?;
-    let program = bpf
-        .program_mut(name.as_str())
-        .ok_or_else(|| LoadCause::Invalid("missing loaded program".into()))?;
-    let program_pin = match filesystem.pin_program(writer, program) {
+    effects: &mut F,
+    input: &Inputs<'_>,
+) -> Result<StoredProgramSummary, FailureFor<F>> {
+    let _store = effects
+        .open_store(writer)
+        .map_err(Failure::NoOwnedArtifacts)?;
+    let filesystem = effects.prepare(writer).map_err(Failure::NoOwnedArtifacts)?;
+    let operation = LoadProgram::new(ProgramSpec::Tracepoint(input.name.clone()));
+    let mut kernel = effects
+        .load_kernel(writer, input)
+        .map_err(Failure::NoOwnedArtifacts)?;
+    let program_pin = match effects.pin_program(writer, &filesystem, &mut kernel, input.name) {
         Ok(pin) => pin,
         Err(failure) => {
             return Err(finish(
                 writer,
+                effects,
                 operation.failed(EffectFailure {
-                    cause: failure.cause.into(),
+                    cause: failure.cause,
                     remaining: KernelAcquisitions {
                         program_pin: failure.remaining,
                         map_pins: vec![],
@@ -75,14 +99,15 @@ fn load(
             ));
         }
     };
-    let id = program_pin.id();
-    let directory = match filesystem.create_map_directory(writer, id) {
+    let id = F::program_id(&program_pin);
+    let directory = match effects.create_map_directory(writer, &filesystem, id) {
         Ok(directory) => directory,
         Err(failure) => {
             return Err(finish(
                 writer,
+                effects,
                 operation.failed(EffectFailure {
-                    cause: failure.cause.into(),
+                    cause: failure.cause,
                     remaining: KernelAcquisitions {
                         program_pin: Some(program_pin),
                         map_pins: vec![],
@@ -94,24 +119,14 @@ fn load(
         }
     };
     let mut pins = Vec::new();
-    for map_name in &object.maps {
-        let result = bpf
-            .map(map_name)
-            .ok_or_else(|| EffectFailure {
-                cause: LoadCause::Invalid(format!("missing loaded map {map_name}")),
-                remaining: None,
-            })
-            .and_then(|map| {
-                directory
-                    .pin_map(writer, map_name, map)
-                    .map_err(map_failure)
-            });
-        match result {
+    for name in &input.object.maps {
+        match effects.pin_map(writer, &kernel, &directory, name) {
             Ok(pin) => pins.push(pin),
             Err(failure) => {
                 pins.extend(failure.remaining);
                 return Err(finish(
                     writer,
+                    effects,
                     operation.failed(EffectFailure {
                         cause: failure.cause,
                         remaining: KernelAcquisitions {
@@ -126,24 +141,12 @@ fn load(
         }
     }
     let publish = operation.loaded(program_pin, pins);
-    let provenance = serde_json::to_vec_pretty(&serde_json::json!({
-        "version": 1, "program_id": id.get(), "program_name": name.as_str(),
-        "source": source, "source_kind": "file", "loaded_at": created_at,
-    }));
-    let bytecode = match provenance
-        .map_err(|cause| EffectFailure {
-            cause: LoadCause::Json(cause),
-            remaining: Vec::new(),
-        })
-        .and_then(|provenance| {
-            writer
-                .publish_bytecode(id, &object.bytes, &provenance)
-                .map_err(map_failure)
-        }) {
+    let bytecode = match effects.publish(writer, id, input) {
         Ok(bytecode) => bytecode,
         Err(failure) => {
             return Err(finish(
                 writer,
+                effects,
                 publish.failed(failure),
                 Some(directory),
                 vec![],
@@ -151,61 +154,14 @@ fn load(
         }
     };
     let persist = publish.published(bytecode);
-    match bpfman_store_sqlite::persist_tracepoint(
-        writer,
-        bpfman_store_sqlite::TracepointRecord {
-            id,
-            name: &name,
-            source,
-            license: &object.license,
-            created_at,
-            metadata,
-        },
-    ) {
+    match effects.persist(writer, id, input) {
         Ok(stored) => Ok(persist.committed(stored).stored),
         Err(cause) => Err(finish(
             writer,
-            persist.failed(cause.into()),
+            effects,
+            persist.failed(cause),
             Some(directory),
             vec![],
         )),
-    }
-    // Dropping Aya descriptors never removes pins. On commit the store becomes
-    // their owner; on failure receipts retain any unresolved pinned resources.
-}
-
-fn map_failure<T>(failure: EffectFailure<T, bpfman_fs::Error>) -> EffectFailure<T, LoadCause> {
-    EffectFailure {
-        cause: failure.cause.into(),
-        remaining: failure.remaining,
-    }
-}
-
-pub(super) struct FilesystemCleanup;
-impl LoadCleanup for FilesystemCleanup {
-    type ProgramPin = ProgramPin;
-    type MapPin = MapPin;
-    type Bytecode = Bytecode;
-    type Error = LoadCause;
-    fn remove_bytecode(
-        &mut self,
-        writer: &RuntimeWriter<'_>,
-        receipt: Bytecode,
-    ) -> Result<(), EffectFailure<Bytecode, LoadCause>> {
-        writer.remove_bytecode(receipt).map_err(map_failure)
-    }
-    fn remove_program_pin(
-        &mut self,
-        writer: &RuntimeWriter<'_>,
-        receipt: ProgramPin,
-    ) -> Result<(), EffectFailure<ProgramPin, LoadCause>> {
-        writer.remove_program_pin(receipt).map_err(map_failure)
-    }
-    fn remove_map_pin(
-        &mut self,
-        writer: &RuntimeWriter<'_>,
-        receipt: MapPin,
-    ) -> Result<(), EffectFailure<MapPin, LoadCause>> {
-        writer.remove_map_pin(receipt).map_err(map_failure)
     }
 }

@@ -227,6 +227,39 @@ Crash recovery and cancellation budgets are not yet implemented for loading. A h
 prevent progress; Rust cannot prevent dropping/forgetting a continuation.
 `must_use`, compile-fail tests and interpreter tests complement type-level ordering.
 
+The load interpreter also has a private `LoadEffects` substitution boundary.
+The CLI and unit tests call the same forward orchestration and compensation
+finaliser; the fake does not implement a parallel load plan. Individual effects
+cover store opening, filesystem preparation, kernel loading, program pinning,
+map-directory creation, each map pin, publication, persistence, and cleanup.
+Every mutating effect borrows the scoped runtime writer. These are internal
+interfaces, with no fault-injection flags or environment hooks in the CLI.
+
+The interpreter tests cross 19 forward failure points with all 64 subsets of
+six cleanup failures (1,216 scenarios). Failures before and after acquisition
+exercise partial program/map pins, map directories, staging, publication, and
+uncommitted persistence. Assertions check exact effect order, preserved
+unrelated/shared state, resource residue against unresolved receipts, no visible
+partial database state, stable instruction IDs, and exactly-once receipt/error
+drops. Explicit retries attempt unresolved work only and preserve all earlier
+outcomes, including successes. Separate tests cover repeated total failure,
+wrong-runtime retries, empty map sets, successful commit with hostile cleanup,
+and blocked map-directory removal followed by failing and successful retries.
+Map-directory attempt history now records successes as well as failures;
+blocked work is retained without recording an attempt that never happened.
+
+Run these tests and a readable failure/retry trace without root:
+
+```sh
+direnv exec . make rust-test-load-compensation
+```
+
+The trace injects a pre-commit load failure plus failed program-pin and second
+map-pin removals. Bytecode and the other map pins are cleaned up, the map
+directory stays blocked, and an explicit second pass removes only the retained
+pins and directory. The fake tests prove orchestration contracts; filesystem
+confinement and actual kernel lifetime remain separate adapter/kernel gates.
+
 The executable slice reads a regular ELF once, validates its selected section
 and maps, then uses those same bytes for Aya loading and bytecode publication.
 It holds one Go-compatible writer scope through runtime preparation, program
