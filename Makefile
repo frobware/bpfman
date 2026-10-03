@@ -969,6 +969,7 @@ endif
 # because the value gets abspath'd at the call site.
 E2E_SCRIPTS_FORWARD_VARS := \
 	BPFMAN_RUNTIME_DIR \
+	BPFMAN_STORE \
 	BPFMAN_CONFIG \
 	BPFMAN_E2E_BYTECODE_SOURCE \
 	BPFMAN_E2E_IMAGE_REGISTRY \

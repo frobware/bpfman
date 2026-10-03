@@ -1,4 +1,5 @@
 //! The same live lifecycle scenarios can run against any conforming store.
+
 use super::{
     faults::{Faults, Point},
     support::*,
@@ -6,6 +7,7 @@ use super::{
 use bpfman_model::{ObservedProgram, Symbol};
 use bpfman_store::{CommitLoad, OpenStore, UnloadStore};
 use std::{collections::BTreeMap, fs};
+
 fn load<S: OpenStore + CommitLoad>(
     store: &S,
     c: &Context,
@@ -19,6 +21,7 @@ fn load<S: OpenStore + CommitLoad>(
         TIMEOUT,
     )
 }
+
 pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore>(backend: S) {
     let c = Context::new();
     let store = Faults::new(backend);
@@ -26,12 +29,14 @@ pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore>(backend: S) {
     let pid = load(&store, &c).expect("load").record.id;
     c.present(pid);
     c.present(unrelated);
+
     // Failed scope observation precedes every destructive effect.
     store.set(Some(Point::ObserveUnload));
     assert!(bpfman_runtime::unload_tracepoint(&store, &c.layout, pid, TIMEOUT).is_err());
     assert_eq!(store.count(Point::DeleteProgram), 0);
     c.present(pid);
     c.present(unrelated);
+
     // Record deletion fails after unpinning. Independent bytecode cleanup runs.
     store.set(Some(Point::DeleteProgram));
     let error = bpfman_runtime::unload_tracepoint(&store, &c.layout, pid, TIMEOUT)

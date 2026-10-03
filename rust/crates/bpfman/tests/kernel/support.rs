@@ -12,24 +12,34 @@ use std::{
 pub(super) const TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const NAME: &str = "tracepoint_kill_recorder";
 pub(super) const SELECTION: &str = "tracepoint:tracepoint_kill_recorder";
+
 pub(super) fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
         .canonicalize()
         .expect("repository")
 }
+
 pub(super) fn fixture(name: &str) -> PathBuf {
     repository().join("e2e/testdata/bpf").join(name)
 }
+
 pub(super) fn rust() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bpfman"))
 }
+
 pub(super) struct Context {
     _temporary: tempfile::TempDir,
     pub(super) layout: RuntimeLayout,
+    store: &'static str,
 }
+
 impl Context {
     pub(super) fn new() -> Self {
+        Self::with_store("sqlite")
+    }
+
+    pub(super) fn with_store(store: &'static str) -> Self {
         assert_ne!(
             fs::read_link("/proc/self/ns/mnt").expect("self namespace"),
             fs::read_link("/proc/1/ns/mnt").expect("host namespace"),
@@ -40,8 +50,10 @@ impl Context {
         Self {
             _temporary: temporary,
             layout,
+            store,
         }
     }
+
     pub(super) fn writer<T>(&self, run: impl FnOnce(&RuntimeWriter<'_>) -> T) -> T {
         RuntimeDirectory::open_or_create(self.layout.clone())
             .expect("runtime")
@@ -54,6 +66,7 @@ impl Context {
             )
             .expect("writer")
     }
+
     pub(super) fn command(&self, binary: &Path, args: &[&str]) -> Command {
         let mut command = Command::new("timeout");
         command
@@ -62,10 +75,12 @@ impl Context {
             .arg("--runtime-dir")
             .arg(self.layout.root())
             .args(args)
+            .env("BPFMAN_STORE", self.store)
             .env_remove("BPFMAN_RUNTIME_DIR")
             .env_remove("BPFMAN_LOCK_TIMEOUT");
         command
     }
+
     pub(super) fn run(&self, binary: &Path, args: &[&str], success: bool) -> Output {
         let output = self.command(binary, args).output().expect("CLI process");
         assert_eq!(
@@ -80,9 +95,11 @@ impl Context {
         }
         output
     }
+
     pub(super) fn json(&self, binary: &Path, args: &[&str]) -> Value {
         serde_json::from_slice(&self.run(binary, args, true).stdout).expect("JSON")
     }
+
     pub(super) fn load_cli(&self, binary: &Path) -> Value {
         self.json(
             binary,
@@ -103,6 +120,7 @@ impl Context {
         )["programs"][0]
             .clone()
     }
+
     pub(super) fn present(&self, id: NonZeroU32) {
         assert!(self.layout.program_pin_path(id).exists());
         assert!(
@@ -113,6 +131,7 @@ impl Context {
         );
         assert!(self.layout.bytecode_path(id).exists());
     }
+
     pub(super) fn absent(&self, id: NonZeroU32) {
         assert!(!self.layout.program_pin_path(id).exists());
         assert!(!self.layout.map_directory_path(id).exists());
@@ -125,6 +144,7 @@ impl Context {
                 .exists()
         );
     }
+
     pub(super) fn no_artifacts(&self) {
         let root = self.layout.root();
         assert!(
@@ -137,9 +157,11 @@ impl Context {
         }
     }
 }
+
 impl Drop for Context {
     fn drop(&mut self) {
         let mount = self.layout.root().join("fs");
+
         // Unmount before TempDir cleanup, including during assertion unwinding.
         if fs::metadata(&mount)
             .ok()
@@ -153,6 +175,7 @@ impl Drop for Context {
         }
     }
 }
+
 pub(super) fn names(path: &Path) -> Vec<String> {
     let entries = match fs::read_dir(path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
@@ -164,6 +187,7 @@ pub(super) fn names(path: &Path) -> Vec<String> {
     names.sort();
     names
 }
+
 pub(super) fn id(value: &Value) -> NonZeroU32 {
     NonZeroU32::new(
         value["record"]["program_id"]

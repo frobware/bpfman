@@ -1,5 +1,6 @@
 //! SQLite-specific interchange with Go. Sharing persisted state with Go is
 //! separate from the behavioural contract required of every store backend.
+
 use super::support::*;
 use std::path::PathBuf;
 

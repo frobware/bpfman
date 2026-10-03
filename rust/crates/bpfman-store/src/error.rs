@@ -10,6 +10,7 @@ pub enum ErrorKind {
     /// The operation is outside the supported domain scope.
     Unsupported,
 }
+
 /// Classified failure retaining private backend diagnostics.
 #[derive(Debug, thiserror::Error)]
 #[error("access program store")]
@@ -18,6 +19,7 @@ pub struct Error {
     #[source]
     source: Box<dyn std::error::Error + Send + Sync>,
 }
+
 impl Error {
     /// Attach a private diagnostic cause to a portable category.
     pub fn new(kind: ErrorKind, source: impl std::error::Error + Send + Sync + 'static) -> Self {
@@ -26,6 +28,7 @@ impl Error {
             source: Box::new(source),
         }
     }
+
     /// Category callers may act on without strings or backend downcasts.
     pub fn kind(&self) -> ErrorKind {
         self.kind

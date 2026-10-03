@@ -1,5 +1,6 @@
 //! An independent, in-memory persistence implementation used only in tests.
 #![allow(clippy::expect_used)]
+
 use crate::sample;
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeIdentity, RuntimeWriter};
@@ -19,6 +20,7 @@ pub(crate) struct Memory {
     root: RuntimeIdentity,
     state: Arc<Mutex<State>>,
 }
+
 struct State {
     program: Option<StoredProgram>,
     map_set: bool,
@@ -26,16 +28,21 @@ struct State {
     calls: Vec<&'static str>,
     faults: BTreeMap<&'static str, ErrorKind>,
 }
+
 pub(crate) struct ProgramReceipt(Receipt);
+
 pub(crate) struct MapSetReceipt(Receipt);
+
 struct Receipt {
     root: RuntimeIdentity,
     owner: Arc<Mutex<State>>,
     generation: u64,
 }
+
 fn error(kind: ErrorKind, message: &'static str) -> Error {
     Error::new(kind, std::io::Error::other(message))
 }
+
 fn summary(p: &StoredProgram) -> StoredProgramSummary {
     StoredProgramSummary::new(
         p.id,
@@ -45,6 +52,7 @@ fn summary(p: &StoredProgram) -> StoredProgramSummary {
         p.links.clone(),
     )
 }
+
 impl State {
     fn enter(&mut self, call: &'static str) -> Result<(), Error> {
         self.calls.push(call);
@@ -54,6 +62,7 @@ impl State {
         }
     }
 }
+
 impl Memory {
     pub(crate) fn new(writer: &RuntimeWriter<'_>) -> Self {
         Self {
@@ -67,25 +76,31 @@ impl Memory {
             })),
         }
     }
+
     pub(crate) fn fail(&self, call: &'static str, kind: ErrorKind) {
         self.state.lock().expect("state").faults.insert(call, kind);
     }
+
     pub(crate) fn clear_faults(&self) {
         self.state.lock().expect("state").faults.clear();
     }
+
     pub(crate) fn calls(&self) -> Vec<&'static str> {
         self.state.lock().expect("state").calls.clone()
     }
+
     pub(crate) fn residue(&self) -> (bool, bool) {
         let s = self.state.lock().expect("state");
         (s.program.is_some(), s.map_set)
     }
+
     fn authority(&self, writer: &RuntimeWriter<'_>) -> Result<(), Error> {
         if writer.identity().expect("runtime identity") != self.root {
             return Err(error(ErrorKind::InvalidData, "wrong runtime"));
         }
         Ok(())
     }
+
     fn receipt(&self, generation: u64) -> Receipt {
         Receipt {
             root: self.root,
@@ -93,6 +108,7 @@ impl Memory {
             generation,
         }
     }
+
     fn validate(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -109,26 +125,31 @@ impl Memory {
         Ok(())
     }
 }
+
 impl OpenStore for Memory {
     type Reader = Self;
+
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self, Error> {
         self.authority(writer)?;
         self.state.lock().expect("state").enter("open")?;
         Ok(self.clone())
     }
 }
+
 impl ProgramReader for Memory {
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         let mut s = self.state.lock().expect("state");
         s.enter("summaries")?;
         Ok(s.program.iter().map(summary).collect())
     }
+
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error> {
         let mut s = self.state.lock().expect("state");
         s.enter("records")?;
         Ok(s.program.iter().cloned().collect())
     }
 }
+
 impl CommitLoad for Memory {
     fn commit_tracepoint(
         &self,
@@ -168,6 +189,7 @@ impl CommitLoad for Memory {
             .expect("path")
             .into();
         let result = summary(&p);
+
         // Publish both facts together under the same state lock.
         s.program = Some(p);
         s.map_set = true;
@@ -175,9 +197,11 @@ impl CommitLoad for Memory {
         Ok(result)
     }
 }
+
 impl UnloadStore for Memory {
     type ProgramReceipt = ProgramReceipt;
     type MapSetReceipt = MapSetReceipt;
+
     fn observe_unload(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -199,6 +223,7 @@ impl UnloadStore for Memory {
             MapSetReceipt(self.receipt(s.generation)),
         )))
     }
+
     fn delete_program(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -219,6 +244,7 @@ impl UnloadStore for Memory {
             remaining: receipt,
         })
     }
+
     fn delete_map_set(
         &self,
         writer: &RuntimeWriter<'_>,

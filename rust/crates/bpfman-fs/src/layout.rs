@@ -4,7 +4,7 @@ use crate::{LayoutError, RuntimeLayout};
 
 pub(super) const LOCK_FILE: &str = ".lock";
 pub(super) const DATABASE_DIRECTORY: &str = "db";
-const DATABASE_FILE: &str = "store.db";
+pub(super) const DATABASE_FILE: &str = "store.db";
 
 impl TryFrom<PathBuf> for RuntimeLayout {
     type Error = LayoutError;

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/bpfman-store", "crates/bpfman-kernel", "crates/bpfman-model", "crates/bpfman-core", "crates/bpfman-lock", "crates/bpfman-fs", "crates/bpfman-store-sqlite", "crates/bpfman-runtime", "crates/bpfman"]
+members = ["crates/bpfman-store", "crates/bpfman-store-json", "crates/bpfman-kernel", "crates/bpfman-model", "crates/bpfman-core", "crates/bpfman-lock", "crates/bpfman-fs", "crates/bpfman-store-sqlite", "crates/bpfman-runtime", "crates/bpfman"]
 resolver = "3"
 
 [workspace.package]
@@ -18,6 +18,7 @@ bpfman-core = { path = "crates/bpfman-core" }
 bpfman-lock = { path = "crates/bpfman-lock" }
 bpfman-fs = { path = "crates/bpfman-fs" }
 bpfman-store-sqlite = { path = "crates/bpfman-store-sqlite" }
+bpfman-store-json = { path = "crates/bpfman-store-json" }
 bpfman-runtime = { path = "crates/bpfman-runtime" }
 aya = { version = "0.14", default-features = false }
 aya-obj = { version = "0.3", default-features = false }
@@ -30,6 +31,7 @@ rustix = { version = "1", features = ["fs", "mount"] }
 libc = "0.2"
 humantime = "2"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 # Error derives work with core::error::Error; pure crates must not enable std.
 thiserror = { version = "2", default-features = false }

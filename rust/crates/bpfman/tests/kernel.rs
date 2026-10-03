@@ -14,14 +14,26 @@ mod support;
 
 #[test]
 #[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
-fn lifecycle_store_failures() {
+fn sqlite_lifecycle_store_failures() {
     lifecycle::exercise(bpfman_store_sqlite::Backend);
 }
 
 #[test]
 #[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
-fn cli_behaviour() {
-    cli::behaviour();
+fn json_lifecycle_store_failures() {
+    lifecycle::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
+fn sqlite_cli_behaviour() {
+    cli::behaviour("sqlite");
+}
+
+#[test]
+#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
+fn json_cli_behaviour() {
+    cli::behaviour("json");
 }
 
 #[test]
@@ -32,6 +44,12 @@ fn sqlite_go_interoperability() {
 
 #[test]
 #[ignore = "requires BPF privileges and a private mount namespace; make rust-test-observation"]
-fn unchanged_tracepoint_dsl() {
-    cli::dsl();
+fn sqlite_unchanged_tracepoint_dsl() {
+    cli::dsl("sqlite");
+}
+
+#[test]
+#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-observation"]
+fn json_unchanged_tracepoint_dsl() {
+    cli::dsl("json");
 }

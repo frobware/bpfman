@@ -1,11 +1,13 @@
 //! Public CLI checks, using returned observations rather than persistence queries.
+
 use super::support::*;
 use std::{
     fs,
     process::{Command, Stdio},
 };
-pub(super) fn behaviour() {
-    let c = Context::new();
+
+pub(super) fn behaviour(store: &'static str) {
+    let c = Context::with_store(store);
     let root = c.layout.root();
     let fifo = root.parent().expect("temporary parent").join("source.fifo");
     assert!(
@@ -100,6 +102,7 @@ pub(super) fn behaviour() {
     );
 
     let unrelated = id(&c.load_cli(&rust()));
+
     // Refuse foreign live program and map identities, preserving both programs.
     let pin = c.layout.program_pin_path(pid);
     let other = c.layout.program_pin_path(unrelated);
@@ -134,6 +137,7 @@ pub(super) fn behaviour() {
         c.absent(id);
     }
     c.no_artifacts();
+
     // Output delivery is after commit, independently of the backend format.
     let output = c
         .command(
@@ -169,8 +173,9 @@ pub(super) fn behaviour() {
     );
     c.no_artifacts();
 }
-pub(super) fn dsl() {
-    let c = Context::new();
+
+pub(super) fn dsl(store: &'static str) {
+    let c = Context::with_store(store);
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin/e2e-scripts.test"));
@@ -186,6 +191,7 @@ pub(super) fn dsl() {
         .arg(format!("BIN_DIR={}", shell_dir.display()))
         .arg("TEST=TestBPFManScripts/scripts/TestTracepoint_LoadAndGet[.]bpfman$")
         .env("BPFMAN_RUNTIME_DIR", c.layout.root())
+        .env("BPFMAN_STORE", store)
         .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
         .current_dir(repository())
         .output()

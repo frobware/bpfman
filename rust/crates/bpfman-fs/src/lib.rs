@@ -11,6 +11,8 @@ mod error;
 mod layout;
 mod observe;
 mod removal;
+mod snapshot;
+pub use snapshot::StoreSnapshot;
 
 /// Default runtime root, shared by front ends rather than duplicated there.
 pub const DEFAULT_RUNTIME_ROOT: &str = "/run/bpfman";

@@ -25,7 +25,16 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: cli::Cli) -> anyhow::Result<()> {
-    let store = bpfman_store_sqlite::Backend;
+    match cli.store {
+        cli::StoreBackend::Sqlite => run_with_store(cli, bpfman_store_sqlite::Backend),
+        cli::StoreBackend::Json => run_with_store(cli, bpfman_store_json::Backend),
+    }
+}
+
+fn run_with_store<S>(cli: cli::Cli, store: S) -> anyhow::Result<()>
+where
+    S: bpfman_store::OpenStore + bpfman_store::CommitLoad + bpfman_store::UnloadStore + 'static,
+{
     match cli.command {
         cli::Command::Program {
             command: cli::ProgramCommand::Get { id, output },

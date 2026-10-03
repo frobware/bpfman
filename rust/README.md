@@ -38,6 +38,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence and conditional teardown |
+| `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
 | `bpfman-runtime` | 4 | Local tracepoint load/unload, private Aya adapter, compensation, and observation gathering |
 | `bpfman` | 5 | Typed Clap CLI, load/get/list/unload dispatch, and Go-compatible text/JSON presentation |
 
@@ -70,9 +71,10 @@ I/O APIs out of these libraries.
 
 ## Store backend boundary
 
-The CLI composition root selects `bpfman_store_sqlite::Backend` and passes it to
-runtime operations. Runtime depends on `bpfman-store`, with no direct or transitive
-SQLite dependency. Architecture tests enforce this separation. The contract
+The CLI composition root selects SQLite (the default) or JSON with `--store`
+or `BPFMAN_STORE`, and passes that backend to runtime operations. Runtime depends
+on `bpfman-store`, with no direct or transitive dependency on either backend.
+Architecture tests enforce this separation. The contract
 crate defines four small, statically dispatched interfaces:
 
 - `OpenStore` opens compatible state under writer authority and returns an owned
@@ -87,10 +89,28 @@ crate defines four small, statically dispatched interfaces:
   receipt for an explicit later pass.
 
 There are no connection types, schema-version fields, or transaction callbacks
-in these contracts. A future JSON-file backend could implement the same operations
-using atomic file publication while preserving locking, validation, and commit
-semantics. This slice provides SQLite plus an independent test-only in-memory
-backend; it does not implement JSON persistence or backend selection flags.
+in these contracts. SQLite and JSON implement the same operations, alongside
+an independent test-only in-memory backend.
+
+JSON version 1 stores private, unattached tracepoints in a whole-file snapshot.
+The filesystem adapter writes the pending snapshot beneath a verified directory
+descriptor and atomically renames it into place under the runtime writer lock.
+Failed publication leaves the old state intact; interrupted staging files are
+reused after validation. This is runtime state under `/run`; power-loss recovery
+is outside the contract. JSON format/version checks and generation-based deletion
+evidence remain inside the JSON adapter. Unknown fields and invalid relationships
+are rejected without repair.
+
+Both formats occupy `<runtime>/db/store.db`. The filename is historical; selecting
+another backend refuses the existing incompatible contents rather than creating
+a second inventory. There is no implicit conversion. Use a separate runtime to
+try JSON alongside an existing SQLite runtime:
+
+```sh
+sudo rust/target/debug/bpfman --store json --runtime-dir /run/bpfman-json program list
+```
+
+Keep the same store selection for later commands against that runtime.
 
 Shared store errors expose portable categories and preserve private diagnostic
 sources. `UnloadReport<S>` and `UnloadError<S>` retain the selected backend's
@@ -109,7 +129,7 @@ compensation, and real-kernel compatibility gates remain in place.
 Generic live-kernel tests inject failures at store operations through a test-only
 `Faults<S>` decorator. They call public runtime operations with real kernel and
 filesystem effects; no production failure flags or persistence edits are needed.
-The same `lifecycle::exercise<S>` scenarios can run against another store backend.
+The same `lifecycle::exercise<S>` scenarios run against both SQLite and JSON.
 CLI and unchanged DSL tests inspect returned JSON and runtime artifacts, with no
 database queries. Privileged tests are ignored by the normal workspace test run;
 the Make targets use Cargo's runner to execute them in a private mount namespace.
@@ -120,7 +140,7 @@ verify transaction rollback, constraints, orphan map-set absence, invalid record
 and conditional deletion. `tests/sqlite_compatibility.rs` checks the selected
 SQLite CLI against Go's schema. These format-specific assertions do not belong in
 the generic lifecycle tests. Sharing persisted state with Go is checked separately
-in `tests/kernel/go_compatibility.rs`; a JSON backend would not need to share
+in `tests/kernel/go_compatibility.rs`; JSON does not need to share
 Go's SQLite representation. The division preserves the previous coverage:
 
 | Scenario | Coverage |
@@ -132,11 +152,11 @@ Go's SQLite representation. The division preserves the previous coverage:
 | CLI load/get/list/unload contract | Unchanged `TestTracepoint_LoadAndGet.bpfman` through the Rust test harness |
 | Typed, raw, and nested-shell executable selection | `tests/e2e_selection.rs`, unprivileged Make recipe tests |
 
-A JSON backend must run the same generic lifecycle, CLI, and unchanged DSL
-scenarios, changing only backend selection in test setup. It adds tests for its
-own persistence guarantees; it does not get a separate behavioural suite.
-No JSON implementation is included yet, so running this matrix against two
-persistent backends remains the next proof of substitutability.
+Both persistent backends run the same generic lifecycle, CLI, unchanged DSL,
+and unprivileged store-contract scenarios, changing only backend selection in
+test setup. JSON adds focused persistence tests for malformed state, publication
+failure, invalid relationships, and stale generations. It has no separate
+behavioural suite.
 
 ## CLI parity harness
 
@@ -436,8 +456,8 @@ sudo rust/target/debug/bpfman program load file \
   --programs tracepoint:tracepoint_kill_recorder --application rust-slice
 ```
 
-A JSON backend is the next check on store substitutability, followed by tracepoint
-attachment/detachment to admit more unchanged lifecycle DSL scripts. Broaden
+Tracepoint attachment/detachment is the next slice to admit more unchanged
+lifecycle DSL scripts. Broaden
 supported options incrementally; do not weaken the scripts for Rust.
 
 

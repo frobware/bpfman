@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 bpfman-store-sqlite.workspace = true
+bpfman-store-json.workspace = true
 bpfman-store.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

@@ -1,6 +1,7 @@
 //! Persistence contracts expressed as domain operations, independent of file format.
 //! Backends own compatibility checks, atomic publication, and opaque teardown evidence.
 //! No connections, transaction callbacks, schema versions, or serialized data escape.
+
 mod error;
 use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
@@ -13,6 +14,7 @@ use std::{collections::BTreeMap, num::NonZeroU32};
 pub trait OpenStore {
     /// Opened read handle; owns backend evidence rather than a path to reopen.
     type Reader: ProgramReader;
+
     /// Observe and open in the same writer scope. Never migrate implicitly.
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self::Reader, Error>;
 }
@@ -21,6 +23,7 @@ pub trait OpenStore {
 pub trait ProgramReader {
     /// Read stored summaries without kernel observations.
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error>;
+
     /// Read complete records and relationships in one consistent snapshot.
     /// Validate current format compatibility on every read.
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error>;
@@ -84,8 +87,10 @@ pub trait CommitLoad {
 pub trait UnloadStore {
     /// Owned evidence authorizing conditional program deletion.
     type ProgramReceipt: Send + Sync + 'static;
+
     /// Owned evidence authorizing deletion of the unused private map set.
     type MapSetReceipt: Send + Sync + 'static;
+
     /// Validate scope and ownership without creation or mutation. Only absence
     /// returns None; failed observation must remain an error.
     fn observe_unload(

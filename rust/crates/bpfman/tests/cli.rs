@@ -6,6 +6,7 @@ fn run(args: &[&str]) -> std::io::Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_bpfman"))
         .env_remove("BPFMAN_RUNTIME_DIR")
         .env_remove("BPFMAN_LOCK_TIMEOUT")
+        .env_remove("BPFMAN_STORE")
         .args(args)
         .output()
 }
@@ -19,11 +20,46 @@ fn invalid_flags_are_rejected_before_opening_the_database() -> Result<(), Box<dy
         vec!["program", "list", "--output", "yaml"],
         vec!["program", "list", "--all"],
         vec!["program", "list", "--attached"],
+        vec!["--store", "unknown", "program", "list"],
     ] {
         let output = run(&args)?;
         assert_eq!(output.status.code(), Some(2));
         assert!(!String::from_utf8(output.stderr)?.contains("SQLite"));
     }
+    Ok(())
+}
+
+#[test]
+fn selected_store_reopens_and_refuses_a_different_format() -> Result<(), Box<dyn std::error::Error>>
+{
+    for (selected, wrong) in [("sqlite", "json"), ("json", "sqlite")] {
+        let directory = tempfile::tempdir()?;
+        let command = || {
+            let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+            command
+                .arg("--runtime-dir")
+                .arg(directory.path())
+                .env("BPFMAN_STORE", selected)
+                .args(["program", "list", "-o", "json"]);
+            command
+        };
+
+        let initial = command().output()?;
+        assert!(initial.status.success());
+        let programs: serde_json::Value = serde_json::from_slice(&initial.stdout)?;
+        assert_eq!(programs["programs"], serde_json::json!([]));
+
+        // The explicit CLI choice overrides the environment; mismatched state
+        // fails rather than being replaced or interpreted as an empty inventory.
+        let refused = command().args(["--store", wrong]).output()?;
+        assert_eq!(refused.status.code(), Some(1));
+        assert!(refused.stdout.is_empty());
+
+        let reopened = command().output()?;
+        assert!(reopened.status.success());
+        assert_eq!(reopened.stdout, initial.stdout);
+    }
+
     Ok(())
 }
 

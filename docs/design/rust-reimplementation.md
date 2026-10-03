@@ -242,10 +242,11 @@ backend-independent `OpenStore`, `ProgramReader`, `CommitLoad`, and `UnloadStore
 contracts. Runtime operations are generic over the capabilities they consume;
 they neither import a backend nor know its storage format or version.
 `bpfman-store-sqlite` implements the contracts and owns all SQL, schema checks,
-transactions, and concrete receipt evidence. The runtime and SQLite adapter are
-peers in the dependency tiers, both depending on the contracts below them.
+transactions, and concrete receipt evidence. `bpfman-store-json` implements the
+same contracts with atomic whole-file publication. Both adapters and the runtime
+are peers in the dependency tiers, depending on the contracts below them.
 
-This boundary permits a future serialized JSON file without changing lifecycle
+This boundary supports a serialized JSON file without changing lifecycle
 orchestration. Each implementation must still provide atomic visibility, writer
 coordination, ownership revalidation, classified failures, and an unambiguous
 commit result. A successful commit must never subsequently be returned as a
@@ -256,8 +257,9 @@ Unload uses associated, non-cloneable program and map-set receipts. Failures
 return those receipts with their causes. An explicit retry supplies the same
 backend and runtime authority; the backend validates evidence again before
 mutation. No generic transaction callback, SQL row, or file-format payload
-appears in the contracts. An independent in-memory test implementation proves
-substitution; SQLite remains the production selection for Go interoperability.
+appears in the contracts. Shared tests exercise both persistent backends and an
+independent in-memory test implementation; SQLite remains the default selection
+for Go interoperability.
 
 ### Ownership within an adapter, compensation across adapters
 
@@ -318,6 +320,7 @@ meaningful:
 | `bpfman-lock` | Effectful | Go-compatible writer locking, borrowed write permits, and inherited descriptor ownership |
 | `bpfman-store` | Boundary | Backend-independent read, atomic commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | Effectful | SQLite schema, migrations, queries, and atomic persistence operations |
+| `bpfman-store-json` | Effectful | Versioned JSON snapshots, atomic publication, and conditional teardown |
 | `bpfman-kernel-aya` | Effectful | Aya-backed program, map, link, dispatcher, netlink, tracefs, and namespace operations |
 | `bpfman-image-oci` | Effectful | OCI pull, cache, authentication, and signature-policy adapters |
 | `bpfman-runtime` | Interpreter | Drives core machines, routes effects, retains effect error sources, and provides the application-facing manager |
@@ -833,7 +836,22 @@ use the public runtime API, real kernel/filesystem effects, and a `Faults<S>`
 store decorator. CLI and DSL acceptance inspect public output and artifacts.
 Backend-specific adapter tests retain SQL triggers and direct state inspection
 where they test SQLite's own guarantees. A second store backend must run the
-same generic scenarios in addition to its own persistence-format tests.
+same generic scenarios in addition to its own persistence-format tests. SQLite
+and JSON now run the same lifecycle, CLI, and unchanged tracepoint DSL scenarios,
+with backend selection confined to setup. The runtime and pure crates did not
+need backend-specific branches.
+
+The JSON adapter publishes versioned whole-file snapshots through descriptor-
+relative filesystem operations under the runtime writer. Program and private
+map-set membership commit together. Deletion receipts bind the runtime, store
+identity, and record generation; failed deletion retains the receipt. Publication
+errors precede the atomic rename and therefore authorize compensation safely.
+Interrupted staging can be reused without changing published state. Runtime state
+lives under `/run`; power-loss durability is outside this contract.
+
+The CLI selects `sqlite` (default) or `json` with `--store` / `BPFMAN_STORE`.
+Both occupy the same runtime store slot, so a format mismatch is rejected rather
+than opening an independent inventory. Existing state is never converted implicitly.
 
 
 Preserve the value of Go's stateful fake kernel (`manager/fake_kernel_test.go`).

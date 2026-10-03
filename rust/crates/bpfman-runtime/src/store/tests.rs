@@ -1,10 +1,12 @@
 #![allow(clippy::expect_used)]
+
 use super::testing::Memory;
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_store::{CommitLoad, ErrorKind, TracepointRecord};
 use std::{collections::BTreeMap, num::NonZeroU32, time::Duration};
 const TIMEOUT: Duration = Duration::from_secs(1);
+
 fn scope<T>(runtime: &RuntimeDirectory, run: impl FnOnce(&RuntimeWriter<'_>) -> T) -> T {
     runtime
         .with_writer(
@@ -16,9 +18,11 @@ fn scope<T>(runtime: &RuntimeDirectory, run: impl FnOnce(&RuntimeWriter<'_>) -> 
         )
         .expect("writer")
 }
+
 fn layout(runtime: &RuntimeDirectory) -> RuntimeLayout {
     scope(runtime, |writer| writer.layout().clone())
 }
+
 fn setup() -> (tempfile::TempDir, RuntimeDirectory, Memory) {
     let temp = tempfile::tempdir().expect("temp");
     let runtime = RuntimeDirectory::open_or_create(
@@ -28,9 +32,11 @@ fn setup() -> (tempfile::TempDir, RuntimeDirectory, Memory) {
     let store = scope(&runtime, Memory::new);
     (temp, runtime, store)
 }
+
 fn id() -> NonZeroU32 {
     NonZeroU32::new(42).expect("id")
 }
+
 fn seed(store: &Memory, writer: &RuntimeWriter<'_>) {
     store
         .commit_tracepoint(
@@ -46,6 +52,7 @@ fn seed(store: &Memory, writer: &RuntimeWriter<'_>) {
         )
         .expect("commit");
 }
+
 #[test]
 fn runtime_reads_an_independent_store_without_creating_a_database() {
     let (_temp, runtime, store) = setup();
@@ -60,6 +67,7 @@ fn runtime_reads_an_independent_store_without_creating_a_database() {
     assert_eq!(programs.len(), 1);
     assert_eq!(programs[0].id(), id());
     assert_eq!(programs[0].application(), "test");
+
     // Filter out the record so JSON listing needs no live kernel access.
     let filter = bpfman_core::ProgramFilter {
         types: vec![],
@@ -92,6 +100,7 @@ fn runtime_reads_an_independent_store_without_creating_a_database() {
     );
     assert!(!layout(&runtime).database_path().exists());
 }
+
 #[test]
 fn store_errors_keep_their_category_and_are_not_retried() {
     for (fault, kind, expected) in [
@@ -138,6 +147,7 @@ fn full_read_failure_is_not_missing_or_an_empty_list() {
     assert_eq!(store.calls(), ["open", "records", "open", "records"]);
     assert!(!layout(&runtime).database_path().exists());
 }
+
 #[test]
 fn retained_backend_receipts_survive_failed_unload_and_explicit_retry() {
     let (_temp, runtime, store) = setup();
@@ -161,6 +171,7 @@ fn retained_backend_receipts_survive_failed_unload_and_explicit_retry() {
     let report = scope(&other, |w| report.retry_cleanup(&store, w)).expect("wrong root GC warning");
     assert_eq!(report.unresolved(), 1);
     store.clear_faults();
+
     // Same backend type does not authorize a different backend instance.
     let report = scope(&runtime, |w| report.retry_cleanup(&other_store, w))
         .expect("foreign backend warning");
