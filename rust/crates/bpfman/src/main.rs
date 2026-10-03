@@ -27,6 +27,22 @@ fn main() -> ExitCode {
 fn run(cli: cli::Cli) -> anyhow::Result<()> {
     match cli.command {
         cli::Command::Program {
+            command: cli::ProgramCommand::Unload { id },
+        } => {
+            let report = bpfman_runtime::unload_tracepoint(&cli.layout, id, cli.lock_timeout)?;
+            for attempt in report.attempts() {
+                if let Err(error) = &attempt.outcome {
+                    writeln!(
+                        io::stderr().lock(),
+                        "Warning: {:?}: {:#}",
+                        attempt.kind,
+                        format_chain(error)
+                    )?;
+                }
+            }
+        }
+
+        cli::Command::Program {
             command: cli::ProgramCommand::List(args),
         } => {
             let filter = bpfman_core::ProgramFilter {
@@ -41,4 +57,15 @@ fn run(cli: cli::Cli) -> anyhow::Result<()> {
         } => source.execute(&cli.layout, cli.lock_timeout)?,
     }
     Ok(())
+}
+
+fn format_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }

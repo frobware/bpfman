@@ -21,7 +21,8 @@ pub(super) fn store_error(source: bpfman_store_sqlite::Error) -> Error {
     let kind = match source.kind() {
         bpfman_store_sqlite::ErrorKind::Unavailable => ErrorKind::Unavailable,
         bpfman_store_sqlite::ErrorKind::IncompatibleSchema => ErrorKind::IncompatibleState,
-        bpfman_store_sqlite::ErrorKind::InvalidData => ErrorKind::InvalidState,
+        bpfman_store_sqlite::ErrorKind::Unsupported
+        | bpfman_store_sqlite::ErrorKind::InvalidData => ErrorKind::InvalidState,
     };
     Error {
         kind,

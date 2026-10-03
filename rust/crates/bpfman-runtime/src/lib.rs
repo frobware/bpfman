@@ -8,6 +8,9 @@ mod load;
 mod load_error;
 pub use load::load_tracepoint;
 mod store;
+mod unload;
+mod unload_error;
+pub use unload::unload_tracepoint;
 
 pub use compensation::compensate_load;
 pub use list::list_programs;
@@ -93,4 +96,36 @@ pub enum LoadErrorKind {
     Unsupported,
     /// An operating-system, kernel, filesystem, lock, or store operation failed.
     Unavailable,
+}
+
+/// Backend-independent classification of an unload failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnloadErrorKind {
+    /// No managed record exists for this ID; no kernel-only identity is adopted.
+    NotFound,
+    /// Linked programs, other program types, or shared maps need a later slice.
+    Unsupported,
+    /// Stored paths or observed objects violate the ownership contract.
+    InvalidState,
+    /// An OS, lock, kernel-observation, or store operation failed.
+    Unavailable,
+}
+
+/// Opaque cause of an unload effect, with backend sources kept private.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct UnloadCause {
+    cause: unload_error::Cause,
+}
+
+/// Unload progress and residue, including successful steps and earlier failures.
+/// A successful operation may retain cleanup warnings, matching Go's contract.
+#[must_use = "inspect cleanup warnings and retain any unresolved work"]
+pub struct UnloadReport {
+    report: unload::ReportFor<unload::real::Effects>,
+}
+
+/// Unload failure, retaining progress and receipts if teardown began.
+pub struct UnloadError {
+    failure: unload_error::Failure,
 }

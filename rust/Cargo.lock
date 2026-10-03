@@ -205,6 +205,7 @@ dependencies = [
 name = "bpfman-store-sqlite"
 version = "0.1.0"
 dependencies = [
+ "bpfman-core",
  "bpfman-fs",
  "bpfman-lock",
  "bpfman-model",

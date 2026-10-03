@@ -9,7 +9,9 @@ mod create;
 mod error;
 mod open;
 mod read;
+mod unload;
 mod write;
+pub use unload::{delete_unloaded_program, delete_unused_map_set, observe_unload};
 pub use write::{TracepointRecord, persist_tracepoint};
 
 pub use create::create_if_missing;
@@ -26,4 +28,21 @@ pub const SCHEMA_VERSION: i64 = 2;
 pub struct Store {
     connection: rusqlite::Connection,
     schema_version: i64,
+}
+
+/// Validated committed record and private map-set evidence for narrow unload.
+/// Fields cannot be forged; dropping evidence does not delete stored state.
+pub struct UnloadRecord {
+    program: ProgramRecord,
+    map_set: PrivateMapSet,
+}
+
+/// Non-cloneable deletion evidence for one committed unattached tracepoint.
+pub struct ProgramRecord {
+    evidence: Box<unload::RecordEvidence>,
+}
+
+/// Non-cloneable deletion evidence for a map set whose last user is unloading.
+pub struct PrivateMapSet {
+    evidence: Box<unload::MapSetEvidence>,
 }

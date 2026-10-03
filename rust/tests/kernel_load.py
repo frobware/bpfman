@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local tracepoint acceptance: run only in a fresh private mount namespace.
 
-The Go CLI is an independent observer and cleans up successful loads. This is
+The Go CLI is an independent observer for the Rust load/unload lifecycle. This is
 an incremental adapter gate; it does not replace the unchanged DSL parity suite.
 """
 import argparse
@@ -80,13 +80,117 @@ def main():
             observation = json.loads(run(args.go, root, "program", "get", pid, "-o", "json").stdout)
             assert observation["record"]["program_id"] == pid, observation
             assert observation["status"]["kernel"] is not None, observation
-            run(args.go, root, "program", "unload", pid)
+            run(args.rust, root, "program", "unload", pid)
             assert not Path(pin).exists()
             assert not Path(bytecode).exists()
             assert not (root / "fs/maps" / str(pid)).exists()
             assert db.execute("SELECT count(*) FROM managed_programs").fetchone()[0] == 0
             assert db.execute("SELECT count(*) FROM map_sets").fetchone()[0] == 0
-            print("PASS: Rust load persists across process exit; Go observes and unloads it")
+            assert not run(args.rust, root, "program", "list", "-q").stdout.strip()
+            print("PASS: Rust load/list/unload leaves no owned residue; Go observes the live program")
+
+            def load(binary=args.rust):
+                run(binary, root, "program", "load", "file", source, "--programs", selected)
+                return db.execute("SELECT max(program_id) FROM managed_programs").fetchone()[0]
+
+            def present(program):
+                assert (root / "fs" / f"prog_{program}").exists()
+                assert (root / "fs/maps" / str(program) / "tracepoint_stats_map").exists()
+                assert (root / "programs" / str(program) / "bytecode.o").exists()
+
+            # Teardown scope must be established before unpinning. A separate
+            # program stays alive throughout these failures and partial unloads.
+            unrelated = load()
+            pid = load()
+            for change, restore, diagnostic in [
+                ("UPDATE managed_programs SET program_type='xdp' WHERE program_id=?", "UPDATE managed_programs SET program_type='tracepoint' WHERE program_id=?", "only tracepoints"),
+                ("INSERT INTO links(kind,kernel_prog_id,created_at) VALUES('tracepoint',?,'now')", "DELETE FROM links WHERE kernel_prog_id=?", "program has links"),
+                ("INSERT INTO shared_map_pins VALUES('shared',?)", "DELETE FROM shared_map_pins WHERE program_id=?", "private map sets"),
+            ]:
+                db.execute(change, (pid,)); db.commit()
+                failed = run(args.rust, root, "program", "unload", pid, success=False)
+                assert diagnostic in failed.stderr, failed.stderr
+                present(pid); present(unrelated)
+                db.execute(restore, (pid,)); db.commit()
+            # Private ownership cannot be inferred from directory names alone.
+            db.execute("UPDATE managed_programs SET map_set_id=? WHERE program_id=?", (pid, unrelated)); db.commit()
+            failed = run(args.rust, root, "program", "unload", pid, success=False)
+            assert "private map sets" in failed.stderr, failed.stderr
+            present(pid); present(unrelated)
+            db.execute("UPDATE managed_programs SET map_set_id=program_id WHERE program_id=?", (unrelated,)); db.commit()
+            old_pin = str(root / "fs" / f"prog_{pid}")
+            db.execute("UPDATE managed_programs SET pin_path='/' WHERE program_id=?", (pid,)); db.commit()
+            failed = run(args.rust, root, "program", "unload", pid, success=False)
+            assert "canonical runtime" in failed.stderr, failed.stderr
+            present(pid); present(unrelated)
+            db.execute("UPDATE managed_programs SET pin_path=? WHERE program_id=?", (old_pin, pid)); db.commit()
+
+            # A different live program at the canonical pin name is not ours.
+            pin = root / "fs" / f"prog_{pid}"
+            other_pin = root / "fs" / f"prog_{unrelated}"
+            saved = root / "fs/saved_program"
+            pin.rename(saved); other_pin.rename(pin)
+            failed = run(args.rust, root, "program", "unload", pid, success=False)
+            assert "different kernel identity" in failed.stderr, failed.stderr
+            pin.rename(other_pin); saved.rename(pin)
+            present(pid); present(unrelated)
+
+            # Likewise, another program's map must not be adopted as a private map.
+            map_pin = root / "fs/maps" / str(pid) / "tracepoint_stats_map"
+            other_map = root / "fs/maps" / str(unrelated) / "tracepoint_stats_map"
+            saved_map = root / "fs/saved_map"
+            map_pin.rename(saved_map); other_map.rename(map_pin)
+            failed = run(args.rust, root, "program", "unload", pid, success=False)
+            assert "does not belong" in failed.stderr, failed.stderr
+            map_pin.rename(other_map); saved_map.rename(map_pin)
+            present(pid); present(unrelated)
+            print("PASS: unsupported relationships, noncanonical paths, and foreign BPF identities are refused before unpinning")
+
+            # Record deletion is the returned post-unpin failure. Independent
+            # bytecode cleanup still runs, while map GC waits for row deletion.
+            db.execute("CREATE TRIGGER reject_unload BEFORE DELETE ON managed_programs BEGIN SELECT RAISE(ABORT,'injected unload record failure'); END"); db.commit()
+            failed = run(args.rust, root, "program", "unload", pid, success=False)
+            assert "injected unload record failure" in failed.stderr, failed.stderr
+            assert not (root / "fs" / f"prog_{pid}").exists()
+            assert not (root / "programs" / str(pid)).exists()
+            assert (root / "fs/maps" / str(pid)).exists()
+            assert db.execute("SELECT count(*) FROM managed_programs WHERE program_id=?", (pid,)).fetchone()[0] == 1
+            present(unrelated)
+            # Repeating an unchanged failed condition cannot magically succeed.
+            failed = run(args.rust, root, "program", "unload", pid, success=False)
+            assert "injected unload record failure" in failed.stderr, failed.stderr
+            assert (root / "fs/maps" / str(pid)).exists()
+            db.execute("DROP TRIGGER reject_unload"); db.commit()
+            run(args.rust, root, "program", "unload", pid)
+            assert not (root / "fs/maps" / str(pid)).exists()
+            assert db.execute("SELECT count(*) FROM map_sets WHERE id=?", (pid,)).fetchone()[0] == 0
+            present(unrelated)
+            print("PASS: record deletion failure preserves maps, cleans bytecode, and succeeds only after the injected fault is removed")
+
+            # Map-set GC failures are warnings after successful record deletion.
+            # A later CLI request by ID cannot recover residue once that row is gone.
+            pid = load()
+            db.execute("CREATE TRIGGER reject_map_gc BEFORE DELETE ON map_sets BEGIN SELECT RAISE(ABORT,'injected map-set GC failure'); END"); db.commit()
+            warning = run(args.rust, root, "program", "unload", pid)
+            assert "Warning: MapSet" in warning.stderr and "injected map-set GC failure" in warning.stderr, warning.stderr
+            assert not (root / "fs" / f"prog_{pid}").exists()
+            assert not (root / "fs/maps" / str(pid)).exists()
+            assert not (root / "programs" / str(pid)).exists()
+            assert db.execute("SELECT count(*) FROM managed_programs WHERE program_id=?", (pid,)).fetchone()[0] == 0
+            assert db.execute("SELECT count(*) FROM map_sets WHERE id=?", (pid,)).fetchone()[0] == 1
+            failed = run(args.rust, root, "program", "unload", pid, success=False)
+            assert "not found" in failed.stderr, failed.stderr
+            present(unrelated)
+            db.execute("DROP TRIGGER reject_map_gc")
+            db.execute("DELETE FROM map_sets WHERE id=?", (pid,)); db.commit()
+            run(args.rust, root, "program", "unload", unrelated)
+            print("PASS: post-record GC failure reports a warning and preserves unrelated state")
+
+            pid = load(args.go)
+            run(args.rust, root, "program", "unload", pid)
+            assert db.execute("SELECT count(*) FROM managed_programs").fetchone()[0] == 0
+            assert db.execute("SELECT count(*) FROM map_sets").fetchone()[0] == 0
+            print("PASS: Rust unload also accepts Go-created private tracepoints")
 
             # Fail after kernel pins and bytecode exist. Both rows must roll back
             # and compensation must remove each pin before its map container.

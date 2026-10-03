@@ -1041,6 +1041,11 @@ rust-test:
 rust-test-load-compensation:
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-runtime --locked --lib load::tests:: -- --nocapture --test-threads=1
 
+# Exercise committed-state teardown ordering and residue through production code.
+.PHONY: rust-test-unload
+rust-test-unload:
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-runtime --locked --lib unload::tests:: -- --nocapture --test-threads=1
+
 rust-fmt:
 	cargo fmt --manifest-path $(RUST_MANIFEST) --all -- --check
 

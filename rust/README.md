@@ -32,12 +32,12 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
 | `bpfman-model` | 0 | Pure domain vocabulary, payload-bearing program specifications, and stored summaries |
-| `bpfman-core` | 1 | Pure listing/store policy and single-program load/compensation continuations |
+| `bpfman-core` | 1 | Pure listing/store policy, load compensation, and forward unload continuations |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
-| `bpfman-store-sqlite` | 3 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence |
-| `bpfman-runtime` | 4 | Local tracepoint loading, private Aya adapter, compensation, and observation gathering |
-| `bpfman` | 5 | Typed Clap CLI, supported load dispatch, and text/quiet presentation |
+| `bpfman-store-sqlite` | 3 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence and conditional teardown |
+| `bpfman-runtime` | 4 | Local tracepoint load/unload, private Aya adapter, compensation, and observation gathering |
+| `bpfman` | 5 | Typed Clap CLI, supported load/unload dispatch, and text/quiet presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
 point down through tiers, pure normal dependency closures are explicitly
@@ -138,7 +138,8 @@ privileges; `/run/bpfman` will normally require sudo.
 
 Listing supports managed table and quiet-ID output only. Stored names
 are used directly (no kernel-name fallback). `--all`, JSON listing, kernel link
-state filters, get, attach, detach, and unload are not implemented and are rejected.
+state filters, get, attach, and detach are not implemented and are rejected.
+Unload supports one unattached tracepoint with private maps, as described below.
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
@@ -299,12 +300,14 @@ direnv exec . make rust-test-kernel-load
 
 It builds the local fixtures and both CLIs, then runs in a private mount namespace
 with an isolated temporary runtime. It proves Rust-created pins outlive the
-loader, Go can observe and unload the program, failed publication and persistence
-remove owned resources, and output-delivery failure preserves the committed load.
-It also checks unsupported ELF inputs before runtime creation. This gate does
+loader, Go can observe the live program, and Rust list/unload removes its owned
+state. It also covers Go-created tracepoints, unload refusal before mutation,
+injected record-deletion and map-set-GC failures, preservation of unrelated
+programs, failed-load cleanup, and output-delivery failure after load commit.
+Unsupported ELF inputs are checked before runtime creation. This gate does
 not claim full CLI or unchanged-DSL parity.
 
-For a manual load (use the Go CLI to unload until Rust unload is implemented):
+For a manual load:
 
 ```sh
 sudo rust/target/debug/bpfman program load file \
@@ -312,6 +315,67 @@ sudo rust/target/debug/bpfman program load file \
   --programs tracepoint:tracepoint_kill_recorder --application rust-slice
 ```
 
-Next, add compatible load JSON, get/JSON-list, and unload, then tracepoint
+Next, add compatible load JSON and get/JSON-list, then tracepoint
 attachment/detachment to admit the unchanged lifecycle DSL scripts. Broaden
 supported options incrementally; do not weaken the scripts for Rust.
+
+
+## Unattached tracepoint unload
+
+```sh
+sudo rust/target/debug/bpfman program unload PROGRAM_ID
+direnv exec . make rust-test-unload
+```
+
+This slice accepts one managed tracepoint with no stored links, its own map set,
+no other map-set users, and no shared-map-pin registrations. Other program types,
+linked/shared state, multiple operands, and `--ignore-missing` are explicitly
+unsupported. A missing managed record returns an error without inspecting or
+adopting a kernel-only program or creating a database. It does not yet make Go's
+additional not-managed versus not-found distinction.
+
+Under one writer scope, store preflight validates canonical artifact paths and
+exclusive ownership. Filesystem observation opens existing objects without
+creating or mounting collections. It verifies descriptor confinement, types,
+hard-link counts and inode identities; a live program pin must match the ID and
+tracepoint type, and its map pins must refer to that program's maps. If the
+program pin is already absent after a partial unload, the validated private
+map-set record authorizes inspection of its remaining BPF map pins. Bytecode
+adoption accepts only `bytecode.o` and `provenance.json`. Unknown children and
+unsafe paths fail preflight before any managed-object removal. Ordinary missing
+artifacts are treated as already absent.
+
+Unload is forward teardown of committed state, with its own pure continuations:
+
+1. Remove the program pin. Failure stops all later effects.
+2. Delete the managed record. Failure is returned, but independent bytecode
+   cleanup still runs; maps and their map-set row remain untouched.
+3. After record deletion, remove each private map pin once, continuing after
+   individual failures. Remove the container only after all pins succeed, then
+   delete the unused map-set row only after the container is gone.
+4. Attempt bytecode cleanup independently of the record/map cleanup outcomes.
+
+As in Go, post-record map/bytecode cleanup failures are warnings: the program is
+unloaded even if GC leaves residue. Store deletions revalidate evidence in atomic
+transactions and require the same opened runtime identity. Failed effects retain
+non-cloneable receipts. Reports preserve successful and failed attempts with
+stable instruction IDs; work skipped because a prerequisite failed is retained
+without inventing an attempt.
+
+No retry runs automatically. The library exposes an optional explicit pass over
+retained receipts, including after successful unload with warnings. This does
+not make failures transient: an unchanged failing condition still fails. The
+caller must decide whether external conditions justify another attempt. The CLI
+runs one pass and reports warnings/errors; it does not persist a recovery queue.
+Repeating the CLI command can finish a partial unload while the program record
+still exists. Once the record has gone, repeating by ID reports not found;
+remaining GC residue requires separate repair, which this slice does not add.
+
+The stateful fake enters the production unload interpreter and checks all 256
+subsets of failure across eight individual effects, including exact order,
+status, successful history, blocked work, residue, and unrelated resources.
+An unchanged-fault pass must make no progress; clearing the injected faults
+allows only retained work to complete. Adapter tests cover store changes,
+ignored/failed deletes, wrong runtime authority, replacement, symlinks, hard
+links, FIFOs, and unexpected children. The kernel gate supplies the BPF identity
+and lifetime checks that these fakes cannot establish.

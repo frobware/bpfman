@@ -24,7 +24,7 @@ pub(super) struct Cli {
 
 #[derive(Subcommand)]
 pub(super) enum Command {
-    /// Manage BPF programs (loading currently supports parsing only).
+    /// Manage BPF programs.
     Program {
         #[command(subcommand)]
         command: ProgramCommand,
@@ -33,6 +33,12 @@ pub(super) enum Command {
 
 #[derive(Subcommand)]
 pub(super) enum ProgramCommand {
+    /// Unload one unattached tracepoint with private maps.
+    Unload {
+        /// Managed kernel program ID.
+        #[arg(value_name = "PROGRAM_ID")]
+        id: std::num::NonZeroU32,
+    },
     /// List managed programs from the Go database (text and quiet output).
     ///
     /// This initial reader does not observe the kernel. JSON, --all, and

@@ -15,7 +15,7 @@ use std::{
 };
 
 // Linux uapi/linux/magic.h; rustix does not currently export this constant.
-const BPF_SUPER_MAGIC: rustix::fs::FsWord = 0xcafe4a11;
+pub(super) const BPF_SUPER_MAGIC: rustix::fs::FsWord = 0xcafe4a11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Identity {
@@ -95,7 +95,7 @@ impl Entry {
     }
 }
 
-fn entry(
+pub(super) fn entry(
     writer: &RuntimeWriter<'_>,
     parent: &OwnedFd,
     parent_path: String,

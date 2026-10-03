@@ -13,6 +13,7 @@ mod list;
 mod load;
 mod rollback;
 mod store;
+mod unload;
 
 pub use list::{ProgramFilter, list_programs};
 pub use store::plan_store_open;
@@ -317,3 +318,148 @@ pub enum StoreOpenPlan<T> {
         evidence: T,
     },
 }
+
+/// One unload effect, in Go's forward teardown order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UnloadKind {
+    /// Unpin before any destructive store or artifact cleanup.
+    ProgramPin,
+    /// Delete the managed record; failure still permits bytecode cleanup.
+    ProgramRecord,
+    /// Remove one private map pin after record deletion.
+    MapPin,
+    /// Remove the container after all map pins succeed.
+    MapDirectory,
+    /// Delete the unused map-set row after its pins and container are gone.
+    MapSet,
+    /// Independent bytecode cleanup after the program is unpinned.
+    Bytecode,
+}
+
+/// Owned teardown work, distinct from compensation of an uncommitted load.
+pub enum UnloadInstruction<P, R, M, D, S, B> {
+    /// Existing program pin.
+    ProgramPin(P),
+    /// Validated committed program record.
+    ProgramRecord(R),
+    /// One private map pin.
+    MapPin(M),
+    /// Private map container.
+    MapDirectory(D),
+    /// Validated private map-set row.
+    MapSet(S),
+    /// Published bytecode artifacts.
+    Bytecode(B),
+}
+
+/// Stable identity and owned receipt for unresolved teardown work.
+pub struct PendingUnload<P, R, M, D, S, B> {
+    id: usize,
+    instruction: UnloadInstruction<P, R, M, D, S, B>,
+}
+
+/// Receipt-free history, including successful effects; blocked work is not an attempt.
+pub struct UnloadAttempt<E> {
+    /// Identity stable across explicit retry passes.
+    pub id: usize,
+    /// Effect label, never filesystem authority.
+    pub kind: UnloadKind,
+    /// Observed effect outcome.
+    pub outcome: Result<(), E>,
+}
+
+/// One bounded forward teardown pass. No rollback or automatic retry.
+#[must_use = "execute each permitted effect and retain the report"]
+pub struct UnloadProgram<P, R, M, D, S, B, E> {
+    pending: VecDeque<PendingUnload<P, R, M, D, S, B>>,
+    remaining: Vec<PendingUnload<P, R, M, D, S, B>>,
+    attempts: Vec<UnloadAttempt<E>>,
+}
+
+/// Terminal unload outcome, including owned residue and all prior outcomes.
+#[must_use = "report failures and retain unresolved work for explicit retry"]
+pub struct UnloadReport<P, R, M, D, S, B, E> {
+    remaining: Vec<PendingUnload<P, R, M, D, S, B>>,
+    attempts: Vec<UnloadAttempt<E>>,
+}
+
+/// Consuming continuation tied to the dispatched receipt type.
+///
+/// A failed map removal cannot return program-record evidence:
+///
+/// ```compile_fail
+/// use bpfman_core::{EffectFailure, UnloadContinuation};
+/// struct Map;
+/// struct Record;
+/// fn wrong(next: UnloadContinuation<Map, (), Record, Map, (), (), (), ()>) {
+///     next.completed(Err(EffectFailure { remaining: Record, cause: () }));
+/// }
+/// ```
+///
+/// Successful completion consumes the continuation:
+///
+/// ```compile_fail
+/// use bpfman_core::UnloadContinuation;
+/// fn twice(next: UnloadContinuation<(), (), (), (), (), (), (), ()>) {
+///     let first = next.completed(Ok(()));
+///     let second = next.completed(Ok(()));
+/// }
+/// ```
+#[must_use = "report the effect and continue teardown"]
+pub struct UnloadContinuation<T, P, R, M, D, S, B, E> {
+    operation: UnloadProgram<P, R, M, D, S, B, E>,
+    id: usize,
+    kind: UnloadKind,
+    wrap: UnloadWrap<T, P, R, M, D, S, B>,
+}
+
+/// Next permitted effect, or a terminal report when the pass is exhausted.
+#[must_use = "execute the effect or retain the terminal report"]
+pub enum UnloadStep<P, R, M, D, S, B, E> {
+    /// Execute ProgramPin teardown.
+    ProgramPin {
+        /// Owned receipt consumed by the adapter on success.
+        receipt: P,
+        /// Continuation accepting only this receipt type on failure.
+        next: UnloadContinuation<P, P, R, M, D, S, B, E>,
+    },
+    /// Execute ProgramRecord teardown.
+    ProgramRecord {
+        /// Owned receipt consumed by the adapter on success.
+        receipt: R,
+        /// Continuation accepting only this receipt type on failure.
+        next: UnloadContinuation<R, P, R, M, D, S, B, E>,
+    },
+    /// Execute MapPin teardown.
+    MapPin {
+        /// Owned receipt consumed by the adapter on success.
+        receipt: M,
+        /// Continuation accepting only this receipt type on failure.
+        next: UnloadContinuation<M, P, R, M, D, S, B, E>,
+    },
+    /// Execute MapDirectory teardown.
+    MapDirectory {
+        /// Owned receipt consumed by the adapter on success.
+        receipt: D,
+        /// Continuation accepting only this receipt type on failure.
+        next: UnloadContinuation<D, P, R, M, D, S, B, E>,
+    },
+    /// Execute MapSet teardown.
+    MapSet {
+        /// Owned receipt consumed by the adapter on success.
+        receipt: S,
+        /// Continuation accepting only this receipt type on failure.
+        next: UnloadContinuation<S, P, R, M, D, S, B, E>,
+    },
+    /// Execute Bytecode teardown.
+    Bytecode {
+        /// Owned receipt consumed by the adapter on success.
+        receipt: B,
+        /// Continuation accepting only this receipt type on failure.
+        next: UnloadContinuation<B, P, R, M, D, S, B, E>,
+    },
+    /// All independent work was attempted once; blocked work remains owned.
+    Complete(UnloadReport<P, R, M, D, S, B, E>),
+}
+
+type UnloadWrap<T, P, R, M, D, S, B> = fn(T) -> UnloadInstruction<P, R, M, D, S, B>;

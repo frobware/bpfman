@@ -156,6 +156,13 @@ pub(super) fn ensure_directory(
         .map_err(|e| io("verify runtime directory component", e))
 }
 
+impl crate::RuntimeWriter<'_> {
+    /// Identity of the descriptor adopted by this writer, independent of path spelling.
+    pub fn identity(&self) -> Result<crate::RuntimeIdentity, crate::Error> {
+        crate::artifacts::identity(&self.runtime.root).map(crate::RuntimeIdentity)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

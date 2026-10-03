@@ -9,6 +9,7 @@ mod artifacts;
 mod directory;
 mod error;
 mod layout;
+mod observe;
 mod removal;
 
 /// Default runtime root, shared by front ends rather than duplicated there.
@@ -143,3 +144,22 @@ pub struct Bytecode {
     directory: Box<artifacts::Entry>,
     files: Vec<artifacts::Entry>,
 }
+
+/// Verified existing artifacts for a stored private tracepoint. Missing objects
+/// are already absent; receipts retain inode and runtime identity for removal.
+/// The caller must first validate exclusive stored ownership under the writer.
+pub struct UnloadArtifacts {
+    /// Program pin, if present and matching the requested kernel ID and type.
+    pub program: Option<ProgramPin>,
+    /// Individual private map pins, in lexical name order.
+    pub maps: Vec<MapPin>,
+    /// Private map container, if present.
+    pub directory: Option<MapDirectory>,
+    /// Known bytecode files and their container, if present.
+    pub bytecode: Option<Bytecode>,
+}
+
+/// Opaque identity of an opened runtime root, for binding adapter evidence.
+/// This observation is not mutation authority; operations still need a writer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RuntimeIdentity(artifacts::Identity);

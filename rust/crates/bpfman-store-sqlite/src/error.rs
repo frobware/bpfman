@@ -3,6 +3,8 @@ use crate::SCHEMA_VERSION;
 /// Backend-independent classification of a store failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
+    /// The requested mutation is outside this adapter's implemented scope.
+    Unsupported,
     /// State could not be created, opened, or read.
     Unavailable,
     /// State is uninitialised or uses an unsupported schema.
@@ -23,7 +25,10 @@ impl Error {
     /// Classification for callers; the backend cause is diagnostic information.
     pub fn kind(&self) -> ErrorKind {
         match self.cause {
-            Failure::Sqlite(_) | Failure::Filesystem { .. } => ErrorKind::Unavailable,
+            Failure::Unsupported(_) => ErrorKind::Unsupported,
+            Failure::Sqlite(_) | Failure::Runtime(_) | Failure::Filesystem { .. } => {
+                ErrorKind::Unavailable
+            }
             Failure::SchemaVersion(_) | Failure::UnsupportedSchema { .. } => {
                 ErrorKind::IncompatibleSchema
             }
@@ -40,6 +45,10 @@ impl From<Failure> for Error {
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
+    #[error(transparent)]
+    Runtime(#[from] bpfman_fs::Error),
+    #[error("unsupported unload: {0}")]
+    Unsupported(&'static str),
     #[error("SQLite operation failed")]
     Sqlite(#[from] rusqlite::Error),
     #[error("access database at {}", path.display())]
