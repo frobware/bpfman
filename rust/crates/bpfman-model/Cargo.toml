@@ -10,6 +10,3 @@ publish.workspace = true
 
 [lints]
 workspace = true
-
-[dependencies]
-thiserror.workspace = true

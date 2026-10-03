@@ -2,6 +2,12 @@ use crate::{Error, ErrorKind};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
+    #[error("pin BPF object")]
+    Pin(#[source] aya::pin::PinError),
+    #[error("inspect loaded program")]
+    Program(#[source] aya::programs::ProgramError),
+    #[error("artifact cleanup failures: {0:?}")]
+    Cleanup(Vec<Error>),
     #[error("{operation}")]
     Io {
         operation: &'static str,
@@ -16,7 +22,8 @@ pub(super) enum Failure {
 impl Error {
     /// Classify without downcasting backend causes.
     pub fn kind(&self) -> ErrorKind {
-        match &self.cause {
+        match self.cause.as_ref() {
+            Failure::Pin(_) | Failure::Program(_) | Failure::Cleanup(_) => ErrorKind::Unavailable,
             Failure::Unsafe(_) => ErrorKind::UnsafeLayout,
             Failure::Io { source, .. } => match source.raw_os_error() {
                 Some(code)
@@ -40,7 +47,9 @@ impl Error {
 
 impl From<Failure> for Error {
     fn from(cause: Failure) -> Self {
-        Self { cause }
+        Self {
+            cause: Box::new(cause),
+        }
     }
 }
 

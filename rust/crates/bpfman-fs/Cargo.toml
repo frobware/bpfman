@@ -12,6 +12,9 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+aya.workspace = true
+bpfman-core.workspace = true
+
 bpfman-lock.workspace = true
 rustix.workspace = true
 thiserror.workspace = true

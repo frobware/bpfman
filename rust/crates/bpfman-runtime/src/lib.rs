@@ -2,7 +2,11 @@
 
 mod compensation;
 mod error;
+mod kernel;
 mod list;
+mod load;
+mod load_error;
+pub use load::load_tracepoint;
 mod store;
 
 pub use compensation::compensate_load;
@@ -73,4 +77,20 @@ pub struct Error {
     kind: ErrorKind,
     #[source]
     source: error::Failure,
+}
+
+/// A failed load, retaining original diagnostics and unresolved cleanup receipts.
+pub struct LoadError {
+    failure: Box<load_error::Failure>,
+}
+
+/// Backend-independent classification for the supported load operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoadErrorKind {
+    /// The local ELF or supplied request is invalid.
+    InvalidInput,
+    /// The requested capability is outside the implemented slice.
+    Unsupported,
+    /// An operating-system, kernel, filesystem, lock, or store operation failed.
+    Unavailable,
 }

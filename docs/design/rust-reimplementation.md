@@ -2,7 +2,10 @@
 
 ## Status
 
-Proposed.
+Implementation in progress in the independent `rust/` workspace. Managed
+listing and one local-file tracepoint load (without attachment) are executable.
+See [the workspace checkpoint](../../rust/README.md) for supported options and
+the focused kernel acceptance gate; full behavioural parity remains unfinished.
 
 ## Summary
 
@@ -260,8 +263,10 @@ The runtime drives a narrow `LoadCleanup` trait, injected for tests, under
 `RuntimeWriter` authority. Both the driver and each mutating method require the
 writer. A real implementation must delegate managed-object I/O to `bpfman-fs`
 and verify receipt/root identity. The fake exercises the same driver; it does
-not replace confinement or real-kernel testing. The initial implementation
-provides this trait, driver and fake, not real pin/bytecode removal yet.
+not replace confinement or real-kernel testing. The local tracepoint slice now
+has real pin/bytecode receipts and removal. Map-directory cleanup remains
+separate dependent work: it is attempted only after all map-pin instructions
+have succeeded, with blocked ownership retained for explicit retry.
 
 Every independent compensation is attempted once per pass. Failure records its
 error and unresolved receipt, then continues; it does not propagate early or
@@ -587,18 +592,20 @@ Runtime directory authority and the SQLite adapter must not claim otherwise.
 WAL interoperability with Go remains required and tested.
 
 `bpfman-fs` owns the filesystem representation of runtime objects: both where
-they live and how they are created or removed. A future prepared-runtime
-capability should offer conceptual operations such as removing a program pin,
-a link pin, or a program's map directory, parameterised by typed identities and
-`&RuntimeWriter`. The core emits object-level intent; the runtime routes it to
+they live and how they are created or removed. Prepared load operations pin
+programs and maps, publish bytecode, and remove only owned artifacts, using typed
+receipts and `&RuntimeWriter`. Future link operations follow the same boundary. The core emits object-level intent; the runtime routes it to
 that capability. Callers must not join path fragments or pass arbitrary paths
 for deletion. A layout change then remains local to the filesystem adapter.
 
 One private removal module is the only workspace-owned home for unlink/rmdir
-and recursive deletion primitives. Clippy denies direct removal calls; any
-future exception is scoped to that module rather than its entire crate.
+primitives. Clippy permits raw unlinkat only within that module, rather than
+its entire crate. No recursive deletion is implemented.
 Third-party temporary-file and SQLite cleanup remains dependency-owned and is
-not a way to delete managed objects. No object deletion API is implemented yet.
+not a way to delete managed objects. Current cleanup revalidates parent and
+artifact identity and refuses symlinks and unexpected children. Like the writer
+lock, this is cooperative: it does not sandbox privileged processes replacing
+entries between a check and its syscall.
 
 The removal boundary must refuse `/`, the configured runtime root, bpffs mount
 root, and collection roots, including equivalent spellings. Every object target
@@ -853,7 +860,10 @@ The working guidelines are recorded in `rust/AGENTS.md`, adapted from `rty`.
 documentation; implementations live in private modules. `unreachable_pub` is
 part of the normal lint gate. Adapter-specific errors remain opaque and are
 translated to backend-independent application categories; library code uses
-`thiserror`, while the binary uses `anyhow` to render retained cause chains.
+`thiserror` in adapters, while the binary uses `anyhow` to render retained cause
+chains. Pure validation errors implement core traits directly and retain an
+empty external dependency closure; Aya enables thiserror's std feature in the
+application graph.
 
 The new workspace begins with these conventions:
 

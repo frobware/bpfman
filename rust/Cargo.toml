@@ -5,7 +5,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 license = "Apache-2.0"
 repository = "https://github.com/bpfman/bpfman"
 publish = false
@@ -17,11 +17,15 @@ bpfman-lock = { path = "crates/bpfman-lock" }
 bpfman-fs = { path = "crates/bpfman-fs" }
 bpfman-store-sqlite = { path = "crates/bpfman-store-sqlite" }
 bpfman-runtime = { path = "crates/bpfman-runtime" }
+aya = { version = "0.14", default-features = false }
+aya-obj = { version = "0.3", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-rustix = { version = "1", features = ["fs"] }
+rustix = { version = "1", features = ["fs", "mount"] }
+libc = "0.2"
 humantime = "2"
 serde_json = "1"
 tempfile = "3"

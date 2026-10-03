@@ -81,7 +81,9 @@ The architecture and compatibility goals are in
 - Forbid unsafe by default. Any exception requires a narrow, documented boundary.
 - No `unwrap`, `expect`, or `panic` in production. Test-only exceptions must be
   scoped to tests. Keep failure represented in types and source chains.
-- Use `thiserror` for library errors and `anyhow` at the binary boundary. Error
+- Use `thiserror` for adapter errors and `anyhow` at the binary boundary. Pure
+  validation errors implement core traits directly: their external normal
+  dependency closure is empty, avoiding Aya's unified `thiserror/std` feature. Error
   messages add context; sources carry causes. Do not interpolate a source into
   its parent's message and then render the chain again. The binary uses `{:#}`.
 - Translate adapter failures into backend-independent categories at the runtime

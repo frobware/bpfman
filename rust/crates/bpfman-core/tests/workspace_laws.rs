@@ -17,16 +17,9 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman", 5),
 ];
 const PURE: &[&str] = &["bpfman-model", "bpfman-core"];
-// thiserror's no_std runtime support plus its host-side derive dependency
-// closure. These expand core::fmt/core::error implementations, not effects.
-const PURE_EXTERNAL: &[&str] = &[
-    "thiserror",
-    "thiserror-impl",
-    "proc-macro2",
-    "quote",
-    "syn",
-    "unicode-ident",
-];
+// No external normal dependencies are admitted to the pure crates. In
+// particular Aya's std-enabled thiserror must not unify into their closure.
+const PURE_EXTERNAL: &[&str] = &[];
 
 fn metadata() -> &'static Value {
     static METADATA: OnceLock<Value> = OnceLock::new();
@@ -178,6 +171,14 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                 "rustix" => assert!(
                     matches!(name, "bpfman-lock" | "bpfman-fs"),
                     "filesystem and lock syscalls belong in their adapters"
+                ),
+                "aya" => assert!(
+                    matches!(name, "bpfman-fs" | "bpfman-runtime"),
+                    "Aya is confined to pin I/O and the private kernel adapter"
+                ),
+                "aya-obj" => assert_eq!(
+                    name, "bpfman-runtime",
+                    "ELF parsing belongs in the kernel adapter"
                 ),
                 "rusqlite" | "libsqlite3-sys" => assert_eq!(
                     name, "bpfman-store-sqlite",

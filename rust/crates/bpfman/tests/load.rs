@@ -192,3 +192,53 @@ fn native_object_paths_are_not_lossily_decoded_or_opened() -> Result {
     assert_eq!(std::fs::read_dir(temporary.path())?.count(), 0);
     Ok(())
 }
+
+#[test]
+fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects() -> Result {
+    let temporary = tempfile::tempdir()?;
+    let runtime = temporary.path().join("runtime");
+    for options in [
+        vec!["--programs", "tracepoint:a,tracepoint:b"],
+        vec!["--programs", "tracepoint:a", "--global", "counter=00"],
+        vec!["--programs", "tracepoint:a", "--map-owner-id", "1"],
+        vec!["--programs", "tracepoint:a", "--output", "json"],
+    ] {
+        assert_failure(
+            command(&runtime)
+                .args(["file", "not-opened.o"])
+                .args(options)
+                .output()?,
+            1,
+            "execution is not implemented",
+        )?;
+        assert!(!runtime.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn local_tracepoint_validates_source_before_runtime_creation() -> Result {
+    let temporary = tempfile::tempdir()?;
+    let runtime = temporary.path().join("runtime");
+    let source = temporary.path().join("invalid.o");
+    std::fs::write(&source, b"not an ELF file")?;
+    assert_failure(
+        command(&runtime)
+            .arg("file")
+            .arg(&source)
+            .args(["--programs", "tracepoint:a"])
+            .output()?,
+        1,
+        "parse local ELF",
+    )?;
+    assert!(!runtime.exists());
+    assert_failure(
+        command(&runtime)
+            .args(["file", "missing.o", "--programs", "tracepoint:a"])
+            .output()?,
+        1,
+        "read local ELF",
+    )?;
+    assert!(!runtime.exists());
+    Ok(())
+}

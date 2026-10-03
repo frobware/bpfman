@@ -2,8 +2,8 @@
 allow-expect-in-tests = true
 
 # Deletion of runtime objects must go through conceptual, typed operations in
-# bpfman-fs. No current operation needs a raw removal call. When introduced,
-# permit the syscall only inside its private, audited removal module.
+# bpfman-fs. Only its private removal module permits descriptor-relative
+# unlinkat; public operations require writer authority and ownership receipts.
 disallowed-methods = [
     { path = "std::fs::remove_file", reason = "Use typed object removal through bpfman-fs; never delete caller-supplied paths." },
     { path = "std::fs::remove_dir", reason = "Use typed object removal through bpfman-fs; never delete caller-supplied paths." },

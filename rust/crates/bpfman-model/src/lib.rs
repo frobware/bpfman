@@ -23,10 +23,7 @@ pub use summary::StoredProgramSummary;
 pub struct Symbol(String);
 
 /// Input cannot name an ELF symbol or load-time target.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-#[error(
-    "names and targets must be nonempty, have no surrounding whitespace, and contain no colon or NUL"
-)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidSymbol;
 
 /// A selected ELF program with the load-time data required by its kind.

@@ -1,13 +1,16 @@
 //! Adapter for Go's SQLite schema, version 2.
 //!
 //! Creation publishes missing databases but never migrates existing ones.
-//! Queries remain read-only and return domain observations; selection policy
+//! Queries remain read-only; load persistence uses a separate atomic write API.
+//! Reads return domain observations; selection policy
 //! remains in bpfman-core.
 
 mod create;
 mod error;
 mod open;
 mod read;
+mod write;
+pub use write::{TracepointRecord, persist_tracepoint};
 
 pub use create::create_if_missing;
 pub use error::{Error, ErrorKind};

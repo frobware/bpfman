@@ -12,6 +12,12 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+libc.workspace = true
+aya.workspace = true
+aya-obj.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+
 bpfman-fs.workspace = true
 bpfman-lock.workspace = true
 bpfman-model.workspace = true

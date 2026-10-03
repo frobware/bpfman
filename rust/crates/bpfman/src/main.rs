@@ -38,7 +38,7 @@ fn run(cli: cli::Cli) -> anyhow::Result<()> {
         }
         cli::Command::Program {
             command: cli::ProgramCommand::Load { source },
-        } => source.execute()?,
+        } => source.execute(&cli.layout, cli.lock_timeout)?,
     }
     Ok(())
 }

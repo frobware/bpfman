@@ -53,3 +53,21 @@ impl RuntimeLayout {
         self.root.join(DATABASE_DIRECTORY).join(DATABASE_FILE)
     }
 }
+
+impl RuntimeLayout {
+    /// Go-compatible program pin path, for stored records and presentation only.
+    pub fn program_pin_path(&self, id: std::num::NonZeroU32) -> PathBuf {
+        self.root.join("fs").join(format!("prog_{id}"))
+    }
+    /// Go-compatible private map directory, for stored records only.
+    pub fn map_directory_path(&self, id: std::num::NonZeroU32) -> PathBuf {
+        self.root.join("fs/maps").join(id.to_string())
+    }
+    /// Published local ELF path, for stored records only.
+    pub fn bytecode_path(&self, id: std::num::NonZeroU32) -> PathBuf {
+        self.root
+            .join("programs")
+            .join(id.to_string())
+            .join("bytecode.o")
+    }
+}

@@ -10,7 +10,7 @@ direnv exec . make rust-check
 direnv exec . make rust-test
 ```
 
-Rust 2024, minimum Rust 1.85. Build output and the lockfile belong to this
+Rust 2024, minimum Rust 1.87 (required by Aya 0.14). Build output and the lockfile belong to this
 workspace. `make rust-build`, `rust-test`, `rust-fmt`, `rust-lint`, and `rust-doc`
 all select it explicitly. `rust-fmt` checks formatting; to apply formatting,
 run `make rust-fmt-fix`. `make rust-lock` refreshes the new lockfile.
@@ -34,10 +34,10 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-model` | 0 | Pure domain vocabulary, payload-bearing program specifications, and stored summaries |
 | `bpfman-core` | 1 | Pure listing/store policy and single-program load/compensation continuations |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
-| `bpfman-fs` | 2 | Runtime layout, opened-root capabilities, and root-bound write authority |
-| `bpfman-store-sqlite` | 3 | Go-compatible database creation and read-only queries through rusqlite |
-| `bpfman-runtime` | 4 | Observation gathering, typed compensation interpretation, and application error translation |
-| `bpfman` | 5 | Typed Clap CLI, load request parsing, and text/quiet listing presentation |
+| `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
+| `bpfman-store-sqlite` | 3 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence |
+| `bpfman-runtime` | 4 | Local tracepoint loading, private Aya adapter, compensation, and observation gathering |
+| `bpfman` | 5 | Typed Clap CLI, supported load dispatch, and text/quiet presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
 point down through tiers, pure normal dependency closures are explicitly
@@ -54,9 +54,12 @@ validates names but is explicitly **not** filesystem path authority. Native
 source paths, image credentials, presentation options and Clap remain outside
 the pure model.
 
-Domain validation errors use `thiserror` with default features disabled. The
-reviewed pure dependency closure includes its no-std support and host-side
-derive dependencies; the architecture gate rejects enabling its `std` feature.
+The pure crates have no external normal dependencies. Their small validation
+errors implement `core::fmt::Display` and `core::error::Error` directly. Aya's
+object parser enables `thiserror/std`; using that same dependency in the model
+would let Cargo feature unification introduce std into its dependency closure.
+The architecture gate therefore admits no external pure dependencies. Adapter
+errors still use `thiserror`, with `anyhow` only at the binary boundary.
 
 The architecture tests inspect the resolved dependency graph. They do not
 prove arbitrary dependency code is free of I/O: admission to the pure closure
@@ -101,10 +104,9 @@ Existing databases are never repaired or migrated. Subsequent reads check the
 schema in a read-only transaction on that handle after releasing the writer lock. Production
 creation and test fixtures embed the Go migration SQL with `include_str!`.
 
-Direct file/directory removal calls are denied by the lint gate. Future runtime
-object removal belongs in a single private `bpfman-fs` module behind typed
-prepared-runtime operations, never a generic path-based public API. No object
-deletion API exists yet. `RuntimeDirectory::open_or_create` opens/creates the
+Direct file/directory removal calls are denied by the lint gate outside the
+private `bpfman-fs::removal` module. Its operations consume typed ownership
+receipts and require the runtime writer. It performs no recursive deletion. `RuntimeDirectory::open_or_create` opens/creates the
 root without acquiring the lock. Its `with_writer` method acquires the lock,
 checks that the lock inode has not changed, prepares the database directory,
 then lends a non-constructible, non-cloneable `RuntimeWriter` to the callback.
@@ -112,7 +114,9 @@ That authority cannot escape the callback. Nested operations borrow the same
 writer rather than reacquiring it.
 
 Directory and lock operations use Linux `openat2`, reject symlink traversal,
-and forbid mount crossings below the adopted root. Kernels without `openat2`
+and forbid unintended mount crossings below the adopted root. Load preparation
+explicitly adopts or mounts the `fs` bpffs child; subsequent operations cannot
+cross another mount below it. Kernels without `openat2`
 fail closed. Runtime adoption may cross mounts such as `/run`. Lock entries must
 be singly linked regular files. Tests cover symlinked roots/ancestors, lock and
 database-directory replacement, stale lock descriptors, and cross-process flock
@@ -129,17 +133,23 @@ object cleanup must never manipulate SQLite's journal, WAL, or shared-memory fil
 acquisition, never work under the lock. The lock adapter supports cooperative
 cancellation and owned inherited descriptors; CLI signal cancellation and
 namespace-helper process launching are not yet wired. No privileges are needed
-for a writable temporary runtime; `/run/bpfman` will normally require sudo.
+for listing in a writable temporary runtime. Loading requires BPF and mount
+privileges; `/run/bpfman` will normally require sudo.
 
 Listing supports managed table and quiet-ID output only. Stored names
 are used directly (no kernel-name fallback). `--all`, JSON listing, kernel link
-state filters, and lifecycle execution are not implemented and are rejected.
+state filters, get, attach, detach, and unload are not implemented and are rejected.
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2; valid requests exit with status 1 and an explicit unsupported
-execution error, without runtime, database, registry, or kernel effects.
+exits with status 2. Only one local tracepoint with text output, private maps,
+and metadata/application labels is executable. Image loads, other program
+types, batches, global overrides, map-owner sharing, and JSON output exit with
+status 1 before source access or runtime effects. ELF-level unsupported
+PinByName maps and section/type mismatches are rejected before runtime setup.
+The supported load currently prints a compact listing table; Go's detailed load
+presentation and JSON result shape remain future compatibility work.
 Credentials are not echoed in auth diagnostics or help. Unlike Go, this parser
 requires the explicit file/image verb and rejects duplicate ELF selections,
 extraneous load-time targets, and zero map-owner IDs. OCI reference resolution
@@ -161,7 +171,7 @@ must be named `bpfman`. Keep Go and Rust suite runs separate on a clean runtime.
 using fixture executables and the real Make recipe. CLI process tests also
 exercise the real Rust executable. Behavioural parity is not yet claimed.
 
-## Single-program load policy (not yet executable by the CLI)
+## Single-program load policy and execution
 
 The first load-policy increment follows Go's `manager/load.go`: load/pin,
 publish bytecode, then atomically persist the program and map-set membership.
@@ -201,10 +211,11 @@ After a successful commit, output-delivery failure must not roll back the load.
 interface. `compensate_load` drives the instructions through it, with a
 `RuntimeWriter` required both by the driver and every mutating method. The loop
 does not propagate cleanup errors early: it attempts every instruction in the
-pass even when every cleanup fails. The real implementation must delegate to
-`bpfman-fs` and validate receipt/root identity; no real pin/bytecode implementation
-exists yet. Raw unlink/remove operations remain forbidden outside the private
-filesystem boundary. SQLite auxiliary files remain rusqlite's responsibility.
+pass even when every cleanup fails. The real implementation delegates to
+`bpfman-fs`, which checks receipt/root identity, reopens parents without following
+symlinks, and compares parent and artifact inodes. Raw unlink/remove operations
+remain forbidden outside the private filesystem boundary. SQLite auxiliary
+files remain rusqlite's responsibility.
 
 The runtime tests exercise the production compensation driver with an injected
 stateful fake under real writer scopes. They cover all 32 combinations of failure
@@ -212,12 +223,62 @@ across five instructions, partial forward work, repeated total failure, retry
 history, wrong-runtime refusal, preservation of unrelated/shared state, and
 non-cloneable receipt/error drop counts. Real-filesystem confinement tests remain
 in `bpfman-fs`; the fake cannot prove confinement or kernel lifetime semantics.
-Real-kernel behaviour, crash recovery, and cancellation budgets are not yet
-implemented for loading. A hanging/panicking adapter or process termination can
+Crash recovery and cancellation budgets are not yet implemented for loading. A hanging/panicking adapter or process termination can
 prevent progress; Rust cannot prevent dropping/forgetting a continuation.
 `must_use`, compile-fail tests and interpreter tests complement type-level ordering.
 
-Next, implement the owned filesystem artifacts and real kernel/store adapters
-for one tracepoint from a local ELF, without attachment. Reject unsupported
-options before effects. Then add the get/JSON-list/unload surface required to
-run the unchanged tracepoint DSL scripts; load-policy tests alone are not parity.
+The executable slice reads a regular ELF once, validates its selected section
+and maps, then uses those same bytes for Aya loading and bytecode publication.
+It holds one Go-compatible writer scope through runtime preparation, program
+and map pinning, publication, and store commit. Pins use `/proc/self/fd` paths
+anchored at verified directory descriptors because Aya's pin API accepts a
+pathname; callers never supply a deletion path. Only the selected program is
+loaded; private maps are pinned under `fs/maps/{program_id}`. Internal data maps
+remain kernel-owned and are not pinned separately. There is no attachment.
+
+Bytecode and provenance are written into an exclusively created staging
+directory, then published to `programs/{id}` with `RENAME_NOREPLACE`. Partial
+publication returns its staged ownership. Cleanup attempts each owned file and
+removes the directory only after all its files have been removed. The runtime
+likewise retains the owned map-directory receipt separately and attempts its
+removal only when no map-pin instructions remain unresolved. Unexpected
+children prevent directory removal. `LoadError::retry_cleanup` performs one
+explicit pass and retains the original cause and all cleanup history.
+
+These checks enforce descriptor-based confinement and refuse observed
+replacement; they rely on cooperating writers holding `.lock`. They are not a
+sandbox against privileged processes renaming entries between the final check
+and a syscall. Collection directories, the lock, database bootstrap, and a newly
+mounted bpffs may remain after a failed load. Crash recovery is separate work.
+Non-UTF-8 source/runtime paths are rejected before load effects because this
+slice persists paths as SQLite text; read-only listing still accepts native paths.
+
+The store creates the private map set and tracepoint row in one transaction,
+with Go's source path, license, metadata, UTC creation time, and null update time.
+Existing rows are not overwritten. On commit, ownership transfers to stored
+state; failed output delivery never compensates the successful load.
+
+Build and run the focused real-kernel acceptance gate with:
+
+```sh
+direnv exec . make rust-test-kernel-load
+```
+
+It builds the local fixtures and both CLIs, then runs in a private mount namespace
+with an isolated temporary runtime. It proves Rust-created pins outlive the
+loader, Go can observe and unload the program, failed publication and persistence
+remove owned resources, and output-delivery failure preserves the committed load.
+It also checks unsupported ELF inputs before runtime creation. This gate does
+not claim full CLI or unchanged-DSL parity.
+
+For a manual load (use the Go CLI to unload until Rust unload is implemented):
+
+```sh
+sudo rust/target/debug/bpfman program load file \
+  e2e/testdata/bpf/tracepoint_counter.bpf.o \
+  --programs tracepoint:tracepoint_kill_recorder --application rust-slice
+```
+
+Next, add compatible load JSON, get/JSON-list, and unload, then tracepoint
+attachment/detachment to admit the unchanged lifecycle DSL scripts. Broaden
+supported options incrementally; do not weaken the scripts for Rust.

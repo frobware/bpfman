@@ -39,7 +39,7 @@ pub(super) enum ProgramCommand {
     /// attachment-state filtering will arrive with kernel observation support.
     /// A missing database is created under the runtime writer lock.
     List(ListArgs),
-    /// Parse a load request; execution is not implemented yet.
+    /// Load one local tracepoint; other requests are explicitly rejected.
     Load {
         #[command(subcommand)]
         source: load::LoadCommand,

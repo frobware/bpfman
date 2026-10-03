@@ -53,3 +53,12 @@ impl ProgramSpec {
         }
     }
 }
+
+// Keep the pure dependency closure empty: Aya enables thiserror's std feature
+// in the application graph, which Cargo would unify into this crate too.
+impl core::fmt::Display for crate::InvalidSymbol {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("names and targets must be nonempty, have no surrounding whitespace, and contain no colon or NUL")
+    }
+}
+impl core::error::Error for crate::InvalidSymbol {}

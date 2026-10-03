@@ -1808,3 +1808,11 @@ ci-test-e2e-grpc:
 # locally, and don't run them in two shells at once.
 .PHONY: ci
 ci: ci-check-vendor ci-check-fmt ci-check-goimports ci-check-vet ci-check-gofix ci-check-bpfman-shell-fmt ci-build ci-lint ci-test ci-test-e2e ci-test-e2e-scripts ci-test-e2e-grpc
+
+# Focused real-kernel gate for the new workspace, isolated from host bpffs.
+# The Go CLI observes and unloads the Rust-created program independently.
+.PHONY: rust-test-kernel-load
+rust-test-kernel-load: rust-build $(BIN_DIR)/bpfman e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
+	sudo unshare --mount --propagation private python3 rust/tests/kernel_load.py \
+		--rust "$(CURDIR)/rust/target/debug/bpfman" --go "$(abspath $(BIN_DIR))/bpfman" \
+		--fixtures "$(CURDIR)/e2e/testdata/bpf"

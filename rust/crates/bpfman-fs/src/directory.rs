@@ -13,11 +13,11 @@ use crate::{
     layout::{DATABASE_DIRECTORY, LOCK_FILE},
 };
 
-const DIRECTORY: OFlags = OFlags::RDONLY
+pub(super) const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
     .union(OFlags::CLOEXEC);
-const BENEATH: ResolveFlags = ResolveFlags::BENEATH.union(ResolveFlags::NO_SYMLINKS);
-const CONFINED: ResolveFlags = BENEATH.union(ResolveFlags::NO_XDEV);
+pub(super) const BENEATH: ResolveFlags = ResolveFlags::BENEATH.union(ResolveFlags::NO_SYMLINKS);
+pub(super) const CONFINED: ResolveFlags = BENEATH.union(ResolveFlags::NO_XDEV);
 
 impl RuntimeDirectory {
     /// Open or create the configured root without following symlinks.
@@ -118,6 +118,11 @@ impl RuntimeDirectory {
 }
 
 impl RuntimeWriter<'_> {
+    /// Validated path vocabulary for persistence and presentation.
+    pub fn layout(&self) -> &RuntimeLayout {
+        &self.runtime.layout
+    }
+
     fn prepare_database_directory(&self) -> Result<(), Error> {
         ensure_directory(&self.runtime.root, DATABASE_DIRECTORY, CONFINED)?;
         Ok(())
@@ -132,7 +137,7 @@ impl RuntimeWriter<'_> {
     }
 }
 
-fn ensure_directory(
+pub(super) fn ensure_directory(
     root: impl AsFd,
     name: impl AsRef<std::ffi::OsStr>,
     resolve: ResolveFlags,

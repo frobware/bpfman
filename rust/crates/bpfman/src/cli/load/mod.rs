@@ -1,4 +1,4 @@
-//! Load input vocabulary. No filesystem, registry, database, or kernel effects.
+//! Typed load input vocabulary and supported-slice dispatch.
 
 use std::{collections::BTreeMap, num::NonZeroU32, path::PathBuf};
 
@@ -10,7 +10,7 @@ mod request;
 
 #[derive(Subcommand)]
 pub(crate) enum LoadCommand {
-    /// Load from an ELF object file (execution not implemented).
+    /// Load one tracepoint from a local ELF object file.
     File(FileArgs),
     /// Load from an OCI image (execution not implemented).
     Image(ImageArgs),
@@ -62,7 +62,7 @@ struct LoadOptions {
     /// Nonzero kernel program ID whose maps should be shared.
     #[arg(long)]
     map_owner_id: Option<NonZeroU32>,
-    /// Requested result format (execution is not implemented for either).
+    /// Requested result format (JSON execution is not implemented).
     #[arg(short, long, value_enum, default_value_t = LoadOutput::Text)]
     output: LoadOutput,
 }

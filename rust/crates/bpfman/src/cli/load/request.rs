@@ -5,11 +5,13 @@ use clap::error::ErrorKind;
 use super::{Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, parse};
 
 impl LoadCommand {
-    pub(crate) fn execute(self) -> anyhow::Result<()> {
+    pub(crate) fn execute(
+        self,
+        layout: &bpfman_fs::RuntimeLayout,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
         let request = self.into_request().unwrap_or_else(|error| error.exit());
-        // This is deliberately a terminal stub, not a successful dry-run or a
-        // fake loader. Do not log the request: it can contain registry secrets.
-        request.not_implemented()
+        request.execute(layout, timeout)
     }
 
     fn into_request(self) -> Result<LoadRequest, clap::Error> {
@@ -82,9 +84,11 @@ impl LoadOptions {
 }
 
 impl LoadRequest {
-    fn not_implemented(self) -> anyhow::Result<()> {
-        // Consume the complete typed request, keeping it private until the
-        // runtime loader supplies an actual public domain consumer.
+    fn execute(
+        self,
+        layout: &bpfman_fs::RuntimeLayout,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
         let Self {
             source,
             first,
@@ -94,12 +98,8 @@ impl LoadRequest {
             map_owner_id,
             output,
         } = self;
-        let _options = (first, remaining, metadata, globals, map_owner_id, output);
-        let kind = match source {
-            LoadSource::File(path) => {
-                let _path = path;
-                "file"
-            }
+        let path = match source {
+            LoadSource::File(path) => path,
             LoadSource::Image {
                 reference,
                 pull_policy,
@@ -109,12 +109,43 @@ impl LoadRequest {
                 if let Some(super::RegistryAuth { username, password }) = auth {
                     let _credentials = (username, password);
                 }
-                "image"
+                anyhow::bail!(
+                    "program load image execution is not implemented in the Rust CLI; no runtime state was changed"
+                );
             }
         };
-        anyhow::bail!(
-            "program load {kind} execution is not implemented in the Rust CLI; no runtime state was changed"
-        )
+        // Reject the complete unsupported request before touching even the source.
+        let reason = if !remaining.is_empty() {
+            Some("multiple programs")
+        } else if !matches!(first, bpfman_model::ProgramSpec::Tracepoint(_)) {
+            Some("program types other than tracepoint")
+        } else if !globals.is_empty() {
+            Some("global overrides")
+        } else if map_owner_id.is_some() {
+            Some("map-owner sharing")
+        } else if output == super::LoadOutput::Json {
+            Some("JSON output")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            anyhow::bail!(
+                "program load file execution is not implemented for {reason}; no runtime state was changed"
+            );
+        }
+        let bpfman_model::ProgramSpec::Tracepoint(name) = first else {
+            anyhow::bail!("unsupported program type");
+        };
+        let stored = bpfman_runtime::load_tracepoint(layout, &path, name, &metadata, timeout)?;
+        // Output is deliberately outside the operation: delivery failure must
+        // never compensate a committed program.
+        crate::output::programs(
+            &mut std::io::stdout().lock(),
+            &[stored],
+            false,
+            crate::cli::OutputFormat::Text,
+        )?;
+        Ok(())
     }
 }
 
