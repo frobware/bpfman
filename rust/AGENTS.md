@@ -77,9 +77,15 @@ The architecture and compatibility goals are in
 
 ## Rust, errors, and CLI
 
-- Follow conventional Rust source layout: separate functions, impl blocks, and
-  logical stages with blank lines. Rustfmt does not supply those boundaries;
-  preserve readable spacing when writing and reviewing code.
+- Follow Rust standard-library conventions for spacing and layout throughout
+  `rust/`, including production code, tests, and support modules. Separate
+  functions, impl blocks, and logical groups of statements with blank lines;
+  distinguish setup, actions, and assertions in tests. Keep closely related
+  statements together rather than inserting a blank line after every statement.
+  Apply this consistently to existing and new code so the workspace retains one
+  style. Rustfmt does not supply all these boundaries: review spacing manually
+  as well as running the formatter. Keep broad formatting passes separate from
+  behavioural changes.
 - Edition 2024; the workspace manifest owns the MSRV, dependencies, and lints.
 - Forbid unsafe by default. Any exception requires a narrow, documented boundary.
 - No `unwrap`, `expect`, or `panic` in production. Test-only exceptions must be
