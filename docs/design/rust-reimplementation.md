@@ -678,19 +678,19 @@ Program, link, map, dispatcher, and bytecode paths must be distinct types.
 Conversion back to a general path should occur only at the filesystem or kernel
 edge.
 
-## Concurrency and async runtime
+## Synchronous concurrency
 
 The domain and core crates are synchronous and runtime-independent. They contain
 no futures, executor handles, mutexes, or async traits.
 
-Kernel operations and rusqlite are fundamentally blocking. They should run in a
-controlled blocking interpreter or on an operation thread rather than acquiring
-async signatures that merely hide blocking work. The gRPC server may use an
-async runtime, but that runtime is a front-end and driver concern.
+The new workspace stays synchronous throughout, including adapters and front
+ends. Do not introduce async/await, Tokio, other async runtimes, or synchronous
+wrappers around async libraries. Kernel operations and rusqlite run directly
+on operation threads. Concurrent callers use ordinary threads and scoped
+locking. Future server transports must respect this constraint.
 
-Avoid `async_trait` unless a demonstrated boundary requires dynamic async
-dispatch. No async runtime type should appear in the domain, core, or public
-effect vocabulary.
+SQLite access remains on rusqlite. Connection reuse and any future synchronous
+pooling belong inside the backend adapter, without changing the `Bpfman` API.
 
 The existing cross-process writer-lock and SQLite WAL model remain part of the
 compatibility contract:

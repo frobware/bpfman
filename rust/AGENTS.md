@@ -87,6 +87,10 @@ The architecture and compatibility goals are in
   as well as running the formatter. Keep broad formatting passes separate from
   behavioural changes.
 - Edition 2024; the workspace manifest owns the MSRV, dependencies, and lints.
+- Keep the new workspace synchronous: no async/await, Tokio, async runtimes, or
+  synchronous wrappers around async libraries. Use ordinary threads and scoped
+  locking where concurrency is needed. Keep rusqlite for SQLite; any connection
+  pooling must also be synchronous and remain inside the backend adapter.
 - Forbid unsafe by default. Any exception requires a narrow, documented boundary.
 - No `unwrap`, `expect`, or `panic` in production. Test-only exceptions must be
   scoped to tests. Keep failure represented in types and source chains.
