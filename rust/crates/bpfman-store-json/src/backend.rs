@@ -41,7 +41,7 @@ impl OpenStore for Backend {
         State::decode(&bytes)?;
 
         Ok(Some(Reader {
-            file,
+            file: std::sync::Arc::new(file),
             layout: runtime.layout().clone(),
         }))
     }
@@ -61,13 +61,18 @@ impl OpenStore for Backend {
         }
 
         Ok(Reader {
-            file,
+            file: std::sync::Arc::new(file),
             layout: writer.layout().clone(),
         })
     }
 }
 
 impl ProgramReader for Reader {
+    #[tracing::instrument(name = "store.validate", level = "debug", skip_all, err)]
+    fn validate(&mut self) -> Result<(), Error> {
+        read(&self.file).map(|_| ()).map_err(Into::into)
+    }
+
     #[tracing::instrument(name = "store.read_summaries", level = "debug", skip_all, err)]
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         let (_, state) = read(&self.file)?;

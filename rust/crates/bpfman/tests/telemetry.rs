@@ -11,11 +11,15 @@ use std::{
 };
 
 fn run(root: &Path, trace: &Path, filter: &str, args: &[&str]) -> Output {
+    run_backend("json", root, trace, filter, args)
+}
+
+fn run_backend(backend: &str, root: &Path, trace: &Path, filter: &str, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bpfman"))
         .env("RUST_LOG", filter)
         .env_remove("BPFMAN_RUNTIME_DIR")
         .env_remove("BPFMAN_LOCK_TIMEOUT")
-        .args(["--store", "json", "--runtime-dir"])
+        .args(["--store", backend, "--runtime-dir"])
         .arg(root)
         .arg("--trace-file")
         .arg(trace)
@@ -202,4 +206,54 @@ fn existing_trace_destination_is_never_truncated() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(std::fs::read(&trace).expect("existing file"), b"preserve");
     assert!(!root.exists());
+}
+
+#[test]
+fn list_reuses_the_store_handle_opened_at_startup() {
+    for backend in ["sqlite", "json"] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().join("runtime");
+
+        // Exercise both first-time initialization and an already-existing store.
+        for stage in ["initial", "existing"] {
+            let trace = temp.path().join(format!("{stage}.json"));
+            let output = run_backend(backend, &root, &trace, "debug", &["program", "list", "-q"]);
+
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(output.stdout.is_empty());
+            let events: Vec<Value> = String::from_utf8(output.stderr)
+                .expect("stderr")
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("telemetry JSON"))
+                .collect();
+            let opens = |name: &str| {
+                events
+                    .iter()
+                    .filter(|event| {
+                        event["fields"]["message"] == "new" && event["span"]["name"] == name
+                    })
+                    .count()
+            };
+
+            assert_eq!(
+                opens("store.open_reader"),
+                1,
+                "{backend} {stage}: no second open for list"
+            );
+            if backend == "sqlite" {
+                assert_eq!(opens("store.connection.open"), 1, "one read connection");
+                assert!(
+                    events.iter().any(|event| {
+                        event["fields"]["message"] == "reader acquired"
+                            && event["fields"]["reused"] == true
+                    }),
+                    "the listing must reuse the startup connection"
+                );
+            }
+        }
+    }
 }

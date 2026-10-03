@@ -132,8 +132,12 @@ The architecture and compatibility goals are in
   writer authority internally; admission failure must retain cleanup receipts.
   Keep interpreters and compensation drivers private. Prepared requests own
   validated inputs and must not carry a second runtime selection.
-  Existing-store readers must open and read
-  without acquiring the giant writer lock. Initialize missing state under that
+  Retain the handle returned by startup rather than discarding and reopening it.
+  Reader handles clone without I/O; backend adapters own resource reuse and fresh
+  snapshot acquisition. Never hold a shared connection-cache mutex across queries.
+  Revalidate retained handles during mutation preflight, and validate reads within
+  their snapshots. Existing-store readers must open and read without acquiring
+  the giant writer lock. Initialize missing state under that
   lock after rechecking absence. Preserve early request/ELF validation before
   initialization. All read-only operations, including combined store/kernel
   observations, bypass the writer lock. Kernel and filesystem observations may

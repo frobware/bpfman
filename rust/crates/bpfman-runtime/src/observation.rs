@@ -95,7 +95,7 @@ impl KernelObservations for Kernel {
 }
 
 fn records<S: OpenStore>(store: &ActiveStore<S>) -> Result<Vec<StoredProgram>, Failure> {
-    store.reader()?.read_records().map_err(Failure::from)
+    store.reader().read_records().map_err(Failure::from)
 }
 
 fn path(path: std::path::PathBuf) -> Result<String, Failure> {

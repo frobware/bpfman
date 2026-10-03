@@ -10,7 +10,7 @@ impl<S: OpenStore> Bpfman<S> {
     /// Read managed summaries without kernel observations or the writer lock.
     #[tracing::instrument(name = "program.list", level = "debug", skip_all, err)]
     pub fn list(&self, filter: &ProgramFilter) -> Result<Vec<StoredProgramSummary>, Error> {
-        let mut reader = self.store.reader().map_err(store_error)?;
+        let mut reader = self.store.reader();
         let programs = reader.read_programs().map_err(store_error)?;
 
         Ok(bpfman_core::list_programs(programs, filter))

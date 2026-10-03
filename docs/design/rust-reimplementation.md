@@ -590,7 +590,13 @@ authoritative Go migration SQL,
 and publishes a complete database without overwriting existing state. Existing
 databases are not implicitly repaired or migrated. Startup releases initialization
 authority before dispatch. The active store binds the backend to the adopted root
-and does not recreate state that disappears during an operation. Ordinary
+and retains the opened reader handle instead of discarding it after validation.
+Cloning that handle performs no I/O and does not retain an old snapshot. SQLite
+owns reuse of one idle connection and opens independent connections for overlapping
+reads; no mutex is held while queries execute. JSON shares its directory handle
+and acquires a fresh immutable snapshot on each read. Mutation preflight explicitly
+revalidates a retained handle. The active store never recreates missing state
+during an operation. Ordinary
 snapshot queries remain read-only and recheck the schema within their own
 transaction, with SQLite WAL permitting concurrent readers and a writer. JSON
 readers consume an independently opened immutable snapshot; a zero-link inode

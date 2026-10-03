@@ -41,12 +41,11 @@ impl Store {
     }
 
     fn open_observed(path: &Path) -> Result<Self, Failure> {
-        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        connection.busy_timeout(std::time::Duration::from_secs(5))?;
+        let connection = connection(path)?;
         let schema_version = schema_version(&connection)?;
 
         Ok(Self {
-            connection,
+            reader: std::sync::Arc::new(crate::reader::Reader::new(path, connection)),
             schema_version,
         })
     }
@@ -66,4 +65,12 @@ pub(super) fn require_supported(found: i64) -> Result<(), Failure> {
     }
 
     Ok(())
+}
+
+#[tracing::instrument(name = "store.connection.open", level = "debug", skip_all, err)]
+pub(super) fn connection(path: &Path) -> Result<Connection, Failure> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+
+    Ok(connection)
 }

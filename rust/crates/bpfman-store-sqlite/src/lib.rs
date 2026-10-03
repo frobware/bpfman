@@ -9,6 +9,7 @@ mod create;
 mod error;
 mod open;
 mod read;
+mod reader;
 mod records;
 mod unload;
 mod write;
@@ -30,13 +31,14 @@ pub use error::{Error, ErrorKind};
 /// Schema version supported by this adapter, from Go's 00002_add_lsm.sql.
 pub const SCHEMA_VERSION: i64 = 2;
 
-/// An opened read-only store; the connection never escapes the adapter.
+/// An opened read-only store; connection reuse stays inside the adapter.
+/// Clones share idle resources while concurrent reads use separate connections.
 ///
 /// Inspection reports the observed schema even when it is incompatible, so the
 /// caller can apply opening policy. Reads independently check their own snapshot.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Store {
-    connection: rusqlite::Connection,
+    reader: std::sync::Arc<reader::Reader>,
     schema_version: i64,
 }
 

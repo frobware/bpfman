@@ -43,7 +43,7 @@ mod unload_error;
 /// Application dependencies cannot be replaced through the public API:
 /// ```compile_fail,E0616
 /// use bpfman_runtime::Bpfman;
-/// fn replace<S>(app: &mut Bpfman<S>) {
+/// fn replace<S: bpfman_store::OpenStore>(app: &mut Bpfman<S>) {
 ///     let _store = &mut app.store;
 /// }
 /// ```
@@ -55,7 +55,7 @@ mod unload_error;
 ///     let _app = Bpfman::new(backend, std::time::Duration::from_secs(1));
 /// }
 /// ```
-pub struct Bpfman<S> {
+pub struct Bpfman<S: bpfman_store::OpenStore> {
     store: ActiveStore<S>,
     lock_timeout: std::time::Duration,
 }
@@ -79,8 +79,9 @@ pub struct PreparedTracepoint {
 /// Store opened at startup and bound to an adopted runtime directory.
 /// Only absent state is initialized, under the writer lock. Move this handle
 /// into `Bpfman` to use the application API without supplying runtime paths.
-pub struct ActiveStore<S> {
+pub struct ActiveStore<S: bpfman_store::OpenStore> {
     backend: S,
+    reader: S::Reader,
     runtime: bpfman_fs::RuntimeDirectory,
 }
 

@@ -20,7 +20,7 @@ impl Store {
     /// Schema compatibility is checked again within the read transaction so a
     /// later migration cannot silently invalidate the earlier opening observation.
     pub fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
-        read(&mut self.connection).map_err(Error::from)
+        self.reader.read(read).map_err(Error::from)
     }
 }
 

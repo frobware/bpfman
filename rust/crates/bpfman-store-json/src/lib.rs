@@ -15,8 +15,9 @@ use bpfman_fs::{RuntimeIdentity, RuntimeLayout, StoreSnapshot};
 pub struct Backend;
 
 /// Opened store directory and layout used for fresh, validated observations.
+#[derive(Clone)]
 pub struct Reader {
-    file: StoreSnapshot,
+    file: std::sync::Arc<StoreSnapshot>,
     layout: RuntimeLayout,
 }
 

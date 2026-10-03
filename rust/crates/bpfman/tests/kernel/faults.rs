@@ -82,6 +82,7 @@ fn check(state: &Arc<Mutex<State>>, point: Point) -> Result<(), Error> {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct Reader<R> {
     reader: R,
     state: Arc<Mutex<State>>,
@@ -109,6 +110,10 @@ impl<S: OpenStore> OpenStore for Faults<S> {
 }
 
 impl<R: ProgramReader> ProgramReader for Reader<R> {
+    fn validate(&mut self) -> Result<(), Error> {
+        self.reader.validate()
+    }
+
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         self.reader.read_programs()
     }

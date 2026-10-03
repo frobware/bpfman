@@ -138,6 +138,13 @@ fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S) {
         )
         .expect("writer scope");
 
+    assert_eq!(
+        shared
+            .list(&Default::default())
+            .expect("latest state through retained handle")
+            .len(),
+        32
+    );
     let mut reader = store.open_reader(&runtime).expect("reader").expect("store");
     assert_eq!(
         reader.read_records().expect("final committed state").len(),

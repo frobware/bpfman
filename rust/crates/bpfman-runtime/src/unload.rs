@@ -111,7 +111,7 @@ pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
     crate::UnloadCause,
 >;
 
-impl<S: UnloadStore> Bpfman<S> {
+impl<S: bpfman_store::OpenStore + UnloadStore> Bpfman<S> {
     /// Unload one committed, unattached tracepoint with a private map set.
     /// Observations and teardown share one writer scope. Independent cleanup
     /// continues after record failure; post-record cleanup may return warnings.

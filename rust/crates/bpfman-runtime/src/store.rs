@@ -8,7 +8,9 @@ use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::StoredProgramSummary;
-use bpfman_store::{CommitLoad, OpenStore, TracepointRecord, UnloadObservation, UnloadStore};
+use bpfman_store::{
+    CommitLoad, OpenStore, ProgramReader, TracepointRecord, UnloadObservation, UnloadStore,
+};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -20,10 +22,8 @@ fn invalid(message: &'static str) -> bpfman_store::Error {
 }
 
 impl<S: OpenStore> ActiveStore<S> {
-    pub(super) fn reader(&self) -> Result<S::Reader, bpfman_store::Error> {
-        self.backend
-            .open_reader(&self.runtime)?
-            .ok_or_else(|| invalid("active store disappeared"))
+    pub(super) fn reader(&self) -> S::Reader {
+        self.reader.clone()
     }
 
     /// Open the selected backend once at startup, creating state only if absent.
@@ -36,12 +36,9 @@ impl<S: OpenStore> ActiveStore<S> {
             None => RuntimeDirectory::open_or_create(layout.clone()).map_err(filesystem_error)?,
         };
 
-        if backend
-            .open_reader(&runtime)
-            .map_err(store_error)?
-            .is_none()
-        {
-            runtime
+        let reader = match backend.open_reader(&runtime).map_err(store_error)? {
+            Some(reader) => reader,
+            None => runtime
                 .with_writer(
                     AcquireOptions {
                         timeout,
@@ -49,14 +46,18 @@ impl<S: OpenStore> ActiveStore<S> {
                     },
                     |writer| backend.open(&writer).map_err(store_error),
                 )
-                .map_err(filesystem_error)??;
-        }
+                .map_err(filesystem_error)??,
+        };
 
-        Ok(Self { backend, runtime })
+        Ok(Self {
+            backend,
+            reader,
+            runtime,
+        })
     }
 }
 
-impl<S> ActiveStore<S> {
+impl<S: OpenStore> ActiveStore<S> {
     pub(super) fn runtime(&self) -> &RuntimeDirectory {
         &self.runtime
     }
@@ -94,16 +95,22 @@ impl<S: OpenStore> OpenStore for ActiveStore<S> {
                 .identity()
                 .map_err(|e| bpfman_store::Error::new(bpfman_store::ErrorKind::Unavailable, e))?,
         )?;
-        self.reader().map(Some)
+        let mut reader = self.reader();
+        reader.validate()?;
+
+        Ok(Some(reader))
     }
 
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self::Reader, bpfman_store::Error> {
         self.check_writer(writer)?;
-        self.reader()
+        let mut reader = self.reader();
+        reader.validate()?;
+
+        Ok(reader)
     }
 }
 
-impl<S: CommitLoad> CommitLoad for ActiveStore<S> {
+impl<S: OpenStore + CommitLoad> CommitLoad for ActiveStore<S> {
     fn commit_tracepoint(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -114,7 +121,7 @@ impl<S: CommitLoad> CommitLoad for ActiveStore<S> {
     }
 }
 
-impl<S: UnloadStore> UnloadStore for ActiveStore<S> {
+impl<S: OpenStore + UnloadStore> UnloadStore for ActiveStore<S> {
     type ProgramReceipt = S::ProgramReceipt;
     type MapSetReceipt = S::MapSetReceipt;
 

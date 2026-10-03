@@ -1,7 +1,7 @@
 use crate::{ActiveStore, Bpfman};
 use std::time::Duration;
 
-impl<S> Bpfman<S> {
+impl<S: bpfman_store::OpenStore> Bpfman<S> {
     /// Bind operations to this active store and its already-adopted runtime.
     /// Construction performs no I/O. The timeout applies only to writer-lock
     /// acquisition; reads have no lock budget or global coordination.

@@ -86,18 +86,7 @@ fn runtime_reads_an_independent_store_without_creating_a_database() {
         .expect_err("missing");
 
     assert_eq!(err.kind(), crate::ObservationErrorKind::NotFound);
-    assert_eq!(
-        calls(&store),
-        [
-            "commit",
-            "open",
-            "summaries",
-            "open",
-            "records",
-            "open",
-            "records"
-        ]
-    );
+    assert_eq!(calls(&store), ["commit", "summaries", "records", "records"]);
     assert!(!layout(&runtime).database_path().exists());
 }
 
@@ -105,7 +94,7 @@ fn runtime_reads_an_independent_store_without_creating_a_database() {
 fn store_errors_keep_their_category_and_are_not_retried() {
     for (fault, kind, expected) in [
         (
-            "open",
+            "summaries",
             ErrorKind::IncompatibleState,
             crate::ErrorKind::IncompatibleState,
         ),
@@ -115,7 +104,7 @@ fn store_errors_keep_their_category_and_are_not_retried() {
             crate::ErrorKind::InvalidState,
         ),
         (
-            "open",
+            "summaries",
             ErrorKind::Unavailable,
             crate::ErrorKind::Unavailable,
         ),
@@ -147,7 +136,7 @@ fn full_read_failure_is_not_missing_or_an_empty_list() {
 
     assert_eq!(get.kind(), crate::ObservationErrorKind::Unavailable);
     assert_eq!(list.kind(), crate::ObservationErrorKind::Unavailable);
-    assert_eq!(calls(&store), ["open", "records", "open", "records"]);
+    assert_eq!(calls(&store), ["records", "records"]);
     assert!(!layout(&runtime).database_path().exists());
 }
 
@@ -299,4 +288,40 @@ fn operations_retain_the_adopted_runtime_when_its_path_is_replaced() {
     assert_eq!(bpfman.unload(id()).expect("unload").unresolved(), 0);
     assert_eq!(store.residue(), (false, false));
     assert_eq!(std::fs::read_dir(original).expect("replacement").count(), 0);
+}
+
+#[test]
+fn startup_open_failures_keep_their_category_and_are_not_retried() {
+    for (kind, expected) in [
+        (
+            ErrorKind::IncompatibleState,
+            crate::ErrorKind::IncompatibleState,
+        ),
+        (ErrorKind::Unavailable, crate::ErrorKind::Unavailable),
+    ] {
+        let (_temp, runtime, store, _bpfman) = setup();
+        store.fail("open", kind);
+        let error = ActiveStore::open(store.clone(), runtime.layout(), TIMEOUT)
+            .err()
+            .expect("injected opening failure must fail startup");
+
+        assert_eq!(error.kind(), expected);
+        assert_eq!(calls(&store), ["open"]);
+        assert_eq!(store.residue(), (false, false));
+    }
+}
+
+#[test]
+fn retained_handle_is_revalidated_for_mutation_preflight() {
+    use bpfman_store::OpenStore;
+
+    let (_temp, runtime, store, bpfman) = setup();
+    store.fail("validate", ErrorKind::IncompatibleState);
+    let error = scope(&runtime, |writer| bpfman.store.open(writer))
+        .err()
+        .expect("changed compatibility must fail preflight");
+
+    assert_eq!(error.kind(), ErrorKind::IncompatibleState);
+    assert_eq!(calls(&store), ["validate"]);
+    assert_eq!(store.residue(), (false, false));
 }

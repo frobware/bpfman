@@ -13,8 +13,9 @@ use std::{collections::BTreeMap, num::NonZeroU32};
 /// Open compatible state for independent readers or under writer authority.
 /// Corrupt, inaccessible, or incompatible state must fail without replacement.
 pub trait OpenStore {
-    /// Opened read handle; owns backend evidence rather than a path to reopen.
-    type Reader: ProgramReader;
+    /// Retained, shareable store handle. Clones share backend resources, not a
+    /// transaction or frozen snapshot. Each read observes current committed state.
+    type Reader: ProgramReader + Clone + Send + Sync;
 
     /// Open existing state without acquiring the runtime writer lock or creating
     /// application state. Only absence returns None; invalid or inaccessible state fails.
@@ -27,8 +28,13 @@ pub trait OpenStore {
 
 /// Consistent read-only observations from an opened backend.
 /// Each call observes one committed snapshot. Separate calls may see newer state.
-/// Use independent handles per thread; sharing one handle concurrently is not required.
+/// Clone the opened handle for independent callers. Backends own connection
+/// reuse and snapshot acquisition; cloning must not perform I/O.
 pub trait ProgramReader {
+    /// Validate current store compatibility without retaining a snapshot.
+    /// Mutation preflight uses this when reusing an already-opened handle.
+    fn validate(&mut self) -> Result<(), Error>;
+
     /// Read stored summaries without kernel observations.
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error>;
 

@@ -89,7 +89,8 @@ no runtime path; the instance supplies its adopted runtime for execution.
 `list` returns summaries without kernel privileges; `list_entries` adds live
 kernel observations. Read methods take `&self` and no lock parameter. Mutations
 and explicit cleanup retries acquire the configured writer lock internally.
-A shared instance supports concurrent readers when its backend is thread safe.
+Opened reader handles are thread safe; a shared instance supports concurrent
+readers when its backend is also thread safe.
 
 Dependencies, interpreter modules, compensation drivers, and request fields
 are private. No store getter or public operation accepting a separate runtime
@@ -130,6 +131,16 @@ crate defines four small, statically dispatched interfaces:
 There are no connection types, schema-version fields, or transaction callbacks
 in these contracts. SQLite and JSON implement the same operations, alongside
 an independent test-only in-memory backend.
+
+`ActiveStore` retains the handle returned by startup and clones it for each
+caller without reopening the backend. Clones share backend resources, not a
+transaction or frozen snapshot. SQLite retains one idle read connection; a
+concurrent read opens a separate connection if that slot is occupied. Its mutex
+protects only checkout/return, never query execution. Sequential reads reuse the
+connection, including after a failed read. JSON shares the opened directory
+handle and reads the currently published snapshot on each call. Mutation
+preflight revalidates the retained handle, and reads check compatibility inside
+their own snapshots.
 
 JSON version 1 stores private, unattached tracepoints in a whole-file snapshot.
 The filesystem adapter writes the pending snapshot beneath a verified directory
@@ -227,7 +238,9 @@ creation, snapshots, commits, deletion, publication, and program operations.
 `lock.wait` measures acquisition (including timeout/cancellation); `lock.held`
 covers the current callback and closing its descriptor. Inherited descriptors may
 retain the underlying flock after that scope. Span-close events report busy/idle
-time, and acquisition events include `wait_us`. No record contents or credentials
+time, and acquisition events include `wait_us`. SQLite's `store.connection.open`
+span records actual read-connection opening; `reader acquired` events include
+`reused` so connection reuse is visible. No record contents or credentials
 are logged. Model/core crates remain uninstrumented and pure.
 
 ## CLI parity harness

@@ -106,7 +106,7 @@ impl<S: UnloadStore> UnloadError<S> {
     }
 }
 
-impl<S: UnloadStore> Bpfman<S> {
+impl<S: bpfman_store::OpenStore + UnloadStore> Bpfman<S> {
     /// Retry retained teardown once, acquiring this instance's writer lock.
     /// Preflight failures are returned unchanged and require a fresh request.
     pub fn retry_unload(&self, error: UnloadError<S>) -> Result<UnloadReport<S>, UnloadError<S>> {

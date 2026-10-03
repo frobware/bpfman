@@ -151,6 +151,10 @@ impl OpenStore for Memory {
 }
 
 impl ProgramReader for Memory {
+    fn validate(&mut self) -> Result<(), Error> {
+        self.state.lock().expect("state").enter("validate")
+    }
+
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         let mut s = self.state.lock().expect("state");
         s.enter("summaries")?;

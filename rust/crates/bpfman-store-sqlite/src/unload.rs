@@ -120,7 +120,7 @@ pub fn observe_unload(
     let Some(store) = crate::Store::inspect(&writer.database_path())? else {
         return Ok(None);
     };
-    let Some(row) = snapshot(&store.connection, id)? else {
+    let Some(row) = store.reader.read(|connection| snapshot(connection, id))? else {
         return Ok(None);
     };
     validate(writer, id, &row)?;

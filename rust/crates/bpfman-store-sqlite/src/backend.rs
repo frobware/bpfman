@@ -47,6 +47,17 @@ impl OpenStore for Backend {
 }
 
 impl ProgramReader for Store {
+    #[tracing::instrument(name = "store.validate", level = "debug", skip_all, err)]
+    fn validate(&mut self) -> Result<(), Error> {
+        self.reader
+            .read(|connection| {
+                let tx = connection.transaction()?;
+                crate::open::require_supported(crate::open::schema_version(&tx)?)
+            })
+            .map_err(crate::Error::from)
+            .map_err(Into::into)
+    }
+
     #[tracing::instrument(name = "store.read_summaries", level = "debug", skip_all, err)]
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         Store::read_programs(self).map_err(Into::into)

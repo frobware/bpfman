@@ -182,37 +182,41 @@ impl Store {
     /// Read full committed records and link identities in one read-only snapshot.
     /// Invalid values fail decoding; missing map-set references are never omitted.
     pub fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error> {
-        let tx = self.connection.transaction().map_err(Failure::from)?;
-        require_supported(schema_version(&tx)?)?;
-        let mut statement=tx.prepare("SELECT p.program_id,p.program_name,p.program_type,p.object_path,p.source_path,p.pin_path,p.attach_func,p.global_data,p.image_source,p.owner,p.description,p.license,p.gpl_compatible,p.metadata_json,p.created_at,p.updated_at,p.map_set_id,m.pin_path FROM managed_programs p LEFT JOIN map_sets m ON m.id=p.map_set_id ORDER BY p.program_id").map_err(Failure::from)?;
-        let mut rows = statement.query([]).map_err(Failure::from)?;
-        let mut records = Vec::new();
-
-        while let Some(row) = rows.next().map_err(Failure::from)? {
-            records.push(decode(row)?);
-        }
-
-        let mut links = tx
-            .prepare("SELECT kernel_prog_id,id FROM links ORDER BY id")
-            .map_err(Failure::from)?;
-        let mut rows = links.query([]).map_err(Failure::from)?;
-
-        while let Some(row) = rows.next().map_err(Failure::from)? {
-            let program: i64 = row.get(0).map_err(Failure::from)?;
-            let raw: i64 = row.get(1).map_err(Failure::from)?;
-            let link = u64::try_from(raw)
-                .ok()
-                .and_then(NonZeroU64::new)
-                .ok_or_else(|| invalid(program, "invalid link ID"))?;
-
-            if let Some(record) = records
-                .iter_mut()
-                .find(|p| i64::from(p.id.get()) == program)
-            {
-                record.links.push(link);
-            }
-        }
-
-        Ok(records)
+        self.reader.read(read).map_err(Error::from)
     }
+}
+
+fn read(connection: &mut rusqlite::Connection) -> Result<Vec<StoredProgram>, Failure> {
+    let tx = connection.transaction()?;
+    require_supported(schema_version(&tx)?)?;
+    let mut statement=tx.prepare("SELECT p.program_id,p.program_name,p.program_type,p.object_path,p.source_path,p.pin_path,p.attach_func,p.global_data,p.image_source,p.owner,p.description,p.license,p.gpl_compatible,p.metadata_json,p.created_at,p.updated_at,p.map_set_id,m.pin_path FROM managed_programs p LEFT JOIN map_sets m ON m.id=p.map_set_id ORDER BY p.program_id").map_err(Failure::from)?;
+    let mut rows = statement.query([]).map_err(Failure::from)?;
+    let mut records = Vec::new();
+
+    while let Some(row) = rows.next().map_err(Failure::from)? {
+        records.push(decode(row)?);
+    }
+
+    let mut links = tx
+        .prepare("SELECT kernel_prog_id,id FROM links ORDER BY id")
+        .map_err(Failure::from)?;
+    let mut rows = links.query([]).map_err(Failure::from)?;
+
+    while let Some(row) = rows.next().map_err(Failure::from)? {
+        let program: i64 = row.get(0).map_err(Failure::from)?;
+        let raw: i64 = row.get(1).map_err(Failure::from)?;
+        let link = u64::try_from(raw)
+            .ok()
+            .and_then(NonZeroU64::new)
+            .ok_or_else(|| invalid(program, "invalid link ID"))?;
+
+        if let Some(record) = records
+            .iter_mut()
+            .find(|p| i64::from(p.id.get()) == program)
+        {
+            record.links.push(link);
+        }
+    }
+
+    Ok(records)
 }
