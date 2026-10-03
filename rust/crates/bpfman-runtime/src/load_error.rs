@@ -1,7 +1,7 @@
 use crate::{
     LoadError, LoadErrorKind,
     compensation::compensate_load,
-    load::{Effects, FailureFor, LoadEffects},
+    load::{CleanupEffects, Effects, FailureFor},
 };
 use bpfman_core::{CompensationKind, LoadFailure, LoadRollback};
 use bpfman_fs::{Bytecode, MapDirectory, MapPin, ProgramPin, RuntimeWriter};
@@ -30,7 +30,7 @@ pub(super) enum LoadCause {
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
     #[error(transparent)]
-    Store(#[from] bpfman_store_sqlite::Error),
+    Store(#[from] bpfman_store::Error),
     #[error("open program store")]
     Open(#[source] crate::Error),
     #[error("encode bytecode provenance")]
@@ -80,12 +80,12 @@ impl LoadError {
     /// and all prior attempts. The supplied writer must belong to the same root.
     pub fn retry_cleanup(self, writer: &RuntimeWriter<'_>) -> Self {
         Self {
-            failure: Box::new(retry(writer, &mut Effects, *self.failure)),
+            failure: Box::new(retry(writer, &mut Effects(&()), *self.failure)),
         }
     }
 }
 
-pub(super) fn retry<F: LoadEffects>(
+pub(super) fn retry<F: CleanupEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
     failure: FailureFor<F>,
@@ -106,7 +106,7 @@ pub(super) fn retry<F: LoadEffects>(
     }
 }
 
-pub(super) fn finish<F: LoadEffects>(
+pub(super) fn finish<F: CleanupEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
     rollback: LoadRollback<F::ProgramPin, F::MapPin, F::Bytecode, F::Error>,

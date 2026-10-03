@@ -65,3 +65,16 @@ pub(super) enum Failure {
     #[error("invalid metadata for program {id}")]
     Metadata { id: i64, source: serde_json::Error },
 }
+
+impl From<Error> for bpfman_store::Error {
+    fn from(error: Error) -> Self {
+        use bpfman_store::ErrorKind as Kind;
+        let kind = match error.kind() {
+            ErrorKind::Unavailable => Kind::Unavailable,
+            ErrorKind::IncompatibleSchema => Kind::IncompatibleState,
+            ErrorKind::InvalidData => Kind::InvalidData,
+            ErrorKind::Unsupported => Kind::Unsupported,
+        };
+        Self::new(kind, error.cause)
+    }
+}

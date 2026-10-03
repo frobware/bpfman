@@ -1024,12 +1024,12 @@ run-e2e-scripts:
 
 .PHONY: test-e2e-selection
 test-e2e-selection:
-	python3 -m unittest discover -s rust/tests -p 'test_e2e_selection.py'
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test e2e_selection --locked
 
 # Every Cargo entry point names the new manifest. These are opt-in while the
 # Go implementation remains the production build.
 .PHONY: rust-check rust-build rust-test rust-fmt rust-fmt-fix rust-lock rust-lint rust-doc
-rust-check: rust-fmt rust-lint rust-test rust-doc test-e2e-selection
+rust-check: rust-fmt rust-lint rust-test rust-doc
 
 rust-build:
 	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked
@@ -1820,16 +1820,16 @@ ci-test-e2e-grpc:
 .PHONY: ci
 ci: ci-check-vendor ci-check-fmt ci-check-goimports ci-check-vet ci-check-gofix ci-check-bpfman-shell-fmt ci-build ci-lint ci-test ci-test-e2e ci-test-e2e-scripts ci-test-e2e-grpc
 
-# Focused real-kernel gate for the new workspace, isolated from host bpffs.
-# The Go CLI observes and unloads the Rust-created program independently.
+# Cargo builds unprivileged; its runner executes only the selected test binary
+# with BPF/mount privileges in a private mount namespace. Tests are ignored by
+# the normal workspace gate and refuse the host mount namespace.
+RUST_KERNEL_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sudo", "--preserve-env=BPFMAN_GO_BIN,BPFMAN_DSL_TEST_BIN,BPFMAN_SHELL_BIN_DIR", "unshare", "--mount", "--propagation", "private", "--"]'
 .PHONY: rust-test-kernel-load
 rust-test-kernel-load: rust-build $(BIN_DIR)/bpfman e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
-	sudo unshare --mount --propagation private python3 rust/tests/kernel_load.py \
-		--rust "$(CURDIR)/rust/target/debug/bpfman" --go "$(abspath $(BIN_DIR))/bpfman" \
-		--fixtures "$(CURDIR)/e2e/testdata/bpf"
+	BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_KERNEL_RUNNER) -- --ignored --skip unchanged_tracepoint_dsl --test-threads=1 --nocapture
 
-# Run the unchanged Go DSL corpus against the Rust observation slice in isolation.
+# Run the unchanged Go DSL script against Rust; observations use only public CLI
+# output and runtime artifacts. No storage queries or format assumptions here.
 .PHONY: rust-test-observation
-rust-test-observation: rust-build $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN)
-	sudo unshare --mount --propagation private python3 rust/tests/tracepoint_observation.py \
-	    --rust "$(abspath rust/target/debug/bpfman)"
+rust-test-observation: rust-build $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o
+	BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))" cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_KERNEL_RUNNER) -- --ignored unchanged_tracepoint_dsl --test-threads=1 --nocapture

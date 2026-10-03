@@ -12,8 +12,15 @@ mod read;
 mod records;
 mod unload;
 mod write;
+pub use bpfman_store::TracepointRecord;
 pub use unload::{delete_unloaded_program, delete_unused_map_set, observe_unload};
-pub use write::{TracepointRecord, persist_tracepoint};
+pub use write::persist_tracepoint;
+mod backend;
+
+/// SQLite backend selected by the application composition root.
+/// This value performs no I/O until a store operation is called.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Backend;
 
 pub use create::create_if_missing;
 pub use error::{Error, ErrorKind};

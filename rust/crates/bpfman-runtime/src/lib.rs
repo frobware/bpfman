@@ -123,13 +123,13 @@ pub struct UnloadCause {
 /// Unload progress and residue, including successful steps and earlier failures.
 /// A successful operation may retain cleanup warnings, matching Go's contract.
 #[must_use = "inspect cleanup warnings and retain any unresolved work"]
-pub struct UnloadReport {
-    report: unload::ReportFor<unload::real::Effects>,
+pub struct UnloadReport<S: bpfman_store::UnloadStore> {
+    report: unload::StoreReport<S>,
 }
 
 /// Unload failure, retaining progress and receipts if teardown began.
-pub struct UnloadError {
-    failure: unload_error::Failure,
+pub struct UnloadError<S: bpfman_store::UnloadStore> {
+    failure: unload_error::Failure<S>,
 }
 
 /// Classification of a full program-observation failure.
@@ -150,3 +150,7 @@ pub enum ObservationErrorKind {
 pub struct ObservationError {
     cause: observation::Failure,
 }
+
+#[cfg(test)]
+#[path = "../../../tests/observation.rs"]
+mod sample;

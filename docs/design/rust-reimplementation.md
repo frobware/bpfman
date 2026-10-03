@@ -235,6 +235,30 @@ The SQLite adapter owns the statements, transaction, busy handling, and retry.
 The core must not pass an arbitrary callback into a transaction or have its
 decision logic rerun implicitly by the database layer.
 
+### Replaceable persistence backend
+
+Persistence is selected at the binary composition root. `bpfman-store` owns
+backend-independent `OpenStore`, `ProgramReader`, `CommitLoad`, and `UnloadStore`
+contracts. Runtime operations are generic over the capabilities they consume;
+they neither import a backend nor know its storage format or version.
+`bpfman-store-sqlite` implements the contracts and owns all SQL, schema checks,
+transactions, and concrete receipt evidence. The runtime and SQLite adapter are
+peers in the dependency tiers, both depending on the contracts below them.
+
+This boundary permits a future serialized JSON file without changing lifecycle
+orchestration. Each implementation must still provide atomic visibility, writer
+coordination, ownership revalidation, classified failures, and an unambiguous
+commit result. A successful commit must never subsequently be returned as a
+pre-commit error authorizing compensation. A backend must resolve that outcome
+inside its operation rather than leaving runtime to infer it from an I/O error.
+
+Unload uses associated, non-cloneable program and map-set receipts. Failures
+return those receipts with their causes. An explicit retry supplies the same
+backend and runtime authority; the backend validates evidence again before
+mutation. No generic transaction callback, SQL row, or file-format payload
+appears in the contracts. An independent in-memory test implementation proves
+substitution; SQLite remains the production selection for Go interoperability.
+
 ### Ownership within an adapter, compensation across adapters
 
 Use RAII for local handles inside an adapter operation. Persistent pins and
@@ -292,6 +316,7 @@ meaningful:
 | `bpfman-core` | Pure | Lifecycle machines, effect vocabulary, dispatcher planning, reconciliation, and rollback policy |
 | `bpfman-fs` | Effectful | Runtime layout, bpffs paths and scanning, bytecode publication, and readiness capabilities |
 | `bpfman-lock` | Effectful | Go-compatible writer locking, borrowed write permits, and inherited descriptor ownership |
+| `bpfman-store` | Boundary | Backend-independent read, atomic commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | Effectful | SQLite schema, migrations, queries, and atomic persistence operations |
 | `bpfman-kernel-aya` | Effectful | Aya-backed program, map, link, dispatcher, netlink, tracefs, and namespace operations |
 | `bpfman-image-oci` | Effectful | OCI pull, cache, authentication, and signature-policy adapters |
@@ -340,7 +365,8 @@ More concretely:
 - Effect adapters may depend on `bpfman-model` and the effect vocabulary
   exposed by `bpfman-core`.
 - Effect adapters must not depend on one another.
-- `bpfman-runtime` is the first crate allowed to compose all adapters.
+- `bpfman-runtime` composes effects through narrow contracts. Persistence
+  implementations are selected by the binary and cannot enter runtime's dependency closure.
 - Front ends depend on runtime and boundary-specific types, never on Aya or
   SQLite.
 - The binary is the only general composition root.
@@ -537,7 +563,8 @@ is closed. The helper launcher will explicitly map its close-on-exec duplicate
 and set the existing `BPFMAN_WRITER_LOCK_FD` protocol variable.
 
 A private runtime `open_or_create_store` operation acquires the lock before
-observing the store. The pure `plan_store_open` function receives a
+calling the selected backend. Inside the SQLite adapter, the pure
+`plan_store_open` function receives a
 `StoreObservation<T>` and the supported schema version, and returns a
 `StoreOpenPlan<T>`: create, use existing, or reject incompatible state. Existing
 observations carry the version and opaque interpreter-owned evidence. The
@@ -547,7 +574,7 @@ There is no representable "use existing, but no store" combination and no
 runtime fallback error for it. Rejection also returns the evidence so any
 resource cleanup remains in the interpreter, not pure policy. The core knows
 nothing about the evidence's representation and neither clones nor drops it.
-Failed observations are errors, never absence. The interpreter applies the
+Failed observations are errors, never absence. The SQLite adapter applies the
 decision within the same lock scope. This is a small explicit sequence, not a
 general startup state machine or a separate effect for every mkdir and SQL
 statement. The adapter's `create_if_missing` requires the runtime writer, embeds the
@@ -799,6 +826,15 @@ Each effect adapter should have a contract suite covering both success and
 partial failure. SQLite tests use temporary databases and the real schema.
 Kernel tests use the smallest available test boundary first and reserve a real
 kernel for behaviour that cannot be simulated meaningfully.
+
+Generic outside-in lifecycle scenarios inject failures through store operations,
+not through SQL or serialized-file edits. The privileged Rust integration tests
+use the public runtime API, real kernel/filesystem effects, and a `Faults<S>`
+store decorator. CLI and DSL acceptance inspect public output and artifacts.
+Backend-specific adapter tests retain SQL triggers and direct state inspection
+where they test SQLite's own guarantees. A second store backend must run the
+same generic scenarios in addition to its own persistence-format tests.
+
 
 Preserve the value of Go's stateful fake kernel (`manager/fake_kernel_test.go`).
 An in-memory effect interpreter should track IDs, programs, links, pins, and

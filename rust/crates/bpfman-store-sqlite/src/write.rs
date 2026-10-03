@@ -1,30 +1,12 @@
 //! A load becomes visible in one transaction: map set and program together.
 use crate::{
-    Error,
+    Error, TracepointRecord,
     error::Failure,
     open::{require_supported, schema_version},
 };
 use bpfman_fs::RuntimeWriter;
-use bpfman_model::{ProgramType, StoredProgramSummary, Symbol};
+use bpfman_model::{ProgramType, StoredProgramSummary};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior, params};
-use std::{collections::BTreeMap, num::NonZeroU32};
-
-/// Observed inputs for the supported local-file tracepoint persistence operation.
-/// Paths of owned artifacts are derived from writer authority, never supplied.
-pub struct TracepointRecord<'a> {
-    /// Kernel-assigned identity.
-    pub id: NonZeroU32,
-    /// Validated ELF entry name.
-    pub name: &'a Symbol,
-    /// Original file operand, preserved verbatim.
-    pub source: &'a str,
-    /// ELF license.
-    pub license: &'a str,
-    /// UTC RFC3339 timestamp captured before load.
-    pub created_at: &'a str,
-    /// User labels, including any application override.
-    pub metadata: &'a BTreeMap<String, String>,
-}
 
 /// Atomically insert a private map set and its loaded tracepoint. Existing rows
 /// are never overwritten. Failure means no successful commit was reported.

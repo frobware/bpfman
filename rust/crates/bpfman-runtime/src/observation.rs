@@ -6,6 +6,7 @@ use bpfman_model::{
     KernelMap, KernelProgram, ObservedMap, ObservedProgram, ProgramEntry, ProgramStats,
     StoredProgram,
 };
+use bpfman_store::{OpenStore, ProgramReader};
 use std::{num::NonZeroU32, time::Duration};
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
@@ -22,7 +23,7 @@ pub(super) enum Failure {
     #[error("observe kernel object")]
     Kernel(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error(transparent)]
-    Store(#[from] bpfman_store_sqlite::Error),
+    Store(#[from] bpfman_store::Error),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
     #[error("open program store")]
@@ -82,8 +83,11 @@ impl KernelObservations for Kernel {
         bpfman_kernel::observe_map(id).map_err(Failure::from)
     }
 }
-fn records(writer: &RuntimeWriter<'_>) -> Result<Vec<StoredProgram>, Failure> {
-    crate::store::open_store(writer)
+fn records<S: OpenStore>(
+    store: &S,
+    writer: &RuntimeWriter<'_>,
+) -> Result<Vec<StoredProgram>, Failure> {
+    crate::store::open_store(store, writer)
         .map_err(Failure::Open)?
         .read_records()
         .map_err(Failure::from)
@@ -95,12 +99,15 @@ fn path(path: std::path::PathBuf) -> Result<String, Failure> {
 }
 /// Observe a managed program's record, live kernel data, maps and statistics.
 /// Linked programs are rejected until full link observation is implemented.
-pub fn get_program(
+pub fn get_program<S: OpenStore>(
+    store: &S,
     layout: &RuntimeLayout,
     id: NonZeroU32,
     timeout: Duration,
 ) -> Result<ObservedProgram, ObservationError> {
-    with_writer(layout, timeout, |writer| observe(writer, id, View::Get))
+    with_writer(layout, timeout, |writer| {
+        observe(store, writer, id, View::Get)
+    })
 }
 fn with_writer<T>(
     layout: &RuntimeLayout,
@@ -118,12 +125,13 @@ fn with_writer<T>(
         )
         .map_err(Failure::from)?
 }
-pub(super) fn observe(
+pub(super) fn observe<S: OpenStore>(
+    store: &S,
     writer: &RuntimeWriter<'_>,
     id: NonZeroU32,
     view: View,
 ) -> Result<ObservedProgram, ObservationError> {
-    let records = records(writer)?;
+    let records = records(store, writer)?;
     let index = records
         .iter()
         .position(|p| p.id == id)
@@ -192,13 +200,14 @@ fn build<K: KernelObservations>(
 /// List full managed records and optional kernel observations. A missing kernel
 /// object is null; permissions and other lookup failures remain errors. Existing
 /// text/quiet listing stays available without kernel privileges.
-pub fn list_program_entries(
+pub fn list_program_entries<S: OpenStore>(
+    store: &S,
     layout: &RuntimeLayout,
     filter: &bpfman_core::ProgramFilter,
     timeout: Duration,
 ) -> Result<Vec<ProgramEntry>, ObservationError> {
     with_writer(layout, timeout, |writer| {
-        let records = bpfman_core::select_records(records(writer)?, filter);
+        let records = bpfman_core::select_records(records(store, writer)?, filter);
         entries(&mut Kernel, records).map_err(ObservationError::from)
     })
 }

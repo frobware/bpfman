@@ -1,6 +1,6 @@
 [package]
-name = "bpfman-store-sqlite"
-description = "Initialisation and access to the Go bpfman SQLite schema"
+name = "bpfman-store"
+description = "Backend-independent program persistence contracts"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,16 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-bpfman-store.workspace = true
-base64.workspace = true
-chrono.workspace = true
 bpfman-core.workspace = true
 bpfman-fs.workspace = true
 bpfman-model.workspace = true
-rusqlite.workspace = true
-serde_json.workspace = true
 thiserror.workspace = true
-tempfile.workspace = true
-
-[dev-dependencies]
-bpfman-lock.workspace = true

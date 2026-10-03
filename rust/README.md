@@ -36,7 +36,8 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
 | `bpfman-kernel` | 2 | Read-only BPF metadata and statistics with a private syscall boundary |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
-| `bpfman-store-sqlite` | 3 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence and conditional teardown |
+| `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
+| `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence and conditional teardown |
 | `bpfman-runtime` | 4 | Local tracepoint load/unload, private Aya adapter, compensation, and observation gathering |
 | `bpfman` | 5 | Typed Clap CLI, load/get/list/unload dispatch, and Go-compatible text/JSON presentation |
 
@@ -67,6 +68,76 @@ prove arbitrary dependency code is free of I/O: admission to the pure closure
 requires source review. `no_std` additionally keeps ordinary standard-library
 I/O APIs out of these libraries.
 
+## Store backend boundary
+
+The CLI composition root selects `bpfman_store_sqlite::Backend` and passes it to
+runtime operations. Runtime depends on `bpfman-store`, with no direct or transitive
+SQLite dependency. Architecture tests enforce this separation. The contract
+crate defines four small, statically dispatched interfaces:
+
+- `OpenStore` opens compatible state under writer authority and returns an owned
+  reader. Backend-specific format checks and missing-state initialization stay
+  inside the implementation.
+- `ProgramReader` returns stored summaries or complete domain records from a
+  consistent snapshot, without exposing serialized data or queries.
+- `CommitLoad` atomically publishes a tracepoint and its private map-set
+  membership. An error means no commit, so compensation remains safe.
+- `UnloadStore` validates ownership and conditionally deletes records and map
+  sets using opaque, non-cloneable backend receipts. Failed deletion returns the
+  receipt for an explicit later pass.
+
+There are no connection types, schema-version fields, or transaction callbacks
+in these contracts. A future JSON-file backend could implement the same operations
+using atomic file publication while preserving locking, validation, and commit
+semantics. This slice provides SQLite plus an independent test-only in-memory
+backend; it does not implement JSON persistence or backend selection flags.
+
+Shared store errors expose portable categories and preserve private diagnostic
+sources. `UnloadReport<S>` and `UnloadError<S>` retain the selected backend's
+receipt types; explicit retries take that backend and writer authority for the
+original root. Backend implementations must reject foreign or stale evidence.
+Failed-load cleanup needs only filesystem receipts and never reopens or retries
+the store.
+
+Tests use the in-memory backend through production read/unload operations and
+the production load interpreter with fake kernel/filesystem effects. They check
+open failures before acquisition, atomic commit failure with independent cleanup
+failures, successful commit without compensation, retained receipts, unchanged
+faults, and wrong-runtime/backend rejection. Existing SQLite, exhaustive
+compensation, and real-kernel compatibility gates remain in place.
+
+Generic live-kernel tests inject failures at store operations through a test-only
+`Faults<S>` decorator. They call public runtime operations with real kernel and
+filesystem effects; no production failure flags or persistence edits are needed.
+The same `lifecycle::exercise<S>` scenarios can run against another store backend.
+CLI and unchanged DSL tests inspect returned JSON and runtime artifacts, with no
+database queries. Privileged tests are ignored by the normal workspace test run;
+the Make targets use Cargo's runner to execute them in a private mount namespace.
+The harness and executable-selection tests are Rust integration tests.
+
+SQL fixtures and DDL/DML remain in tests explicitly testing SQLite. Adapter tests
+verify transaction rollback, constraints, orphan map-set absence, invalid records,
+and conditional deletion. `tests/sqlite_compatibility.rs` checks the selected
+SQLite CLI against Go's schema. These format-specific assertions do not belong in
+the generic lifecycle tests. Sharing persisted state with Go is checked separately
+in `tests/kernel/go_compatibility.rs`; a JSON backend would not need to share
+Go's SQLite representation. The division preserves the previous coverage:
+
+| Scenario | Coverage |
+| --- | --- |
+| Commit, deletion, GC, and post-commit read failures with live programs | Generic `tests/kernel/lifecycle.rs`, faulting store operations |
+| Foreign pin/map identity, failed output delivery | `tests/kernel/cli.rs`, public CLI and artifact observations |
+| Go/Rust shared-state observations and unload in both directions | SQLite-specific `tests/kernel/go_compatibility.rs` |
+| Unsupported stored relationships, noncanonical stored paths, partial writes | SQLite adapter tests using the actual Go schema |
+| CLI load/get/list/unload contract | Unchanged `TestTracepoint_LoadAndGet.bpfman` through the Rust test harness |
+| Typed, raw, and nested-shell executable selection | `tests/e2e_selection.rs`, unprivileged Make recipe tests |
+
+A JSON backend must run the same generic lifecycle, CLI, and unchanged DSL
+scenarios, changing only backend selection in test setup. It adds tests for its
+own persistence guarantees; it does not get a separate behavioural suite.
+No JSON implementation is included yet, so running this matrix against two
+persistent backends remains the next proof of substitutability.
+
 ## CLI parity harness
 
 The production Go CLI remains the default under test. Build the new CLI with
@@ -89,9 +160,10 @@ It describes locations, not proof that runtime setup has happened.
 `--program-type` and `-p` are aliases. Startup acquires `<runtime>/.lock` using
 the same `flock` protocol as Go, then creates a missing
 `<runtime>/db/store.db` at Go schema version 2. The private runtime operation
-`open_or_create_store` owns this sequence. Under the lock, it observes the
-existing schema, asks the core's `plan_store_open` whether to create/use/reject,
-applies that decision, and returns an opened read-only `Store`.
+`open_or_create_store` acquires the writer and calls the selected backend's
+`OpenStore` implementation. SQLite observes its schema and uses the core's
+`plan_store_open` decision inside the adapter, returning an opened read handle.
+Runtime orchestration never receives a schema version or database path.
 `StoreObservation<T>` and `StoreOpenPlan<T>` retain opaque interpreter-owned
 evidence: `UseExisting` carries the opened store, so it cannot disagree with a
 separate optional handle. Rejection also returns the evidence, keeping resource
@@ -217,8 +289,8 @@ names share a truncated prefix. Runtime paths alone do not assert presence.
 
 After successful load persistence, observation and output failures cannot roll
 back committed state. An observation failure reports the program ID and that it
-remains loaded. Kernel tests inject a malformed stored timestamp after commit
-and a failing output destination to check this boundary, alongside the existing
+remains loaded. Kernel tests inject a store read failure after commit
+and use a failing output destination to check this boundary, alongside the existing
 pre-commit compensation cases. No observation retry runs automatically.
 
 ## Single-program load policy and execution
@@ -364,8 +436,8 @@ sudo rust/target/debug/bpfman program load file \
   --programs tracepoint:tracepoint_kill_recorder --application rust-slice
 ```
 
-Next, add compatible load JSON and get/JSON-list, then tracepoint
-attachment/detachment to admit the unchanged lifecycle DSL scripts. Broaden
+A JSON backend is the next check on store substitutability, followed by tracepoint
+attachment/detachment to admit more unchanged lifecycle DSL scripts. Broaden
 supported options incrementally; do not weaken the scripts for Rust.
 
 

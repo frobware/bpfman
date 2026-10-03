@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used)]
 use super::*;
-#[path = "../../../../tests/observation.rs"]
-mod sample;
+use crate::sample;
 #[derive(Clone, Copy)]
 enum Fault {
     None,

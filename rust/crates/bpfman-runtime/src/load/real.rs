@@ -13,8 +13,8 @@ fn map_failure<T>(failure: EffectFailure<T, bpfman_fs::Error>) -> EffectFailure<
     }
 }
 
-pub(crate) struct Effects;
-impl LoadCleanup for Effects {
+pub(crate) struct Effects<'a, S>(pub(crate) &'a S);
+impl<S> LoadCleanup for Effects<'_, S> {
     type ProgramPin = ProgramPin;
     type MapPin = MapPin;
     type Bytecode = Bytecode;
@@ -42,14 +42,13 @@ impl LoadCleanup for Effects {
     }
 }
 
-impl LoadEffects for Effects {
-    type Store = bpfman_store_sqlite::Store;
+impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effects<'_, S> {
+    type Store = S::Reader;
     type Prepared = PreparedLoad;
     type Kernel = aya::Ebpf;
-    type MapDirectory = MapDirectory;
 
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, LoadCause> {
-        crate::store::open_store(writer).map_err(LoadCause::Open)
+        crate::store::open_store(self.0, writer).map_err(LoadCause::Open)
     }
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, LoadCause> {
         writer.prepare_load().map_err(LoadCause::from)
@@ -126,19 +125,23 @@ impl LoadEffects for Effects {
         id: NonZeroU32,
         input: &Inputs<'_>,
     ) -> Result<StoredProgramSummary, LoadCause> {
-        bpfman_store_sqlite::persist_tracepoint(
-            writer,
-            bpfman_store_sqlite::TracepointRecord {
-                id,
-                name: input.name,
-                source: input.source,
-                license: &input.object.license,
-                created_at: input.created_at,
-                metadata: input.metadata,
-            },
-        )
-        .map_err(LoadCause::from)
+        self.0
+            .commit_tracepoint(
+                writer,
+                bpfman_store::TracepointRecord {
+                    id,
+                    name: input.name,
+                    source: input.source,
+                    license: &input.object.license,
+                    created_at: input.created_at,
+                    metadata: input.metadata,
+                },
+            )
+            .map_err(LoadCause::from)
     }
+}
+impl<S> super::CleanupEffects for Effects<'_, S> {
+    type MapDirectory = MapDirectory;
     fn remove_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,

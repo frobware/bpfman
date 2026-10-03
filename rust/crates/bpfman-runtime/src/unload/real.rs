@@ -2,9 +2,9 @@ use super::{Artifacts, UnloadEffects};
 use crate::{UnloadCause, unload_error::Cause};
 use bpfman_core::EffectFailure;
 use bpfman_fs::{Bytecode, MapDirectory, MapPin, ProgramPin, RuntimeWriter};
-use bpfman_store_sqlite::{PrivateMapSet, ProgramRecord};
+use bpfman_store::UnloadStore;
 use std::num::NonZeroU32;
-pub(crate) struct Effects;
+pub(crate) struct Effects<'a, S>(pub(crate) &'a S);
 fn map_failure<R, E: Into<UnloadCause>>(
     failure: EffectFailure<R, E>,
 ) -> EffectFailure<R, UnloadCause> {
@@ -13,21 +13,21 @@ fn map_failure<R, E: Into<UnloadCause>>(
         cause: failure.cause.into(),
     }
 }
-impl UnloadEffects for Effects {
+impl<S: UnloadStore> UnloadEffects for Effects<'_, S> {
     type Pin = ProgramPin;
-    type Record = ProgramRecord;
+    type Record = S::ProgramReceipt;
     type Map = MapPin;
     type Directory = MapDirectory;
-    type MapSet = PrivateMapSet;
+    type MapSet = S::MapSetReceipt;
     type Bytecode = Bytecode;
     type Error = UnloadCause;
     fn observe_store(
         &mut self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
-    ) -> Result<(ProgramRecord, PrivateMapSet), UnloadCause> {
-        bpfman_store_sqlite::observe_unload(writer, id)?
-            .map(|record| record.into_parts())
+    ) -> Result<(S::ProgramReceipt, S::MapSetReceipt), UnloadCause> {
+        self.0
+            .observe_unload(writer, id)?
             .ok_or_else(|| Cause::NotFound(id).into())
     }
     fn observe_artifacts(
@@ -53,9 +53,9 @@ impl UnloadEffects for Effects {
     fn delete_record(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: ProgramRecord,
-    ) -> Result<(), EffectFailure<ProgramRecord, UnloadCause>> {
-        bpfman_store_sqlite::delete_unloaded_program(writer, receipt).map_err(map_failure)
+        receipt: S::ProgramReceipt,
+    ) -> Result<(), EffectFailure<S::ProgramReceipt, UnloadCause>> {
+        self.0.delete_program(writer, receipt).map_err(map_failure)
     }
     fn remove_map(
         &mut self,
@@ -76,9 +76,9 @@ impl UnloadEffects for Effects {
     fn delete_map_set(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: PrivateMapSet,
-    ) -> Result<(), EffectFailure<PrivateMapSet, UnloadCause>> {
-        bpfman_store_sqlite::delete_unused_map_set(writer, receipt).map_err(map_failure)
+        receipt: S::MapSetReceipt,
+    ) -> Result<(), EffectFailure<S::MapSetReceipt, UnloadCause>> {
+        self.0.delete_map_set(writer, receipt).map_err(map_failure)
     }
     fn remove_bytecode(
         &mut self,

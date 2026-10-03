@@ -5,13 +5,14 @@ use clap::error::ErrorKind;
 use super::{Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, parse};
 
 impl LoadCommand {
-    pub(crate) fn execute(
+    pub(crate) fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
         self,
+        store: &S,
         layout: &bpfman_fs::RuntimeLayout,
         timeout: std::time::Duration,
     ) -> anyhow::Result<()> {
         let request = self.into_request().unwrap_or_else(|error| error.exit());
-        request.execute(layout, timeout)
+        request.execute(store, layout, timeout)
     }
 
     fn into_request(self) -> Result<LoadRequest, clap::Error> {
@@ -84,8 +85,9 @@ impl LoadOptions {
 }
 
 impl LoadRequest {
-    fn execute(
+    fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
         self,
+        store: &S,
         layout: &bpfman_fs::RuntimeLayout,
         timeout: std::time::Duration,
     ) -> anyhow::Result<()> {
@@ -134,7 +136,8 @@ impl LoadRequest {
         let bpfman_model::ProgramSpec::Tracepoint(name) = first else {
             anyhow::bail!("unsupported program type");
         };
-        let stored = bpfman_runtime::load_tracepoint(layout, &path, name, &metadata, timeout)?;
+        let stored =
+            bpfman_runtime::load_tracepoint(store, layout, &path, name, &metadata, timeout)?;
         // Output is deliberately outside the operation: delivery failure must
         // never compensate a committed program.
         crate::output::program(

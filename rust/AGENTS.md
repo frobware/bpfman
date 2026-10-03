@@ -105,6 +105,12 @@ The architecture and compatibility goals are in
   layout and obtain paths through its methods. Layout construction performs no
   I/O and does not imply filesystem readiness. Add accessors as consumers need
   them, rather than scattering joins or preemptively exposing every Go path.
+- Store backend selection belongs to the binary composition root. Runtime
+  depends on `bpfman-store` contracts, never on SQLite or a future file-format
+  implementation. Keep format/version checks and atomic publication inside each
+  backend. Use domain operations, not connections or transaction callbacks.
+  Associated teardown receipts stay opaque and must validate backend/runtime
+  identity on deletion and explicit retry.
 - Store observations and policy execution share one writer-lock scope. The core
   decides create/use/reject from schema observations without knowing paths,
   SQLite, or resource handles. It may move opaque interpreter-owned evidence
@@ -162,6 +168,14 @@ The architecture and compatibility goals are in
   finaliser. A test-only forward plan is not evidence that CLI orchestration
   retains partial acquisitions. Cross forward and cleanup failures; assert
   residue, blocked dependent cleanup, all outcomes, and explicit retry history.
+- Generic lifecycle and outside-in tests use store contracts and public
+  observations, never SQL queries or triggers to set up state or inject faults.
+  Keep persistence-format fixtures in explicitly backend-specific adapter and
+  compatibility tests. Prefer Rust integration tests for the new workspace;
+  continue using the unchanged Go DSL corpus for CLI acceptance.
+  Every new store backend must run the existing generic lifecycle, CLI, and DSL
+  scenarios by changing backend selection in test setup. Add backend-specific
+  tests only for its persistence guarantees; do not duplicate behavioural suites.
 - Keep real-kernel tests for guarantees the fake cannot establish: verifier,
   syscalls, namespaces, traffic, and kernel lifetime semantics.
 - Reuse the unchanged `e2e/scripts/*.bpfman` corpus via the Go shell runner.

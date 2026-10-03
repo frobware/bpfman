@@ -13,7 +13,8 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-lock", 1),
     ("bpfman-fs", 2),
     ("bpfman-kernel", 2),
-    ("bpfman-store-sqlite", 3),
+    ("bpfman-store", 3),
+    ("bpfman-store-sqlite", 4),
     ("bpfman-runtime", 4),
     ("bpfman", 5),
 ];
@@ -162,6 +163,33 @@ fn normal_workspace_edges_point_strictly_downward() {
 }
 
 #[test]
+fn runtime_and_store_contract_cannot_reach_a_persistence_backend() {
+    let meta = metadata();
+    for name in ["bpfman-runtime", "bpfman-store"] {
+        let start = array(&meta["workspace_members"])
+            .iter()
+            .find(|id| package(meta, id)["name"] == name)
+            .expect("member");
+        let mut pending = vec![start];
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(string(id)) {
+                continue;
+            }
+            let dependency = string(&package(meta, id)["name"]);
+            assert!(
+                !matches!(
+                    dependency,
+                    "bpfman-store-sqlite" | "rusqlite" | "libsqlite3-sys"
+                ),
+                "{name} reaches concrete persistence backend {dependency}"
+            );
+            pending.extend(normal_dependencies(meta, id));
+        }
+    }
+}
+
+#[test]
 fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
     let meta = metadata();
     for id in array(&meta["workspace_members"]) {
@@ -184,6 +212,10 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                 "rusqlite" | "libsqlite3-sys" => assert_eq!(
                     name, "bpfman-store-sqlite",
                     "SQL belongs inside the store adapter"
+                ),
+                "bpfman-store-sqlite" => assert_eq!(
+                    name, "bpfman",
+                    "only the composition root selects a persistence backend"
                 ),
                 "clap" | "anyhow" => assert_eq!(
                     name, "bpfman",

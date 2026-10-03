@@ -17,7 +17,7 @@ pub(crate) type FailureFor<F> = Failure<
     <F as LoadCleanup>::ProgramPin,
     <F as LoadCleanup>::MapPin,
     <F as LoadCleanup>::Bytecode,
-    <F as LoadEffects>::MapDirectory,
+    <F as CleanupEffects>::MapDirectory,
     <F as LoadCleanup>::Error,
 >;
 
@@ -27,11 +27,10 @@ type PublicationResult<R, E> = Result<R, EffectFailure<Vec<R>, E>>;
 
 // Every mutation borrows the same scoped writer. Receipts remain adapter-owned;
 // no production injection flags or arbitrary path mutation APIs are exposed.
-pub(crate) trait LoadEffects: LoadCleanup {
+pub(crate) trait LoadEffects: CleanupEffects {
     type Store;
     type Prepared;
     type Kernel;
-    type MapDirectory;
 
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, Self::Error>;
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, Self::Error>;
@@ -74,6 +73,11 @@ pub(crate) trait LoadEffects: LoadCleanup {
         id: NonZeroU32,
         input: &Inputs<'_>,
     ) -> Result<StoredProgramSummary, Self::Error>;
+}
+
+// Cleanup never requires a store, including explicit retries after load failure.
+pub(crate) trait CleanupEffects: LoadCleanup {
+    type MapDirectory;
     fn remove_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,

@@ -1,4 +1,6 @@
-//! Real Go schema shared by store and CLI acceptance tests.
+//! SQLite-specific Go compatibility fixture for adapter and CLI integration tests.
+//! The production CLI selects SQLite. Backend-neutral runtime tests instead use
+//! domain records and failures through the store contracts, with no SQL fixtures.
 
 use std::path::PathBuf;
 

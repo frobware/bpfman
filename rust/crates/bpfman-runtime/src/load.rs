@@ -15,14 +15,15 @@ mod real;
 mod tests;
 
 use effects::Inputs;
-pub(super) use effects::{FailureFor, LoadEffects};
+pub(super) use effects::{CleanupEffects, FailureFor, LoadEffects};
 pub(super) use real::Effects;
 
 /// Load one tracepoint from a local ELF, without attaching it. The exact bytes
 /// parsed before runtime setup are both loaded and published. Private maps are
 /// pinned; PinByName maps are rejected before runtime or kernel effects.
 /// Failure retains unresolved ownership and supports an explicit cleanup retry.
-pub fn load_tracepoint(
+pub fn load_tracepoint<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
+    store: &S,
     layout: &RuntimeLayout,
     source: &Path,
     name: Symbol,
@@ -49,7 +50,7 @@ pub fn load_tracepoint(
             |writer| {
                 run(
                     &writer,
-                    &mut Effects,
+                    &mut Effects(store),
                     &Inputs {
                         object: &object,
                         source: source_text,
@@ -63,6 +64,7 @@ pub fn load_tracepoint(
                 })
                 .and_then(|stored| {
                     crate::observation::observe(
+                        store,
                         &writer,
                         stored.id(),
                         crate::observation::View::Load,

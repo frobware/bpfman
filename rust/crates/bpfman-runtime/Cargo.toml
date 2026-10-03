@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+bpfman-store.workspace = true
 bpfman-kernel.workspace = true
 libc.workspace = true
 aya.workspace = true
@@ -23,7 +24,6 @@ bpfman-fs.workspace = true
 bpfman-lock.workspace = true
 bpfman-model.workspace = true
 bpfman-core.workspace = true
-bpfman-store-sqlite.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

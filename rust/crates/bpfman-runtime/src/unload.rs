@@ -3,6 +3,7 @@ use crate::{UnloadError, UnloadReport};
 use bpfman_core::{EffectFailure, UnloadProgram, UnloadStep};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
+use bpfman_store::UnloadStore;
 use std::{num::NonZeroU32, time::Duration};
 
 pub(super) mod real;
@@ -89,16 +90,27 @@ pub(super) type ReportFor<F> = bpfman_core::UnloadReport<
     <F as UnloadEffects>::Error,
 >;
 
+pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
+    bpfman_fs::ProgramPin,
+    <S as UnloadStore>::ProgramReceipt,
+    bpfman_fs::MapPin,
+    bpfman_fs::MapDirectory,
+    <S as UnloadStore>::MapSetReceipt,
+    bpfman_fs::Bytecode,
+    crate::UnloadCause,
+>;
+
 /// Unload one committed, unattached tracepoint with a private map set.
 /// All scope and artifact observations precede mutation under the writer lock.
 /// Unpin failure stops teardown; record failure still allows bytecode cleanup.
 /// Post-record cleanup failures return a successful report with warnings, as Go
 /// does. Retained receipts support explicit retry even after the row is gone.
-pub fn unload_tracepoint(
+pub fn unload_tracepoint<S: UnloadStore>(
+    store: &S,
     layout: &RuntimeLayout,
     id: NonZeroU32,
     timeout: Duration,
-) -> Result<UnloadReport, UnloadError> {
+) -> Result<UnloadReport<S>, UnloadError<S>> {
     let runtime =
         RuntimeDirectory::open_or_create(layout.clone()).map_err(crate::UnloadCause::from)?;
     runtime
@@ -108,8 +120,8 @@ pub fn unload_tracepoint(
                 cancelled: None,
             },
             |writer| {
-                let report = run(&writer, &mut real::Effects, id)?;
-                finish(report)
+                let report = run(&writer, &mut real::Effects(store), id)?;
+                finish::<S>(report)
             },
         )
         .map_err(crate::UnloadCause::from)?
@@ -163,7 +175,9 @@ pub(super) fn drain<F: UnloadEffects>(
         };
     }
 }
-pub(super) fn finish(report: ReportFor<real::Effects>) -> Result<UnloadReport, UnloadError> {
+pub(super) fn finish<S: UnloadStore>(
+    report: StoreReport<S>,
+) -> Result<UnloadReport<S>, UnloadError<S>> {
     let failed = report.failed();
     let report = UnloadReport { report };
     if failed {

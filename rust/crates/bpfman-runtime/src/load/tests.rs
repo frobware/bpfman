@@ -259,7 +259,6 @@ impl LoadEffects for Fake {
     type Store = ();
     type Prepared = ();
     type Kernel = Kernel;
-    type MapDirectory = Directory;
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<(), TestError> {
         self.enter(writer, Event::OpenStore)
     }
@@ -379,6 +378,9 @@ impl LoadEffects for Fake {
             vec![],
         ))
     }
+}
+impl super::CleanupEffects for Fake {
+    type MapDirectory = Directory;
     fn remove_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -408,11 +410,11 @@ fn with_writer(test: impl FnOnce(&RuntimeWriter<'_>)) {
         )
         .expect("writer");
 }
-fn invoke(
+fn invoke<F: LoadEffects>(
     writer: &RuntimeWriter<'_>,
-    fake: &mut Fake,
+    fake: &mut F,
     maps: &[&str],
-) -> Result<StoredProgramSummary, FailureFor<Fake>> {
+) -> Result<StoredProgramSummary, FailureFor<F>> {
     // Inputs are already validated at the public boundary. Nothing here
     // constructs policy transitions: run() is exactly the CLI's interpreter.
     run(
@@ -1001,3 +1003,5 @@ fn directory_retry_waits_for_maps_then_retains_failed_and_successful_attempts() 
         assert_dropped_once(&fake.counts);
     });
 }
+
+mod store;
