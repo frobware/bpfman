@@ -43,16 +43,16 @@ where
 {
     let command = cli.command.prepare(&cli.layout)?;
     let store = bpfman_runtime::ActiveStore::open(store, &cli.layout, cli.lock_timeout)?;
+    let bpfman = bpfman_runtime::Bpfman::new(store, cli.lock_timeout);
 
     match command {
         cli::PreparedCommand::Get { id, output } => {
-            let program = bpfman_runtime::get_program(&store, &cli.layout, id, cli.lock_timeout)?;
+            let program = bpfman.get(id)?;
             output::program(&mut io::stdout().lock(), &program, output, false)?;
         }
 
         cli::PreparedCommand::Unload { id } => {
-            let report =
-                bpfman_runtime::unload_tracepoint(&store, &cli.layout, id, cli.lock_timeout)?;
+            let report = bpfman.unload(id)?;
 
             for attempt in report.attempts() {
                 if let Err(error) = &attempt.outcome {
@@ -73,21 +73,15 @@ where
             };
 
             if args.output == cli::OutputFormat::Json && !args.quiet {
-                let entries = bpfman_runtime::list_program_entries(
-                    &store,
-                    &cli.layout,
-                    &filter,
-                    cli.lock_timeout,
-                )?;
+                let entries = bpfman.list_entries(&filter)?;
                 output::entries(&mut io::stdout().lock(), &entries)?;
             } else {
-                let programs =
-                    bpfman_runtime::list_programs(&store, &cli.layout, &filter, cli.lock_timeout)?;
+                let programs = bpfman.list(&filter)?;
                 output::programs(&mut io::stdout().lock(), &programs, args.quiet)?;
             }
         }
 
-        cli::PreparedCommand::Load(request) => request.execute(&store, cli.lock_timeout)?,
+        cli::PreparedCommand::Load(request) => request.execute(&bpfman)?,
     }
 
     Ok(())

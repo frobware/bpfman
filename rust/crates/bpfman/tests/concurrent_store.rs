@@ -4,7 +4,7 @@
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::Symbol;
-use bpfman_runtime::ActiveStore;
+use bpfman_runtime::{ActiveStore, Bpfman};
 use bpfman_store::{CommitLoad, OpenStore, ProgramReader, TracepointRecord};
 use std::{collections::BTreeMap, num::NonZeroU32, sync::mpsc, time::Duration};
 
@@ -14,6 +14,10 @@ fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S) {
     let temporary = tempfile::tempdir().expect("runtime directory");
     let layout = RuntimeLayout::try_from(temporary.path().to_owned()).expect("layout");
     let store = ActiveStore::open(backend, &layout, BUDGET).expect("startup");
+    let shared = Bpfman::new(
+        ActiveStore::open(backend, &layout, BUDGET).expect("shared application"),
+        Duration::from_millis(50),
+    );
     let runtime = RuntimeDirectory::open_existing(layout.clone())
         .expect("open runtime")
         .expect("existing runtime");
@@ -32,6 +36,7 @@ fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S) {
                         let (request, requests) = mpsc::channel();
                         let (reply, replies) = mpsc::channel();
                         let layout = &layout;
+                        let shared = &shared;
 
                         scope.spawn(move || {
                             // Startup and opening a fresh reader must complete while
@@ -47,23 +52,16 @@ fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S) {
                                 .expect("reader")
                                 .expect("store");
 
+                            let bpfman = Bpfman::new(active, Duration::from_millis(50));
                             assert!(
-                                bpfman_runtime::list_program_entries(
-                                    &active,
-                                    layout,
-                                    &Default::default(),
-                                    Duration::from_millis(50),
-                                )
-                                .expect("full listing must not wait for writer")
-                                .is_empty()
+                                bpfman
+                                    .list_entries(&Default::default())
+                                    .expect("full listing must not wait for writer")
+                                    .is_empty()
                             );
-                            let missing = bpfman_runtime::get_program(
-                                &active,
-                                layout,
-                                NonZeroU32::new(u32::MAX).expect("id"),
-                                Duration::from_millis(50),
-                            )
-                            .expect_err("missing record, without waiting for writer");
+                            let missing = bpfman
+                                .get(NonZeroU32::new(u32::MAX).expect("id"))
+                                .expect_err("missing record, without waiting for writer");
 
                             assert_eq!(
                                 missing.kind(),
@@ -88,13 +86,12 @@ fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S) {
 
                                 // Exercise application reads too; separate calls may
                                 // legitimately observe different committed generations.
-                                bpfman_runtime::list_programs(
-                                    &active,
-                                    layout,
-                                    &Default::default(),
-                                    Duration::from_millis(50),
-                                )
-                                .expect("listing must not wait for writer");
+                                bpfman
+                                    .list(&Default::default())
+                                    .expect("listing must not wait for writer");
+                                shared
+                                    .list(&Default::default())
+                                    .expect("shared instance permits concurrent readers");
                                 reply.send(()).expect("read completed");
                             }
                         });
@@ -173,9 +170,10 @@ fn concurrent_startup<S: OpenStore + Copy + Send>(backend: S) {
             threads.push(scope.spawn(move || {
                 start.wait();
                 let active = ActiveStore::open(backend, layout, BUDGET).expect("startup");
-                let records =
-                    bpfman_runtime::list_programs(&active, layout, &Default::default(), BUDGET)
-                        .expect("complete initialized store");
+                let bpfman = Bpfman::new(active, BUDGET);
+                let records = bpfman
+                    .list(&Default::default())
+                    .expect("complete initialized store");
 
                 assert!(records.is_empty());
             }));

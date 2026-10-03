@@ -95,7 +95,7 @@ fn schema_error_retains_diagnostic_chain() -> Result<(), Box<dyn std::error::Err
 
     let error = String::from_utf8(output.stderr)?;
 
-    assert!(error.contains("list managed programs"));
+    assert!(error.contains("access bpfman runtime"));
     assert_eq!(error.matches("schema version mismatch").count(), 1);
     assert!(error.contains("99"));
     assert!(output.stdout.is_empty());

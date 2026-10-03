@@ -125,8 +125,14 @@ The architecture and compatibility goals are in
   backend. Use domain operations, not connections or transaction callbacks.
   Associated teardown receipts stay opaque and must validate backend/runtime
   identity on deletion and explicit retry.
-- Open one active store at startup and inject it into operations; use the same
-  setup in shared behavioural tests. Existing-store readers must open and read
+- Open one active store at startup and move it into `Bpfman`; use the same
+  setup in shared behavioural tests. Keep its store, runtime, and options private.
+  Expose operations as methods taking domain inputs, without a separate runtime
+  or caller-supplied writer. Mutation and explicit retry methods acquire scoped
+  writer authority internally; admission failure must retain cleanup receipts.
+  Keep interpreters and compensation drivers private. Prepared requests own
+  validated inputs and must not carry a second runtime selection.
+  Existing-store readers must open and read
   without acquiring the giant writer lock. Initialize missing state under that
   lock after rechecking absence. Preserve early request/ELF validation before
   initialization. All read-only operations, including combined store/kernel

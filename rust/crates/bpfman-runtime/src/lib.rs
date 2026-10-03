@@ -1,37 +1,88 @@
-//! Application operations: gather observations, then evaluate pure policy.
+//! A bpfman instance, bound to its runtime and persistence backend.
+//!
+//! Open the selected store once, then inject it into [`Bpfman`]. Read methods
+//! borrow the instance without acquiring the writer lock. Mutations and explicit
+//! cleanup passes acquire scoped writer authority internally. The library never
+//! installs a telemetry subscriber or formats command output.
+//!
+//! ```no_run
+//! use bpfman_runtime::{ActiveStore, Bpfman, Error};
+//! use bpfman_fs::RuntimeLayout;
+//! use bpfman_store::OpenStore;
+//! use std::time::Duration;
+//!
+//! fn list<S: OpenStore>(backend: S, layout: &RuntimeLayout) -> Result<(), Error> {
+//!     let timeout = Duration::from_secs(30);
+//!     let store = ActiveStore::open(backend, layout, timeout)?;
+//!     let bpfman = Bpfman::new(store, timeout);
+//!     let programs = bpfman.list(&Default::default())?;
+//!     // The caller chooses how to use or present these domain values.
+//!     Ok(())
+//! }
+//! ```
 
+mod application;
 mod compensation;
 mod error;
 mod kernel;
 mod list;
-mod observation;
-
-pub use observation::{get_program, list_program_entries};
-
 mod load;
 mod load_error;
+mod observation;
+mod store;
+mod unload;
+mod unload_error;
 
-pub use load::load_tracepoint;
+/// An instance of bpfman bound to an initialized store and its runtime.
+///
+/// Construct the active store at startup, then move it into this application.
+/// Operations share the adopted runtime, not an operation-wide mutex. Reads
+/// need no writer lock; mutations acquire scoped authority for this runtime.
+/// The caller owns telemetry collection and presentation.
+///
+/// Application dependencies cannot be replaced through the public API:
+/// ```compile_fail,E0616
+/// use bpfman_runtime::Bpfman;
+/// fn replace<S>(app: &mut Bpfman<S>) {
+///     let _store = &mut app.store;
+/// }
+/// ```
+///
+/// Construction requires an initialized store, not a backend selector:
+/// ```compile_fail,E0308
+/// use bpfman_runtime::Bpfman;
+/// fn uninitialized<S>(backend: S) {
+///     let _app = Bpfman::new(backend, std::time::Duration::from_secs(1));
+/// }
+/// ```
+pub struct Bpfman<S> {
+    store: ActiveStore<S>,
+    lock_timeout: std::time::Duration,
+}
 
 /// Validated local tracepoint input, prepared before opening runtime state.
 /// Owns the exact ELF bytes that will be loaded and published.
+/// Request contents are private and cannot be changed after validation:
+/// ```compile_fail,E0616
+/// use bpfman_runtime::PreparedTracepoint;
+/// fn change(request: &mut PreparedTracepoint) {
+///     request.source = "another.o".into();
+/// }
+/// ```
 pub struct PreparedTracepoint {
-    layout: bpfman_fs::RuntimeLayout,
     object: kernel::LocalObject,
     source: String,
     name: bpfman_model::Symbol,
     metadata: std::collections::BTreeMap<String, String>,
 }
 
-mod store;
-pub use store::ActiveStore;
-mod unload;
-mod unload_error;
-
-pub use unload::unload_tracepoint;
-
-pub use compensation::compensate_load;
-pub use list::list_programs;
+/// Store opened at startup and bound to an adopted runtime directory.
+/// Only absent state is initialized, under the writer lock. Move this handle
+/// into `Bpfman` to use the application API without supplying runtime paths.
+pub struct ActiveStore<S> {
+    backend: S,
+    runtime: bpfman_fs::RuntimeDirectory,
+}
 
 /// Narrow filesystem-effects boundary for failed-load cleanup.
 ///
@@ -44,7 +95,7 @@ pub use list::list_programs;
 /// pre-existing resources. Container cleanup needing prerequisites is outside
 /// this interface. No guarantees about destroying kernel objects are implied
 /// by successfully removing pins.
-pub trait LoadCleanup {
+trait LoadCleanup {
     /// Non-cloneable program-pin ownership receipt.
     type ProgramPin;
 
@@ -96,7 +147,7 @@ pub enum ErrorKind {
 
 /// Application failure; concrete adapter errors remain private diagnostics.
 #[derive(Debug, thiserror::Error)]
-#[error("list managed programs")]
+#[error("access bpfman runtime")]
 pub struct Error {
     kind: ErrorKind,
     #[source]
@@ -106,6 +157,7 @@ pub struct Error {
 /// A failed load, retaining original diagnostics and unresolved cleanup receipts.
 pub struct LoadError {
     failure: Box<load_error::Failure>,
+    retry_lock_error: Option<Error>,
 }
 
 /// Backend-independent classification for the supported load operation.

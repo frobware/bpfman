@@ -15,18 +15,7 @@ use crate::LoadCleanup;
 /// forward work prevent cleanup attempts. Process termination/crash recovery is
 /// a separate concern. This is not a database rollback or an unload operation.
 ///
-/// An unlocked directory is not sufficient authority:
-///
-/// ```compile_fail
-/// use bpfman_core::LoadRollback;
-/// use bpfman_fs::RuntimeDirectory;
-/// use bpfman_runtime::{LoadCleanup, compensate_load};
-/// fn unlocked<F: LoadCleanup>(directory: &RuntimeDirectory, fs: &mut F,
-///     plan: LoadRollback<F::ProgramPin, F::MapPin, F::Bytecode, F::Error>) {
-///     compensate_load(directory, fs, plan);
-/// }
-/// ```
-pub fn compensate_load<F: LoadCleanup>(
+pub(super) fn compensate_load<F: LoadCleanup>(
     writer: &RuntimeWriter<'_>,
     filesystem: &mut F,
     mut rollback: LoadRollback<F::ProgramPin, F::MapPin, F::Bytecode, F::Error>,
@@ -46,3 +35,6 @@ pub fn compensate_load<F: LoadCleanup>(
         };
     }
 }
+
+#[cfg(test)]
+mod tests;

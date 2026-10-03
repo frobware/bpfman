@@ -1,8 +1,8 @@
-use crate::{UnloadCause, UnloadError, UnloadErrorKind, UnloadReport, unload};
+use crate::{Bpfman, UnloadCause, UnloadError, UnloadErrorKind, UnloadReport, unload};
 use bpfman_core::{UnloadAttempt, UnloadKind};
-use bpfman_fs::RuntimeWriter;
 use bpfman_store::UnloadStore;
 use std::{fmt, num::NonZeroU32};
+
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Cause {
     #[error("managed program {0} not found")]
@@ -16,6 +16,10 @@ pub(super) enum Cause {
 pub(super) enum Failure<S: UnloadStore> {
     Before(UnloadCause),
     Incomplete(Box<UnloadReport<S>>),
+    RetryBlocked {
+        cause: UnloadCause,
+        report: Box<UnloadReport<S>>,
+    },
 }
 
 impl From<Cause> for UnloadCause {
@@ -73,20 +77,6 @@ impl<S: UnloadStore> UnloadReport<S> {
     pub fn unresolved(&self) -> usize {
         self.report.remaining().len()
     }
-
-    /// Perform one caller-budgeted pass over retained cleanup only, preserving history.
-    /// Requires writer authority for the same runtime. Does not reobserve by ID.
-    pub fn retry_cleanup(
-        self,
-        store: &S,
-        writer: &RuntimeWriter<'_>,
-    ) -> Result<Self, UnloadError<S>> {
-        unload::finish::<S>(unload::drain(
-            writer,
-            &mut unload::real::Effects(store),
-            self.report.retry(),
-        ))
-    }
 }
 
 impl<S: UnloadStore> UnloadError<S> {
@@ -100,26 +90,78 @@ impl<S: UnloadStore> UnloadError<S> {
     pub fn report(&self) -> Option<&UnloadReport<S>> {
         match &self.failure {
             Failure::Before(_) => None,
-            Failure::Incomplete(report) => Some(report),
-        }
-    }
-
-    /// Explicitly retry retained work. Preflight failures require a fresh request.
-    pub fn retry(self, store: &S, writer: &RuntimeWriter<'_>) -> Result<UnloadReport<S>, Self> {
-        match self.failure {
-            Failure::Before(_) => Err(self),
-            Failure::Incomplete(report) => report.retry_cleanup(store, writer),
+            Failure::Incomplete(report) | Failure::RetryBlocked { report, .. } => Some(report),
         }
     }
 
     fn primary(&self) -> Option<&UnloadCause> {
         match &self.failure {
-            Failure::Before(cause) => Some(cause),
+            Failure::Before(cause) | Failure::RetryBlocked { cause, .. } => Some(cause),
             Failure::Incomplete(report) => report
                 .attempts()
                 .iter()
                 .filter(|a| matches!(a.kind, UnloadKind::ProgramPin | UnloadKind::ProgramRecord))
                 .find_map(|a| a.outcome.as_ref().err()),
+        }
+    }
+}
+
+impl<S: UnloadStore> Bpfman<S> {
+    /// Retry retained teardown once, acquiring this instance's writer lock.
+    /// Preflight failures are returned unchanged and require a fresh request.
+    pub fn retry_unload(&self, error: UnloadError<S>) -> Result<UnloadReport<S>, UnloadError<S>> {
+        match error.failure {
+            Failure::Before(_) => Err(error),
+            Failure::Incomplete(report) | Failure::RetryBlocked { report, .. } => {
+                self.retry_unload_cleanup(*report)
+            }
+        }
+    }
+
+    /// Retry retained cleanup once, preserving receipts if lock acquisition fails.
+    /// No new observations or automatic retry loops are performed.
+    #[tracing::instrument(name = "program.retry_unload_cleanup", level = "debug", skip_all, err)]
+    pub fn retry_unload_cleanup(
+        &self,
+        report: UnloadReport<S>,
+    ) -> Result<UnloadReport<S>, UnloadError<S>> {
+        // The callback borrows this slot so acquisition failure cannot drop its receipts.
+        let mut pending = Some(report);
+        let result = self.store.runtime().with_writer(
+            bpfman_lock::AcquireOptions {
+                timeout: self.lock_timeout,
+                cancelled: None,
+            },
+            |writer| {
+                pending.take().map(|report| {
+                    unload::finish::<S>(unload::drain(
+                        &writer,
+                        &mut unload::real::Effects(&self.store),
+                        report.report.retry(),
+                    ))
+                })
+            },
+        );
+
+        match result {
+            Ok(Some(result)) => result,
+            Err(cause) => {
+                let cause = UnloadCause::from(cause);
+                Err(UnloadError {
+                    failure: match pending {
+                        Some(report) => Failure::RetryBlocked {
+                            cause,
+                            report: Box::new(report),
+                        },
+                        None => Failure::Before(cause),
+                    },
+                })
+            }
+            Ok(None) => Err(UnloadCause::from(bpfman_store::Error::new(
+                bpfman_store::ErrorKind::InvalidData,
+                std::io::Error::other("cleanup callback has no retained report"),
+            ))
+            .into()),
         }
     }
 }

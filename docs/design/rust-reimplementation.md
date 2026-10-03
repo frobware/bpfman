@@ -323,7 +323,7 @@ meaningful:
 | `bpfman-store-json` | Effectful | Versioned JSON snapshots, atomic publication, and conditional teardown |
 | `bpfman-kernel-aya` | Effectful | Aya-backed program, map, link, dispatcher, netlink, tracefs, and namespace operations |
 | `bpfman-image-oci` | Effectful | OCI pull, cache, authentication, and signature-policy adapters |
-| `bpfman-runtime` | Interpreter | Drives core machines, routes effects, retains effect error sources, and provides the application-facing manager |
+| `bpfman-runtime` | Interpreter | Drives core machines, routes effects, retains effect error sources, and exposes the `Bpfman` application API |
 | `bpfman-proto` | Boundary | Generated protobuf vocabulary only; not the domain model |
 | `bpfman-api` | Front end | gRPC request conversion, status mapping, and server implementation |
 | `bpfman-csi` | Front end | CSI integration using narrow runtime capabilities |
@@ -566,8 +566,11 @@ is closed. The helper launcher will explicitly map its close-on-exec duplicate
 and set the existing `BPFMAN_WRITER_LOCK_FD` protocol variable.
 
 The composition root validates input, then opens a runtime-bound `ActiveStore`
-and passes it to application operations. Shared behavioural tests do the same
-in setup. Existing stores open without the giant lock; only absence acquires the
+and moves it into `Bpfman`. The instance holds private dependencies and exposes
+load, unload, get, and list methods; each operation uses the already-adopted
+runtime. Shared behavioural tests construct the same instance in setup.
+Read methods have no lock argument. Mutations and explicit cleanup retries
+acquire writer authority internally, retaining receipts on admission failure. Existing stores open without the giant lock; only absence acquires the
 writer and rechecks before initialization. Inside the SQLite adapter, the pure
 `plan_store_open` function receives a
 `StoreObservation<T>` and the supported schema version, and returns a

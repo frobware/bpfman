@@ -1,7 +1,7 @@
 //! Existing readers bypass the writer lock; missing state is created under it.
 
 use crate::{
-    Error,
+    ActiveStore, Error,
     error::{filesystem_error, store_error},
 };
 use bpfman_core::EffectFailure;
@@ -12,15 +12,6 @@ use bpfman_store::{CommitLoad, OpenStore, TracepointRecord, UnloadObservation, U
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-/// Runtime-bound store opened by the composition root and injected into operations.
-/// Existing state opens without the writer lock. Only absent state is initialized
-/// under that lock, which is released before dispatch. Operations never recreate
-/// a disappeared store through this handle.
-pub struct ActiveStore<S> {
-    backend: S,
-    runtime: RuntimeDirectory,
-}
-
 fn invalid(message: &'static str) -> bpfman_store::Error {
     bpfman_store::Error::new(
         bpfman_store::ErrorKind::InvalidData,
@@ -29,6 +20,12 @@ fn invalid(message: &'static str) -> bpfman_store::Error {
 }
 
 impl<S: OpenStore> ActiveStore<S> {
+    pub(super) fn reader(&self) -> Result<S::Reader, bpfman_store::Error> {
+        self.backend
+            .open_reader(&self.runtime)?
+            .ok_or_else(|| invalid("active store disappeared"))
+    }
+
     /// Open the selected backend once at startup, creating state only if absent.
     #[tracing::instrument(name = "store.open", level = "debug", skip_all, fields(runtime = %layout.root().display()), err)]
     pub fn open(backend: S, layout: &RuntimeLayout, timeout: Duration) -> Result<Self, Error> {
@@ -60,6 +57,10 @@ impl<S: OpenStore> ActiveStore<S> {
 }
 
 impl<S> ActiveStore<S> {
+    pub(super) fn runtime(&self) -> &RuntimeDirectory {
+        &self.runtime
+    }
+
     fn check_root(&self, identity: bpfman_fs::RuntimeIdentity) -> Result<(), bpfman_store::Error> {
         let root = self
             .runtime
@@ -93,17 +94,12 @@ impl<S: OpenStore> OpenStore for ActiveStore<S> {
                 .identity()
                 .map_err(|e| bpfman_store::Error::new(bpfman_store::ErrorKind::Unavailable, e))?,
         )?;
-        self.backend
-            .open_reader(&self.runtime)?
-            .map(Some)
-            .ok_or_else(|| invalid("active store disappeared"))
+        self.reader().map(Some)
     }
 
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self::Reader, bpfman_store::Error> {
         self.check_writer(writer)?;
-        self.backend
-            .open_reader(&self.runtime)?
-            .ok_or_else(|| invalid("active store disappeared"))
+        self.reader()
     }
 }
 
@@ -160,22 +156,6 @@ impl<S: UnloadStore> UnloadStore for ActiveStore<S> {
 
         self.backend.delete_map_set(writer, receipt)
     }
-}
-
-pub(super) fn read_store<S: OpenStore>(
-    store: &S,
-    layout: &RuntimeLayout,
-    _timeout: Duration,
-) -> Result<S::Reader, Error> {
-    if let Some(runtime) =
-        RuntimeDirectory::open_existing(layout.clone()).map_err(filesystem_error)?
-    {
-        if let Some(reader) = store.open_reader(&runtime).map_err(store_error)? {
-            return Ok(reader);
-        }
-    }
-
-    Err(store_error(invalid("store has not been initialized")))
 }
 
 pub(super) fn open_store<S: OpenStore>(

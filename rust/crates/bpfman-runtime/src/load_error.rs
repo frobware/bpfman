@@ -1,5 +1,5 @@
 use crate::{
-    LoadError, LoadErrorKind,
+    Bpfman, LoadError, LoadErrorKind,
     compensation::compensate_load,
     load::{CleanupEffects, Effects, FailureFor},
 };
@@ -50,6 +50,7 @@ impl From<LoadCause> for LoadError {
     fn from(cause: LoadCause) -> Self {
         Self {
             failure: Box::new(Failure::NoOwnedArtifacts(cause)),
+            retry_lock_error: None,
         }
     }
 }
@@ -79,11 +80,53 @@ impl LoadError {
         }
     }
 
+    /// Failure to acquire writer authority for the most recent explicit cleanup pass.
+    /// The original load failure and all unresolved receipts remain available.
+    pub fn retry_lock_error(&self) -> Option<&crate::Error> {
+        self.retry_lock_error.as_ref()
+    }
+
     /// Explicitly retry unresolved cleanup once, retaining the original error
     /// and all prior attempts. The supplied writer must belong to the same root.
-    pub fn retry_cleanup(self, writer: &RuntimeWriter<'_>) -> Self {
+    fn retry_cleanup(self, writer: &RuntimeWriter<'_>) -> Self {
         Self {
             failure: Box::new(retry(writer, &mut Effects(&()), *self.failure)),
+            retry_lock_error: None,
+        }
+    }
+}
+
+impl<S> Bpfman<S> {
+    /// Retry unresolved load cleanup once under this instance's writer lock.
+    /// The original failure remains the result, including after complete cleanup.
+    /// Acquisition failure retains all receipts and is exposed by `retry_lock_error`.
+    #[tracing::instrument(name = "program.retry_load_cleanup", level = "debug", skip_all)]
+    pub fn retry_load_cleanup(&self, error: LoadError) -> LoadError {
+        if error.unresolved() == 0 {
+            return error;
+        }
+
+        let mut pending = Some(error);
+        let acquired = self.store.runtime().with_writer(
+            bpfman_lock::AcquireOptions {
+                timeout: self.lock_timeout,
+                cancelled: None,
+            },
+            |writer| {
+                if let Some(error) = pending.take() {
+                    pending = Some(error.retry_cleanup(&writer));
+                }
+            },
+        );
+
+        match pending {
+            Some(mut error) => {
+                if let Err(cause) = acquired {
+                    error.retry_lock_error = Some(crate::error::filesystem_error(cause));
+                }
+                error
+            }
+            None => LoadCause::Invalid("cleanup callback lost its retained failure".into()).into(),
         }
     }
 }
@@ -155,6 +198,11 @@ impl fmt::Debug for LoadError {
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "load local tracepoint")?;
+
+        if let Some(error) = &self.retry_lock_error {
+            write!(f, "; cleanup lock: ")?;
+            write_chain(f, error)?;
+        }
 
         if let Failure::Compensated {
             report,

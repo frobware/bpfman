@@ -1,4 +1,5 @@
-//! Backend-independent fault decorator. No production switches or storage mutation.
+//! Backend-independent fault decorator. Store failures use domain operations;
+//! one filesystem replacement also exercises retained load cleanup.
 
 use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
@@ -15,6 +16,7 @@ use std::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Point {
     Commit,
+    CommitWithBlockedCleanup,
     ReadAfterCommit,
     ObserveUnload,
     DeleteProgram,
@@ -26,10 +28,12 @@ struct State {
     fault: Option<Point>,
     committed: bool,
     calls: Vec<Point>,
+    blocked_bytecode: Option<NonZeroU32>,
 }
 
+#[derive(Clone)]
 pub(super) struct Faults<S> {
-    pub(super) backend: S,
+    backend: S,
     state: Arc<Mutex<State>>,
 }
 
@@ -43,6 +47,14 @@ impl<S> Faults<S> {
 
     pub(super) fn set(&self, fault: Option<Point>) {
         self.state.lock().expect("fault state").fault = fault;
+    }
+
+    pub(super) fn blocked_bytecode(&self) -> NonZeroU32 {
+        self.state
+            .lock()
+            .expect("fault state")
+            .blocked_bytecode
+            .expect("blocked bytecode")
     }
 
     pub(super) fn count(&self, point: Point) -> usize {
@@ -116,6 +128,18 @@ impl<S: CommitLoad> CommitLoad for Faults<S> {
         w: &RuntimeWriter<'_>,
         record: TracepointRecord<'_>,
     ) -> Result<StoredProgramSummary, Error> {
+        if self.state.lock().expect("fault state").fault == Some(Point::CommitWithBlockedCleanup) {
+            // Replace only this request's bytecode directory. Cleanup must refuse
+            // the symlink and retain the original directory/file receipts.
+            let bytecode = w.layout().bytecode_path(record.id);
+            let directory = bytecode.parent().expect("program directory");
+            let saved = w.layout().root().join("saved-bytecode");
+            std::fs::rename(directory, &saved).expect("save bytecode");
+            std::os::unix::fs::symlink(&saved, directory).expect("block cleanup");
+            self.state.lock().expect("fault state").blocked_bytecode = Some(record.id);
+            check(&self.state, Point::CommitWithBlockedCleanup)?;
+        }
+
         check(&self.state, Point::Commit)?;
         let result = self.backend.commit_tracepoint(w, record)?;
         self.state.lock().expect("fault state").committed = true;

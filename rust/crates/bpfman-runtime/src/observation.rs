@@ -1,13 +1,14 @@
 //! Full store/kernel views. Wire DTOs remain in the CLI.
 
-use crate::{ObservationError, ObservationErrorKind};
+use crate::{ActiveStore, Bpfman, ObservationError, ObservationErrorKind};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{
     KernelMap, KernelProgram, ObservedMap, ObservedProgram, ProgramEntry, ProgramStats,
     StoredProgram,
 };
 use bpfman_store::{OpenStore, ProgramReader};
-use std::{num::NonZeroU32, time::Duration};
+use std::num::NonZeroU32;
+
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
     #[error("program {0} does not exist")]
@@ -28,8 +29,6 @@ pub(super) enum Failure {
     Store(#[from] bpfman_store::Error),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
-    #[error("store has not been initialized")]
-    Uninitialized,
     #[error("observed runtime path is not UTF-8")]
     Path,
 }
@@ -72,6 +71,7 @@ trait KernelObservations {
 }
 
 struct Kernel;
+
 impl KernelObservations for Kernel {
     fn program(
         &mut self,
@@ -94,15 +94,8 @@ impl KernelObservations for Kernel {
     }
 }
 
-fn records<S: OpenStore>(
-    store: &S,
-    runtime: &RuntimeDirectory,
-) -> Result<Vec<StoredProgram>, Failure> {
-    store
-        .open_reader(runtime)?
-        .ok_or(Failure::Uninitialized)?
-        .read_records()
-        .map_err(Failure::from)
+fn records<S: OpenStore>(store: &ActiveStore<S>) -> Result<Vec<StoredProgram>, Failure> {
+    store.reader()?.read_records().map_err(Failure::from)
 }
 
 fn path(path: std::path::PathBuf) -> Result<String, Failure> {
@@ -111,29 +104,23 @@ fn path(path: std::path::PathBuf) -> Result<String, Failure> {
         .map_err(|_| Failure::Path)
 }
 
-/// Observe a managed program's record, live kernel data, maps and statistics.
-/// Linked programs are rejected until full link observation is implemented.
-#[tracing::instrument(name = "program.get", level = "debug", skip_all, fields(program_id = id.get()), err)]
-pub fn get_program<S: OpenStore>(
-    store: &S,
-    layout: &RuntimeLayout,
-    id: NonZeroU32,
-    _timeout: Duration,
-) -> Result<ObservedProgram, ObservationError> {
-    let runtime = RuntimeDirectory::open_existing(layout.clone())
-        .map_err(Failure::from)?
-        .ok_or(Failure::Uninitialized)?;
-
-    observe(store, &runtime, id, View::Get)
+impl<S: OpenStore> Bpfman<S> {
+    /// Observe a managed record and its live kernel data without the writer lock.
+    /// Kernel and pin observations may change after the store snapshot.
+    /// Linked programs are rejected until full link observation is implemented.
+    #[tracing::instrument(name = "program.get", level = "debug", skip_all, fields(program_id = id.get()), err)]
+    pub fn get(&self, id: NonZeroU32) -> Result<ObservedProgram, ObservationError> {
+        observe(&self.store, self.store.runtime(), id, View::Get)
+    }
 }
 
 pub(super) fn observe<S: OpenStore>(
-    store: &S,
+    store: &ActiveStore<S>,
     runtime: &RuntimeDirectory,
     id: NonZeroU32,
     view: View,
 ) -> Result<ObservedProgram, ObservationError> {
-    let records = records(store, runtime)?;
+    let records = records(store)?;
     let index = records
         .iter()
         .position(|p| p.id == id)
@@ -205,22 +192,19 @@ fn build<K: KernelObservations>(
     })
 }
 
-/// List full managed records and optional kernel observations. A missing kernel
-/// object is null; permissions and other lookup failures remain errors. Existing
-/// text/quiet listing stays available without kernel privileges.
-#[tracing::instrument(name = "program.list_observed", level = "debug", skip_all, err)]
-pub fn list_program_entries<S: OpenStore>(
-    store: &S,
-    layout: &RuntimeLayout,
-    filter: &bpfman_core::ProgramFilter,
-    _timeout: Duration,
-) -> Result<Vec<ProgramEntry>, ObservationError> {
-    let runtime = RuntimeDirectory::open_existing(layout.clone())
-        .map_err(Failure::from)?
-        .ok_or(Failure::Uninitialized)?;
-    let records = bpfman_core::select_records(records(store, &runtime)?, filter);
+impl<S: OpenStore> Bpfman<S> {
+    /// List full records and optional live kernel data without the writer lock.
+    /// Missing kernel objects are null; other lookup failures remain errors.
+    /// Use `list` for summaries without kernel privileges.
+    #[tracing::instrument(name = "program.list_observed", level = "debug", skip_all, err)]
+    pub fn list_entries(
+        &self,
+        filter: &bpfman_core::ProgramFilter,
+    ) -> Result<Vec<ProgramEntry>, ObservationError> {
+        let records = bpfman_core::select_records(records(&self.store)?, filter);
 
-    entries(&mut Kernel, records).map_err(ObservationError::from)
+        entries(&mut Kernel, records).map_err(ObservationError::from)
+    }
 }
 
 fn entries<K: KernelObservations>(

@@ -69,11 +69,48 @@ prove arbitrary dependency code is free of I/O: admission to the pure closure
 requires source review. `no_std` additionally keeps ordinary standard-library
 I/O APIs out of these libraries.
 
+## Application API
+
+`bpfman-runtime::Bpfman<S>` is an instance of bpfman bound to its store and runtime.
+The CLI and library consumers use the same operations:
+
+```rust,ignore
+let store = ActiveStore::open(backend, &layout, lock_timeout)?;
+let bpfman = Bpfman::new(store, lock_timeout);
+let programs = bpfman.list(&filter)?;
+let observed = bpfman.get(id)?;
+let loaded = bpfman.load(request)?;
+let report = bpfman.unload(id)?;
+```
+
+Prepare a local ELF with `PreparedTracepoint::new` before startup to reject bad
+input without creating runtime state. The request owns validated bytes and has
+no runtime path; the instance supplies its adopted runtime for execution.
+`list` returns summaries without kernel privileges; `list_entries` adds live
+kernel observations. Read methods take `&self` and no lock parameter. Mutations
+and explicit cleanup retries acquire the configured writer lock internally.
+A shared instance supports concurrent readers when its backend is thread safe.
+
+Dependencies, interpreter modules, compensation drivers, and request fields
+are private. No store getter or public operation accepting a separate runtime
+is exposed. Compile-fail examples check construction and field visibility.
+Backend contracts remain available to adapter implementers, while application
+callers use typed requests, domain results, and opaque errors/reports.
+
+`retry_unload`, `retry_unload_cleanup`, and `retry_load_cleanup` perform one
+explicit pass over retained work. Lock acquisition failure preserves receipts
+and previous effect history. Unload returns the retained report in its error;
+load retains its original error and exposes the acquisition failure through
+`retry_lock_error`. The application never automatically retries effects.
+
+The crate owns no CLI formatting or telemetry subscriber. This is a reusable
+library boundary today; packaging and publishing remain a separate step.
+
 ## Store backend boundary
 
 The CLI composition root selects SQLite (the default) or JSON with `--store`
-or `BPFMAN_STORE`, opens a runtime-bound `ActiveStore`, and injects it into runtime
-operations. Shared behavioural tests construct the same active store in setup.
+or `BPFMAN_STORE`, opens a runtime-bound `ActiveStore`, and moves it into `Bpfman`.
+Shared behavioural tests construct the same application instance in setup.
 Runtime depends
 on `bpfman-store`, with no direct or transitive dependency on either backend.
 Architecture tests enforce this separation. The contract
@@ -116,8 +153,8 @@ Keep the same store selection for later commands against that runtime.
 
 Shared store errors expose portable categories and preserve private diagnostic
 sources. `UnloadReport<S>` and `UnloadError<S>` retain the selected backend's
-receipt types; explicit retries take that backend and writer authority for the
-original root. Backend implementations must reject foreign or stale evidence.
+receipt types; explicit retries use the instance's backend and acquire writer
+authority internally. Backends must reject foreign or stale evidence.
 Failed-load cleanup needs only filesystem receipts and never reopens or retries
 the store.
 
@@ -387,7 +424,7 @@ history even after recovery. No receipt or error is cloned or dropped by policy.
 Persistence must report failure only when the transaction has not committed.
 After a successful commit, output-delivery failure must not roll back the load.
 
-`bpfman-runtime::LoadCleanup` is the narrow, injectable filesystem-effects
+The private `LoadCleanup` trait is the narrow, injectable filesystem-effects
 interface. `compensate_load` drives the instructions through it, with a
 `RuntimeWriter` required both by the driver and every mutating method. The loop
 does not propagate cleanup errors early: it attempts every instruction in the
@@ -455,7 +492,7 @@ publication returns its staged ownership. Cleanup attempts each owned file and
 removes the directory only after all its files have been removed. The runtime
 likewise retains the owned map-directory receipt separately and attempts its
 removal only when no map-pin instructions remain unresolved. Unexpected
-children prevent directory removal. `LoadError::retry_cleanup` performs one
+children prevent directory removal. `Bpfman::retry_load_cleanup` performs one
 explicit pass and retains the original cause and all cleanup history.
 
 These checks enforce descriptor-based confinement and refuse observed

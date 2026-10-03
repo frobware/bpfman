@@ -1,11 +1,11 @@
 //! The single production interpreter for committed-state forward teardown.
 
-use crate::{UnloadError, UnloadReport};
+use crate::{Bpfman, UnloadError, UnloadReport};
 use bpfman_core::{EffectFailure, UnloadProgram, UnloadStep};
-use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
+use bpfman_fs::RuntimeWriter;
 use bpfman_lock::AcquireOptions;
 use bpfman_store::UnloadStore;
-use std::{num::NonZeroU32, time::Duration};
+use std::num::NonZeroU32;
 
 pub(super) mod real;
 #[cfg(test)]
@@ -111,32 +111,27 @@ pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
     crate::UnloadCause,
 >;
 
-/// Unload one committed, unattached tracepoint with a private map set.
-/// All scope and artifact observations precede mutation under the writer lock.
-/// Unpin failure stops teardown; record failure still allows bytecode cleanup.
-/// Post-record cleanup failures return a successful report with warnings, as Go
-/// does. Retained receipts support explicit retry even after the row is gone.
-#[tracing::instrument(name = "program.unload", level = "debug", skip_all, fields(program_id = id.get()), err)]
-pub fn unload_tracepoint<S: UnloadStore>(
-    store: &S,
-    layout: &RuntimeLayout,
-    id: NonZeroU32,
-    timeout: Duration,
-) -> Result<UnloadReport<S>, UnloadError<S>> {
-    let runtime =
-        RuntimeDirectory::open_or_create(layout.clone()).map_err(crate::UnloadCause::from)?;
-    runtime
-        .with_writer(
-            AcquireOptions {
-                timeout,
-                cancelled: None,
-            },
-            |writer| {
-                let report = run(&writer, &mut real::Effects(store), id)?;
-                finish::<S>(report)
-            },
-        )
-        .map_err(crate::UnloadCause::from)?
+impl<S: UnloadStore> Bpfman<S> {
+    /// Unload one committed, unattached tracepoint with a private map set.
+    /// Observations and teardown share one writer scope. Independent cleanup
+    /// continues after record failure; post-record cleanup may return warnings.
+    /// Retained receipts support explicit retry even after the row is gone.
+    #[tracing::instrument(name = "program.unload", level = "debug", skip_all, fields(program_id = id.get()), err)]
+    pub fn unload(&self, id: NonZeroU32) -> Result<UnloadReport<S>, UnloadError<S>> {
+        self.store
+            .runtime()
+            .with_writer(
+                AcquireOptions {
+                    timeout: self.lock_timeout,
+                    cancelled: None,
+                },
+                |writer| {
+                    let report = run(&writer, &mut real::Effects(&self.store), id)?;
+                    finish::<S>(report)
+                },
+            )
+            .map_err(crate::UnloadCause::from)?
+    }
 }
 
 fn run<F: UnloadEffects>(

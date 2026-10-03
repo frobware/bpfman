@@ -11,13 +11,13 @@ use std::{
     time::Duration,
 };
 
+use crate::{LoadCleanup, compensation::compensate_load};
 use bpfman_core::{
     EffectFailure, KernelAcquisitions, LoadCompensation, LoadComplete, LoadProgram, LoadRollback,
 };
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::{ProgramSpec, ProgramType, Symbol};
-use bpfman_runtime::{LoadCleanup, compensate_load};
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Resource {

@@ -138,8 +138,12 @@ impl LoadRequest {
         let bpfman_model::ProgramSpec::Tracepoint(name) = first else {
             anyhow::bail!("unsupported program type");
         };
+        if layout.root().to_str().is_none() {
+            anyhow::bail!("load persistence requires a UTF-8 runtime path");
+        }
+
         Ok(PreparedLoad {
-            request: bpfman_runtime::PreparedTracepoint::new(layout, &path, name, metadata)?,
+            request: bpfman_runtime::PreparedTracepoint::new(&path, name, metadata)?,
             output,
         })
     }
@@ -148,10 +152,9 @@ impl LoadRequest {
 impl PreparedLoad {
     pub(crate) fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
         self,
-        store: &S,
-        timeout: std::time::Duration,
+        bpfman: &bpfman_runtime::Bpfman<S>,
     ) -> anyhow::Result<()> {
-        let stored = self.request.load(store, timeout)?;
+        let stored = bpfman.load(self.request)?;
 
         // Output is deliberately outside the operation: delivery failure must
         // never compensate a committed program.

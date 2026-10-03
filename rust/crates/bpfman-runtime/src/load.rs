@@ -1,13 +1,13 @@
 use crate::{
-    LoadError, PreparedTracepoint,
+    Bpfman, LoadError, PreparedTracepoint,
     kernel::LocalObject,
     load_error::{Failure, LoadCause, finish},
 };
 use bpfman_core::{EffectFailure, KernelAcquisitions, LoadProgram};
-use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
+use bpfman_fs::RuntimeWriter;
 use bpfman_lock::AcquireOptions;
 use bpfman_model::{ObservedProgram, ProgramSpec, StoredProgramSummary, Symbol};
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path};
 
 mod effects;
 mod real;
@@ -18,25 +18,9 @@ use effects::Inputs;
 pub(super) use effects::{CleanupEffects, FailureFor, LoadEffects};
 pub(super) use real::Effects;
 
-/// Load one tracepoint from a local ELF, without attaching it. The exact bytes
-/// parsed before runtime setup are both loaded and published. Private maps are
-/// pinned; PinByName maps are rejected before runtime or kernel effects.
-/// Failure retains unresolved ownership and supports an explicit cleanup retry.
-pub fn load_tracepoint<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
-    store: &S,
-    layout: &RuntimeLayout,
-    source: &Path,
-    name: Symbol,
-    metadata: &BTreeMap<String, String>,
-    timeout: Duration,
-) -> Result<ObservedProgram, LoadError> {
-    PreparedTracepoint::new(layout, source, name, metadata.clone())?.load(store, timeout)
-}
-
 impl PreparedTracepoint {
     /// Validate the request and read the ELF without creating runtime state.
     pub fn new(
-        layout: &RuntimeLayout,
         source: &Path,
         name: Symbol,
         metadata: BTreeMap<String, String>,
@@ -45,44 +29,43 @@ impl PreparedTracepoint {
             .to_str()
             .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
 
-        if layout.root().to_str().is_none() {
-            return Err(LoadCause::Invalid(
-                "load persistence requires a UTF-8 runtime path".into(),
-            )
-            .into());
-        }
-
         let object = LocalObject::read(source, &name)?;
 
         Ok(Self {
-            layout: layout.clone(),
             object,
             source: source_text.into(),
             name,
             metadata,
         })
     }
+}
 
-    /// Load these validated bytes using the explicitly supplied active store.
+impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
+    /// Load one prepared local tracepoint without attaching it. Private maps are
+    /// pinned; failures retain unresolved ownership for an explicit cleanup pass.
     #[tracing::instrument(name = "program.load", level = "debug", skip_all, err)]
-    pub fn load<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
-        self,
-        store: &S,
-        timeout: Duration,
-    ) -> Result<ObservedProgram, LoadError> {
-        let Self {
-            layout,
+    pub fn load(&self, request: PreparedTracepoint) -> Result<ObservedProgram, LoadError> {
+        let PreparedTracepoint {
             object,
             source,
             name,
             metadata,
-        } = self;
+        } = request;
+        let runtime = self.store.runtime();
+        let store = &self.store;
+
+        if runtime.layout().root().to_str().is_none() {
+            return Err(LoadCause::Invalid(
+                "load persistence requires a UTF-8 runtime path".into(),
+            )
+            .into());
+        }
+
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-        let runtime = RuntimeDirectory::open_or_create(layout.clone()).map_err(LoadCause::from)?;
         runtime
             .with_writer(
                 AcquireOptions {
-                    timeout,
+                    timeout: self.lock_timeout,
                     cancelled: None,
                 },
                 |writer| {
@@ -99,6 +82,7 @@ impl PreparedTracepoint {
                     )
                     .map_err(|failure| LoadError {
                         failure: Box::new(failure),
+                        retry_lock_error: None,
                     })
                     .and_then(|stored| {
                         crate::observation::observe(
