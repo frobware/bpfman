@@ -18,5 +18,6 @@ pub fn list_programs<S: bpfman_store::OpenStore>(
 ) -> Result<Vec<StoredProgramSummary>, Error> {
     let mut store = open_or_create_store(backend, layout, lock_timeout)?;
     let programs = store.read_programs().map_err(store_error)?;
+
     Ok(bpfman_core::list_programs(programs, filter))
 }

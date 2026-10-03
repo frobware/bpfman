@@ -1,4 +1,5 @@
 //! Open the selected backend under runtime writer authority.
+
 use crate::{
     Error,
     error::{filesystem_error, store_error},
@@ -24,6 +25,7 @@ pub(super) fn open_or_create_store<S: OpenStore>(
         )
         .map_err(filesystem_error)?
 }
+
 pub(super) fn open_store<S: OpenStore>(
     store: &S,
     writer: &RuntimeWriter<'_>,

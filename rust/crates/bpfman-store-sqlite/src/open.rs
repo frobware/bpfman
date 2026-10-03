@@ -29,6 +29,7 @@ impl Store {
     pub fn open(path: &Path) -> Result<Self, Error> {
         let store = Self::open_observed(path)?;
         require_supported(store.schema_version)?;
+
         Ok(store)
     }
 
@@ -43,6 +44,7 @@ impl Store {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         connection.busy_timeout(std::time::Duration::from_secs(5))?;
         let schema_version = schema_version(&connection)?;
+
         Ok(Self {
             connection,
             schema_version,
@@ -62,5 +64,6 @@ pub(super) fn require_supported(found: i64) -> Result<(), Failure> {
     if found != SCHEMA_VERSION {
         return Err(Failure::UnsupportedSchema { found });
     }
+
     Ok(())
 }

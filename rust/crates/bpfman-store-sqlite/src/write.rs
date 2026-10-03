@@ -1,4 +1,5 @@
 //! A load becomes visible in one transaction: map set and program together.
+
 use crate::{
     Error, TracepointRecord,
     error::Failure,
@@ -84,6 +85,7 @@ fn persist(
             record.created_at
         ],
     )?;
+
     // Construct output before commit. Nothing fallible follows a successful commit.
     let summary = StoredProgramSummary::new(
         record.id,
@@ -93,5 +95,6 @@ fn persist(
         Vec::new(),
     );
     tx.commit()?;
+
     Ok(summary)
 }

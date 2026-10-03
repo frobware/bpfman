@@ -12,10 +12,12 @@ fn go() -> PathBuf {
 
 pub(super) fn exercise() {
     let c = Context::new();
+
     for (loader, unloader) in [(rust(), go()), (go(), rust())] {
         let pid = id(&c.load_cli(&loader));
         let pid_text = pid.to_string();
         c.present(pid);
+
         assert_eq!(
             c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]),
             c.json(&go(), &["program", "get", &pid_text, "-o", "json"])

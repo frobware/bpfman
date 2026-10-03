@@ -1,4 +1,5 @@
 //! Whole-store publication beneath verified directory descriptors.
+
 use crate::{
     Error, RuntimeIdentity, RuntimeWriter,
     artifacts::identity,
@@ -25,9 +26,11 @@ pub struct StoreSnapshot {
 
 fn regular(fd: &OwnedFd) -> Result<(), Error> {
     let stat = fstat(fd).map_err(|e| io("inspect store snapshot", e))?;
+
     if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1 {
         return Err(Failure::Unsafe("store snapshot must be a singly linked regular file").into());
     }
+
     Ok(())
 }
 
@@ -52,9 +55,11 @@ impl StoreSnapshot {
             .take(MAX_BYTES + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| io("read store snapshot", e))?;
+
         if bytes.len() as u64 > MAX_BYTES {
             return Err(Failure::Unsafe("store snapshot exceeds size limit").into());
         }
+
         Ok(Some(bytes))
     }
 }
@@ -72,6 +77,7 @@ impl RuntimeWriter<'_> {
             CONFINED,
         )
         .map_err(|e| io("open store directory", e))?;
+
         Ok(StoreSnapshot {
             root: self.identity()?,
             directory,
@@ -93,7 +99,9 @@ impl RuntimeWriter<'_> {
         if bytes.len() as u64 > MAX_BYTES {
             return Err(Failure::Unsafe("store snapshot exceeds size limit").into());
         }
+
         let current = self.open_store_snapshot()?;
+
         if current.root != snapshot.root
             || identity(&current.directory)? != identity(&snapshot.directory)?
         {
@@ -101,9 +109,11 @@ impl RuntimeWriter<'_> {
                 Failure::Unsafe("store snapshot belongs to another root or directory").into(),
             );
         }
+
         if snapshot.read()?.as_deref() != expected {
             return Err(Failure::Unsafe("store snapshot changed before publication").into());
         }
+
         let fd = openat2(
             &snapshot.directory,
             PENDING,
@@ -130,9 +140,11 @@ impl RuntimeWriter<'_> {
         )
         .map_err(|e| io("recheck pending store snapshot", e))?;
         regular(&pending)?;
+
         if identity(&pending)? != pending_identity || snapshot.read()?.as_deref() != expected {
             return Err(Failure::Unsafe("store snapshot changed during publication").into());
         }
+
         renameat(
             &snapshot.directory,
             PENDING,

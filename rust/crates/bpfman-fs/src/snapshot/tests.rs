@@ -46,6 +46,7 @@ fn failed_publication_preserves_state_and_rejects_stale_observations()
                     .is_err()
             );
             assert_eq!(snapshot.read()?, Some(b"new".to_vec()));
+
             Ok(())
         },
     )??;
@@ -70,12 +71,14 @@ fn snapshot_authority_is_root_bound_and_refuses_special_files()
                 .is_err()
         );
     })?;
+
     assert_eq!(snapshot.read()?, None);
 
     let path = layout.database_path();
     let outside = temporary.path().join("outside");
     fs::write(&outside, b"sentinel")?;
     symlink(&outside, &path)?;
+
     assert!(snapshot.read().is_err());
     fs::rename(&path, temporary.path().join("saved-link"))?;
     fs::hard_link(&outside, &path)?;
@@ -113,6 +116,7 @@ fn replacement_of_store_directory_cannot_redirect_publication()
             );
             assert_eq!(snapshot.read()?, Some(b"old".to_vec()));
             assert!(!temporary.path().join("db/store.db").exists());
+
             Ok(())
         },
     )??;

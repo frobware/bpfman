@@ -31,6 +31,7 @@ fn read(connection: &mut Connection) -> Result<Vec<StoredProgramSummary>, Failur
     let mut links = BTreeMap::<i64, Vec<NonZeroU64>>::new();
     let mut statement = tx.prepare("SELECT kernel_prog_id, id FROM links ORDER BY id")?;
     let mut rows = statement.query([])?;
+
     while let Some(row) = rows.next()? {
         let program_id: i64 = row.get(0)?;
         let raw: i64 = row.get(1)?;
@@ -43,6 +44,7 @@ fn read(connection: &mut Connection) -> Result<Vec<StoredProgramSummary>, Failur
             })?;
         links.entry(program_id).or_default().push(id);
     }
+
     // The join mirrors Go's list query: programs refer to a concrete map set.
     let mut statement = tx.prepare(
         "SELECT m.program_id, m.program_name, m.program_type, m.metadata_json
@@ -51,6 +53,7 @@ fn read(connection: &mut Connection) -> Result<Vec<StoredProgramSummary>, Failur
     )?;
     let mut rows = statement.query([])?;
     let mut programs = Vec::new();
+
     while let Some(row) = rows.next()? {
         let raw: i64 = row.get(0)?;
         let id = u32::try_from(raw)
@@ -83,5 +86,6 @@ fn read(connection: &mut Connection) -> Result<Vec<StoredProgramSummary>, Failur
             links.remove(&raw).unwrap_or_default(),
         ));
     }
+
     Ok(programs)
 }

@@ -25,6 +25,7 @@ pub(crate) fn database() -> Result<Database, Box<dyn std::error::Error>> {
     std::fs::create_dir(runtime.join("db"))?;
     let path = runtime.join("db/store.db");
     let connection = Connection::open(&path)?;
+
     for migration in MIGRATIONS {
         let up = migration
             .split("-- +goose Down")
@@ -32,6 +33,7 @@ pub(crate) fn database() -> Result<Database, Box<dyn std::error::Error>> {
             .ok_or("missing Up migration")?;
         connection.execute_batch(up)?;
     }
+
     // Goose owns its version table separately from the application migrations.
     connection.execute_batch(
         "CREATE TABLE goose_db_version (
@@ -41,6 +43,7 @@ pub(crate) fn database() -> Result<Database, Box<dyn std::error::Error>> {
          );
          INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1), (1, 1), (2, 1);",
     )?;
+
     Ok(Database {
         _directory: directory,
         runtime,

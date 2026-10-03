@@ -1,9 +1,11 @@
 //! Full observations decoded from the unchanged Go schema.
+
 use bpfman_model::{ImagePullPolicy, ProgramSource, ProgramSpec};
 use bpfman_store_sqlite::{ErrorKind, Store};
 
 #[path = "../../../tests/support/mod.rs"]
 mod support;
+
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 
 #[test]
@@ -24,11 +26,14 @@ fn full_records_preserve_nullable_values_and_payloads_without_writing() -> Resul
     )?;
     let before = std::fs::read(&db.path)?;
     let records = Store::open(&db.path)?.read_records()?;
+
     assert_eq!(
         records.iter().map(|r| r.id.get()).collect::<Vec<_>>(),
         [7, 42]
     );
+
     let p = &records[0];
+
     assert_eq!(p.source, ProgramSource::File(Some("original.o".into())));
     assert_eq!(p.owner, "alice");
     assert_eq!(p.description, "test program");
@@ -42,7 +47,9 @@ fn full_records_preserve_nullable_values_and_payloads_without_writing() -> Resul
     assert_eq!(p.map_set.get(), 42);
     assert_eq!(p.map_path, "/run/bpfman/fs/maps/42");
     assert!(p.links.is_empty());
+
     let p = &records[1];
+
     assert!(matches!(&p.spec, ProgramSpec::Fentry{target,..} if target.as_str()=="do_open"));
     assert_eq!(
         p.source,
@@ -57,6 +64,7 @@ fn full_records_preserve_nullable_values_and_payloads_without_writing() -> Resul
     assert!(p.globals.is_empty());
     assert_eq!(std::fs::read(&db.path)?, before);
     assert_eq!(std::fs::read_dir(db.runtime.join("db"))?.count(), 1);
+
     Ok(())
 }
 
@@ -64,6 +72,7 @@ fn full_records_preserve_nullable_values_and_payloads_without_writing() -> Resul
 fn timestamps_match_go_rfc3339nano_without_losing_precision() -> Result {
     let db = support::database()?;
     support::seed(&db)?;
+
     for (input, expected) in [
         ("2026-07-07T12:00:00.000000000Z", "2026-07-07T12:00:00Z"),
         (
@@ -80,11 +89,13 @@ fn timestamps_match_go_rfc3339nano_without_losing_precision() -> Result {
             "UPDATE managed_programs SET created_at=? WHERE program_id=7",
             [input],
         )?;
+
         assert_eq!(
             Store::open(&db.path)?.read_records()?[0].created_at,
             expected
         );
     }
+
     Ok(())
 }
 
@@ -102,6 +113,7 @@ fn malformed_full_records_fail_instead_of_being_omitted() -> Result {
         let db = support::database()?;
         support::seed(&db)?;
         db.connection.execute(update, [])?;
+
         assert_eq!(
             Store::open(&db.path)?
                 .read_records()
@@ -110,11 +122,14 @@ fn malformed_full_records_fail_instead_of_being_omitted() -> Result {
             ErrorKind::InvalidData
         );
     }
+
     let db = support::database()?;
     support::seed(&db)?;
     db.connection
         .execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM map_sets;")?;
+
     assert!(Store::open(&db.path)?.read_records().is_err());
+
     Ok(())
 }
 
@@ -124,9 +139,11 @@ fn full_reads_recheck_the_schema_on_the_open_handle() -> Result {
     let mut store = Store::open(&db.path)?;
     db.connection
         .execute("UPDATE goose_db_version SET version_id=3", [])?;
+
     assert_eq!(
         store.read_records().expect_err("changed schema").kind(),
         ErrorKind::IncompatibleSchema
     );
+
     Ok(())
 }

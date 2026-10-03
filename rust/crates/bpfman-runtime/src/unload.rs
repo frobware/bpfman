@@ -1,4 +1,5 @@
 //! The single production interpreter for committed-state forward teardown.
+
 use crate::{UnloadError, UnloadReport};
 use bpfman_core::{EffectFailure, UnloadProgram, UnloadStep};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
@@ -16,6 +17,7 @@ pub(super) struct Artifacts<P, M, D, B> {
     pub directory: Option<D>,
     pub bytecode: Option<B>,
 }
+
 pub(super) trait UnloadEffects {
     type Pin;
     type Record;
@@ -24,47 +26,56 @@ pub(super) trait UnloadEffects {
     type MapSet;
     type Bytecode;
     type Error;
+
     fn observe_store(
         &mut self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
     ) -> Result<(Self::Record, Self::MapSet), Self::Error>;
+
     fn observe_artifacts(
         &mut self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
     ) -> Result<ArtifactsFor<Self>, Self::Error>;
+
     fn unpin(
         &mut self,
         writer: &RuntimeWriter<'_>,
         receipt: Self::Pin,
     ) -> Result<(), EffectFailure<Self::Pin, Self::Error>>;
+
     fn delete_record(
         &mut self,
         writer: &RuntimeWriter<'_>,
         receipt: Self::Record,
     ) -> Result<(), EffectFailure<Self::Record, Self::Error>>;
+
     fn remove_map(
         &mut self,
         writer: &RuntimeWriter<'_>,
         receipt: Self::Map,
     ) -> Result<(), EffectFailure<Self::Map, Self::Error>>;
+
     fn remove_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
         receipt: Self::Directory,
     ) -> Result<(), EffectFailure<Self::Directory, Self::Error>>;
+
     fn delete_map_set(
         &mut self,
         writer: &RuntimeWriter<'_>,
         receipt: Self::MapSet,
     ) -> Result<(), EffectFailure<Self::MapSet, Self::Error>>;
+
     fn remove_bytecode(
         &mut self,
         writer: &RuntimeWriter<'_>,
         receipt: Self::Bytecode,
     ) -> Result<(), EffectFailure<Self::Bytecode, Self::Error>>;
 }
+
 type ArtifactsFor<F> = Artifacts<
     <F as UnloadEffects>::Pin,
     <F as UnloadEffects>::Map,
@@ -126,6 +137,7 @@ pub fn unload_tracepoint<S: UnloadStore>(
         )
         .map_err(crate::UnloadCause::from)?
 }
+
 fn run<F: UnloadEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
@@ -133,6 +145,7 @@ fn run<F: UnloadEffects>(
 ) -> Result<ReportFor<F>, F::Error> {
     let (record, map_set) = effects.observe_store(writer, id)?;
     let artifacts = effects.observe_artifacts(writer, id)?;
+
     Ok(drain(
         writer,
         effects,
@@ -146,6 +159,7 @@ fn run<F: UnloadEffects>(
         ),
     ))
 }
+
 pub(super) fn drain<F: UnloadEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
@@ -175,11 +189,13 @@ pub(super) fn drain<F: UnloadEffects>(
         };
     }
 }
+
 pub(super) fn finish<S: UnloadStore>(
     report: StoreReport<S>,
 ) -> Result<UnloadReport<S>, UnloadError<S>> {
     let failed = report.failed();
     let report = UnloadReport { report };
+
     if failed {
         Err(UnloadError {
             failure: crate::unload_error::Failure::Incomplete(Box::new(report)),

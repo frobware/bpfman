@@ -30,17 +30,20 @@ fn peer(path: &Path, mode: &str) -> std::io::Result<Command> {
         .args(["--exact", "process_peer", "--nocapture"])
         .env("BPFMAN_TEST_LOCK", path)
         .env("BPFMAN_TEST_LOCK_MODE", mode);
+
     Ok(command)
 }
 
 fn assert_peer(path: &Path, mode: &str) -> Result {
     let output = peer(path, mode)?.output()?;
+
     assert!(
         output.status.success(),
         "stdout={} stderr={}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+
     Ok(())
 }
 
@@ -50,6 +53,7 @@ fn process_peer() -> Result {
         return Ok(());
     };
     let path = Path::new(&path);
+
     match std::env::var("BPFMAN_TEST_LOCK_MODE")?.as_str() {
         "blocked" => assert_eq!(
             with_write_lock(path, options(), |_| ())
@@ -67,13 +71,16 @@ fn process_peer() -> Result {
             std::io::stdout().flush()?;
             let release = path.with_extension("release");
             let start = Instant::now();
+
             while !release.exists() && start.elapsed() < Duration::from_secs(10) {
                 std::thread::sleep(Duration::from_millis(5));
             }
+
             assert!(release.exists(), "parent failed to release helper");
         }
         mode => return Err(format!("unknown peer mode: {mode}").into()),
     }
+
     Ok(())
 }
 
@@ -82,6 +89,7 @@ fn creates_directories_and_excludes_other_processes() -> Result {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("runtime/.lock");
     with_write_lock(&path, options(), |_| assert_peer(&path, "blocked"))??;
+
     assert!(path.is_file());
     assert_peer(&path, "acquire")
 }
@@ -93,6 +101,7 @@ fn rejects_same_thread_reentry_including_aliases_but_allows_other_locks() -> Res
     let alias = directory.path().join("alias");
     with_write_lock(&path, options(), |_| -> Result {
         std::fs::hard_link(&path, &alias)?;
+
         for name in [&path, &alias] {
             assert_eq!(
                 with_write_lock(name, options(), |_| ())
@@ -101,10 +110,13 @@ fn rejects_same_thread_reentry_including_aliases_but_allows_other_locks() -> Res
                 ErrorKind::Reentrant
             );
         }
+
         with_write_lock(&directory.path().join("other"), options(), |_| ())?;
+
         Ok(())
     })??;
     with_write_lock(&path, options(), |_| ())?;
+
     Ok(())
 }
 
@@ -125,6 +137,7 @@ fn work_outlives_acquisition_budget_and_preserves_its_error() -> Result {
             Err::<(), _>("work failed")
         },
     )?;
+
     assert_eq!(result, Err("work failed"));
     assert_peer(&path, "acquire")
 }
@@ -152,6 +165,7 @@ fn cancellation_stops_an_indefinite_wait() -> Result {
             });
             waiting.recv().expect("waiter started");
             cancelled.store(true, Ordering::Relaxed);
+
             assert_eq!(
                 waiter
                     .join()
@@ -162,6 +176,7 @@ fn cancellation_stops_an_indefinite_wait() -> Result {
             );
         });
     })?;
+
     Ok(())
 }
 
@@ -192,6 +207,7 @@ fn waiter_acquires_after_release() -> Result {
             |_| (),
         )?;
         holder.join().expect("holder thread")?;
+
         Ok(())
     })
 }
@@ -220,15 +236,19 @@ fn inherited_child_keeps_lock_after_parent_scope_exits() -> Result {
     let stdout = child.stdout.take().ok_or("missing helper stdout")?;
     let mut reader = BufReader::new(stdout);
     let mut ready = false;
+
     for line in (&mut reader).lines() {
         if line? == "LOCK_READY" {
             ready = true;
             break;
         }
     }
+
     assert!(ready, "helper did not inherit the descriptor");
+
     let blocked = assert_peer(&path, "blocked");
     File::create(path.with_extension("release"))?;
+
     assert!(child.wait()?.success());
     blocked?;
     assert_peer(&path, "acquire")
@@ -243,8 +263,11 @@ fn inherited_descriptor_must_be_exclusive() -> Result {
         let error = InheritedWriteLock::from_fd(independent.into())
             .err()
             .ok_or("accepted unlocked descriptor")?;
+
         assert_eq!(error.kind(), ErrorKind::Unavailable);
+
         Ok(())
     })??;
+
     Ok(())
 }

@@ -35,6 +35,7 @@ fn commit(writer: &RuntimeWriter<'_>) -> Result<(), bpfman_store::Error> {
             metadata: &BTreeMap::new(),
         },
     )?;
+
     Ok(())
 }
 
@@ -56,14 +57,17 @@ fn malformed_and_future_snapshots_are_never_replaced() {
         fs::write(layout.database_path(), bytes).expect("fixture");
         writer(&runtime, |w| {
             let error = Backend.open(w).map(|_| ()).expect_err("reject state");
+
             assert_eq!(error.kind(), kind);
         });
+
         assert_eq!(fs::read(layout.database_path()).expect("unchanged"), bytes);
     }
 
     fs::write(layout.database_path(), &pristine).expect("restore");
     let mut reader = writer(&runtime, |w| Backend.open(w).expect("open"));
     fs::write(layout.database_path(), b"{\"version\":9}").expect("change version");
+
     assert_eq!(
         reader
             .read_records()
@@ -97,8 +101,10 @@ fn publication_failure_never_commits_half_a_load() {
 
         fs::rename(&pending, temporary.path().join("saved")).expect("remove obstruction");
         commit(w).expect("commit after obstruction removed");
+
         let published = fs::read(layout.database_path()).expect("published");
         let state: serde_json::Value = serde_json::from_slice(&published).expect("JSON");
+
         assert_eq!(state["programs"].as_array().expect("programs").len(), 1);
         assert_eq!(state["map_sets"].as_array().expect("maps").len(), 1);
 
@@ -124,6 +130,7 @@ fn invalid_relationships_are_refused_before_teardown() {
 
     for mutation in 0..4 {
         let mut state = original.clone();
+
         match mutation {
             0 => state["map_sets"] = serde_json::json!([]),
             1 => state["programs"][0]["created_at"] = serde_json::json!("invalid"),
@@ -133,6 +140,7 @@ fn invalid_relationships_are_refused_before_teardown() {
                 .expect("programs")
                 .push(original["programs"][0].clone()),
         }
+
         let bytes = serde_json::to_vec(&state).expect("encode");
         fs::write(layout.database_path(), &bytes).expect("fixture");
 
@@ -143,6 +151,7 @@ fn invalid_relationships_are_refused_before_teardown() {
                     .is_err()
             );
         });
+
         assert_eq!(fs::read(layout.database_path()).expect("unchanged"), bytes);
     }
 }
@@ -157,6 +166,7 @@ fn receipts_reject_recreated_records_and_replaced_store_identity() {
     writer(&runtime, |w| {
         Backend.open(w).expect("create");
         commit(w).expect("commit");
+
         let (stale_program, stale_maps) = Backend
             .observe_unload(w, id)
             .expect("observe")
@@ -176,7 +186,9 @@ fn receipts_reject_recreated_records_and_replaced_store_identity() {
 
         // Same ID, timestamp and contents, but a new generation owns the artifacts.
         commit(w).expect("recreate identical record");
+
         assert!(Backend.delete_program(w, stale_program).is_err());
+
         let (program, maps) = Backend
             .observe_unload(w, id)
             .expect("observe")
@@ -185,6 +197,7 @@ fn receipts_reject_recreated_records_and_replaced_store_identity() {
             .delete_program(w, program)
             .map_err(|e| e.cause)
             .expect("delete new generation");
+
         assert!(Backend.delete_map_set(w, stale_maps).is_err());
         Backend
             .delete_map_set(w, maps)
@@ -192,6 +205,7 @@ fn receipts_reject_recreated_records_and_replaced_store_identity() {
             .expect("delete new map generation");
 
         commit(w).expect("commit");
+
         let (program, _) = Backend
             .observe_unload(w, id)
             .expect("observe")
@@ -200,6 +214,7 @@ fn receipts_reject_recreated_records_and_replaced_store_identity() {
             .expect("replace store");
         Backend.open(w).expect("create independent store");
         commit(w).expect("same record in new store");
+
         assert!(Backend.delete_program(w, program).is_err());
         assert_eq!(
             Backend

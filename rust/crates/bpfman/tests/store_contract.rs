@@ -47,24 +47,30 @@ fn exercise<S: OpenStore + CommitLoad + UnloadStore>(store: S) {
 
     let (program, maps) = with_writer(&runtime, |w| {
         let mut reader = store.open(w).expect("open");
+
         assert!(reader.read_records().expect("records").is_empty());
         commit(&store, w, 42);
 
         // Previously opened readers observe a complete, newly committed record.
+
         let records = reader.read_records().expect("records");
+
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, id);
         assert_eq!(
             records[0].object_path,
             layout.bytecode_path(id).to_str().expect("path")
         );
+
         let summaries = reader.read_programs().expect("summaries");
+
         assert_eq!(summaries[0].application(), "contract");
 
         let (program, maps) = store
             .observe_unload(w, id)
             .expect("observe")
             .expect("present");
+
         // An unrelated commit must not invalidate this program's receipts.
         commit(&store, w, 7);
         let error = store
@@ -91,6 +97,7 @@ fn exercise<S: OpenStore + CommitLoad + UnloadStore>(store: S) {
             .expect("delete unused map set");
         let mut reader = store.open(w).expect("reopen");
         let records = reader.read_records().expect("records");
+
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id.get(), 7);
         assert!(

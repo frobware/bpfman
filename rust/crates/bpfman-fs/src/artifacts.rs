@@ -1,4 +1,5 @@
 //! Managed artifacts are addressed below opened directories, never caller paths.
+
 use crate::{
     Bytecode, Error, MapDirectory, MapPin, PreparedLoad, ProgramPin, RuntimeWriter,
     directory::{BENEATH, CONFINED, DIRECTORY, ensure_directory},
@@ -25,6 +26,7 @@ pub(super) struct Identity {
 
 pub(super) fn identity(fd: &OwnedFd) -> Result<Identity, Error> {
     let stat = fstat(fd).map_err(|e| io("inspect owned artifact", e))?;
+
     Ok(Identity {
         device: stat.st_dev,
         inode: stat.st_ino,
@@ -37,6 +39,7 @@ pub(super) struct Entry {
     pub(super) parent: OwnedFd,
     pub(super) name: String,
     pub(super) parent_path: String,
+
     // None retains ownership after creation if observing the new inode failed.
     // Removal refuses this case rather than guessing what now occupies the name.
     pub(super) identity: Option<Identity>,
@@ -54,12 +57,15 @@ impl Entry {
         )
         .map_err(|e| io("observe newly owned artifact", e))?;
         self.identity = Some(identity(&fd)?);
+
         Ok(())
     }
+
     pub(super) fn check_writer(&self, writer: &RuntimeWriter<'_>) -> Result<(), Error> {
         if self.root != identity(&writer.runtime.root)? {
             return Err(Failure::Unsafe("artifact belongs to another runtime").into());
         }
+
         let current = if let Some(relative) = self.parent_path.strip_prefix("fs/") {
             let bpffs = openat2(
                 &writer.runtime.root,
@@ -88,9 +94,11 @@ impl Entry {
             )
         }
         .map_err(|e| io("revalidate artifact parent", e))?;
+
         if identity(&current)? != identity(&self.parent)? {
             return Err(Failure::Unsafe("artifact parent was moved or replaced").into());
         }
+
         Ok(())
     }
 }
@@ -123,10 +131,12 @@ impl RuntimeWriter<'_> {
     /// Existing nonempty ordinary directories are never covered by a mount.
     pub fn prepare_load(&self) -> Result<PreparedLoad, Error> {
         let mut bpffs = ensure_directory(&self.runtime.root, "fs", BENEATH)?;
+
         if fstatfs(&bpffs).map_err(|e| io("inspect bpffs", e))?.f_type != BPF_SUPER_MAGIC {
             // An existing mount of any other filesystem is not ours to cover.
             openat2(&self.runtime.root, "fs", DIRECTORY, Mode::empty(), CONFINED)
                 .map_err(|e| io("refuse unexpected mount at fs", e))?;
+
             // The proc descriptor is an anchor, not the configured runtime path.
             if std::fs::read_dir(proc_path(&bpffs))
                 .map_err(|e| io("inspect mount target", e))?
@@ -135,6 +145,7 @@ impl RuntimeWriter<'_> {
             {
                 return Err(Failure::Unsafe("refuse to mount over a nonempty fs directory").into());
             }
+
             rustix::mount::mount(
                 "bpf",
                 proc_path(&bpffs),
@@ -148,10 +159,13 @@ impl RuntimeWriter<'_> {
             bpffs = openat2(&self.runtime.root, "fs", DIRECTORY, Mode::empty(), BENEATH)
                 .map_err(|e| io("adopt mounted bpffs", e))?;
         }
+
         if fstatfs(&bpffs).map_err(|e| io("verify bpffs", e))?.f_type != BPF_SUPER_MAGIC {
             return Err(Failure::Unsafe("fs is not bpffs").into());
         }
+
         let maps = ensure_directory(&bpffs, "maps", CONFINED)?;
+
         Ok(PreparedLoad {
             root: identity(&self.runtime.root)?,
             bpffs,
@@ -173,6 +187,7 @@ impl RuntimeWriter<'_> {
         };
         let programs = ensure_directory(&self.runtime.root, "programs", CONFINED).map_err(fail)?;
         let staging = ensure_directory(&self.runtime.root, ".staging", CONFINED).map_err(fail)?;
+
         // One load per kernel ID; never adopt even an empty pre-existing staging directory.
         let owned = entry(
             self,
@@ -198,6 +213,7 @@ impl RuntimeWriter<'_> {
                 CONFINED,
             )
             .map_err(|e| io("open bytecode staging directory", e))?;
+
             for (name, data) in [("bytecode.o", bytes), ("provenance.json", provenance)] {
                 let file_receipt = entry(
                     self,
@@ -215,15 +231,18 @@ impl RuntimeWriter<'_> {
                 )
                 .map_err(|e| io("create bytecode artifact", e))?;
                 receipt.files.push(file_receipt);
+
                 if let Some(last) = receipt.files.last_mut() {
                     last.identity = Some(identity(&fd)?);
                 }
+
                 let mut file = File::from(fd);
                 file.write_all(data)
                     .map_err(|e| io("write bytecode artifact", e))?;
                 file.sync_all()
                     .map_err(|e| io("sync bytecode artifact", e))?;
             }
+
             // Allocate/duplicate before rename: after publication updating the receipt cannot fail.
             let final_parent = rustix::io::fcntl_dupfd_cloexec(&programs, 0)
                 .map_err(|e| io("retain published parent", e))?;
@@ -238,9 +257,11 @@ impl RuntimeWriter<'_> {
                 CONFINED,
             )
             .map_err(|e| io("revalidate bytecode publication parent", e))?;
+
             if identity(&current_programs)? != identity(&programs)? {
                 return Err(Failure::Unsafe("bytecode publication parent changed").into());
             }
+
             renameat_with(
                 &staging,
                 &receipt.directory.name,
@@ -250,13 +271,17 @@ impl RuntimeWriter<'_> {
             )
             .map_err(|e| io("publish bytecode without replacing existing state", e))?;
             receipt.directory.parent_path = "programs".into();
+
             for child in &mut receipt.files {
                 child.parent_path = format!("programs/{id}");
             }
+
             receipt.directory.parent = final_parent;
             receipt.directory.name = final_name;
+
             Ok(())
         })();
+
         match result {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -272,6 +297,7 @@ impl PreparedLoad {
         if self.root != identity(&writer.runtime.root)? {
             return Err(Failure::Unsafe("bpffs belongs to another runtime").into());
         }
+
         let current = openat2(
             &writer.runtime.root,
             "fs",
@@ -282,11 +308,13 @@ impl PreparedLoad {
         .map_err(|e| io("revalidate bpffs", e))?;
         let maps = openat2(&current, "maps", DIRECTORY, Mode::empty(), CONFINED)
             .map_err(|e| io("revalidate map collection", e))?;
+
         if identity(&current)? != identity(&self.bpffs)?
             || identity(&maps)? != identity(&self.maps)?
         {
             return Err(Failure::Unsafe("bpffs or map collection was replaced").into());
         }
+
         Ok(())
     }
 
@@ -323,6 +351,7 @@ impl PreparedLoad {
             id,
             entry: Box::new(owned),
         };
+
         match receipt.entry.observe() {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -350,6 +379,7 @@ impl PreparedLoad {
         let mut receipt = MapDirectory {
             entry: Box::new(owned),
         };
+
         match receipt.entry.observe() {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -388,6 +418,7 @@ impl MapDirectory {
         let mut receipt = MapPin {
             entry: Box::new(owned),
         };
+
         match receipt.entry.observe() {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -405,6 +436,7 @@ pub(super) fn validate_map_name(name: &str) -> Result<(), Error> {
         )
         .into());
     }
+
     Ok(())
 }
 

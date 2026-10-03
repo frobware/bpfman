@@ -7,6 +7,7 @@ fn symbols_are_refined_without_becoming_path_authority() -> Result<(), InvalidSy
     for invalid in ["", " ", "\t", " name", "name\n", "name:target", "name\0"] {
         assert!(Symbol::try_from(invalid).is_err(), "{invalid:?}");
     }
+
     // ELF/target spellings are not automatically filesystem-safe names.
     // The filesystem adapter must use typed identities, never these as paths.
     for valid in [
@@ -16,6 +17,7 @@ fn symbols_are_refined_without_becoming_path_authority() -> Result<(), InvalidSy
     ] {
         assert_eq!(Symbol::try_from(valid)?.as_str(), valid);
     }
+
     Ok(())
 }
 
@@ -45,9 +47,11 @@ fn every_kind_is_derived_from_its_payload() -> Result<(), InvalidSymbol> {
             hook: Symbol::try_from("file_open")?,
         },
     ];
+
     for (spec, kind) in specs.iter().zip(ProgramType::ALL) {
         assert_eq!(spec.kind(), kind);
         assert_eq!(spec.name().as_str(), "entry");
     }
+
     Ok(())
 }

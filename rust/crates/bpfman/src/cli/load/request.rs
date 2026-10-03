@@ -21,6 +21,7 @@ impl LoadCommand {
                 if args.path.as_os_str().is_empty() {
                     return Err(invalid("object path must not be empty"));
                 }
+
                 (LoadSource::File(args.path), args.options)
             }
             Self::Image(args) => {
@@ -51,11 +52,13 @@ fn invalid(message: impl Into<String>) -> clap::Error {
 impl LoadOptions {
     fn into_request(self, source: LoadSource) -> Result<LoadRequest, clap::Error> {
         let mut seen = BTreeSet::new();
+
         for program in &self.programs {
             if !seen.insert(program.name()) {
                 return Err(invalid("each ELF program must be selected only once"));
             }
         }
+
         let mut programs = self.programs.into_iter();
         let first = programs
             .next()
@@ -65,9 +68,11 @@ impl LoadOptions {
             .into_iter()
             .map(|Metadata(k, v)| (k, v))
             .collect::<super::BTreeMap<_, _>>();
+
         if let Some(application) = self.application.filter(|v| !v.is_empty()) {
             metadata.insert("bpfman.io/application".into(), application);
         }
+
         Ok(LoadRequest {
             source,
             first,
@@ -108,14 +113,17 @@ impl LoadRequest {
                 auth,
             } => {
                 let _image = (reference, pull_policy);
+
                 if let Some(super::RegistryAuth { username, password }) = auth {
                     let _credentials = (username, password);
                 }
+
                 anyhow::bail!(
                     "program load image execution is not implemented in the Rust CLI; no runtime state was changed"
                 );
             }
         };
+
         // Reject the complete unsupported request before touching even the source.
         let reason = if !remaining.is_empty() {
             Some("multiple programs")
@@ -128,16 +136,19 @@ impl LoadRequest {
         } else {
             None
         };
+
         if let Some(reason) = reason {
             anyhow::bail!(
                 "program load file execution is not implemented for {reason}; no runtime state was changed"
             );
         }
+
         let bpfman_model::ProgramSpec::Tracepoint(name) = first else {
             anyhow::bail!("unsupported program type");
         };
         let stored =
             bpfman_runtime::load_tracepoint(store, layout, &path, name, &metadata, timeout)?;
+
         // Output is deliberately outside the operation: delivery failure must
         // never compensate a committed program.
         crate::output::program(
@@ -149,6 +160,7 @@ impl LoadRequest {
             },
             true,
         )?;
+
         Ok(())
     }
 }
@@ -166,6 +178,7 @@ mod tests {
                 .into_iter()
                 .chain(args.iter().copied()),
         )?;
+
         match cli.command {
             Command::Program {
                 command: ProgramCommand::Load { source },
@@ -200,6 +213,7 @@ mod tests {
             "-o",
             "json",
         ])?;
+
         assert!(matches!(req.source, LoadSource::File(_)));
         assert!(matches!(req.first, ProgramSpec::Xdp(_)));
         assert!(
@@ -210,6 +224,7 @@ mod tests {
         assert_eq!(req.globals["counter"], [1, 2]);
         assert_eq!(req.map_owner_id.map(|id| id.get()), Some(42));
         assert_eq!(req.output, super::super::LoadOutput::Json);
+
         Ok(())
     }
 
@@ -226,7 +241,9 @@ mod tests {
             "--registry-auth",
             "dXNlcjpwYXNzOndvcmQ=",
         ])?;
+
         assert!(matches!(req.first, ProgramSpec::Lsm { .. }));
+
         match req.source {
             LoadSource::Image {
                 pull_policy,
@@ -239,6 +256,7 @@ mod tests {
             }
             _ => return Err(invalid("expected authenticated image")),
         }
+
         assert!(
             request(&[
                 "file",
@@ -250,6 +268,7 @@ mod tests {
             ])
             .is_err()
         );
+
         Ok(())
     }
 }

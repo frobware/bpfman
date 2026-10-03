@@ -12,6 +12,7 @@ mod layout;
 mod observe;
 mod removal;
 mod snapshot;
+
 pub use snapshot::StoreSnapshot;
 
 /// Default runtime root, shared by front ends rather than duplicated there.

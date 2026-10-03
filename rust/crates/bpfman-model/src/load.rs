@@ -7,6 +7,7 @@ impl TryFrom<&str> for Symbol {
         if value.is_empty() || value.trim() != value || value.contains([':', '\0']) {
             return Err(InvalidSymbol);
         }
+
         Ok(Self(value.into()))
     }
 }
@@ -61,4 +62,5 @@ impl core::fmt::Display for crate::InvalidSymbol {
         f.write_str("names and targets must be nonempty, have no surrounding whitespace, and contain no colon or NUL")
     }
 }
+
 impl core::error::Error for crate::InvalidSymbol {}

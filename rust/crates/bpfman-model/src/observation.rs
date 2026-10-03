@@ -1,4 +1,5 @@
 //! Backend-independent stored and observed values. Wire nullability is a CLI concern.
+
 use crate::ProgramSpec;
 use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use core::num::{NonZeroU32, NonZeroU64};
@@ -18,6 +19,7 @@ pub enum ProgramSource {
         pull_policy: ImagePullPolicy,
     },
 }
+
 /// Stored image pull behavior.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImagePullPolicy {

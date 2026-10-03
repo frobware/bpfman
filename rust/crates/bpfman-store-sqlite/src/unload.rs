@@ -1,4 +1,5 @@
 //! Conditional forward deletion of committed state. No load rollback is reused.
+
 use crate::{
     Error, PrivateMapSet, ProgramRecord, UnloadRecord,
     error::Failure,
@@ -14,6 +15,7 @@ pub(super) struct RecordEvidence {
     id: NonZeroU32,
     snapshot: Snapshot,
 }
+
 pub(super) struct MapSetEvidence {
     root: bpfman_fs::RuntimeIdentity,
     id: NonZeroU32,
@@ -33,8 +35,10 @@ struct Snapshot {
     users: i64,
     shared: i64,
 }
+
 fn snapshot(connection: &Connection, id: NonZeroU32) -> Result<Option<Snapshot>, Failure> {
     require_supported(schema_version(connection)?)?;
+
     Ok(connection
         .query_row(
             "SELECT p.program_type, p.object_path, p.pin_path, p.map_set_id, m.pin_path,
@@ -62,27 +66,33 @@ fn snapshot(connection: &Connection, id: NonZeroU32) -> Result<Option<Snapshot>,
         )
         .optional()?)
 }
+
 fn invalid(id: NonZeroU32, reason: &str) -> Failure {
     Failure::InvalidRecord {
         id: i64::from(id.get()),
         reason: reason.into(),
     }
 }
+
 fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Result<(), Failure> {
     if row.kind != "tracepoint" {
         return Err(Failure::Unsupported("only tracepoints are implemented"));
     }
+
     if row.links != 0 {
         return Err(Failure::Unsupported(
             "program has links; detach is not implemented",
         ));
     }
+
     if row.map_set != i64::from(id.get()) || row.users != 1 || row.shared != 0 {
         return Err(Failure::Unsupported(
             "only private map sets without shared pins are implemented",
         ));
     }
+
     let layout = writer.layout();
+
     for (stored, expected) in [
         (&row.object, layout.bytecode_path(id)),
         (&row.pin, layout.program_pin_path(id)),
@@ -95,8 +105,10 @@ fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Resul
             ));
         }
     }
+
     Ok(())
 }
+
 /// Observe and validate the complete supported teardown scope without mutation.
 /// Linked programs, shared map sets/pins, and noncanonical paths are refused.
 /// Absence is distinct from invalid or unreadable state. Call under one writer
@@ -112,6 +124,7 @@ pub fn observe_unload(
         return Ok(None);
     };
     validate(writer, id, &row)?;
+
     Ok(Some(UnloadRecord {
         map_set: PrivateMapSet {
             evidence: Box::new(MapSetEvidence {
@@ -129,19 +142,23 @@ pub fn observe_unload(
         },
     }))
 }
+
 impl UnloadRecord {
     /// Split independent store receipts after preflight, without duplicating them.
     pub fn into_parts(self) -> (ProgramRecord, PrivateMapSet) {
         (self.program, self.map_set)
     }
 }
+
 fn connection(writer: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
     let connection =
         Connection::open_with_flags(writer.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.pragma_update(None, "foreign_keys", true)?;
+
     Ok(connection)
 }
+
 /// Delete exactly the previously observed program, rechecking scope atomically.
 /// Failure retains the receipt. No map-set row is deleted in this transaction.
 ///
@@ -162,28 +179,34 @@ pub fn delete_unloaded_program(
                 "record belongs to another runtime",
             ));
         }
+
         let mut connection = connection(writer)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let row = snapshot(&tx, receipt.evidence.id)?
             .ok_or_else(|| invalid(receipt.evidence.id, "program record disappeared"))?;
         validate(writer, receipt.evidence.id, &row)?;
+
         if row != receipt.evidence.snapshot {
             return Err(invalid(
                 receipt.evidence.id,
                 "program record changed since observation",
             ));
         }
+
         let count = tx.execute(
             "DELETE FROM managed_programs WHERE program_id = ?1",
             [receipt.evidence.id.get()],
         )?;
+
         if count != 1 {
             return Err(invalid(
                 receipt.evidence.id,
                 "program deletion did not remove its row",
             ));
         }
+
         tx.commit()?;
+
         Ok(())
     })();
     result.map_err(|cause| EffectFailure {
@@ -191,6 +214,7 @@ pub fn delete_unloaded_program(
         cause: cause.into(),
     })
 }
+
 /// Delete only the observed map set, after its last user and owned pins are gone.
 /// Recheck the row identity and zero users in the same transaction as deletion.
 pub fn delete_unused_map_set(
@@ -204,6 +228,7 @@ pub fn delete_unused_map_set(
                 "map set belongs to another runtime",
             ));
         }
+
         let mut connection = connection(writer)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_supported(schema_version(&tx)?)?;
@@ -219,13 +244,16 @@ pub fn delete_unused_map_set(
                     .to_str()
             ],
         )?;
+
         if count != 1 {
             return Err(invalid(
                 receipt.evidence.id,
                 "map set changed or is still in use",
             ));
         }
+
         tx.commit()?;
+
         Ok(())
     })();
     result.map_err(|cause| EffectFailure {

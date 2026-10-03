@@ -3,6 +3,7 @@
 //! No connections, transaction callbacks, schema versions, or serialized data escape.
 
 mod error;
+
 use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
 use bpfman_model::{StoredProgram, StoredProgramSummary, Symbol};

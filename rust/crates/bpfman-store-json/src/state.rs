@@ -65,12 +65,14 @@ impl State {
         }
 
         let header: Header = serde_json::from_slice(bytes)?;
+
         if header.version != 1 {
             return Err(Failure::Version(header.version));
         }
 
         let state: Self = serde_json::from_slice(bytes)?;
         state.validate()?;
+
         Ok(state)
     }
 
@@ -85,6 +87,7 @@ impl State {
 
         let mut map_ids = BTreeSet::new();
         let mut generations = BTreeSet::new();
+
         for map in &self.map_sets {
             if !map_ids.insert(map.id)
                 || !generations.insert(map.generation)
@@ -96,10 +99,12 @@ impl State {
         }
 
         let mut program_ids = BTreeSet::new();
+
         for row in &self.programs {
             Symbol::try_from(row.name.as_str())
                 .map_err(|_| Failure::Invalid("invalid ELF symbol"))?;
             timestamp(&row.created_at)?;
+
             if !program_ids.insert(row.id)
                 || !self
                     .map_sets
@@ -145,6 +150,7 @@ impl State {
             generation,
         });
         self.programs.push(row);
+
         Ok(summary)
     }
 }
@@ -204,17 +210,20 @@ fn timestamp(raw: &str) -> Result<String, Failure> {
 
     let parsed = chrono::DateTime::parse_from_rfc3339(raw)
         .map_err(|_| Failure::Invalid("invalid RFC3339 timestamp"))?;
+
     if !(0..=9999).contains(&parsed.year()) {
         return Err(Failure::Invalid("timestamp year outside RFC3339 range"));
     }
 
     let base = parsed.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let nanos = parsed.timestamp_subsec_nanos();
+
     if nanos == 0 {
         return Ok(base);
     }
 
     let fraction = format!("{nanos:09}");
+
     Ok(format!(
         "{}.{}{}",
         &base[..19],

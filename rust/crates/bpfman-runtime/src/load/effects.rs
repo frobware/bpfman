@@ -1,4 +1,5 @@
 //! Private substitution boundary for the production load interpreter.
+
 use crate::{LoadCleanup, kernel::LocalObject, load_error::Failure};
 use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
@@ -33,12 +34,15 @@ pub(crate) trait LoadEffects: CleanupEffects {
     type Kernel;
 
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, Self::Error>;
+
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, Self::Error>;
+
     fn load_kernel(
         &mut self,
         writer: &RuntimeWriter<'_>,
         input: &Inputs<'_>,
     ) -> Result<Self::Kernel, Self::Error>;
+
     fn pin_program(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -46,13 +50,16 @@ pub(crate) trait LoadEffects: CleanupEffects {
         kernel: &mut Self::Kernel,
         name: &Symbol,
     ) -> AcquisitionResult<Self::ProgramPin, Self::Error>;
+
     fn program_id(pin: &Self::ProgramPin) -> NonZeroU32;
+
     fn create_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
         prepared: &Self::Prepared,
         id: NonZeroU32,
     ) -> AcquisitionResult<Self::MapDirectory, Self::Error>;
+
     fn pin_map(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -60,12 +67,14 @@ pub(crate) trait LoadEffects: CleanupEffects {
         directory: &Self::MapDirectory,
         name: &str,
     ) -> AcquisitionResult<Self::MapPin, Self::Error>;
+
     fn publish(
         &mut self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
         input: &Inputs<'_>,
     ) -> PublicationResult<Self::Bytecode, Self::Error>;
+
     // Err must mean not committed. A successful commit ends compensation authority.
     fn persist(
         &mut self,
@@ -78,6 +87,7 @@ pub(crate) trait LoadEffects: CleanupEffects {
 // Cleanup never requires a store, including explicit retries after load failure.
 pub(crate) trait CleanupEffects: LoadCleanup {
     type MapDirectory;
+
     fn remove_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,

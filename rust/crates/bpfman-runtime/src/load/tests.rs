@@ -1,5 +1,6 @@
 //! Faults enter the production forward interpreter, not a test-only load plan.
 #![allow(clippy::expect_used)]
+
 use super::*;
 use crate::{
     LoadCleanup,
@@ -25,6 +26,7 @@ enum Resource {
     Unrelated,
     SharedMap,
 }
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Event {
     OpenStore,
@@ -40,6 +42,7 @@ enum Event {
     RemoveMap(u8),
     RemoveDirectory,
 }
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Fault {
     Before(Event),
@@ -48,6 +51,7 @@ enum Fault {
     BeforeCommit,
     WrongRuntime(Event),
 }
+
 #[derive(Default, Debug)]
 struct Counts {
     receipts: Cell<usize>,
@@ -56,6 +60,7 @@ struct Counts {
     dropped_errors: RefCell<Vec<usize>>,
     handles: Cell<usize>,
 }
+
 #[derive(Debug, thiserror::Error)]
 #[error("injected {fault:?}")]
 struct TestError {
@@ -63,11 +68,13 @@ struct TestError {
     serial: usize,
     counts: Rc<Counts>,
 }
+
 impl Drop for TestError {
     fn drop(&mut self) {
         self.counts.dropped_errors.borrow_mut().push(self.serial);
     }
 }
+
 // Deliberately no Clone for any ownership or error type.
 struct Receipt {
     resource: Resource,
@@ -75,11 +82,13 @@ struct Receipt {
     serial: usize,
     counts: Rc<Counts>,
 }
+
 impl Drop for Receipt {
     fn drop(&mut self) {
         self.counts.dropped_receipts.borrow_mut().push(self.serial);
     }
 }
+
 struct Program(Receipt);
 struct Map(Receipt);
 struct BytecodeReceipt(Receipt);
@@ -101,12 +110,15 @@ struct Fake {
     faults: BTreeSet<Fault>,
     events: Vec<Event>,
 }
+
 fn baseline() -> BTreeSet<Resource> {
     BTreeSet::from([Resource::Unrelated, Resource::SharedMap])
 }
+
 fn id() -> NonZeroU32 {
     NonZeroU32::new(42).expect("fixture")
 }
+
 impl Fake {
     fn new(writer: &RuntimeWriter<'_>, faults: impl IntoIterator<Item = Fault>) -> Self {
         Self {
@@ -120,6 +132,7 @@ impl Fake {
             events: vec![],
         }
     }
+
     fn error(&self, fault: Fault) -> TestError {
         let serial = self.counts.errors.get();
         self.counts.errors.set(serial + 1);
@@ -129,6 +142,7 @@ impl Fake {
             counts: self.counts.clone(),
         }
     }
+
     fn check(&self, fault: Fault) -> Result<(), TestError> {
         if self.faults.contains(&fault) {
             Err(self.error(fault))
@@ -136,18 +150,23 @@ impl Fake {
             Ok(())
         }
     }
+
     fn enter(&mut self, writer: &RuntimeWriter<'_>, event: Event) -> Result<(), TestError> {
         self.events.push(event);
+
         if writer.database_path() != self.runtime {
             return Err(self.error(Fault::WrongRuntime(event)));
         }
+
         self.check(Fault::Before(event))
     }
+
     fn acquire(&mut self, resource: Resource) -> Receipt {
         assert!(
             self.resources.insert(resource),
             "duplicate acquisition {resource:?}"
         );
+
         let serial = self.counts.receipts.get();
         self.counts.receipts.set(serial + 1);
         Receipt {
@@ -157,6 +176,7 @@ impl Fake {
             counts: self.counts.clone(),
         }
     }
+
     fn pin(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -168,6 +188,7 @@ impl Fake {
             remaining: None,
         })?;
         let receipt = self.acquire(resource);
+
         match self.check(Fault::AfterAcquisition(event)) {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -176,6 +197,7 @@ impl Fake {
             }),
         }
     }
+
     fn remove(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -185,18 +207,22 @@ impl Fake {
         assert!(!self.records.contains(&42), "cleanup after commit");
         assert!(Rc::ptr_eq(&receipt.owner, &self.owner), "foreign receipt");
         self.enter(writer, event)?;
+
         if event == Event::RemoveDirectory {
             assert!(
                 !self.resources.iter().any(|r| matches!(r, Resource::Map(_))),
                 "directory removal while map pins remain"
             );
         }
+
         assert!(
             self.resources.remove(&receipt.resource),
             "double removal or unowned resource"
         );
+
         Ok(())
     }
+
     fn assert_clean(&self) {
         assert_eq!(self.resources, baseline());
         assert_eq!(self.records, BTreeSet::from([7]));
@@ -204,6 +230,7 @@ impl Fake {
         assert_eq!(self.counts.handles.get(), 0);
     }
 }
+
 fn wrap_partial<T>(
     failure: EffectFailure<Option<Receipt>, TestError>,
     wrap: impl FnOnce(Receipt) -> T,
@@ -213,11 +240,13 @@ fn wrap_partial<T>(
         remaining: failure.remaining.map(wrap),
     }
 }
+
 impl LoadCleanup for Fake {
     type ProgramPin = Program;
     type MapPin = Map;
     type Bytecode = BytecodeReceipt;
     type Error = TestError;
+
     fn remove_bytecode(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -229,6 +258,7 @@ impl LoadCleanup for Fake {
                 remaining: receipt,
             })
     }
+
     fn remove_program_pin(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -240,6 +270,7 @@ impl LoadCleanup for Fake {
                 remaining: receipt,
             })
     }
+
     fn remove_map_pin(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -255,28 +286,36 @@ impl LoadCleanup for Fake {
             })
     }
 }
+
 impl LoadEffects for Fake {
     type Store = ();
     type Prepared = ();
     type Kernel = Kernel;
+
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<(), TestError> {
         self.enter(writer, Event::OpenStore)
     }
+
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<(), TestError> {
         self.enter(writer, Event::Prepare)
     }
+
     fn load_kernel(
         &mut self,
         writer: &RuntimeWriter<'_>,
         input: &Inputs<'_>,
     ) -> Result<Kernel, TestError> {
         self.enter(writer, Event::LoadKernel)?;
+
         assert_eq!(input.name.as_str(), "trace");
         self.counts.handles.set(self.counts.handles.get() + 1);
+
         let kernel = Kernel(self.counts.clone());
         self.check(Fault::AfterAcquisition(Event::LoadKernel))?;
+
         Ok(kernel)
     }
+
     fn pin_program(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -289,9 +328,11 @@ impl LoadEffects for Fake {
             .map(Program)
             .map_err(|f| wrap_partial(f, Program))
     }
+
     fn program_id(_: &Program) -> NonZeroU32 {
         id()
     }
+
     fn create_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -304,6 +345,7 @@ impl LoadEffects for Fake {
             .map(Directory)
             .map_err(|f| wrap_partial(f, Directory))
     }
+
     fn pin_map(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -312,11 +354,13 @@ impl LoadEffects for Fake {
         name: &str,
     ) -> Result<Map, EffectFailure<Option<Map>, TestError>> {
         assert!(self.resources.contains(&directory.0.resource));
+
         let n = name.parse::<u8>().expect("map fixture name");
         self.pin(writer, Event::PinMap(n), Resource::Map(n))
             .map(Map)
             .map_err(|f| wrap_partial(f, Map))
     }
+
     fn publish(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -325,27 +369,32 @@ impl LoadEffects for Fake {
     ) -> Result<BytecodeReceipt, EffectFailure<Vec<BytecodeReceipt>, TestError>> {
         assert_eq!(program, id());
         assert!(self.resources.contains(&Resource::Program));
+
         for name in &input.object.maps {
             assert!(
                 self.resources
                     .contains(&Resource::Map(name.parse().expect("map id")))
             );
         }
+
         self.enter(writer, Event::Publish)
             .map_err(|cause| EffectFailure {
                 cause,
                 remaining: vec![],
             })?;
         let mut receipt = BytecodeReceipt(self.acquire(Resource::Staging));
+
         if let Err(cause) = self.check(Fault::StagedPublication) {
             return Err(EffectFailure {
                 cause,
                 remaining: vec![receipt],
             });
         }
+
         assert!(self.resources.remove(&Resource::Staging));
         assert!(self.resources.insert(Resource::Bytecode));
         receipt.0.resource = Resource::Bytecode;
+
         match self.check(Fault::AfterAcquisition(Event::Publish)) {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -354,6 +403,7 @@ impl LoadEffects for Fake {
             }),
         }
     }
+
     fn persist(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -361,15 +411,20 @@ impl LoadEffects for Fake {
         input: &Inputs<'_>,
     ) -> Result<StoredProgramSummary, TestError> {
         self.enter(writer, Event::Persist)?;
+
         assert!(self.resources.contains(&Resource::Bytecode));
+
         // Build both transaction-local rows, but expose neither until commit.
+
         let mut next_maps = self.map_sets.clone();
         let mut next_records = self.records.clone();
+
         assert!(next_maps.insert(program.get()));
         assert!(next_records.insert(program.get()));
         self.check(Fault::BeforeCommit)?;
         self.map_sets = next_maps;
         self.records = next_records;
+
         Ok(StoredProgramSummary::new(
             program,
             input.name.as_str().into(),
@@ -379,8 +434,10 @@ impl LoadEffects for Fake {
         ))
     }
 }
+
 impl super::CleanupEffects for Fake {
     type MapDirectory = Directory;
+
     fn remove_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -410,6 +467,7 @@ fn with_writer(test: impl FnOnce(&RuntimeWriter<'_>)) {
         )
         .expect("writer");
 }
+
 fn invoke<F: LoadEffects>(
     writer: &RuntimeWriter<'_>,
     fake: &mut F,
@@ -433,20 +491,24 @@ fn invoke<F: LoadEffects>(
         },
     )
 }
+
 fn failed(result: Result<StoredProgramSummary, FailureFor<Fake>>) -> FailureFor<Fake> {
     match result {
         Err(failure) => failure,
         Ok(_) => unreachable!("injected load must fail"),
     }
 }
+
 fn primary(failure: &FailureFor<Fake>) -> &TestError {
     match failure {
         Failure::NoOwnedArtifacts(error) => error,
         Failure::Compensated { report, .. } => report.primary(),
     }
 }
+
 fn unresolved(failure: &FailureFor<Fake>) -> BTreeSet<Resource> {
     use bpfman_core::LoadCompensation;
+
     match failure {
         Failure::NoOwnedArtifacts(_) => BTreeSet::new(),
         Failure::Compensated {
@@ -461,13 +523,16 @@ fn unresolved(failure: &FailureFor<Fake>) -> BTreeSet<Resource> {
                     LoadCompensation::RemoveBytecode(r) => r.0.resource,
                 })
                 .collect();
+
             if directory.is_some() {
                 resources.insert(Resource::Directory);
             }
+
             resources
         }
     }
 }
+
 fn history(failure: &FailureFor<Fake>) -> Vec<(usize, CompensationKind, Option<Fault>)> {
     match failure {
         Failure::NoOwnedArtifacts(_) => vec![],
@@ -478,11 +543,13 @@ fn history(failure: &FailureFor<Fake>) -> Vec<(usize, CompensationKind, Option<F
             .collect(),
     }
 }
+
 fn assert_dropped_once(counts: &Counts) {
     let mut receipts = counts.dropped_receipts.borrow().clone();
     receipts.sort_unstable();
     let mut errors = counts.dropped_errors.borrow().clone();
     errors.sort_unstable();
+
     assert_eq!(receipts, (0..counts.receipts.get()).collect::<Vec<_>>());
     assert_eq!(errors, (0..counts.errors.get()).collect::<Vec<_>>());
 }
@@ -512,6 +579,7 @@ struct Case {
     last: Event,
     owned: Vec<Resource>,
 }
+
 fn cases() -> Vec<Case> {
     use Event::*;
     use Fault::*;
@@ -642,6 +710,7 @@ fn cases() -> Vec<Case> {
         },
     ]
 }
+
 fn removal(resource: Resource) -> Event {
     match resource {
         Resource::Program => Event::RemoveProgram,
@@ -656,6 +725,7 @@ fn removal(resource: Resource) -> Event {
 fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
     with_writer(|writer| {
         let mut scenarios = 0;
+
         for case in cases() {
             for mask in 0..(1 << CLEANUP.len()) {
                 let injected: BTreeSet<_> = CLEANUP
@@ -667,6 +737,7 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                     .collect();
                 let mut fake = Fake::new(writer, injected.clone());
                 let failure = failed(invoke(writer, &mut fake, &["1", "2", "3"]));
+
                 assert_eq!(primary(&failure).fault, case.fault);
                 assert_eq!(
                     fake.counts.handles.get(),
@@ -674,11 +745,14 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                     "kernel handles leaked at {:?}",
                     case.fault
                 );
+
                 let last = FORWARD
                     .iter()
                     .position(|e| *e == case.last)
                     .expect("forward event");
+
                 assert_eq!(&fake.events[..=last], &FORWARD[..=last]);
+
                 let blocked = case.owned.iter().any(|r| {
                     matches!(r, Resource::Map(_)) && injected.contains(&Fault::Before(removal(*r)))
                 });
@@ -690,12 +764,14 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                             && !(*e == Event::RemoveDirectory && blocked)
                     })
                     .collect();
+
                 assert_eq!(
                     &fake.events[last + 1..],
                     expected,
                     "case {:?} cleanup mask {mask}",
                     case.fault
                 );
+
                 let remaining: BTreeSet<_> = case
                     .owned
                     .iter()
@@ -705,6 +781,7 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                             || (*r == Resource::Directory && blocked)
                     })
                     .collect();
+
                 assert_eq!(unresolved(&failure), remaining);
                 assert_eq!(
                     fake.resources,
@@ -712,18 +789,22 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                 );
                 assert_eq!(fake.records, BTreeSet::from([7]));
                 assert_eq!(fake.map_sets, BTreeSet::from([7]));
+
                 let before = history(&failure);
                 let independent: Vec<_> = expected
                     .iter()
                     .filter(|e| **e != Event::RemoveDirectory)
                     .collect();
+
                 assert_eq!(before.len(), independent.len());
+
                 for (attempt, event) in before.iter().zip(independent) {
                     assert_eq!(
                         attempt.2.is_some(),
                         injected.contains(&Fault::Before(*event))
                     );
                 }
+
                 if let Failure::Compensated {
                     directory_attempts, ..
                 } = &failure
@@ -733,10 +814,12 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                         usize::from(expected.contains(&Event::RemoveDirectory))
                     );
                 }
+
                 assert!(
                     fake.counts.dropped_errors.borrow().is_empty(),
                     "error history was discarded"
                 );
+
                 let original_serial = primary(&failure).serial;
                 fake.events.clear();
                 fake.faults.clear();
@@ -746,18 +829,23 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                     .copied()
                     .filter(|e| remaining.iter().any(|r| removal(*r) == *e))
                     .collect();
+
                 assert_eq!(
                     fake.events, expected_retry,
                     "retry must contain only unresolved work"
                 );
                 assert!(unresolved(&failure).is_empty());
+
                 let after = history(&failure);
+
                 assert_eq!(&after[..before.len()], before);
+
                 let unresolved_ids: Vec<_> = before
                     .iter()
                     .filter(|a| a.2.is_some())
                     .map(|a| a.0)
                     .collect();
+
                 assert_eq!(
                     after[before.len()..]
                         .iter()
@@ -774,6 +862,7 @@ fn every_forward_failure_crossed_with_every_cleanup_failure_subset() {
                 scenarios += 1;
             }
         }
+
         assert_eq!(scenarios, 19 * 64);
     });
 }
@@ -785,6 +874,7 @@ fn successful_commit_never_runs_compensation_even_when_all_cleanup_would_fail() 
         let result = invoke(writer, &mut fake, &["1", "2", "3"])
             .ok()
             .expect("commit");
+
         assert_eq!(result.id(), id());
         assert_eq!(result.application(), "fault-test");
         assert!(result.links().is_empty());
@@ -815,6 +905,7 @@ fn empty_map_set_still_owns_and_cleans_its_directory() {
     with_writer(|writer| {
         let mut fake = Fake::new(writer, [Fault::BeforeCommit]);
         let failure = failed(invoke(writer, &mut fake, &[]));
+
         assert_eq!(
             &fake.events[fake.events.len() - 3..],
             &[
@@ -840,6 +931,7 @@ fn repeated_total_cleanup_failure_then_recovery_retains_every_attempt() {
                 .chain([Fault::BeforeCommit]),
         );
         let mut failure = failed(invoke(writer, &mut fake, &["1", "2", "3"]));
+
         for pass in 1..=3 {
             assert_eq!(history(&failure).len(), 5 * pass);
             assert_eq!(unresolved(&failure).len(), 6);
@@ -852,6 +944,7 @@ fn repeated_total_cleanup_failure_then_recovery_retains_every_attempt() {
             fake.events.clear();
             failure = retry(writer, &mut fake, failure);
         }
+
         assert_eq!(history(&failure).len(), 20);
         fake.faults.clear();
         failure = retry(writer, &mut fake, failure);
@@ -873,11 +966,13 @@ fn wrong_writer_retry_preserves_ownership_until_the_original_runtime_returns() {
         fake.faults.clear();
         with_writer(|other| {
             let failure = retry(other, &mut fake, failure);
+
             assert_eq!(unresolved(&failure), BTreeSet::from([Resource::Program]));
             assert_eq!(
                 history(&failure).last().expect("retry").2,
                 Some(Fault::WrongRuntime(Event::RemoveProgram))
             );
+
             let failure = retry(writer, &mut fake, failure);
             fake.assert_clean();
             drop(failure);
@@ -898,12 +993,15 @@ fn compensation_trace_shows_success_failure_blocking_and_retry() {
             ],
         );
         let failure = failed(invoke(writer, &mut fake, &["1", "2", "3"]));
+
         assert_eq!(
             unresolved(&failure),
             BTreeSet::from([Resource::Program, Resource::Map(2), Resource::Directory])
         );
         println!("\nOriginal load failure: {}", primary(&failure));
+
         let removals = fake.events.iter().filter(|e| CLEANUP.contains(e));
+
         for ((id, _, error), event) in history(&failure).into_iter().zip(removals) {
             println!(
                 "  cleanup #{id} {event:?}: {}",
@@ -914,11 +1012,13 @@ fn compensation_trace_shows_success_failure_blocking_and_retry() {
                 }
             );
         }
+
         println!("  map directory: BLOCKED by unresolved map pin");
         println!("  residue: {:?}", unresolved(&failure));
         fake.events.clear();
         fake.faults.clear();
         let failure = retry(writer, &mut fake, failure);
+
         assert_eq!(
             fake.events,
             vec![
@@ -927,9 +1027,11 @@ fn compensation_trace_shows_success_failure_blocking_and_retry() {
                 Event::RemoveDirectory
             ]
         );
+
         for event in &fake.events {
             println!("  retry {event:?}: OK");
         }
+
         println!(
             "  residue: {:?}; original error and earlier failures retained\n",
             unresolved(&failure)
@@ -958,6 +1060,7 @@ fn directory_retry_waits_for_maps_then_retains_failed_and_successful_attempts() 
         else {
             unreachable!("rollback")
         };
+
         assert!(
             directory_attempts.is_empty(),
             "blocked is not an attempted removal"
@@ -967,9 +1070,11 @@ fn directory_retry_waits_for_maps_then_retains_failed_and_successful_attempts() 
         failure = retry(writer, &mut fake, failure);
         assert_eq!(fake.events, [Event::RemoveMap(2), Event::RemoveDirectory]);
         assert_eq!(unresolved(&failure), BTreeSet::from([Resource::Directory]));
+
         let history_after_maps = history(&failure);
         fake.events.clear();
         failure = retry(writer, &mut fake, failure);
+
         assert_eq!(fake.events, [Event::RemoveDirectory]);
         assert_eq!(
             history(&failure),
@@ -980,12 +1085,14 @@ fn directory_retry_waits_for_maps_then_retains_failed_and_successful_attempts() 
         fake.events.clear();
         failure = retry(writer, &mut fake, failure);
         assert_eq!(fake.events, [Event::RemoveDirectory]);
+
         let Failure::Compensated {
             directory_attempts, ..
         } = &failure
         else {
             unreachable!("rollback")
         };
+
         assert_eq!(
             directory_attempts
                 .iter()

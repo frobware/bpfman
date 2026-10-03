@@ -10,6 +10,7 @@ pub(super) fn behaviour(store: &'static str) {
     let c = Context::with_store(store);
     let root = c.layout.root();
     let fifo = root.parent().expect("temporary parent").join("source.fifo");
+
     assert!(
         Command::new("mkfifo")
             .arg(&fifo)
@@ -17,6 +18,7 @@ pub(super) fn behaviour(store: &'static str) {
             .expect("mkfifo")
             .success()
     );
+
     for (source, selection, diagnostic) in [
         (fifo, SELECTION, "regular ELF file"),
         (
@@ -47,14 +49,17 @@ pub(super) fn behaviour(store: &'static str) {
             ],
             false,
         );
+
         assert!(String::from_utf8_lossy(&output.stderr).contains(diagnostic));
         assert!(!root.exists());
     }
+
     let loaded = c.load_cli(&rust());
     let pid = id(&loaded);
     let pid_text = pid.to_string();
     c.present(pid);
     let source = fixture("tracepoint_counter.bpf.o");
+
     assert_eq!(
         fs::read(c.layout.bytecode_path(pid)).expect("bytecode"),
         fs::read(&source).expect("source")
@@ -66,6 +71,7 @@ pub(super) fn behaviour(store: &'static str) {
     assert_eq!(loaded["record"]["load"]["program_name"], NAME);
     assert_eq!(loaded["record"]["license"], "Dual BSD/GPL");
     assert!(loaded["record"]["updated_at"].is_null());
+
     let provenance: serde_json::Value = serde_json::from_slice(
         &fs::read(
             c.layout
@@ -77,9 +83,12 @@ pub(super) fn behaviour(store: &'static str) {
         .expect("provenance"),
     )
     .expect("JSON");
+
     assert_eq!(provenance["program_id"], pid.get());
     assert_eq!(provenance["source"], source.to_str().expect("path"));
+
     let observation = c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]);
+
     assert_eq!(loaded["record"], observation["record"]);
     assert_eq!(loaded["status"]["kernel"], observation["status"]["kernel"]);
     assert!(loaded["status"]["stats"].is_null());
@@ -90,8 +99,10 @@ pub(super) fn behaviour(store: &'static str) {
             .iter()
             .all(|m| m["pin_path"] == "" && m["present"] == false)
     );
+
     let list = c.json(&rust(), &["program", "list", "-o", "json"]);
     let programs = list["programs"].as_array().expect("programs");
+
     assert_eq!(programs.len(), 1);
     assert_eq!(programs[0]["record"], observation["record"]);
     assert_eq!(
@@ -110,11 +121,13 @@ pub(super) fn behaviour(store: &'static str) {
     fs::rename(&pin, &saved).expect("save pin");
     fs::rename(&other, &pin).expect("replace pin");
     let output = c.run(&rust(), &["program", "unload", &pid_text], false);
+
     assert!(String::from_utf8_lossy(&output.stderr).contains("different kernel identity"));
     fs::rename(&pin, &other).expect("restore other pin");
     fs::rename(&saved, &pin).expect("restore pin");
     c.present(pid);
     c.present(unrelated);
+
     let map = c
         .layout
         .map_directory_path(pid)
@@ -127,15 +140,18 @@ pub(super) fn behaviour(store: &'static str) {
     fs::rename(&map, &saved).expect("save map");
     fs::rename(&other, &map).expect("replace map");
     let output = c.run(&rust(), &["program", "unload", &pid_text], false);
+
     assert!(String::from_utf8_lossy(&output.stderr).contains("does not belong"));
     fs::rename(&map, &other).expect("restore other map");
     fs::rename(&saved, &map).expect("restore map");
     c.present(pid);
     c.present(unrelated);
+
     for id in [pid, unrelated] {
         c.run(&rust(), &["program", "unload", &id.to_string()], true);
         c.absent(id);
     }
+
     c.no_artifacts();
 
     // Output delivery is after commit, independently of the backend format.
@@ -159,14 +175,19 @@ pub(super) fn behaviour(store: &'static str) {
         ))
         .output()
         .expect("CLI");
+
     assert_eq!(output.status.code(), Some(1));
+
     let list = c.json(&rust(), &["program", "list", "-o", "json"]);
     let programs = list["programs"].as_array().expect("programs");
+
     assert_eq!(programs.len(), 1);
+
     let pid = id(&programs[0]);
     c.present(pid);
     c.run(&rust(), &["program", "get", &pid.to_string()], true);
     c.run(&rust(), &["program", "unload", &pid.to_string()], true);
+
     assert_eq!(
         c.json(&rust(), &["program", "list", "-o", "json"])["programs"],
         serde_json::json!([])
@@ -196,6 +217,7 @@ pub(super) fn dsl(store: &'static str) {
         .current_dir(repository())
         .output()
         .expect("DSL runner");
+
     assert!(
         output.status.success(),
         "{}\n{}",

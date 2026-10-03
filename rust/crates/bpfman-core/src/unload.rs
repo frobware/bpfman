@@ -17,16 +17,19 @@ impl<P, R, M, D, S, B> UnloadInstruction<P, R, M, D, S, B> {
         }
     }
 }
+
 impl<P, R, M, D, S, B> PendingUnload<P, R, M, D, S, B> {
     /// Stable instruction identity.
     pub fn id(&self) -> usize {
         self.id
     }
+
     /// Receipt-bearing instruction, borrowed without transferring authority.
     pub fn instruction(&self) -> &UnloadInstruction<P, R, M, D, S, B> {
         &self.instruction
     }
 }
+
 impl<P, R, M, D, S, B, E> UnloadProgram<P, R, M, D, S, B, E> {
     /// Begin teardown from a fully validated snapshot under the writer lock.
     /// Missing filesystem artifacts are already satisfied, not deletion targets.
@@ -55,6 +58,7 @@ impl<P, R, M, D, S, B, E> UnloadProgram<P, R, M, D, S, B, E> {
             attempts: Vec::new(),
         }
     }
+
     /// Dispatch the next effect whose prerequisites succeeded in this pass.
     pub fn next(mut self) -> UnloadStep<P, R, M, D, S, B, E> {
         while let Some(work) = self.pending.pop_front() {
@@ -71,11 +75,14 @@ impl<P, R, M, D, S, B, E> UnloadProgram<P, R, M, D, S, B, E> {
                     UnloadKind::MapDirectory => kind == UnloadKind::MapSet,
                     UnloadKind::MapSet | UnloadKind::Bytecode => false,
                 });
+
             if blocked {
                 self.remaining.push(work);
                 continue;
             }
+
             let id = work.id;
+
             return match work.instruction {
                 UnloadInstruction::ProgramPin(receipt) => UnloadStep::ProgramPin {
                     receipt,
@@ -133,12 +140,14 @@ impl<P, R, M, D, S, B, E> UnloadProgram<P, R, M, D, S, B, E> {
                 },
             };
         }
+
         UnloadStep::Complete(UnloadReport {
             remaining: self.remaining,
             attempts: self.attempts,
         })
     }
 }
+
 impl<T, P, R, M, D, S, B, E> UnloadContinuation<T, P, R, M, D, S, B, E> {
     /// Record success or retained failure, without retrying it during this pass.
     pub fn completed(
@@ -160,6 +169,7 @@ impl<T, P, R, M, D, S, B, E> UnloadContinuation<T, P, R, M, D, S, B, E> {
         self.operation
     }
 }
+
 impl<P, R, M, D, S, B, E> UnloadReport<P, R, M, D, S, B, E> {
     /// Go's operation status: post-record artifact failures are warnings.
     pub fn failed(&self) -> bool {
@@ -170,14 +180,17 @@ impl<P, R, M, D, S, B, E> UnloadReport<P, R, M, D, S, B, E> {
             )
         })
     }
+
     /// Ordered history, including successful steps and previous passes.
     pub fn attempts(&self) -> &[UnloadAttempt<E>] {
         &self.attempts
     }
+
     /// Unresolved and blocked work; successful receipts are absent.
     pub fn remaining(&self) -> &[PendingUnload<P, R, M, D, S, B>] {
         &self.remaining
     }
+
     /// Explicitly begin one more pass over unresolved work only.
     pub fn retry(self) -> UnloadProgram<P, R, M, D, S, B, E> {
         UnloadProgram {

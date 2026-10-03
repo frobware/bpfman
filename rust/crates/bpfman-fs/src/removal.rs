@@ -3,6 +3,7 @@
 //! Writers must cooperate with the runtime lock. These checks do not sandbox
 //! privileged processes concurrently replacing the final directory entry.
 #![allow(clippy::disallowed_methods)]
+
 use crate::{
     Bytecode, Error, MapDirectory, MapPin, ProgramPin, RuntimeWriter,
     artifacts::{Entry, identity},
@@ -27,19 +28,23 @@ pub(super) fn open_owned(entry: &Entry) -> Result<OwnedFd, Error> {
         CONFINED,
     )
     .map_err(|e| io("open owned artifact for removal", e))?;
+
     if Some(identity(&fd)?) != entry.identity {
         return Err(Failure::Unsafe("owned artifact was replaced or identity is unknown").into());
     }
+
     let stat = fstat(&fd).map_err(|e| io("inspect owned artifact type", e))?;
     let expected = if entry.directory {
         FileType::Directory
     } else {
         FileType::RegularFile
     };
+
     if FileType::from_raw_mode(stat.st_mode) != expected || (!entry.directory && stat.st_nlink != 1)
     {
         return Err(Failure::Unsafe("owned artifact has unexpected type or hard links").into());
     }
+
     Ok(fd)
 }
 
@@ -65,6 +70,7 @@ impl RuntimeWriter<'_> {
             remaining: receipt,
         })
     }
+
     /// Consume exactly one private map pin; never remove its parent implicitly.
     pub fn remove_map_pin(&self, receipt: MapPin) -> Result<(), EffectFailure<MapPin, Error>> {
         remove(self, &receipt.entry).map_err(|cause| EffectFailure {
@@ -72,6 +78,7 @@ impl RuntimeWriter<'_> {
             remaining: receipt,
         })
     }
+
     /// Remove an owned map directory after all its map-pin receipts are consumed.
     /// An unexpected entry or unresolved pin prevents rmdir; nothing is recursive.
     pub fn remove_empty_map_directory(
@@ -83,6 +90,7 @@ impl RuntimeWriter<'_> {
             remaining: receipt,
         })
     }
+
     /// Remove each owned bytecode file once, then its directory only if every
     /// child removal succeeded. Retain all failures and unresolved ownership.
     pub fn remove_bytecode(
@@ -90,6 +98,7 @@ impl RuntimeWriter<'_> {
         mut receipt: Bytecode,
     ) -> Result<(), EffectFailure<Bytecode, Error>> {
         let mut causes = Vec::new();
+
         if let Err(cause) = receipt
             .directory
             .check_writer(self)
@@ -100,6 +109,7 @@ impl RuntimeWriter<'_> {
                 remaining: receipt,
             });
         }
+
         receipt.files.retain(|entry| match remove(self, entry) {
             Ok(()) => false,
             Err(cause) => {
@@ -107,11 +117,13 @@ impl RuntimeWriter<'_> {
                 true
             }
         });
+
         if causes.is_empty() {
             if let Err(cause) = remove(self, &receipt.directory) {
                 causes.push(cause);
             }
         }
+
         if causes.is_empty() {
             Ok(())
         } else {

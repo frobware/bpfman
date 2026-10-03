@@ -30,11 +30,13 @@ impl RuntimeDirectory {
             open("/", DIRECTORY, Mode::empty()).map_err(|e| io("open filesystem anchor", e))?;
         let mut parent = rustix::io::fcntl_dupfd_cloexec(&filesystem, 0)
             .map_err(|e| io("duplicate filesystem anchor", e))?;
+
         for component in layout.root().components() {
             if let Component::Normal(name) = component {
                 parent = ensure_directory(&parent, name, BENEATH)?;
             }
         }
+
         // Re-resolve the full supplied path at adoption, refusing any ancestor
         // replaced by a symlink during creation. After adoption, the descriptor
         // (not the pathname) defines the root's identity.
@@ -46,9 +48,11 @@ impl RuntimeDirectory {
             .map_err(|e| io("adopt runtime directory", e))?;
         let anchor = fstat(&filesystem).map_err(|e| io("inspect filesystem anchor", e))?;
         let adopted = fstat(&root).map_err(|e| io("inspect runtime directory", e))?;
+
         if (anchor.st_dev, anchor.st_ino) == (adopted.st_dev, adopted.st_ino) {
             return Err(Failure::Unsafe("filesystem root cannot be adopted").into());
         }
+
         Ok(Self { root, layout })
     }
 
@@ -81,9 +85,11 @@ impl RuntimeDirectory {
         work: impl for<'scope> FnOnce(RuntimeWriter<'scope>) -> T,
     ) -> Result<T, Error> {
         let stat = fstat(&fd).map_err(|e| io("inspect runtime writer lock", e))?;
+
         if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink != 1 {
             return Err(Failure::Unsafe("writer lock must be a singly linked regular file").into());
         }
+
         with_write_lock_file(
             File::from(fd),
             &self.layout.lock_path(),
@@ -100,16 +106,19 @@ impl RuntimeDirectory {
                 )
                 .map_err(|e| io("recheck runtime writer lock", e))?;
                 let current = fstat(&current).map_err(|e| io("inspect acquired writer lock", e))?;
+
                 if (stat.st_dev, stat.st_ino) != (current.st_dev, current.st_ino)
                     || current.st_nlink != 1
                 {
                     return Err(Failure::Unsafe("writer lock changed during acquisition").into());
                 }
+
                 let writer = RuntimeWriter {
                     runtime: self,
                     _permit: permit,
                 };
                 writer.prepare_database_directory()?;
+
                 Ok(work(writer))
             },
         )
@@ -125,6 +134,7 @@ impl RuntimeWriter<'_> {
 
     fn prepare_database_directory(&self) -> Result<(), Error> {
         ensure_directory(&self.runtime.root, DATABASE_DIRECTORY, CONFINED)?;
+
         Ok(())
     }
 
@@ -143,15 +153,18 @@ pub(super) fn ensure_directory(
     resolve: ResolveFlags,
 ) -> Result<OwnedFd, Error> {
     let name = name.as_ref();
+
     match openat2(&root, name, DIRECTORY, Mode::empty(), resolve) {
         Ok(fd) => return Ok(fd),
         Err(rustix::io::Errno::NOENT) => {}
         Err(error) => return Err(io("open runtime directory component", error)),
     }
+
     match mkdirat(&root, name, Mode::from_raw_mode(0o755)) {
         Ok(()) | Err(rustix::io::Errno::EXIST) => {}
         Err(error) => return Err(io("create runtime directory component", error)),
     }
+
     openat2(root, name, DIRECTORY, Mode::empty(), resolve)
         .map_err(|e| io("verify runtime directory component", e))
 }
@@ -187,19 +200,24 @@ mod tests {
         std::fs::create_dir(&outside)?;
         symlink(&outside, &path)?;
         runtime.with_writer(options(), |_| ())?;
+
         assert!(adopted.join(LOCK_FILE).is_file());
         assert!(adopted.join(DATABASE_DIRECTORY).is_dir());
         assert_eq!(std::fs::read_dir(outside)?.count(), 0);
+
         Ok(())
     }
 
     #[test]
     fn mount_crossing_is_rejected_by_kernel_resolution() -> Result<(), Box<dyn std::error::Error>> {
         let root = open("/", DIRECTORY, Mode::empty())?;
+
         // /proc is an existing separate mount; this test only attempts a read-only open.
         let error = openat2(&root, "proc", DIRECTORY, Mode::empty(), CONFINED)
             .expect_err("reject mount crossing");
+
         assert_eq!(error, rustix::io::Errno::XDEV);
+
         Ok(())
     }
 
@@ -210,6 +228,7 @@ mod tests {
         let layout = RuntimeLayout::try_from(temporary.path().to_owned())?;
         let path = layout.lock_path();
         let runtime = RuntimeDirectory::open_or_create(layout)?;
+
         // Deterministic handoff: this is the fd a waiter opened before flock.
         let old = openat2(
             &runtime.root,
@@ -224,10 +243,12 @@ mod tests {
         let error = runtime
             .with_lock_file(old, options(), |_| called.set(true))
             .expect_err("lock inode was replaced");
+
         assert_eq!(error.kind(), crate::ErrorKind::UnsafeLayout);
         assert!(!called.get());
         assert!(!temporary.path().join(DATABASE_DIRECTORY).exists());
         assert_eq!(std::fs::read(path)?, b"replacement");
+
         Ok(())
     }
 }

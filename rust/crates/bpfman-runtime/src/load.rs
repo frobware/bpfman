@@ -33,11 +33,13 @@ pub fn load_tracepoint<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
     let source_text = source
         .to_str()
         .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
+
     if layout.root().to_str().is_none() {
         return Err(
             LoadCause::Invalid("load persistence requires a UTF-8 runtime path".into()).into(),
         );
     }
+
     let object = LocalObject::read(source, &name)?;
     let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let runtime = RuntimeDirectory::open_or_create(layout.clone()).map_err(LoadCause::from)?;
@@ -135,11 +137,13 @@ fn run<F: LoadEffects>(
         }
     };
     let mut pins = Vec::new();
+
     for name in &input.object.maps {
         match effects.pin_map(writer, &kernel, &directory, name) {
             Ok(pin) => pins.push(pin),
             Err(failure) => {
                 pins.extend(failure.remaining);
+
                 return Err(finish(
                     writer,
                     effects,
@@ -156,6 +160,7 @@ fn run<F: LoadEffects>(
             }
         }
     }
+
     let publish = operation.loaded(program_pin, pins);
     let bytecode = match effects.publish(writer, id, input) {
         Ok(bytecode) => bytecode,
@@ -170,6 +175,7 @@ fn run<F: LoadEffects>(
         }
     };
     let persist = publish.published(bytecode);
+
     match effects.persist(writer, id, input) {
         Ok(stored) => Ok(persist.committed(stored).stored),
         Err(cause) => Err(finish(

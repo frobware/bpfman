@@ -5,13 +5,18 @@ mod error;
 mod kernel;
 mod list;
 mod observation;
+
 pub use observation::{get_program, list_program_entries};
+
 mod load;
 mod load_error;
+
 pub use load::load_tracepoint;
+
 mod store;
 mod unload;
 mod unload_error;
+
 pub use unload::unload_tracepoint;
 
 pub use compensation::compensate_load;
@@ -31,10 +36,13 @@ pub use list::list_programs;
 pub trait LoadCleanup {
     /// Non-cloneable program-pin ownership receipt.
     type ProgramPin;
+
     /// Non-cloneable ownership receipt for a single map pin.
     type MapPin;
+
     /// Non-cloneable ownership receipt for staged or published bytecode.
     type Bytecode;
+
     /// Application-classified error; concrete backend causes stay private.
     type Error: std::error::Error;
 
@@ -144,6 +152,7 @@ pub enum ObservationErrorKind {
     /// An observation failed; it must not be presented as absence.
     Unavailable,
 }
+
 /// Opaque failure while observing a managed program.
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]

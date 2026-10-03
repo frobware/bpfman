@@ -1,4 +1,5 @@
 //! Full store/kernel views. Wire DTOs remain in the CLI.
+
 use crate::{ObservationError, ObservationErrorKind};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
@@ -31,16 +32,19 @@ pub(super) enum Failure {
     #[error("observed runtime path is not UTF-8")]
     Path,
 }
+
 impl From<bpfman_kernel::Error> for Failure {
     fn from(cause: bpfman_kernel::Error) -> Self {
         Self::Kernel(Box::new(cause))
     }
 }
+
 impl From<Failure> for ObservationError {
     fn from(cause: Failure) -> Self {
         Self { cause }
     }
 }
+
 impl ObservationError {
     /// Classify absence separately from denied or failed observation.
     pub fn kind(&self) -> ObservationErrorKind {
@@ -52,16 +56,20 @@ impl ObservationError {
         }
     }
 }
+
 #[derive(Clone, Copy)]
 pub(super) enum View {
     Load,
     Get,
 }
+
 trait KernelObservations {
     fn program(&mut self, id: NonZeroU32)
     -> Result<(KernelProgram, Option<ProgramStats>), Failure>;
+
     fn map(&mut self, id: u32) -> Result<KernelMap, Failure>;
 }
+
 struct Kernel;
 impl KernelObservations for Kernel {
     fn program(
@@ -79,10 +87,12 @@ impl KernelObservations for Kernel {
             }
         })
     }
+
     fn map(&mut self, id: u32) -> Result<KernelMap, Failure> {
         bpfman_kernel::observe_map(id).map_err(Failure::from)
     }
 }
+
 fn records<S: OpenStore>(
     store: &S,
     writer: &RuntimeWriter<'_>,
@@ -92,11 +102,13 @@ fn records<S: OpenStore>(
         .read_records()
         .map_err(Failure::from)
 }
+
 fn path(path: std::path::PathBuf) -> Result<String, Failure> {
     path.into_os_string()
         .into_string()
         .map_err(|_| Failure::Path)
 }
+
 /// Observe a managed program's record, live kernel data, maps and statistics.
 /// Linked programs are rejected until full link observation is implemented.
 pub fn get_program<S: OpenStore>(
@@ -109,6 +121,7 @@ pub fn get_program<S: OpenStore>(
         observe(store, writer, id, View::Get)
     })
 }
+
 fn with_writer<T>(
     layout: &RuntimeLayout,
     timeout: Duration,
@@ -125,6 +138,7 @@ fn with_writer<T>(
         )
         .map_err(Failure::from)?
 }
+
 pub(super) fn observe<S: OpenStore>(
     store: &S,
     writer: &RuntimeWriter<'_>,
@@ -137,9 +151,11 @@ pub(super) fn observe<S: OpenStore>(
         .position(|p| p.id == id)
         .ok_or(Failure::Missing(id))?;
     let record = records[index].clone();
+
     if !record.links.is_empty() {
         return Err(Failure::Links.into());
     }
+
     let users = records
         .iter()
         .filter(|p| p.map_set == record.map_set)
@@ -153,6 +169,7 @@ pub(super) fn observe<S: OpenStore>(
     };
     build(&mut Kernel, writer.layout(), record, users, pins, view).map_err(ObservationError::from)
 }
+
 fn build<K: KernelObservations>(
     effects: &mut K,
     layout: &RuntimeLayout,
@@ -164,6 +181,7 @@ fn build<K: KernelObservations>(
     let (kernel, stats) = effects.program(record.id)?;
     let directory = layout.map_directory_path(record.map_set);
     let mut maps = Vec::new();
+
     for id in kernel.map_ids.as_deref().unwrap_or_default() {
         // Go omits an individually unreadable map; never synthesize attributes.
         let Ok(map) = effects.map(*id) else {
@@ -183,6 +201,7 @@ fn build<K: KernelObservations>(
             present,
         });
     }
+
     Ok(ObservedProgram {
         prog_pin: path(layout.program_pin_path(record.id))?,
         bytecode: path(layout.bytecode_path(record.id))?,
@@ -197,6 +216,7 @@ fn build<K: KernelObservations>(
         map_used_by: users,
     })
 }
+
 /// List full managed records and optional kernel observations. A missing kernel
 /// object is null; permissions and other lookup failures remain errors. Existing
 /// text/quiet listing stays available without kernel privileges.
@@ -211,6 +231,7 @@ pub fn list_program_entries<S: OpenStore>(
         entries(&mut Kernel, records).map_err(ObservationError::from)
     })
 }
+
 fn entries<K: KernelObservations>(
     effects: &mut K,
     records: Vec<StoredProgram>,
@@ -223,9 +244,11 @@ fn entries<K: KernelObservations>(
                 Err(Failure::Reconciliation { .. }) => None,
                 Err(error) => return Err(error),
             };
+
             Ok(ProgramEntry { record, kernel })
         })
         .collect()
 }
+
 #[cfg(test)]
 mod tests;

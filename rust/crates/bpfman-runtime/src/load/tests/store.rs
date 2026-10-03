@@ -156,6 +156,7 @@ fn independent_store_commit_failure_runs_production_compensation() {
             Err(f) => f,
             Ok(_) => unreachable!("injected commit must fail"),
         };
+
         assert_eq!(store.calls(), ["open", "commit"]);
         assert_eq!(store.residue(), (false, false));
         assert_eq!(
@@ -168,14 +169,17 @@ fn independent_store_commit_failure_runs_production_compensation() {
                 Resource::Directory
             ])
         );
+
         let Failure::Compensated { report, .. } = &failure else {
             unreachable!("must compensate")
         };
+
         assert!(
             matches!(report.primary(),Error::Store(LoadCause::Store(e)) if e.kind()==bpfman_store::ErrorKind::Unavailable)
         );
         assert_eq!(report.attempts().len(), 4);
         effects.fake.faults.clear();
+
         let failure = retry(writer, &mut effects, failure);
         effects.fake.assert_clean();
         let Failure::Compensated {
@@ -184,6 +188,7 @@ fn independent_store_commit_failure_runs_production_compensation() {
         else {
             unreachable!("history")
         };
+
         assert!(report.remaining().is_empty());
         assert!(directory.is_none());
         assert_eq!(report.attempts().len(), 6);
@@ -203,6 +208,7 @@ fn independent_store_open_failure_precedes_acquisition_and_commit_success_ends_c
             fake: Fake::new(writer, []),
             store: &store,
         };
+
         assert!(matches!(
             invoke(writer, &mut effects, &["1"]),
             Err(Failure::NoOwnedArtifacts(_))

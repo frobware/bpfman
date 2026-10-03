@@ -17,10 +17,13 @@ impl TryFrom<PathBuf> for RuntimeLayout {
         if path.as_os_str().is_empty() {
             return Err(LayoutError::EmptyRoot);
         }
+
         if !path.is_absolute() {
             return Err(LayoutError::RelativeRoot(path));
         }
+
         let mut root = PathBuf::new();
+
         for component in path.components() {
             match component {
                 Component::CurDir => {}
@@ -30,9 +33,11 @@ impl TryFrom<PathBuf> for RuntimeLayout {
                 other => root.push(other.as_os_str()),
             }
         }
+
         if root.parent().is_none() {
             return Err(LayoutError::FilesystemRoot);
         }
+
         Ok(Self { root })
     }
 }
@@ -59,10 +64,12 @@ impl RuntimeLayout {
     pub fn program_pin_path(&self, id: std::num::NonZeroU32) -> PathBuf {
         self.root.join("fs").join(format!("prog_{id}"))
     }
+
     /// Go-compatible private map directory, for stored records only.
     pub fn map_directory_path(&self, id: std::num::NonZeroU32) -> PathBuf {
         self.root.join("fs/maps").join(id.to_string())
     }
+
     /// Published local ELF path, for stored records only.
     pub fn bytecode_path(&self, id: std::num::NonZeroU32) -> PathBuf {
         self.root

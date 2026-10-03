@@ -100,6 +100,7 @@ fn lock_timeout(value: &str) -> Result<Duration, String> {
     if value == "0" {
         return Ok(Duration::ZERO);
     }
+
     humantime::parse_duration(value).map_err(|error| error.to_string())
 }
 
@@ -123,7 +124,9 @@ mod tests {
             "program",
             "list",
         ])?;
+
         assert_eq!(cli.layout.root(), std::path::Path::new("/tmp/runtime"));
+
         Ok(())
     }
 
@@ -138,7 +141,9 @@ mod tests {
             OsString::from("program"),
             OsString::from("list"),
         ])?;
+
         assert_eq!(cli.layout.root(), PathBuf::from(root));
+
         Ok(())
     }
 
@@ -164,6 +169,7 @@ mod tests {
                 "expected list",
             ));
         };
+
         assert_eq!(
             args.types,
             [
@@ -173,6 +179,7 @@ mod tests {
                 ProgramType::Tcx
             ]
         );
+
         Ok(())
     }
 }

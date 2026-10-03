@@ -1,4 +1,5 @@
 //! Full record decoding is separate from the cheap stored-summary projection.
+
 use crate::{
     Error, Store,
     error::Failure,
@@ -13,18 +14,21 @@ use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64},
 };
+
 fn invalid(id: i64, reason: impl Into<String>) -> Failure {
     Failure::InvalidRecord {
         id,
         reason: reason.into(),
     }
 }
+
 fn id(raw: i64) -> Result<NonZeroU32, Failure> {
     u32::try_from(raw)
         .ok()
         .and_then(NonZeroU32::new)
         .ok_or_else(|| invalid(raw, "identity must be a nonzero u32"))
 }
+
 fn labels(raw: Option<String>, program: i64) -> Result<BTreeMap<String, String>, Failure> {
     raw.filter(|s| !s.is_empty())
         .map(|s| {
@@ -35,19 +39,25 @@ fn labels(raw: Option<String>, program: i64) -> Result<BTreeMap<String, String>,
         .transpose()
         .map(|m| m.unwrap_or_default())
 }
+
 fn timestamp(raw: String, program: i64) -> Result<String, Failure> {
     use chrono::Datelike;
     let parsed = chrono::DateTime::parse_from_rfc3339(&raw)
         .map_err(|_| invalid(program, "invalid RFC3339 timestamp"))?;
+
     if !(0..=9999).contains(&parsed.year()) {
         return Err(invalid(program, "timestamp year outside RFC3339 range"));
     }
+
     let base = parsed.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let nanos = parsed.timestamp_subsec_nanos();
+
     if nanos == 0 {
         return Ok(base);
     }
+
     let fraction = format!("{nanos:09}");
+
     Ok(format!(
         "{}.{}{}",
         &base[..19],
@@ -144,6 +154,7 @@ fn decode(row: &Row<'_>) -> Result<StoredProgram, Failure> {
                 .map(|value| (key, value))
         })
         .collect::<Result<_, _>>()?;
+
     Ok(StoredProgram {
         id: id(raw)?,
         spec,
@@ -166,6 +177,7 @@ fn decode(row: &Row<'_>) -> Result<StoredProgram, Failure> {
         links: Vec::new(),
     })
 }
+
 impl Store {
     /// Read full committed records and link identities in one read-only snapshot.
     /// Invalid values fail decoding; missing map-set references are never omitted.
@@ -175,13 +187,16 @@ impl Store {
         let mut statement=tx.prepare("SELECT p.program_id,p.program_name,p.program_type,p.object_path,p.source_path,p.pin_path,p.attach_func,p.global_data,p.image_source,p.owner,p.description,p.license,p.gpl_compatible,p.metadata_json,p.created_at,p.updated_at,p.map_set_id,m.pin_path FROM managed_programs p LEFT JOIN map_sets m ON m.id=p.map_set_id ORDER BY p.program_id").map_err(Failure::from)?;
         let mut rows = statement.query([]).map_err(Failure::from)?;
         let mut records = Vec::new();
+
         while let Some(row) = rows.next().map_err(Failure::from)? {
             records.push(decode(row)?);
         }
+
         let mut links = tx
             .prepare("SELECT kernel_prog_id,id FROM links ORDER BY id")
             .map_err(Failure::from)?;
         let mut rows = links.query([]).map_err(Failure::from)?;
+
         while let Some(row) = rows.next().map_err(Failure::from)? {
             let program: i64 = row.get(0).map_err(Failure::from)?;
             let raw: i64 = row.get(1).map_err(Failure::from)?;
@@ -189,6 +204,7 @@ impl Store {
                 .ok()
                 .and_then(NonZeroU64::new)
                 .ok_or_else(|| invalid(program, "invalid link ID"))?;
+
             if let Some(record) = records
                 .iter_mut()
                 .find(|p| i64::from(p.id.get()) == program)
@@ -196,6 +212,7 @@ impl Store {
                 record.links.push(link);
             }
         }
+
         Ok(records)
     }
 }

@@ -15,6 +15,7 @@ mod output;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
+
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
@@ -48,6 +49,7 @@ where
         } => {
             let report =
                 bpfman_runtime::unload_tracepoint(&store, &cli.layout, id, cli.lock_timeout)?;
+
             for attempt in report.attempts() {
                 if let Err(error) = &attempt.outcome {
                     writeln!(
@@ -67,6 +69,7 @@ where
                 types: args.types,
                 application: args.application,
             };
+
             if args.output == cli::OutputFormat::Json && !args.quiet {
                 let entries = bpfman_runtime::list_program_entries(
                     &store,
@@ -81,20 +84,24 @@ where
                 output::programs(&mut io::stdout().lock(), &programs, args.quiet)?;
             }
         }
+
         cli::Command::Program {
             command: cli::ProgramCommand::Load { source },
         } => source.execute(&store, &cli.layout, cli.lock_timeout)?,
     }
+
     Ok(())
 }
 
 fn format_chain(error: &dyn std::error::Error) -> String {
     let mut text = error.to_string();
     let mut source = error.source();
+
     while let Some(cause) = source {
         text.push_str(": ");
         text.push_str(&cause.to_string());
         source = cause.source();
     }
+
     text
 }

@@ -1,7 +1,9 @@
 //! Shared owned observations for boundary tests; never an I/O interpreter.
 #![allow(dead_code, clippy::expect_used)]
+
 use bpfman_model::*;
 use std::{collections::BTreeMap, num::NonZeroU32};
+
 pub(crate) fn record() -> StoredProgram {
     StoredProgram {
         id: NonZeroU32::new(42).expect("fixture"),
@@ -24,6 +26,7 @@ pub(crate) fn record() -> StoredProgram {
         links: Vec::new(),
     }
 }
+
 pub(crate) fn kernel() -> KernelProgram {
     KernelProgram {
         id: NonZeroU32::new(42).expect("fixture"),
@@ -41,6 +44,7 @@ pub(crate) fn kernel() -> KernelProgram {
         restricted: false,
     }
 }
+
 pub(crate) fn map() -> KernelMap {
     KernelMap {
         id: 100,
@@ -56,6 +60,7 @@ pub(crate) fn map() -> KernelMap {
         frozen: false,
     }
 }
+
 pub(crate) fn program() -> ObservedProgram {
     let record = record();
     ObservedProgram {

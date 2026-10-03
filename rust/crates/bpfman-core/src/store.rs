@@ -11,6 +11,7 @@ pub fn plan_store_open<T>(observed: StoreObservation<T>, supported: i64) -> Stor
         StoreObservation::Existing { version, evidence } if version == supported => {
             StoreOpenPlan::UseExisting(evidence)
         }
+
         StoreObservation::Existing {
             version: found,
             evidence,
@@ -90,6 +91,7 @@ mod tests {
                 },
                 2,
             );
+
             assert_eq!(
                 drops.get(),
                 0,

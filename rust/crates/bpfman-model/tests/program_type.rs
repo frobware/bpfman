@@ -17,7 +17,9 @@ fn boundary_spellings_are_stable_and_round_trip() {
         "fexit",
         "lsm",
     ];
+
     assert_eq!(ProgramType::ALL.map(ProgramType::as_str), names);
+
     for (kind, name) in ProgramType::ALL.into_iter().zip(names) {
         assert_eq!(name.parse(), Ok(kind));
         assert_eq!(kind.to_string(), name);

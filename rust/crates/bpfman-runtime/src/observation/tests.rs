@@ -1,4 +1,5 @@
 #![allow(clippy::expect_used)]
+
 use super::*;
 use crate::sample;
 #[derive(Clone, Copy)]
@@ -8,16 +9,19 @@ enum Fault {
     Denied,
     Map,
 }
+
 struct Fake {
     fault: Fault,
     calls: Vec<String>,
 }
+
 impl KernelObservations for Fake {
     fn program(
         &mut self,
         id: NonZeroU32,
     ) -> Result<(KernelProgram, Option<ProgramStats>), Failure> {
         self.calls.push(format!("program:{id}"));
+
         match self.fault {
             Fault::Missing => Err(Failure::Reconciliation {
                 id,
@@ -36,8 +40,10 @@ impl KernelObservations for Fake {
             )),
         }
     }
+
     fn map(&mut self, id: u32) -> Result<KernelMap, Failure> {
         self.calls.push(format!("map:{id}"));
+
         if matches!(self.fault, Fault::Map) {
             Err(Failure::Kernel(
                 std::io::Error::from(std::io::ErrorKind::PermissionDenied).into(),
@@ -47,18 +53,21 @@ impl KernelObservations for Fake {
         }
     }
 }
+
 fn fake(fault: Fault) -> Fake {
     Fake {
         fault,
         calls: Vec::new(),
     }
 }
+
 #[test]
 fn load_and_get_keep_distinct_stats_and_pin_observations() {
     for view in [View::Load, View::Get] {
         let mut effects = fake(Fault::None);
         let layout =
             RuntimeLayout::try_from(std::path::PathBuf::from("/tmp/runtime")).expect("layout");
+
         // Two pin names share a truncated prefix; correlation must use identity.
         let pins = vec![
             bpfman_fs::ObservedMapPin {
@@ -79,7 +88,9 @@ fn load_and_get_keep_distinct_stats_and_pin_observations() {
             view,
         )
         .expect("observation");
+
         assert_eq!(effects.calls, ["program:42", "map:100"]);
+
         match view {
             View::Load => {
                 assert!(result.stats.is_none());
@@ -97,6 +108,7 @@ fn load_and_get_keep_distinct_stats_and_pin_observations() {
         }
     }
 }
+
 #[test]
 fn disappearance_and_permission_failure_are_not_interchangeable() {
     for fault in [Fault::Missing, Fault::Denied] {
@@ -117,9 +129,12 @@ fn disappearance_and_permission_failure_are_not_interchangeable() {
         } else {
             ObservationErrorKind::Unavailable
         };
+
         assert_eq!(ObservationError::from(err).kind(), expected);
         assert_eq!(effects.calls, ["program:42"]);
+
         let list = entries(&mut fake(fault), vec![sample::record()]);
+
         if matches!(fault, Fault::Missing) {
             assert!(list.expect("missing is null")[0].kernel.is_none());
         } else {
@@ -127,6 +142,7 @@ fn disappearance_and_permission_failure_are_not_interchangeable() {
         }
     }
 }
+
 #[test]
 fn failed_map_is_omitted_without_inventing_attributes() {
     let mut effects = fake(Fault::Map);
@@ -140,6 +156,7 @@ fn failed_map_is_omitted_without_inventing_attributes() {
         View::Get,
     )
     .expect("best effort map");
+
     assert_eq!(result.kernel.map_ids, Some(vec![100]));
     assert!(result.maps.is_empty());
 }

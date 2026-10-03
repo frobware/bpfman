@@ -4,6 +4,7 @@ use bpfman_model::StoredProgramSummary;
 
 mod detail;
 mod json;
+
 use crate::cli::OutputFormat;
 
 pub(super) fn programs(
@@ -15,8 +16,10 @@ pub(super) fn programs(
         for program in programs {
             writeln!(out, "{}", program.id())?;
         }
+
         return Ok(());
     }
+
     table(out, programs)
 }
 
@@ -24,18 +27,24 @@ fn table(out: &mut impl Write, programs: &[StoredProgramSummary]) -> io::Result<
     if programs.is_empty() {
         return Ok(());
     }
+
     let with_application = programs.iter().any(|p| !p.application().is_empty());
     let mut headers = vec!["PROGRAM ID"];
+
     if with_application {
         headers.push("APPLICATION");
     }
+
     headers.extend(["TYPE", "FUNCTION NAME", "LINK IDS"]);
     let mut rows = vec![headers.into_iter().map(String::from).collect::<Vec<_>>()];
+
     for program in programs {
         let mut row = vec![program.id().to_string()];
+
         if with_application {
             row.push(program.application().into());
         }
+
         let links = if program.links().is_empty() {
             "<none>".into()
         } else {
@@ -49,12 +58,15 @@ fn table(out: &mut impl Write, programs: &[StoredProgramSummary]) -> io::Result<
         row.extend([program.kind().to_string(), program.name().into(), links]);
         rows.push(row);
     }
+
     let mut widths = vec![0; rows[0].len()];
+
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row) {
             *width = (*width).max(cell.chars().count());
         }
     }
+
     for row in &rows {
         for (index, cell) in row.iter().enumerate() {
             if index + 1 == row.len() {
@@ -64,6 +76,7 @@ fn table(out: &mut impl Write, programs: &[StoredProgramSummary]) -> io::Result<
             }
         }
     }
+
     Ok(())
 }
 
@@ -86,6 +99,7 @@ pub(super) fn program(
         }
     }
 }
+
 pub(super) fn entries(
     out: &mut impl Write,
     entries: &[bpfman_model::ProgramEntry],
@@ -95,6 +109,7 @@ pub(super) fn entries(
         &serde_json::json!({"programs":entries.iter().map(json::entry).collect::<Vec<_>>()}),
     )
 }
+
 fn write_json(out: &mut impl Write, value: &serde_json::Value) -> io::Result<()> {
     serde_json::to_writer_pretty(&mut *out, value).map_err(io::Error::other)?;
     writeln!(out)

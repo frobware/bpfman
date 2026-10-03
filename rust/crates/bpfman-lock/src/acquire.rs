@@ -29,10 +29,13 @@ impl ActiveScope {
         let identity = (metadata.dev(), metadata.ino());
         ACTIVE.with(|active| {
             let mut active = active.borrow_mut();
+
             if active.contains(&identity) {
                 return Err(Failure::Reentrant.into());
             }
+
             active.push(identity);
+
             Ok(Self(identity))
         })
     }
@@ -97,8 +100,10 @@ fn acquire<T>(
     let _active = ActiveScope::enter(&file)?;
     let mut backoff = Duration::from_millis(1);
     let mut attempted = false;
+
     loop {
         check_cancelled(options)?;
+
         if attempted && !options.timeout.is_zero() && started.elapsed() >= options.timeout {
             return Err(Failure::TimedOut {
                 path: path.to_owned(),
@@ -106,7 +111,9 @@ fn acquire<T>(
             }
             .into());
         }
+
         attempted = true;
+
         match flock(&file, FlockOperation::NonBlockingLockExclusive) {
             Ok(()) => return Ok(work(WritePermit { file: &file })),
             Err(rustix::io::Errno::WOULDBLOCK | rustix::io::Errno::INTR) => {}
@@ -117,10 +124,12 @@ fn acquire<T>(
                 ));
             }
         }
+
         let wait = if options.timeout.is_zero() {
             backoff
         } else {
             let remaining = options.timeout.saturating_sub(started.elapsed());
+
             if remaining.is_zero() {
                 return Err(Failure::TimedOut {
                     path: path.to_owned(),
@@ -128,6 +137,7 @@ fn acquire<T>(
                 }
                 .into());
             }
+
             backoff.min(remaining)
         };
         std::thread::sleep(wait);
@@ -142,5 +152,6 @@ fn check_cancelled(options: AcquireOptions<'_>) -> Result<(), Error> {
     {
         return Err(Failure::Cancelled.into());
     }
+
     Ok(())
 }

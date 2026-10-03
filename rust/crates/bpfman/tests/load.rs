@@ -20,9 +20,12 @@ fn command(runtime: &Path) -> Command {
 fn assert_failure(output: Output, code: i32, diagnostic: &str) -> Result {
     assert_eq!(output.status.code(), Some(code));
     assert!(output.stdout.is_empty());
+
     let stderr = String::from_utf8(output.stderr)?;
+
     assert!(stderr.contains(diagnostic), "{stderr}");
     assert!(!stderr.contains("SQLite"));
+
     Ok(())
 }
 
@@ -30,6 +33,7 @@ fn assert_failure(output: Output, code: i32, diagnostic: &str) -> Result {
 fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
+
     for spec in [
         "",
         "xdp",
@@ -48,8 +52,10 @@ fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
             .args(["file", "not-opened.o", "--programs", spec])
             .output()?;
         assert_failure(output, 2, "error:")?;
+
         assert!(!runtime.exists());
     }
+
     for options in [
         vec!["--map-owner-id", "0"],
         vec!["--map-owner-id", "4294967296"],
@@ -66,8 +72,10 @@ fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
             .args(options)
             .output()?;
         assert_failure(output, 2, "error:")?;
+
         assert!(!runtime.exists());
     }
+
     for args in [
         vec!["file", "not-opened.o"],
         vec!["file", "", "--programs", "xdp:p"],
@@ -85,7 +93,9 @@ fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
         assert_failure(command(&runtime).args(args).output()?, 2, "error:")?;
         assert!(!runtime.exists());
     }
+
     assert_eq!(std::fs::read_dir(temporary.path())?.count(), 0);
+
     Ok(())
 }
 
@@ -93,6 +103,7 @@ fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
 fn valid_requests_fail_explicitly_without_creating_runtime_or_accessing_source() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
+
     for (source, name) in [
         ("file", "missing-object.o"),
         ("image", "example.invalid/never-pull:latest"),
@@ -122,10 +133,13 @@ fn valid_requests_fail_explicitly_without_creating_runtime_or_accessing_source()
                 1,
                 &format!("program load {source} execution is not implemented"),
             )?;
+
             assert!(!runtime.exists());
         }
     }
+
     assert_eq!(std::fs::read_dir(temporary.path())?.count(), 0);
+
     Ok(())
 }
 
@@ -133,6 +147,7 @@ fn valid_requests_fail_explicitly_without_creating_runtime_or_accessing_source()
 fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
+
     // Valid, invalid base64, missing separator, and empty username/password.
     for secret in [
         "dXNlcjpwYXNzOndvcmQ=",
@@ -144,11 +159,13 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
         for via_environment in [false, true] {
             let mut process = command(&runtime);
             process.args(["image", "example.invalid/test", "--programs", "xdp:p"]);
+
             if via_environment {
                 process.env("BPFMAN_REGISTRY_AUTH", secret);
             } else {
                 process.args(["--registry-auth", secret]);
             }
+
             let output = process.output()?;
             let code = if secret == "dXNlcjpwYXNzOndvcmQ=" {
                 1
@@ -161,19 +178,24 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
                 "registry auth"
             };
             let stderr = String::from_utf8_lossy(&output.stderr);
+
             assert!(!stderr.contains(secret), "credentials were echoed");
             assert!(!stderr.contains("pass:word"));
             assert_failure(output, code, diagnostic)?;
         }
+
         let output = command(&runtime)
             .env("BPFMAN_REGISTRY_AUTH", secret)
             .args(["image", "--help"])
             .output()?;
+
         assert!(output.status.success());
         assert!(!String::from_utf8(output.stdout)?.contains(secret));
         assert!(output.stderr.is_empty());
     }
+
     assert!(!runtime.exists());
+
     Ok(())
 }
 
@@ -189,7 +211,9 @@ fn native_object_paths_are_not_lossily_decoded_or_opened() -> Result {
         .args(["--programs", "xdp:p"])
         .output()?;
     assert_failure(output, 1, "execution is not implemented")?;
+
     assert_eq!(std::fs::read_dir(temporary.path())?.count(), 0);
+
     Ok(())
 }
 
@@ -197,6 +221,7 @@ fn native_object_paths_are_not_lossily_decoded_or_opened() -> Result {
 fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
+
     for options in [
         vec!["--programs", "tracepoint:a,tracepoint:b"],
         vec!["--programs", "tracepoint:a", "--global", "counter=00"],
@@ -212,6 +237,7 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
         )?;
         assert!(!runtime.exists());
     }
+
     Ok(())
 }
 
@@ -230,7 +256,9 @@ fn local_tracepoint_validates_source_before_runtime_creation() -> Result {
         1,
         "parse local ELF",
     )?;
+
     assert!(!runtime.exists());
+
     for format in ["text", "json"] {
         assert_failure(
             command(&runtime)
@@ -247,6 +275,8 @@ fn local_tracepoint_validates_source_before_runtime_creation() -> Result {
             "read local ELF",
         )?;
     }
+
     assert!(!runtime.exists());
+
     Ok(())
 }

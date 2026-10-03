@@ -1,5 +1,6 @@
 //! Faults exercise the production forward interpreter, not a second unload plan.
 #![allow(clippy::expect_used)]
+
 use super::*;
 use bpfman_core::UnloadKind;
 use std::{cell::Cell, collections::BTreeSet, path::PathBuf, rc::Rc};
@@ -19,11 +20,13 @@ struct Receipt {
     root: PathBuf,
     drops: Rc<Cell<usize>>,
 }
+
 impl Drop for Receipt {
     fn drop(&mut self) {
         self.drops.set(self.drops.get() + 1);
     }
 }
+
 struct Pin(Receipt);
 struct Record(Receipt);
 struct Map(Receipt);
@@ -39,6 +42,7 @@ struct Fake {
     minted: usize,
     drops: Rc<Cell<usize>>,
 }
+
 impl Fake {
     fn new(faults: BTreeSet<&'static str>) -> Self {
         Self {
@@ -52,6 +56,7 @@ impl Fake {
             drops: Rc::new(Cell::new(0)),
         }
     }
+
     fn receipt(&mut self, writer: &RuntimeWriter<'_>, name: &'static str) -> Receipt {
         self.minted += 1;
         Receipt {
@@ -60,14 +65,17 @@ impl Fake {
             drops: self.drops.clone(),
         }
     }
+
     fn observe(&mut self, name: &'static str) -> Result<(), Fault> {
         self.calls.push(name);
+
         if self.faults.contains(name) {
             Err(Fault(name))
         } else {
             Ok(())
         }
     }
+
     fn step(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -75,16 +83,19 @@ impl Fake {
     ) -> Result<(), EffectFailure<Receipt, Fault>> {
         let name = receipt.name;
         self.calls.push(name);
+
         assert!(
             self.state.contains(name),
             "successful work must never be repeated: {name}"
         );
+
         if receipt.root != writer.layout().root() {
             return Err(EffectFailure {
                 remaining: receipt,
                 cause: Fault("wrong writer"),
             });
         }
+
         match name {
             "record" | "bytecode" => assert!(!self.state.contains("pin")),
             "map-a" | "map-b" | "map-c" => assert!(!self.state.contains("record")),
@@ -98,27 +109,33 @@ impl Fake {
             }
             _ => {}
         }
+
         if self.faults.contains(name) {
             return Err(EffectFailure {
                 remaining: receipt,
                 cause: Fault(name),
             });
         }
+
         assert!(self.state.remove(name));
+
         Ok(())
     }
+
     fn residue(&self) -> BTreeSet<&'static str> {
         self.state
             .intersection(&WORK.into_iter().collect())
             .copied()
             .collect()
     }
+
     fn unrelated_preserved(&self) {
         for name in ["unrelated-program", "shared-map", "unrelated-bytecode"] {
             assert!(self.state.contains(name));
         }
     }
 }
+
 impl UnloadEffects for Fake {
     type Pin = Pin;
     type Record = Record;
@@ -127,23 +144,27 @@ impl UnloadEffects for Fake {
     type MapSet = MapSet;
     type Bytecode = Bytecode;
     type Error = Fault;
+
     fn observe_store(
         &mut self,
         writer: &RuntimeWriter<'_>,
         _id: NonZeroU32,
     ) -> Result<(Record, MapSet), Fault> {
         self.observe("observe-store")?;
+
         Ok((
             Record(self.receipt(writer, "record")),
             MapSet(self.receipt(writer, "map-set")),
         ))
     }
+
     fn observe_artifacts(
         &mut self,
         writer: &RuntimeWriter<'_>,
         _id: NonZeroU32,
     ) -> Result<ArtifactsFor<Self>, Fault> {
         self.observe("observe-artifacts")?;
+
         Ok(Artifacts {
             pin: self
                 .state
@@ -166,6 +187,7 @@ impl UnloadEffects for Fake {
                 .then(|| Bytecode(self.receipt(writer, "bytecode"))),
         })
     }
+
     fn unpin(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -176,6 +198,7 @@ impl UnloadEffects for Fake {
             cause: f.cause,
         })
     }
+
     fn delete_record(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -186,6 +209,7 @@ impl UnloadEffects for Fake {
             cause: f.cause,
         })
     }
+
     fn remove_map(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -196,6 +220,7 @@ impl UnloadEffects for Fake {
             cause: f.cause,
         })
     }
+
     fn remove_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -206,6 +231,7 @@ impl UnloadEffects for Fake {
             cause: f.cause,
         })
     }
+
     fn delete_map_set(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -216,6 +242,7 @@ impl UnloadEffects for Fake {
             cause: f.cause,
         })
     }
+
     fn remove_bytecode(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -227,27 +254,35 @@ impl UnloadEffects for Fake {
         })
     }
 }
+
 fn expected(faults: &BTreeSet<&'static str>) -> Vec<&'static str> {
     let mut calls = vec!["pin"];
+
     if faults.contains("pin") {
         return calls;
     }
+
     calls.push("record");
+
     if !faults.contains("record") {
         calls.extend(["map-a", "map-b", "map-c"]);
+
         if !["map-a", "map-b", "map-c"]
             .iter()
             .any(|n| faults.contains(n))
         {
             calls.push("directory");
+
             if !faults.contains("directory") {
                 calls.push("map-set");
             }
         }
     }
+
     calls.push("bytecode");
     calls
 }
+
 fn kind(name: &str) -> UnloadKind {
     match name {
         "pin" => UnloadKind::ProgramPin,
@@ -259,6 +294,7 @@ fn kind(name: &str) -> UnloadKind {
         _ => unreachable!(),
     }
 }
+
 fn scope(test: impl FnOnce(&RuntimeWriter<'_>)) {
     let temporary = tempfile::tempdir().expect("temp");
     let runtime = RuntimeDirectory::open_or_create(
@@ -275,6 +311,7 @@ fn scope(test: impl FnOnce(&RuntimeWriter<'_>)) {
         )
         .expect("writer");
 }
+
 #[test]
 fn every_failure_subset_preserves_order_residue_status_and_successful_history() {
     scope(|writer| {
@@ -288,6 +325,7 @@ fn every_failure_subset_preserves_order_residue_status_and_successful_history() 
             let mut fake = Fake::new(faults.clone());
             let report = run(writer, &mut fake, NonZeroU32::MIN).expect("preflight");
             let attempted = expected(&faults);
+
             assert_eq!(
                 fake.calls,
                 [
@@ -297,10 +335,12 @@ fn every_failure_subset_preserves_order_residue_status_and_successful_history() 
                 .concat(),
                 "mask {mask}"
             );
+
             let residual: BTreeSet<_> = WORK
                 .into_iter()
                 .filter(|n| !attempted.contains(n) || faults.contains(n))
                 .collect();
+
             assert_eq!(fake.residue(), residual);
             assert_eq!(report.remaining().len(), residual.len());
             assert_eq!(
@@ -308,30 +348,37 @@ fn every_failure_subset_preserves_order_residue_status_and_successful_history() 
                 faults.contains("pin") || faults.contains("record")
             );
             assert_eq!(report.attempts().len(), attempted.len());
+
             for (attempt, name) in report.attempts().iter().zip(&attempted) {
                 assert_eq!(attempt.id, WORK.iter().position(|n| n == name).expect("id"));
                 assert_eq!(attempt.kind, kind(name));
                 assert_eq!(attempt.outcome.is_err(), faults.contains(name));
+
                 if let Err(Fault(cause)) = &attempt.outcome {
                     assert_eq!(cause, name);
                 }
             }
+
             // An unchanged fault is not healed by invoking another pass.
             let before = fake.residue();
             let count = report.attempts().len();
             let report = drain(writer, &mut fake, report.retry());
+
             assert_eq!(fake.residue(), before);
             assert!(
                 report.attempts()[count..]
                     .iter()
                     .all(|a| a.outcome.is_err())
             );
+
             let prior_count = report.attempts().len();
             let prior_ids: Vec<_> = report.remaining().iter().map(|p| p.id()).collect();
+
             // The test deliberately changes the external condition before retry.
             fake.faults.clear();
             fake.calls.clear();
             let report = drain(writer, &mut fake, report.retry());
+
             assert_eq!(
                 fake.calls,
                 WORK.into_iter()
@@ -359,6 +406,7 @@ fn every_failure_subset_preserves_order_residue_status_and_successful_history() 
         }
     });
 }
+
 #[test]
 fn preflight_failures_never_mutate_committed_resources() {
     scope(|writer| {
@@ -366,6 +414,7 @@ fn preflight_failures_never_mutate_committed_resources() {
             let mut fake = Fake::new([failure].into_iter().collect());
             let before = fake.state.clone();
             let result = run(writer, &mut fake, NonZeroU32::MIN);
+
             assert!(matches!(result, Err(Fault(name)) if name == failure));
             assert_eq!(fake.state, before);
             assert!(fake.calls.iter().all(|name| name.starts_with("observe-")));
@@ -373,14 +422,18 @@ fn preflight_failures_never_mutate_committed_resources() {
         }
     });
 }
+
 #[test]
 fn absent_artifacts_require_only_store_teardown() {
     scope(|writer| {
         let mut fake = Fake::new(BTreeSet::new());
+
         for name in ["pin", "map-a", "map-b", "map-c", "directory", "bytecode"] {
             fake.state.remove(name);
         }
+
         let report = run(writer, &mut fake, NonZeroU32::MIN).expect("preflight");
+
         assert_eq!(
             fake.calls,
             ["observe-store", "observe-artifacts", "record", "map-set"]
@@ -390,6 +443,7 @@ fn absent_artifacts_require_only_store_teardown() {
         fake.unrelated_preserved();
     });
 }
+
 #[test]
 fn wrong_runtime_cannot_consume_retained_receipts() {
     scope(|writer| {
@@ -399,12 +453,16 @@ fn wrong_runtime_cannot_consume_retained_receipts() {
         fake.faults.clear();
         fake.calls.clear();
         let report = scope_return(|other| drain(other, &mut fake, report.retry()));
+
         assert_eq!(fake.calls, ["pin"]);
         assert_eq!(fake.state, original);
+
         let report = drain(writer, &mut fake, report.retry());
+
         assert!(report.remaining().is_empty());
     });
 }
+
 fn scope_return<T>(test: impl FnOnce(&RuntimeWriter<'_>) -> T) -> T {
     let temporary = tempfile::tempdir().expect("temp");
     let runtime = RuntimeDirectory::open_or_create(
@@ -432,6 +490,7 @@ fn unload_trace_distinguishes_failures_from_unattempted_dependencies() {
                 "unload with injected {faults:?}: failed={}",
                 report.failed()
             );
+
             for attempt in report.attempts() {
                 println!(
                     "  {} {:?}: {}",
@@ -444,6 +503,7 @@ fn unload_trace_distinguishes_failures_from_unattempted_dependencies() {
                     }
                 );
             }
+
             for pending in report.remaining() {
                 if !report.attempts().iter().any(|a| a.id == pending.id()) {
                     println!(
@@ -453,6 +513,7 @@ fn unload_trace_distinguishes_failures_from_unattempted_dependencies() {
                     );
                 }
             }
+
             assert!(
                 report
                     .attempts()

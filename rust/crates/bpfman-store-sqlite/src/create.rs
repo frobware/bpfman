@@ -65,12 +65,14 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
         path: path.to_owned(),
         source,
     };
+
     // Inspect the entry itself: a dangling symlink is existing state too.
     match std::fs::symlink_metadata(path) {
         Ok(_) => return Ok(()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(filesystem(error)),
     }
+
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -78,6 +80,7 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
     let temporary = tempfile::NamedTempFile::new_in(parent).map_err(filesystem)?;
     let mut connection = Connection::open(temporary.path())?;
     let tx = connection.transaction()?;
+
     // Goose creates its own migration history separately from application SQL.
     tx.execute_batch(
         "CREATE TABLE goose_db_version (
@@ -87,6 +90,7 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
          );
          INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1);",
     )?;
+
     for &(version, sql) in migrations {
         let up = sql.split_once("-- +goose Down").map_or(sql, |(up, _)| up);
         tx.execute_batch(up)?;
@@ -95,11 +99,13 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
             [version],
         )?;
     }
+
     tx.commit()?;
     connection
         .close()
         .map_err(|(_, error)| Failure::Sqlite(error))?;
     temporary.as_file().sync_all().map_err(filesystem)?;
+
     match temporary.persist_noclobber(path) {
         Ok(_) => Ok(()),
         Err(error) if error.error.kind() == io::ErrorKind::AlreadyExists => Ok(()),
@@ -117,12 +123,15 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let parent = directory.path().join("not-a-directory");
         std::fs::write(&parent, b"preserve me")?;
+
         // Exercise the adapter's error translation directly. The public API
         // cannot accept an arbitrary destination or an unrelated lock anymore.
         let error =
             Error::from(create(&parent.join("store.db"), &MIGRATIONS).expect_err("invalid parent"));
+
         assert_eq!(error.kind(), crate::ErrorKind::Unavailable);
         assert_eq!(std::fs::read(parent)?, b"preserve me");
+
         Ok(())
     }
 
@@ -134,9 +143,11 @@ mod tests {
             (1, "CREATE TABLE partial (id INTEGER);"),
             (2, "invalid SQL;"),
         ];
+
         assert!(create(&path, &migrations).is_err());
         assert!(!path.exists());
         assert_eq!(std::fs::read_dir(directory.path())?.count(), 0);
+
         Ok(())
     }
 }

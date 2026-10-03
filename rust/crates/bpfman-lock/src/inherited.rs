@@ -27,6 +27,7 @@ impl InheritedWriteLock {
         let file = std::fs::File::from(fd);
         flock(&file, FlockOperation::NonBlockingLockExclusive)
             .map_err(|e| io_error("verify inherited writer lock descriptor", e))?;
+
         Ok(Self { file })
     }
 
@@ -38,6 +39,7 @@ impl InheritedWriteLock {
         work: impl for<'lock> FnOnce(WritePermit<'lock>) -> T,
     ) -> Result<T, Error> {
         let _active = ActiveScope::enter(&self.file)?;
+
         Ok(work(WritePermit { file: &self.file }))
     }
 }

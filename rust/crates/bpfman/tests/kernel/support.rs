@@ -9,6 +9,7 @@ use std::{
     process::{Command, Output},
     time::Duration,
 };
+
 pub(super) const TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const NAME: &str = "tracepoint_kill_recorder";
 pub(super) const SELECTION: &str = "tracepoint:tracepoint_kill_recorder";
@@ -45,6 +46,7 @@ impl Context {
             fs::read_link("/proc/1/ns/mnt").expect("host namespace"),
             "run via the Make target in a private mount namespace"
         );
+
         let temporary = tempfile::tempdir().expect("test runtime");
         let layout = RuntimeLayout::try_from(temporary.path().join("runtime")).expect("layout");
         Self {
@@ -83,6 +85,7 @@ impl Context {
 
     pub(super) fn run(&self, binary: &Path, args: &[&str], success: bool) -> Output {
         let output = self.command(binary, args).output().expect("CLI process");
+
         assert_eq!(
             output.status.code(),
             Some(if success { 0 } else { 1 }),
@@ -90,9 +93,11 @@ impl Context {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+
         if !success {
             assert!(output.stdout.is_empty());
         }
+
         output
     }
 
@@ -147,11 +152,13 @@ impl Context {
 
     pub(super) fn no_artifacts(&self) {
         let root = self.layout.root();
+
         assert!(
             names(&root.join("fs"))
                 .iter()
                 .all(|s| !s.starts_with("prog_"))
         );
+
         for path in ["fs/maps", "programs", ".staging"] {
             assert!(names(&root.join(path)).is_empty(), "residue in {path}");
         }
@@ -169,6 +176,7 @@ impl Drop for Context {
             .is_some_and(|(a, b)| a.dev() != b.dev())
         {
             let result = Command::new("umount").arg(&mount).status();
+
             if !std::thread::panicking() {
                 assert!(result.expect("umount").success());
             }

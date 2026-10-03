@@ -53,6 +53,7 @@ impl<P, M, B, E> LoadRollback<P, M, B, E> {
             });
         };
         let kind = instruction.kind();
+
         match instruction {
             LoadCompensation::RemoveBytecode(receipt) => RollbackStep::RemoveBytecode {
                 receipt,
@@ -100,6 +101,7 @@ impl<R, P, M, B, E> CompensationContinuation<R, P, M, B, E> {
                     id: self.id,
                     instruction: (self.wrap)(remaining),
                 });
+
                 Err(cause)
             }
         };

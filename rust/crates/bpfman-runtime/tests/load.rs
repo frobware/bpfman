@@ -46,6 +46,7 @@ struct FakeError {
     reason: &'static str,
     drops: Rc<Cell<usize>>,
 }
+
 impl Drop for FakeError {
     fn drop(&mut self) {
         self.drops.set(self.drops.get() + 1);
@@ -57,11 +58,13 @@ struct Receipt {
     authority: Rc<()>,
     drops: Rc<RefCell<Vec<Resource>>>,
 }
+
 impl Drop for Receipt {
     fn drop(&mut self) {
         self.drops.borrow_mut().push(self.resource);
     }
 }
+
 struct ProgramPin(Receipt);
 struct MapPin(Receipt);
 struct Bytecode(Receipt);
@@ -115,6 +118,7 @@ impl Fake {
 
     fn check(&mut self, event: Event) -> Result<(), FakeError> {
         self.events.push(event);
+
         if self.faults.contains(&event) {
             Err(self.error(event, "injected failure"))
         } else {
@@ -134,10 +138,12 @@ impl Fake {
     fn load(&mut self, spec: &ProgramSpec) -> Result<(ProgramPin, Vec<MapPin>), KernelFailure> {
         assert_eq!(spec.kind(), ProgramType::Tracepoint);
         assert_eq!(spec.name().as_str(), "tracepoint_kill_recorder");
+
         let mut acquired = KernelAcquisitions {
             program_pin: None,
             map_pins: Vec::new(),
         };
+
         for event in [Event::Load, Event::PinProgram] {
             if let Err(cause) = self.check(event) {
                 return Err(EffectFailure {
@@ -146,19 +152,24 @@ impl Fake {
                 });
             }
         }
+
         let program = ProgramPin(self.acquire(Resource::Program(42)));
+
         for id in [101, 102, 103] {
             if let Err(cause) = self.check(Event::PinMap(id)) {
                 acquired.program_pin = Some(program);
+
                 return Err(EffectFailure {
                     remaining: acquired,
                     cause,
                 });
             }
+
             acquired
                 .map_pins
                 .push(MapPin(self.acquire(Resource::Map(id))));
         }
+
         Ok((program, acquired.map_pins))
     }
 
@@ -168,7 +179,9 @@ impl Fake {
     ) -> Result<Bytecode, EffectFailure<Vec<Bytecode>, FakeError>> {
         assert_eq!(program.0.resource, Resource::Program(42));
         assert!(self.resources.contains(&program.0.resource));
+
         let mut staged = Bytecode(self.acquire(Resource::Staging(42)));
+
         if let Err(cause) = self.check(Event::Publish) {
             // Forward failure returns staging ownership rather than hiding a
             // potentially failing local cleanup in a defer/Drop implementation.
@@ -177,9 +190,11 @@ impl Fake {
                 cause,
             });
         }
+
         assert!(self.resources.remove(&Resource::Staging(42)));
         assert!(self.resources.insert(Resource::Bytecode(42)));
         staged.0.resource = Resource::Bytecode(42);
+
         Ok(staged)
     }
 
@@ -190,13 +205,16 @@ impl Fake {
         assert_eq!(spec.kind(), ProgramType::Tracepoint);
         assert!(self.resources.contains(&program.0.resource));
         assert_eq!(maps.len(), 3);
+
         for map in maps {
             assert!(self.resources.contains(&map.0.resource));
         }
+
         assert_eq!(bytecode.0.resource, Resource::Bytecode(42));
         assert!(self.resources.contains(&bytecode.0.resource));
         self.check(Event::Persist)?;
         assert!(self.records.insert(42));
+
         Ok(42)
     }
 
@@ -205,17 +223,21 @@ impl Fake {
             !self.records.contains(&42),
             "must not roll back a committed load"
         );
+
         let event = Event::Remove(receipt.resource);
         self.check(event)?;
+
         if writer.database_path() != self.runtime
             || !Rc::ptr_eq(&receipt.authority, &self.authority)
         {
             return Err(self.error(event, "wrong runtime authority"));
         }
+
         assert!(
             self.resources.remove(&receipt.resource),
             "double removal or wrong ownership"
         );
+
         Ok(())
     }
 
@@ -239,6 +261,7 @@ impl LoadCleanup for Fake {
         match self.remove(writer, &receipt.0) {
             Ok(()) => {
                 drop(receipt);
+
                 Ok(())
             }
             Err(cause) => Err(EffectFailure {
@@ -256,6 +279,7 @@ impl LoadCleanup for Fake {
         match self.remove(writer, &receipt.0) {
             Ok(()) => {
                 drop(receipt);
+
                 Ok(())
             }
             Err(cause) => Err(EffectFailure {
@@ -273,6 +297,7 @@ impl LoadCleanup for Fake {
         match self.remove(writer, &receipt.0) {
             Ok(()) => {
                 drop(receipt);
+
                 Ok(())
             }
             Err(cause) => Err(EffectFailure {
@@ -317,6 +342,7 @@ fn interpret_forward(fake: &mut Fake) -> Forward {
         Err(failure) => return Forward::Rollback(publish.failed(failure)),
     };
     let persist = publish.published(bytecode);
+
     match fake.persist(persist.inputs()) {
         Ok(stored) => Forward::Complete(persist.committed(stored)),
         Err(error) => Forward::Rollback(persist.failed(error)),
@@ -356,6 +382,7 @@ fn committed_load_transfers_receipts_without_scheduling_compensation() {
             Forward::Complete(loaded) => loaded,
             Forward::Rollback(_) => unreachable!("success expected"),
         };
+
         assert_eq!(loaded.spec.kind(), ProgramType::Tracepoint);
         assert_eq!(loaded.program_pin.0.resource, Resource::Program(42));
         assert_eq!(loaded.map_pins.len(), 3);
@@ -420,6 +447,7 @@ fn every_forward_failure_returns_exact_partial_acquisitions_for_cleanup() {
         with_writer(|writer| {
             let mut fake = Fake::new(writer, &[failure]);
             let plan = failed_load(&mut fake);
+
             assert_eq!(
                 plan.pending()
                     .map(|p| target(p.instruction()))
@@ -427,8 +455,10 @@ fn every_forward_failure_returns_exact_partial_acquisitions_for_cleanup() {
                 expected
             );
             assert!(fake.receipt_drops.borrow().is_empty());
+
             let before = fake.events.len();
             let report = compensate_load(writer, &mut fake, plan);
+
             assert_eq!(
                 fake.events[before..],
                 expected
@@ -453,6 +483,7 @@ fn every_forward_failure_returns_exact_partial_acquisitions_for_cleanup() {
 #[test]
 fn every_combination_of_cleanup_failures_runs_the_entire_pass_and_retries_only_residue() {
     let actions = full_cleanup();
+
     // Five instructions: every subset, including all succeeding/all failing.
     for mask in 0u32..(1 << actions.len()) {
         with_writer(|writer| {
@@ -469,6 +500,7 @@ fn every_combination_of_cleanup_failures_runs_the_entire_pass_and_retries_only_r
             let plan = failed_load(&mut fake);
             let before = fake.events.len();
             let report = compensate_load(writer, &mut fake, plan);
+
             assert_eq!(
                 fake.events[before..],
                 actions
@@ -486,13 +518,16 @@ fn every_combination_of_cleanup_failures_runs_the_entire_pass_and_retries_only_r
                     .collect::<Vec<_>>(),
                 failures
             );
+
             for (i, attempt) in report.attempts().iter().enumerate() {
                 assert_eq!(attempt.id, i);
                 assert_eq!(attempt.outcome.is_err(), mask & (1 << i) != 0);
+
                 if let Err(error) = &attempt.outcome {
                     assert_eq!(error.event, Event::Remove(actions[i]));
                 }
             }
+
             assert_eq!(
                 fake.receipt_drops.borrow().len(),
                 actions.len() - failures.len()
@@ -509,15 +544,19 @@ fn every_combination_of_cleanup_failures_runs_the_entire_pass_and_retries_only_r
             // Recovery is explicitly a second pass: the first pass did not
             // retry inline or skip a later pin. Prior errors remain in history.
             fake.faults.clear();
+
             let plan = report.retry();
+
             assert_eq!(
                 plan.pending()
                     .map(|p| (p.id(), target(p.instruction())))
                     .collect::<Vec<_>>(),
                 failures
             );
+
             let before = fake.events.len();
             let report = compensate_load(writer, &mut fake, plan);
+
             assert_eq!(
                 fake.events[before..],
                 failures
@@ -554,9 +593,11 @@ fn repeated_total_failure_is_bounded_and_keeps_error_history_and_receipts() {
             .collect();
         let mut fake = Fake::new(writer, &faults);
         let mut plan = failed_load(&mut fake);
+
         for pass in 1..=3 {
             let before = fake.events.len();
             let report = compensate_load(writer, &mut fake, plan);
+
             assert_eq!(fake.events.len() - before, actions.len());
             assert_eq!(report.attempts().len(), pass * actions.len());
             assert_eq!(report.remaining().len(), actions.len());
@@ -564,9 +605,11 @@ fn repeated_total_failure_is_bounded_and_keeps_error_history_and_receipts() {
             assert_eq!(fake.error_drops.get(), 0);
             plan = report.retry();
         }
+
         fake.faults.clear();
         let report = compensate_load(writer, &mut fake, plan);
         fake.assert_clean();
+
         assert_eq!(report.attempts().len(), 4 * actions.len());
         assert_eq!(report.primary().event, Event::Persist);
         assert_eq!(fake.error_drops.get(), 0);
@@ -584,11 +627,14 @@ fn partial_publication_and_partial_kernel_load_also_survive_cleanup_failure() {
             let owned: Vec<_> = plan.pending().map(|p| target(p.instruction())).collect();
             fake.faults.extend(owned.iter().copied().map(Event::Remove));
             let report = compensate_load(writer, &mut fake, plan);
+
             assert_eq!(report.remaining().len(), owned.len());
             assert_eq!(report.attempts().len(), owned.len());
             assert!(fake.receipt_drops.borrow().is_empty());
             fake.faults.clear();
+
             let report = compensate_load(writer, &mut fake, report.retry());
+
             assert!(report.remaining().is_empty());
             assert_eq!(report.primary().event, failure);
             fake.assert_clean();
@@ -604,6 +650,7 @@ fn wrong_runtime_failure_preserves_all_receipts_for_the_right_runtime() {
         let resources = fake.resources.clone();
         with_writer(|other_writer| {
             let report = compensate_load(other_writer, &mut fake, plan);
+
             assert_eq!(report.remaining().len(), 5);
             assert_eq!(report.attempts().len(), 5);
             assert!(
@@ -614,7 +661,9 @@ fn wrong_runtime_failure_preserves_all_receipts_for_the_right_runtime() {
             );
             assert_eq!(fake.resources, resources);
             assert!(fake.receipt_drops.borrow().is_empty());
+
             let report = compensate_load(writer, &mut fake, report.retry());
+
             assert!(report.remaining().is_empty());
             fake.assert_clean();
         });
@@ -640,6 +689,7 @@ fn partial_kernel_residue_can_contain_only_maps() {
             cause: fake.error(Event::PinProgram, "injected failure"),
         });
         let report = compensate_load(writer, &mut fake, plan);
+
         assert_eq!(
             fake.events,
             [
@@ -653,7 +703,9 @@ fn partial_kernel_residue_can_contain_only_maps() {
             Resource::Map(102)
         );
         fake.faults.clear();
+
         let report = compensate_load(writer, &mut fake, report.retry());
+
         assert!(report.remaining().is_empty());
         fake.assert_clean();
     });
@@ -674,9 +726,12 @@ fn publication_failure_before_staging_schedules_no_bytecode_removal() {
             remaining: Vec::<Bytecode>::new(),
             cause: fake.error(Event::Publish, "injected failure"),
         });
+
         assert_eq!(plan.pending().len(), 4);
+
         let before = fake.events.len();
         let report = compensate_load(writer, &mut fake, plan);
+
         assert_eq!(
             fake.events[before..],
             full_cleanup()[1..]

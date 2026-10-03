@@ -56,6 +56,7 @@ fn summary(p: &StoredProgram) -> StoredProgramSummary {
 impl State {
     fn enter(&mut self, call: &'static str) -> Result<(), Error> {
         self.calls.push(call);
+
         match self.faults.get(call) {
             Some(kind) => Err(error(*kind, call)),
             None => Ok(()),
@@ -98,6 +99,7 @@ impl Memory {
         if writer.identity().expect("runtime identity") != self.root {
             return Err(error(ErrorKind::InvalidData, "wrong runtime"));
         }
+
         Ok(())
     }
 
@@ -116,12 +118,14 @@ impl Memory {
         state: &State,
     ) -> Result<(), Error> {
         self.authority(writer)?;
+
         if receipt.root != self.root
             || !Arc::ptr_eq(&receipt.owner, &self.state)
             || receipt.generation != state.generation
         {
             return Err(error(ErrorKind::InvalidData, "foreign or stale receipt"));
         }
+
         Ok(())
     }
 }
@@ -132,6 +136,7 @@ impl OpenStore for Memory {
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self, Error> {
         self.authority(writer)?;
         self.state.lock().expect("state").enter("open")?;
+
         Ok(self.clone())
     }
 }
@@ -140,12 +145,14 @@ impl ProgramReader for Memory {
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         let mut s = self.state.lock().expect("state");
         s.enter("summaries")?;
+
         Ok(s.program.iter().map(summary).collect())
     }
 
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error> {
         let mut s = self.state.lock().expect("state");
         s.enter("records")?;
+
         Ok(s.program.iter().cloned().collect())
     }
 }
@@ -159,9 +166,11 @@ impl CommitLoad for Memory {
         self.authority(writer)?;
         let mut s = self.state.lock().expect("state");
         s.enter("commit")?;
+
         if s.program.is_some() || s.map_set {
             return Err(error(ErrorKind::InvalidData, "already committed"));
         }
+
         let mut p = sample::record();
         p.id = record.id;
         p.map_set = record.id;
@@ -194,6 +203,7 @@ impl CommitLoad for Memory {
         s.program = Some(p);
         s.map_set = true;
         s.generation += 1;
+
         Ok(result)
     }
 }
@@ -211,13 +221,16 @@ impl UnloadStore for Memory {
         let mut s = self.state.lock().expect("state");
         s.enter("observe")?;
         let Some(p) = &s.program else { return Ok(None) };
+
         if p.id != id {
             return Ok(None);
         }
+
         if !p.links.is_empty() || p.map_set != p.id || !matches!(p.spec, ProgramSpec::Tracepoint(_))
         {
             return Err(error(ErrorKind::Unsupported, "unsupported relationships"));
         }
+
         Ok(Some((
             ProgramReceipt(self.receipt(s.generation)),
             MapSetReceipt(self.receipt(s.generation)),
@@ -233,10 +246,13 @@ impl UnloadStore for Memory {
             let mut s = self.state.lock().expect("state");
             s.enter("delete program")?;
             self.validate(writer, &receipt.0, &s)?;
+
             if s.program.is_none() {
                 return Err(error(ErrorKind::InvalidData, "program disappeared"));
             }
+
             s.program = None;
+
             Ok(())
         })();
         result.map_err(|cause| EffectFailure {
@@ -254,13 +270,16 @@ impl UnloadStore for Memory {
             let mut s = self.state.lock().expect("state");
             s.enter("delete map set")?;
             self.validate(writer, &receipt.0, &s)?;
+
             if s.program.is_some() || !s.map_set {
                 return Err(error(
                     ErrorKind::InvalidData,
                     "map set still used or absent",
                 ));
             }
+
             s.map_set = false;
+
             Ok(())
         })();
         result.map_err(|cause| EffectFailure {

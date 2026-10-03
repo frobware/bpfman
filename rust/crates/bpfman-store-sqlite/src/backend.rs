@@ -19,6 +19,7 @@ impl OpenStore for Backend {
                 evidence: store,
             },
         };
+
         match plan_store_open(observed, crate::SCHEMA_VERSION) {
             StoreOpenPlan::Create => {
                 crate::create_if_missing(writer)?;

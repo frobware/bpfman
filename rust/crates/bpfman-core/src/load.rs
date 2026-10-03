@@ -34,9 +34,11 @@ impl LoadProgram {
         failure: EffectFailure<KernelAcquisitions<P, M>, E>,
     ) -> LoadRollback<P, M, B, E> {
         let mut instructions = Vec::new();
+
         if let Some(pin) = failure.remaining.program_pin {
             instructions.push(LoadCompensation::RemoveProgramPin(pin));
         }
+
         instructions.extend(
             failure
                 .remaining

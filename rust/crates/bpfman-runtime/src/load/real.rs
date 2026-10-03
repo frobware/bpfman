@@ -1,4 +1,5 @@
 //! Production adapters for the injectable load orchestration.
+
 use super::{LoadEffects, effects::Inputs};
 use crate::{LoadCleanup, load_error::LoadCause};
 use bpfman_core::EffectFailure;
@@ -19,6 +20,7 @@ impl<S> LoadCleanup for Effects<'_, S> {
     type MapPin = MapPin;
     type Bytecode = Bytecode;
     type Error = LoadCause;
+
     fn remove_bytecode(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -26,6 +28,7 @@ impl<S> LoadCleanup for Effects<'_, S> {
     ) -> Result<(), EffectFailure<Bytecode, LoadCause>> {
         writer.remove_bytecode(receipt).map_err(map_failure)
     }
+
     fn remove_program_pin(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -33,6 +36,7 @@ impl<S> LoadCleanup for Effects<'_, S> {
     ) -> Result<(), EffectFailure<ProgramPin, LoadCause>> {
         writer.remove_program_pin(receipt).map_err(map_failure)
     }
+
     fn remove_map_pin(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -50,9 +54,11 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, LoadCause> {
         crate::store::open_store(self.0, writer).map_err(LoadCause::Open)
     }
+
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, LoadCause> {
         writer.prepare_load().map_err(LoadCause::from)
     }
+
     fn load_kernel(
         &mut self,
         _writer: &RuntimeWriter<'_>,
@@ -60,6 +66,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     ) -> Result<Self::Kernel, LoadCause> {
         input.object.load(input.name)
     }
+
     fn pin_program(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -75,9 +82,11 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
             })?;
         prepared.pin_program(writer, program).map_err(map_failure)
     }
+
     fn program_id(pin: &ProgramPin) -> NonZeroU32 {
         pin.id()
     }
+
     fn create_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -88,6 +97,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
             .create_map_directory(writer, id)
             .map_err(map_failure)
     }
+
     fn pin_map(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -101,6 +111,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
         })?;
         directory.pin_map(writer, name, map).map_err(map_failure)
     }
+
     fn publish(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -119,6 +130,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
             .publish_bytecode(id, &input.object.bytes, &provenance)
             .map_err(map_failure)
     }
+
     fn persist(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -140,8 +152,10 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
             .map_err(LoadCause::from)
     }
 }
+
 impl<S> super::CleanupEffects for Effects<'_, S> {
     type MapDirectory = MapDirectory;
+
     fn remove_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,

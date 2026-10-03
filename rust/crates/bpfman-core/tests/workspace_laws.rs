@@ -20,6 +20,7 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman", 5),
 ];
 const PURE: &[&str] = &["bpfman-model", "bpfman-core"];
+
 // No external normal dependencies are admitted to the pure crates. In
 // particular Aya's std-enabled thiserror must not unify into their closure.
 const PURE_EXTERNAL: &[&str] = &[];
@@ -40,6 +41,7 @@ fn metadata() -> &'static Value {
             .arg(manifest)
             .output()
             .expect("run metadata for rust/Cargo.toml");
+
         assert!(
             output.status.success(),
             "{}",
@@ -91,11 +93,14 @@ fn workspace_members_are_registered_and_documented() {
         .join("../..")
         .canonicalize()
         .expect("workspace root");
+
     assert_eq!(Path::new(string(&meta["workspace_root"])), root);
+
     let names: HashSet<_> = array(&meta["workspace_members"])
         .iter()
         .map(|id| string(&package(meta, id)["name"]))
         .collect();
+
     assert_eq!(names, TIERS.iter().map(|(name, _)| *name).collect());
 
     let readme = std::fs::read_to_string(root.join("README.md")).expect("workspace README");
@@ -104,10 +109,12 @@ fn workspace_members_are_registered_and_documented() {
         .filter_map(|line| line.strip_prefix("| `"))
         .filter_map(|line| line.split('`').next())
         .collect();
+
     assert_eq!(
         names, documented,
         "document each implemented crate exactly once in the registry"
     );
+
     for &(name, tier) in TIERS {
         assert!(
             readme.contains(&format!("| `{name}` | {tier} |")),
@@ -122,22 +129,26 @@ fn no_local_dependency_can_reach_legacy_rust() {
     let root = Path::new(string(&meta["workspace_root"]))
         .canonicalize()
         .expect("workspace root");
+
     for p in array(&meta["packages"]) {
         if p["source"].is_null() {
             let manifest = Path::new(string(&p["manifest_path"]))
                 .canonicalize()
                 .expect("local manifest");
+
             assert!(
                 manifest.starts_with(&root),
                 "local package outside rust/: {}",
                 manifest.display()
             );
         }
+
         // Also inspect declared paths: this includes optional, target-specific,
         // build and development dependencies, even if not compiled here.
         for dep in array(&p["dependencies"]) {
             if let Some(path) = dep["path"].as_str() {
                 let path = Path::new(path).canonicalize().expect("dependency path");
+
                 assert!(
                     path.starts_with(&root),
                     "dependency outside rust/: {}",
@@ -152,11 +163,14 @@ fn no_local_dependency_can_reach_legacy_rust() {
 fn normal_workspace_edges_point_strictly_downward() {
     let meta = metadata();
     let members = array(&meta["workspace_members"]);
+
     for id in members {
         let from = string(&package(meta, id)["name"]);
+
         for dep in normal_dependencies(meta, id) {
             if members.contains(dep) {
                 let to = string(&package(meta, dep)["name"]);
+
                 assert!(tier(from) > tier(to), "{from} must not depend on {to}");
             }
         }
@@ -166,6 +180,7 @@ fn normal_workspace_edges_point_strictly_downward() {
 #[test]
 fn runtime_and_store_contract_cannot_reach_a_persistence_backend() {
     let meta = metadata();
+
     for name in ["bpfman-runtime", "bpfman-store"] {
         let start = array(&meta["workspace_members"])
             .iter()
@@ -173,11 +188,14 @@ fn runtime_and_store_contract_cannot_reach_a_persistence_backend() {
             .expect("member");
         let mut pending = vec![start];
         let mut seen = HashSet::new();
+
         while let Some(id) = pending.pop() {
             if !seen.insert(string(id)) {
                 continue;
             }
+
             let dependency = string(&package(meta, id)["name"]);
+
             assert!(
                 !matches!(
                     dependency,
@@ -193,10 +211,13 @@ fn runtime_and_store_contract_cannot_reach_a_persistence_backend() {
 #[test]
 fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
     let meta = metadata();
+
     for id in array(&meta["workspace_members"]) {
         let name = string(&package(meta, id)["name"]);
+
         for dep in normal_dependencies(meta, id) {
             let dependency = string(&package(meta, dep)["name"]);
+
             match dependency {
                 "rustix" => assert!(
                     matches!(name, "bpfman-lock" | "bpfman-fs"),
@@ -231,6 +252,7 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
 #[test]
 fn pure_closures_have_only_reviewed_dependencies_and_features() {
     let meta = metadata();
+
     for name in PURE {
         let start = array(&meta["workspace_members"])
             .iter()
@@ -239,26 +261,33 @@ fn pure_closures_have_only_reviewed_dependencies_and_features() {
         let features = package(meta, start)["features"]
             .as_object()
             .expect("declared features");
+
         assert!(
             features.is_empty(),
             "{name}: review new features before admitting them"
         );
+
         let mut pending = vec![start];
         let mut seen = HashSet::new();
+
         while let Some(id) = pending.pop() {
             if !seen.insert(string(id)) {
                 continue;
             }
+
             let dep = string(&package(meta, id)["name"]);
+
             assert!(
                 PURE.contains(&dep) || PURE_EXTERNAL.contains(&dep),
                 "{name} reaches unreviewed {dep}"
             );
+
             if dep == "thiserror" {
                 let node = array(&meta["resolve"]["nodes"])
                     .iter()
                     .find(|node| node["id"] == *id)
                     .expect("resolved thiserror node");
+
                 assert!(
                     !array(&node["features"])
                         .iter()
@@ -266,6 +295,7 @@ fn pure_closures_have_only_reviewed_dependencies_and_features() {
                     "pure errors must not enable thiserror's std feature"
                 );
             }
+
             pending.extend(normal_dependencies(meta, id));
         }
     }
@@ -288,6 +318,7 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
             .map(str::to_owned)
             .collect()
     };
+
     for category in ["rust", "clippy"] {
         let expected = section(&workspace, &format!("[workspace.lints.{category}]"));
         let actual = section(&kernel, &format!("[lints.{category}]"));
@@ -301,17 +332,22 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
                 }
             })
             .collect();
+
         assert_eq!(
             actual, expected,
             "kernel must retain all other workspace gates"
         );
     }
+
     let syscall = std::fs::read_to_string(root.join("crates/bpfman-kernel/src/syscall.rs"))
         .expect("syscall boundary");
+
     assert!(syscall.contains("#![allow(unsafe_code)]"));
+
     for module in ["lib.rs", "observe.rs"] {
         let source = std::fs::read_to_string(root.join("crates/bpfman-kernel/src").join(module))
             .expect("safe observation module");
+
         assert!(!source.contains("allow(unsafe_code)"));
     }
 }

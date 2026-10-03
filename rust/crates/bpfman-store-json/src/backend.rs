@@ -10,6 +10,7 @@ use std::num::NonZeroU32;
 fn read(file: &StoreSnapshot) -> Result<(Vec<u8>, State), Failure> {
     let bytes = file.read()?.ok_or(Failure::Invalid("store disappeared"))?;
     let state = State::decode(&bytes)?;
+
     Ok((bytes, state))
 }
 
@@ -21,6 +22,7 @@ fn publish(
 ) -> Result<(), Failure> {
     let bytes = serde_json::to_vec_pretty(state)?;
     writer.publish_store_snapshot(file, previous, &bytes)?;
+
     Ok(())
 }
 
@@ -29,6 +31,7 @@ impl OpenStore for Backend {
 
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Reader, Error> {
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
+
         match file.read().map_err(Failure::from)? {
             Some(bytes) => {
                 State::decode(&bytes)?;
@@ -46,6 +49,7 @@ impl OpenStore for Backend {
 impl ProgramReader for Reader {
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         let (_, state) = read(&self.file)?;
+
         Ok(state.programs.iter().map(|row| row.summary()).collect())
     }
 
@@ -68,12 +72,14 @@ impl CommitLoad for Backend {
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
         let (previous, mut state) = read(&file)?;
         let summary = state.insert(record)?;
+
         // Ensure every record can be observed before transferring ownership.
         for row in &state.programs {
             row.record(writer.layout())?;
         }
 
         publish(writer, &file, Some(&previous), &state)?;
+
         Ok(summary)
     }
 }
@@ -129,6 +135,7 @@ impl UnloadStore for Backend {
 
             let file = writer.open_store_snapshot()?;
             let (previous, mut state) = read(&file)?;
+
             if state.identity != receipt.store {
                 return Err(Failure::Invalid("store identity changed"));
             }
@@ -160,6 +167,7 @@ impl UnloadStore for Backend {
 
             let file = writer.open_store_snapshot()?;
             let (previous, mut state) = read(&file)?;
+
             if state.identity != receipt.store
                 || state.programs.iter().any(|row| row.id == receipt.row.id)
             {

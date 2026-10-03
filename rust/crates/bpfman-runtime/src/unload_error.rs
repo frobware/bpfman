@@ -12,25 +12,30 @@ pub(super) enum Cause {
     #[error(transparent)]
     Store(#[from] bpfman_store::Error),
 }
+
 pub(super) enum Failure<S: UnloadStore> {
     Before(UnloadCause),
     Incomplete(Box<UnloadReport<S>>),
 }
+
 impl From<Cause> for UnloadCause {
     fn from(cause: Cause) -> Self {
         Self { cause }
     }
 }
+
 impl From<bpfman_fs::Error> for UnloadCause {
     fn from(cause: bpfman_fs::Error) -> Self {
         Cause::Filesystem(cause).into()
     }
 }
+
 impl From<bpfman_store::Error> for UnloadCause {
     fn from(cause: bpfman_store::Error) -> Self {
         Cause::Store(cause).into()
     }
 }
+
 impl<S: UnloadStore> From<UnloadCause> for UnloadError<S> {
     fn from(cause: UnloadCause) -> Self {
         Self {
@@ -38,6 +43,7 @@ impl<S: UnloadStore> From<UnloadCause> for UnloadError<S> {
         }
     }
 }
+
 impl UnloadCause {
     /// Application category; concrete backend diagnostics remain in the source chain.
     pub fn kind(&self) -> UnloadErrorKind {
@@ -56,15 +62,18 @@ impl UnloadCause {
         }
     }
 }
+
 impl<S: UnloadStore> UnloadReport<S> {
     /// All attempted effects, including successful ones and previous retry passes.
     pub fn attempts(&self) -> &[UnloadAttempt<UnloadCause>] {
         self.report.attempts()
     }
+
     /// Retained work, including dependencies that could not yet be attempted.
     pub fn unresolved(&self) -> usize {
         self.report.remaining().len()
     }
+
     /// Perform one caller-budgeted pass over retained cleanup only, preserving history.
     /// Requires writer authority for the same runtime. Does not reobserve by ID.
     pub fn retry_cleanup(
@@ -79,12 +88,14 @@ impl<S: UnloadStore> UnloadReport<S> {
         ))
     }
 }
+
 impl<S: UnloadStore> UnloadError<S> {
     /// Backend-independent failure category.
     pub fn kind(&self) -> UnloadErrorKind {
         self.primary()
             .map_or(UnloadErrorKind::Unavailable, UnloadCause::kind)
     }
+
     /// Progress if teardown started; preflight errors have no cleanup report.
     pub fn report(&self) -> Option<&UnloadReport<S>> {
         match &self.failure {
@@ -92,6 +103,7 @@ impl<S: UnloadStore> UnloadError<S> {
             Failure::Incomplete(report) => Some(report),
         }
     }
+
     /// Explicitly retry retained work. Preflight failures require a fresh request.
     pub fn retry(self, store: &S, writer: &RuntimeWriter<'_>) -> Result<UnloadReport<S>, Self> {
         match self.failure {
@@ -99,6 +111,7 @@ impl<S: UnloadStore> UnloadError<S> {
             Failure::Incomplete(report) => report.retry_cleanup(store, writer),
         }
     }
+
     fn primary(&self) -> Option<&UnloadCause> {
         match &self.failure {
             Failure::Before(cause) => Some(cause),
@@ -110,6 +123,7 @@ impl<S: UnloadStore> UnloadError<S> {
         }
     }
 }
+
 impl<S: UnloadStore> fmt::Debug for UnloadReport<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UnloadReport")
@@ -118,20 +132,24 @@ impl<S: UnloadStore> fmt::Debug for UnloadReport<S> {
             .finish()
     }
 }
+
 impl<S: UnloadStore> fmt::Debug for UnloadError<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
 }
+
 impl<S: UnloadStore> fmt::Display for UnloadError<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unload program")?;
+
         if let Some(report) = self.report() {
             write!(
                 f,
                 "; {} unresolved teardown instructions",
                 report.unresolved()
             )?;
+
             for attempt in report.attempts() {
                 if let Err(error) = &attempt.outcome {
                     if self
@@ -140,8 +158,10 @@ impl<S: UnloadStore> fmt::Display for UnloadError<S> {
                     {
                         continue; // the original failure is rendered by Error::source
                     }
+
                     write!(f, "; {:?}: {error}", attempt.kind)?;
                     let mut source = std::error::Error::source(error);
+
                     while let Some(cause) = source {
                         write!(f, ": {cause}")?;
                         source = cause.source();
@@ -149,9 +169,11 @@ impl<S: UnloadStore> fmt::Display for UnloadError<S> {
                 }
             }
         }
+
         Ok(())
     }
 }
+
 impl<S: UnloadStore> std::error::Error for UnloadError<S> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.primary().map(|e| e as _)

@@ -1,18 +1,23 @@
 //! Real filesystem and store contracts for local tracepoint loading.
 #![allow(clippy::expect_used)]
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_lock::AcquireOptions;
 use std::{num::NonZeroU32, os::unix::fs::symlink, time::Duration};
+
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+
 fn options() -> AcquireOptions<'static> {
     AcquireOptions {
         timeout: Duration::from_secs(1),
         cancelled: None,
     }
 }
+
 fn id() -> NonZeroU32 {
     NonZeroU32::new(42).expect("nonzero fixture")
 }
+
 fn runtime(
     path: &std::path::Path,
 ) -> std::result::Result<RuntimeDirectory, Box<dyn std::error::Error>> {
@@ -29,6 +34,7 @@ fn published_bytes_and_owned_cleanup_preserve_collections_and_lock() -> Result {
         let receipt = writer
             .publish_bytecode(id(), b"ELF bytes", b"provenance")
             .map_err(|f| f.cause)?;
+
         assert_eq!(
             std::fs::read(temp.path().join("programs/42/bytecode.o"))?,
             b"ELF bytes"
@@ -38,8 +44,10 @@ fn published_bytes_and_owned_cleanup_preserve_collections_and_lock() -> Result {
         assert!(temp.path().join("programs").is_dir());
         assert!(temp.path().join(".staging").is_dir());
         assert!(temp.path().join(".lock").is_file());
+
         Ok(())
     })??;
+
     Ok(())
 }
 
@@ -53,17 +61,22 @@ fn publication_collision_returns_staging_without_replacing_existing_state() -> R
         let failure = writer
             .publish_bytecode(id(), b"ELF", b"{}")
             .expect_err("collision");
+
         assert_eq!(failure.remaining.len(), 1);
+
         for receipt in failure.remaining {
             writer.remove_bytecode(receipt).map_err(|f| f.cause)?;
         }
+
         assert_eq!(
             std::fs::read(temp.path().join("programs/42/sentinel"))?,
             b"keep"
         );
         assert_eq!(std::fs::read_dir(temp.path().join(".staging"))?.count(), 0);
+
         Ok(())
     })??;
+
     Ok(())
 }
 
@@ -78,9 +91,11 @@ fn wrong_runtime_refuses_then_original_writer_can_retry() -> Result {
     let failure = b
         .with_writer(options(), |w| w.remove_bytecode(receipt))?
         .expect_err("wrong root");
+
     assert!(temp.path().join("a/programs/42/bytecode.o").is_file());
     a.with_writer(options(), |w| w.remove_bytecode(failure.remaining))?
         .map_err(|f| f.cause)?;
+
     Ok(())
 }
 
@@ -99,6 +114,7 @@ fn replaced_child_is_preserved_other_child_is_cleaned_and_retry_works() -> Resul
         let failure = writer
             .remove_bytecode(receipt)
             .expect_err("inode replacement");
+
         assert_eq!(std::fs::read(&path)?, b"unrelated");
         assert!(!temp.path().join("programs/42/provenance.json").exists());
         std::fs::rename(&path, temp.path().join("unrelated"))?;
@@ -106,8 +122,10 @@ fn replaced_child_is_preserved_other_child_is_cleaned_and_retry_works() -> Resul
         writer
             .remove_bytecode(failure.remaining)
             .map_err(|f| f.cause)?;
+
         Ok(())
     })??;
+
     Ok(())
 }
 
@@ -126,14 +144,17 @@ fn moved_parent_and_symlinked_collection_cannot_redirect_cleanup() -> Result {
         let failure = writer
             .remove_bytecode(receipt)
             .expect_err("moved collection");
+
         assert_eq!(std::fs::read(moved.join("42/bytecode.o"))?, b"keep");
         std::fs::rename(root_path.join("programs"), temp.path().join("saved-link"))?;
         std::fs::rename(&moved, root_path.join("programs"))?;
         writer
             .remove_bytecode(failure.remaining)
             .map_err(|f| f.cause)?;
+
         Ok(())
     })??;
+
     Ok(())
 }
 
@@ -150,14 +171,17 @@ fn unexpected_children_prevent_directory_removal_without_recursive_deletion() ->
         let failure = writer
             .remove_bytecode(receipt)
             .expect_err("directory not empty");
+
         assert_eq!(std::fs::read(&unexpected)?, b"keep");
         assert!(!temp.path().join("programs/42/bytecode.o").exists());
         std::fs::rename(&unexpected, temp.path().join("unrelated"))?;
         writer
             .remove_bytecode(failure.remaining)
             .map_err(|f| f.cause)?;
+
         Ok(())
     })??;
+
     Ok(())
 }
 
@@ -172,8 +196,11 @@ fn symlinked_staging_is_rejected_before_publication() -> Result {
         let failure = writer
             .publish_bytecode(id(), b"ELF", b"{}")
             .expect_err("symlink staging");
+
         assert!(failure.remaining.is_empty());
     })?;
+
     assert_eq!(std::fs::read_dir(outside)?.count(), 0);
+
     Ok(())
 }

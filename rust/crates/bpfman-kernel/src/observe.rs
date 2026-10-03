@@ -5,6 +5,7 @@ use std::{
     num::NonZeroU32,
     os::fd::{AsRawFd, OwnedFd},
 };
+
 impl Error {
     /// Classify without exposing raw syscall/backend types.
     pub fn kind(&self) -> ErrorKind {
@@ -15,9 +16,11 @@ impl Error {
         }
     }
 }
+
 fn failure(operation: &'static str, source: std::io::Error) -> Error {
     Error { operation, source }
 }
+
 fn fdinfo(fd: &OwnedFd) -> BTreeMap<String, u64> {
     std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
         .ok()
@@ -32,6 +35,7 @@ fn fdinfo(fd: &OwnedFd) -> BTreeMap<String, u64> {
         })
         .collect()
 }
+
 fn name(bytes: &[libc::c_char]) -> String {
     String::from_utf8_lossy(
         &bytes
@@ -42,13 +46,16 @@ fn name(bytes: &[libc::c_char]) -> String {
     )
     .into_owned()
 }
+
 fn nonzero(value: u64) -> Option<u64> {
     (value != 0).then_some(value)
 }
+
 fn loaded_at(nanos: u64) -> Result<Option<String>, Error> {
     if nanos == 0 {
         return Ok(None);
     }
+
     let stat =
         std::fs::read_to_string("/proc/stat").map_err(|e| failure("read kernel boot time", e))?;
     let boot = stat
@@ -71,10 +78,12 @@ fn loaded_at(nanos: u64) -> Result<Option<String>, Error> {
                 ),
             )
         })?;
+
     Ok(Some(
         time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     ))
 }
+
 /// Observe one live program by ID, preserving unavailable fields and counters.
 /// A descriptor holds the object alive across both metadata queries and procfs.
 pub fn observe_program(id: NonZeroU32) -> Result<(KernelProgram, Option<ProgramStats>), Error> {
@@ -88,6 +97,7 @@ pub fn observe_program(id: NonZeroU32) -> Result<(KernelProgram, Option<ProgramS
             run_count: info.run_cnt,
             recursion_misses: info.recursion_misses,
         });
+
     Ok((
         KernelProgram {
             id,
@@ -107,10 +117,12 @@ pub fn observe_program(id: NonZeroU32) -> Result<(KernelProgram, Option<ProgramS
         stats,
     ))
 }
+
 /// Observe a live map's metadata and procfs accounting/frozen flag.
 pub fn observe_map(id: u32) -> Result<KernelMap, Error> {
     let (fd, info) = syscall::map(id).map_err(|e| failure("observe kernel map", e))?;
     let extra = fdinfo(&fd);
+
     Ok(KernelMap {
         id: info.id,
         name: name(&info.name),
@@ -125,6 +137,7 @@ pub fn observe_map(id: u32) -> Result<KernelMap, Error> {
         frozen: extra.get("frozen").is_some_and(|n| *n != 0),
     })
 }
+
 fn program_kind(kind: u32) -> String {
     const NAMES: &[&str] = &[
         "unspecifiedprogram",
@@ -165,6 +178,7 @@ fn program_kind(kind: u32) -> String {
         .get(kind as usize)
         .map_or_else(|| format!("programtype({kind})"), |s| (*s).into())
 }
+
 fn map_kind(kind: u32) -> String {
     const NAMES: &[&str] = &[
         "unspecifiedmap",
@@ -223,6 +237,7 @@ mod tests {
                 kind
             );
         }
+
         assert_eq!(
             failure(
                 "test",
@@ -232,6 +247,7 @@ mod tests {
             ErrorKind::InvalidData
         );
     }
+
     #[test]
     fn kernel_taxonomy_and_fixed_names_match_go_observations() {
         assert_eq!(program_kind(5), "tracepoint");

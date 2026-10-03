@@ -61,12 +61,14 @@ impl LoadError {
             Failure::NoOwnedArtifacts(c) => c,
             Failure::Compensated { report, .. } => report.primary(),
         };
+
         match cause {
             LoadCause::Invalid(_) | LoadCause::Parse(_) => LoadErrorKind::InvalidInput,
             LoadCause::Unsupported(_) => LoadErrorKind::Unsupported,
             _ => LoadErrorKind::Unavailable,
         }
     }
+
     /// Number of owned resources still requiring cleanup (including a blocked map directory).
     pub fn unresolved(&self) -> usize {
         match self.failure.as_ref() {
@@ -76,6 +78,7 @@ impl LoadError {
             } => report.remaining().len() + usize::from(directory.is_some()),
         }
     }
+
     /// Explicitly retry unresolved cleanup once, retaining the original error
     /// and all prior attempts. The supplied writer must belong to the same root.
     pub fn retry_cleanup(self, writer: &RuntimeWriter<'_>) -> Self {
@@ -114,24 +117,28 @@ pub(super) fn finish<F: CleanupEffects>(
     mut directory_attempts: Vec<Result<(), F::Error>>,
 ) -> FailureFor<F> {
     let report = compensate_load(writer, effects, rollback);
+
     // Explicit prerequisite: no unresolved map-pin instructions. A blocked
     // container is retained without claiming that its removal was attempted.
     let maps_pending = report
         .remaining()
         .iter()
         .any(|p| p.instruction().kind() == CompensationKind::MapPin);
+
     if !maps_pending {
         if let Some(owned) = directory.take() {
             let outcome = match effects.remove_map_directory(writer, owned) {
                 Ok(()) => Ok(()),
                 Err(failure) => {
                     directory = Some(failure.remaining);
+
                     Err(failure.cause)
                 }
             };
             directory_attempts.push(outcome);
         }
     }
+
     Failure::Compensated {
         report: Box::new(report),
         directory,
@@ -144,9 +151,11 @@ impl fmt::Debug for LoadError {
         fmt::Display::fmt(self, f)
     }
 }
+
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "load local tracepoint")?;
+
         if let Failure::Compensated {
             report,
             directory_attempts,
@@ -154,12 +163,14 @@ impl fmt::Display for LoadError {
         } = self.failure.as_ref()
         {
             write!(f, " ({} unresolved cleanup resources)", self.unresolved())?;
+
             for attempt in report.attempts() {
                 if let Err(cause) = &attempt.outcome {
                     write!(f, "; cleanup {:?}: ", attempt.kind)?;
                     write_chain(f, cause)?;
                 }
             }
+
             for cause in directory_attempts
                 .iter()
                 .filter_map(|result| result.as_ref().err())
@@ -168,9 +179,11 @@ impl fmt::Display for LoadError {
                 write_chain(f, cause)?;
             }
         }
+
         Ok(())
     }
 }
+
 impl std::error::Error for LoadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(match self.failure.as_ref() {
@@ -183,9 +196,11 @@ impl std::error::Error for LoadError {
 fn write_chain(f: &mut fmt::Formatter<'_>, cause: &dyn std::error::Error) -> fmt::Result {
     write!(f, "{cause}")?;
     let mut source = cause.source();
+
     while let Some(error) = source {
         write!(f, ": {error}")?;
         source = error.source();
     }
+
     Ok(())
 }

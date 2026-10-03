@@ -12,6 +12,7 @@ mod load;
 mod observation;
 mod program_type;
 mod summary;
+
 pub use observation::{
     ImagePullPolicy, KernelMap, KernelProgram, ObservedMap, ObservedProgram, ProgramEntry,
     ProgramSource, ProgramStats, StoredProgram,

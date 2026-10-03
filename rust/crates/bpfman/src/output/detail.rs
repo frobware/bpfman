@@ -1,17 +1,22 @@
 //! Program detail presentation, shared by load and get.
+
 use bpfman_model::{ObservedProgram, ProgramSource};
 use std::io::{self, Write};
+
 enum Row {
     Field(&'static str, String),
     Section(String, Vec<Row>),
     Note(&'static str),
 }
+
 fn field(label: &'static str, value: impl ToString) -> Row {
     Row::Field(label, value.to_string())
 }
+
 fn section(label: impl Into<String>, rows: Vec<Row>) -> Row {
     Row::Section(label.into(), rows)
 }
+
 fn render(out: &mut impl Write, rows: &[Row], depth: usize) -> io::Result<()> {
     let width = rows
         .iter()
@@ -26,6 +31,7 @@ fn render(out: &mut impl Write, rows: &[Row], depth: usize) -> io::Result<()> {
         .unwrap_or(0)
         + 1;
     let indent = "  ".repeat(depth);
+
     for row in rows {
         match row {
             Row::Field(k, v) => writeln!(
@@ -40,14 +46,17 @@ fn render(out: &mut impl Write, rows: &[Row], depth: usize) -> io::Result<()> {
             Row::Note(note) => writeln!(out, "{indent}{note}")?,
         }
     }
+
     Ok(())
 }
+
 fn sort(rows: &mut [Row]) {
     rows.sort_by(|a, b| match (a, b) {
         (Row::Field(a, _), Row::Field(b, _)) => a.cmp(b),
         _ => std::cmp::Ordering::Equal,
     });
 }
+
 pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<()> {
     let r = &p.record;
     let k = &p.kernel;
@@ -102,6 +111,7 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
         field("Name", r.spec.name().as_str()),
         field("Type", r.spec.kind()),
     ];
+
     match &r.source {
         ProgramSource::File(path) => spec.push(field("Path", path.as_deref().unwrap_or(""))),
         ProgramSource::Image {
@@ -129,15 +139,19 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
         ),
         field("Tag", &k.tag),
     ];
+
     if let Some(id) = k.btf_id {
         status.push(field("BTF ID", id));
     }
+
     if let Some(time) = &k.loaded_at {
         status.push(field("Loaded At", time));
     }
+
     if let Some(mem) = k.memlock {
         status.push(field("Memory", format!("{mem} bytes")));
     }
+
     if !p.map_used_by.is_empty() {
         status.push(field(
             "Maps Used By",
@@ -148,6 +162,7 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
                 .join(" "),
         ));
     }
+
     sort(&mut status);
     status.push(field("Links", "None"));
     let maps = p
@@ -160,12 +175,14 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
                 field("Max Entries", k.max_entries),
                 field("Name", &k.name),
             ];
+
             if let Some(pin) = &m.pin_path {
                 fields.push(field(
                     "Pin",
                     format!("{pin}{}", if m.present { "" } else { " (missing)" }),
                 ));
             }
+
             fields.extend([
                 field("Type", &k.kind),
                 field("Value Size", format!("{}B", k.value_size)),
@@ -200,9 +217,11 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
                 field("Run Count", s.run_count),
                 field("Runtime", duration(s.runtime_ns)),
             ];
+
             if s.recursion_misses > 0 {
                 rows.push(field("Recursion Misses", s.recursion_misses));
             }
+
             sort(&mut rows);
             rows
         }
@@ -218,6 +237,7 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
         1,
     )
 }
+
 fn scaled(value: u64, scale: u64, suffix: &str) -> String {
     let fraction = if value.is_multiple_of(scale) {
         String::new()
@@ -229,29 +249,37 @@ fn scaled(value: u64, scale: u64, suffix: &str) -> String {
     };
     format!("{}{fraction}{suffix}", value / scale)
 }
+
 fn duration(ns: u64) -> String {
     if ns == 0 {
         return "0s".into();
     }
+
     if ns < 1_000 {
         return format!("{ns}ns");
     }
+
     if ns < 1_000_000 {
         return scaled(ns, 1_000, "µs");
     }
+
     if ns < 1_000_000_000 {
         return scaled(ns, 1_000_000, "ms");
     }
+
     let seconds = ns / 1_000_000_000;
     let hours = seconds / 3600;
     let minutes = seconds % 3600 / 60;
     let mut text = String::new();
+
     if hours > 0 {
         text.push_str(&format!("{hours}h"));
     }
+
     if hours > 0 || minutes > 0 {
         text.push_str(&format!("{minutes}m"));
     }
+
     text.push_str(&scaled(ns % 60_000_000_000, 1_000_000_000, "s"));
     text
 }

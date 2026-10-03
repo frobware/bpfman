@@ -21,6 +21,7 @@ fn create_store(layout: &RuntimeLayout) -> Result<(), Box<dyn std::error::Error>
         },
         |writer| create_if_missing(&writer),
     )??;
+
     Ok(())
 }
 
@@ -30,6 +31,7 @@ fn reads_go_schema_and_leaves_database_unchanged() -> Result<(), Box<dyn std::er
     support::seed(&db)?;
     let before = std::fs::read(&db.path)?;
     let programs = read_programs(&db.path)?;
+
     assert_eq!(
         programs.iter().map(|p| p.id().get()).collect::<Vec<_>>(),
         [7, 42]
@@ -46,6 +48,7 @@ fn reads_go_schema_and_leaves_database_unchanged() -> Result<(), Box<dyn std::er
     );
     assert_eq!(before, std::fs::read(&db.path)?);
     assert_eq!(std::fs::read_dir(db.runtime.join("db"))?.count(), 1);
+
     Ok(())
 }
 
@@ -54,8 +57,10 @@ fn missing_database_is_not_created() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let path = directory.path().join("missing.db");
     let error = read_programs(&path).expect_err("missing database");
+
     assert_eq!(error.kind(), ErrorKind::Unavailable);
     assert!(!path.exists());
+
     Ok(())
 }
 
@@ -67,6 +72,7 @@ fn refuses_old_and_new_schemas_without_migrating() -> Result<(), Box<dyn std::er
             .execute("UPDATE goose_db_version SET version_id = ?1", [version])?;
         let before = std::fs::read(&db.path)?;
         create_store(&RuntimeLayout::try_from(db.runtime.clone())?)?;
+
         assert_eq!(
             read_programs(&db.path)
                 .expect_err("unsupported schema")
@@ -75,6 +81,7 @@ fn refuses_old_and_new_schemas_without_migrating() -> Result<(), Box<dyn std::er
         );
         assert_eq!(before, std::fs::read(&db.path)?);
     }
+
     Ok(())
 }
 
@@ -84,12 +91,17 @@ fn creates_go_schema_and_history_idempotently() -> Result<(), Box<dyn std::error
     let layout = RuntimeLayout::try_from(directory.path().join("runtime"))?;
     let path = layout.database_path();
     create_store(&layout)?;
+
     assert!(read_programs(&path)?.is_empty());
+
     let before = std::fs::read(&path)?;
     create_store(&layout)?;
+
     assert_eq!(before, std::fs::read(&path)?);
+
     let actual = rusqlite::Connection::open(&path)?;
     let expected = support::database()?;
+
     for query in [
         "SELECT name, sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name",
         "SELECT CAST(version_id AS TEXT), CAST(is_applied AS TEXT) FROM goose_db_version ORDER BY id",
@@ -101,12 +113,15 @@ fn creates_go_schema_and_history_idempotently() -> Result<(), Box<dyn std::error
                     .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
                     .collect()
             };
+
         assert_eq!(values(&actual)?, values(&expected.connection)?);
     }
+
     assert_eq!(
         std::fs::read_dir(path.parent().ok_or("missing parent")?)?.count(),
         1
     );
+
     Ok(())
 }
 
@@ -116,12 +131,14 @@ fn existing_empty_or_corrupt_files_are_never_repaired() -> Result<(), Box<dyn st
     let layout = RuntimeLayout::try_from(directory.path().join("runtime"))?;
     let path = layout.database_path();
     std::fs::create_dir_all(path.parent().ok_or("missing database parent")?)?;
+
     for bytes in [b"".as_slice(), b"not a SQLite database".as_slice()] {
         std::fs::write(&path, bytes)?;
         create_store(&layout)?;
         assert!(read_programs(&path).is_err());
         assert_eq!(std::fs::read(&path)?, bytes);
     }
+
     Ok(())
 }
 
@@ -135,6 +152,7 @@ fn rejects_malformed_stored_values() -> Result<(), Box<dyn std::error::Error>> {
         let db = support::database()?;
         support::seed(&db)?;
         db.connection.execute(update, [])?;
+
         assert_eq!(
             read_programs(&db.path)
                 .expect_err("invalid stored value")
@@ -142,6 +160,7 @@ fn rejects_malformed_stored_values() -> Result<(), Box<dyn std::error::Error>> {
             ErrorKind::InvalidData
         );
     }
+
     Ok(())
 }
 
@@ -150,7 +169,9 @@ fn reads_committed_wal_state() -> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     db.connection.pragma_update(None, "journal_mode", "WAL")?;
     support::seed(&db)?;
+
     assert_eq!(read_programs(&db.path)?.len(), 2);
+
     Ok(())
 }
 
@@ -159,13 +180,16 @@ fn inspection_distinguishes_absence_from_incompatible_or_broken_state()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let missing = directory.path().join("missing/store.db");
+
     assert!(Store::inspect(&missing)?.is_none());
     assert!(!directory.path().join("missing").exists());
+
     let db = support::database()?;
     db.connection
         .execute("UPDATE goose_db_version SET version_id = 99", [])?;
     let before = std::fs::read(&db.path)?;
     let mut observed = Store::inspect(&db.path)?.ok_or("existing store")?;
+
     assert_eq!(observed.schema_version(), 99);
     assert_eq!(
         observed
@@ -175,13 +199,18 @@ fn inspection_distinguishes_absence_from_incompatible_or_broken_state()
         ErrorKind::IncompatibleSchema
     );
     assert_eq!(std::fs::read(&db.path)?, before);
+
     let corrupt = directory.path().join("corrupt.db");
     std::fs::write(&corrupt, b"not SQLite")?;
+
     assert!(Store::inspect(&corrupt).is_err());
+
     let dangling = directory.path().join("dangling.db");
     std::os::unix::fs::symlink(&missing, &dangling)?;
+
     assert!(Store::inspect(&dangling).is_err());
     assert!(!missing.exists());
+
     Ok(())
 }
 
@@ -189,6 +218,7 @@ fn inspection_distinguishes_absence_from_incompatible_or_broken_state()
 fn reads_recheck_schema_after_opening_observation() -> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     let mut store = Store::open(&db.path)?;
+
     assert_eq!(store.schema_version(), 2);
     db.connection
         .execute("UPDATE goose_db_version SET version_id = 3", [])?;
@@ -196,5 +226,6 @@ fn reads_recheck_schema_after_opening_observation() -> Result<(), Box<dyn std::e
         store.read_programs().expect_err("schema changed").kind(),
         ErrorKind::IncompatibleSchema
     );
+
     Ok(())
 }

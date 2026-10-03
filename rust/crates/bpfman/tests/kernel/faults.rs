@@ -59,6 +59,7 @@ impl<S> Faults<S> {
 fn check(state: &Arc<Mutex<State>>, point: Point) -> Result<(), Error> {
     let mut state = state.lock().expect("fault state");
     state.calls.push(point);
+
     if state.fault == Some(point) {
         Err(Error::new(
             ErrorKind::Unavailable,
@@ -94,6 +95,7 @@ impl<R: ProgramReader> ProgramReader for Reader<R> {
         if self.state.lock().expect("fault state").committed {
             check(&self.state, Point::ReadAfterCommit)?;
         }
+
         self.reader.read_records()
     }
 }
@@ -107,6 +109,7 @@ impl<S: CommitLoad> CommitLoad for Faults<S> {
         check(&self.state, Point::Commit)?;
         let result = self.backend.commit_tracepoint(w, record)?;
         self.state.lock().expect("fault state").committed = true;
+
         Ok(result)
     }
 }
@@ -135,6 +138,7 @@ impl<S: UnloadStore> UnloadStore for Faults<S> {
                 remaining: receipt,
             });
         }
+
         self.backend.delete_program(w, receipt)
     }
 
@@ -149,6 +153,7 @@ impl<S: UnloadStore> UnloadStore for Faults<S> {
                 remaining: receipt,
             });
         }
+
         self.backend.delete_map_set(w, receipt)
     }
 }
