@@ -6,7 +6,7 @@ use crate::{
 use bpfman_core::{EffectFailure, KernelAcquisitions, LoadProgram};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
-use bpfman_model::{ProgramSpec, StoredProgramSummary, Symbol};
+use bpfman_model::{ObservedProgram, ProgramSpec, StoredProgramSummary, Symbol};
 use std::{collections::BTreeMap, path::Path, time::Duration};
 
 mod effects;
@@ -28,7 +28,7 @@ pub fn load_tracepoint(
     name: Symbol,
     metadata: &BTreeMap<String, String>,
     timeout: Duration,
-) -> Result<StoredProgramSummary, LoadError> {
+) -> Result<ObservedProgram, LoadError> {
     let source_text = source
         .to_str()
         .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
@@ -60,6 +60,20 @@ pub fn load_tracepoint(
                 )
                 .map_err(|failure| LoadError {
                     failure: Box::new(failure),
+                })
+                .and_then(|stored| {
+                    crate::observation::observe(
+                        &writer,
+                        stored.id(),
+                        crate::observation::View::Load,
+                    )
+                    .map_err(|source| {
+                        LoadCause::Observation {
+                            id: stored.id(),
+                            source,
+                        }
+                        .into()
+                    })
                 })
             },
         )

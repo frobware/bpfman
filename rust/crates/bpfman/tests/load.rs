@@ -201,7 +201,6 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
         vec!["--programs", "tracepoint:a,tracepoint:b"],
         vec!["--programs", "tracepoint:a", "--global", "counter=00"],
         vec!["--programs", "tracepoint:a", "--map-owner-id", "1"],
-        vec!["--programs", "tracepoint:a", "--output", "json"],
     ] {
         assert_failure(
             command(&runtime)
@@ -232,13 +231,22 @@ fn local_tracepoint_validates_source_before_runtime_creation() -> Result {
         "parse local ELF",
     )?;
     assert!(!runtime.exists());
-    assert_failure(
-        command(&runtime)
-            .args(["file", "missing.o", "--programs", "tracepoint:a"])
-            .output()?,
-        1,
-        "read local ELF",
-    )?;
+    for format in ["text", "json"] {
+        assert_failure(
+            command(&runtime)
+                .args([
+                    "file",
+                    "missing.o",
+                    "--programs",
+                    "tracepoint:a",
+                    "-o",
+                    format,
+                ])
+                .output()?,
+            1,
+            "read local ELF",
+        )?;
+    }
     assert!(!runtime.exists());
     Ok(())
 }

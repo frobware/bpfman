@@ -33,17 +33,25 @@ pub(super) enum Command {
 
 #[derive(Subcommand)]
 pub(super) enum ProgramCommand {
+    /// Get a managed program with kernel and map observations (unattached only).
+    Get {
+        /// Managed kernel program ID.
+        #[arg(value_name = "PROGRAM_ID")]
+        id: std::num::NonZeroU32,
+        /// Output format.
+        #[arg(short,long,value_enum,default_value_t=OutputFormat::Text)]
+        output: OutputFormat,
+    },
     /// Unload one unattached tracepoint with private maps.
     Unload {
         /// Managed kernel program ID.
         #[arg(value_name = "PROGRAM_ID")]
         id: std::num::NonZeroU32,
     },
-    /// List managed programs from the Go database (text and quiet output).
+    /// List managed programs; JSON includes live kernel observations.
     ///
-    /// This initial reader does not observe the kernel. JSON, --all, and
-    /// attachment-state filtering will arrive with kernel observation support.
-    /// A missing database is created under the runtime writer lock.
+    /// Text/quiet output reads stored summaries without kernel privileges.
+    /// --all and attachment-state filtering are not yet implemented.
     List(ListArgs),
     /// Load one local tracepoint; other requests are explicitly rejected.
     Load {
@@ -57,7 +65,7 @@ pub(super) struct ListArgs {
     /// Print only program IDs, one per line.
     #[arg(short, long)]
     pub(super) quiet: bool,
-    /// Output format (JSON is not yet implemented).
+    /// Output format.
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
     pub(super) output: OutputFormat,
     /// Filter by program type; comma-separated or repeated, case-insensitive.
@@ -68,9 +76,10 @@ pub(super) struct ListArgs {
     pub(super) application: Option<String>,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub(super) enum OutputFormat {
     Text,
+    Json,
 }
 
 fn program_type_parser() -> impl TypedValueParser<Value = ProgramType> {

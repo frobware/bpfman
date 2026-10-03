@@ -31,13 +31,14 @@ unchanged; SQLite still uses rusqlite's bundled library.
 
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
-| `bpfman-model` | 0 | Pure domain vocabulary, payload-bearing program specifications, and stored summaries |
+| `bpfman-model` | 0 | Pure program specifications, stored records, and kernel observations |
 | `bpfman-core` | 1 | Pure listing/store policy, load compensation, and forward unload continuations |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
+| `bpfman-kernel` | 2 | Read-only BPF metadata and statistics with a private syscall boundary |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store-sqlite` | 3 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence and conditional teardown |
 | `bpfman-runtime` | 4 | Local tracepoint load/unload, private Aya adapter, compensation, and observation gathering |
-| `bpfman` | 5 | Typed Clap CLI, supported load/unload dispatch, and text/quiet presentation |
+| `bpfman` | 5 | Typed Clap CLI, load/get/list/unload dispatch, and Go-compatible text/JSON presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
 point down through tiers, pure normal dependency closures are explicitly
@@ -133,34 +134,47 @@ object cleanup must never manipulate SQLite's journal, WAL, or shared-memory fil
 acquisition, never work under the lock. The lock adapter supports cooperative
 cancellation and owned inherited descriptors; CLI signal cancellation and
 namespace-helper process launching are not yet wired. No privileges are needed
-for listing in a writable temporary runtime. Loading requires BPF and mount
+for text/quiet listing in a writable temporary runtime. Loading requires BPF and mount
 privileges; `/run/bpfman` will normally require sudo.
 
-Listing supports managed table and quiet-ID output only. Stored names
-are used directly (no kernel-name fallback). `--all`, JSON listing, kernel link
-state filters, get, attach, and detach are not implemented and are rejected.
-Unload supports one unattached tracepoint with private maps, as described below.
+Listing supports managed table, quiet-ID and JSON output. Text and quiet output
+use stored summaries without kernel privileges; JSON adds full records and live
+kernel observations. `program get ID [-o text|json]` observes one unattached
+managed program, including its maps and statistics. `--all`, kernel link state
+filters, attach, detach, and full observation of attached programs remain
+unsupported. Unload supports one unattached tracepoint with private maps.
+
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Only one local tracepoint with text output, private maps,
-and metadata/application labels is executable. Image loads, other program
-types, batches, global overrides, map-owner sharing, and JSON output exit with
-status 1 before source access or runtime effects. ELF-level unsupported
-PinByName maps and section/type mismatches are rejected before runtime setup.
-The supported load currently prints a compact listing table; Go's detailed load
-presentation and JSON result shape remain future compatibility work.
-Credentials are not echoed in auth diagnostics or help. Unlike Go, this parser
-requires the explicit file/image verb and rejects duplicate ELF selections,
-extraneous load-time targets, and zero map-owner IDs. OCI reference resolution
-and object-file validation remain execution responsibilities, not parser I/O.
-Consequently the typed DSL's automatic JSON requests cannot yet use this CLI;
-the full behavioural corpus is a later acceptance gate. Once the relevant
-commands are ready, build the Go shell/test runner and select the new binary:
+exits with status 2. One local tracepoint with private maps and
+metadata/application labels is executable, with Go's detailed text output or
+JSON load envelope. Image loads, other program types, batches, global overrides,
+and map-owner sharing exit with status 1 before source access or runtime effects.
+ELF-level unsupported PinByName maps and section/type mismatches are rejected
+before runtime setup. Credentials are not echoed in auth diagnostics or help.
+Unlike Go, this parser requires the explicit file/image verb and rejects duplicate
+ELF selections, extraneous load-time targets, and zero map-owner IDs.
+
+The unchanged `e2e/scripts/TestTracepoint_LoadAndGet.bpfman` now runs against Rust
+through the Go shell runner. The dedicated gate builds the required executables,
+uses a temporary runtime in a private mount namespace, selects local bytecode,
+and verifies that unload leaves no owned residue:
 
 ```sh
-make run-e2e-scripts BPFMAN_UNDER_TEST="$PWD/rust/target/debug/bpfman"
+direnv exec . make rust-test-observation
+```
+
+This needs the same privileged kernel environment and bytecode fixtures as
+`rust-test-kernel-load`. If the Nix Go linker needs external linking, pass
+`EXTRA_GOFLAGS=-ldflags=-linkmode=external` to Make. The full corpus still includes
+unsupported operations; passing this one script does not establish full parity.
+For manual selection with prebuilt binaries:
+
+```sh
+make run-e2e-scripts BPFMAN_UNDER_TEST="$PWD/rust/target/debug/bpfman" \
+    TEST='TestBPFManScripts/scripts/TestTracepoint_LoadAndGet[.]bpfman$'
 ```
 
 This run-only target requires prebuilt fixtures and an appropriate privileged
@@ -170,7 +184,42 @@ must be named `bpfman`. Keep Go and Rust suite runs separate on a clean runtime.
 
 `make test-e2e-selection` tests this wiring without sudo or kernel effects,
 using fixture executables and the real Make recipe. CLI process tests also
-exercise the real Rust executable. Behavioural parity is not yet claimed.
+exercise the real Rust executable. The kernel gate compares Go and Rust get
+text/JSON and list JSON for the same live tracepoint.
+
+## Program observations
+
+Full store decoding, kernel reads, map-pin correlation, and selection happen
+under one runtime writer scope. The store returns typed domain values from a
+read-only transaction, preserving nullable timestamps and nil versus empty
+global byte slices. Timestamp output matches Go's RFC3339Nano formatting,
+trimming trailing fractional zeros without reducing precision. CLI conversion
+owns JSON field names and the different load/get/list envelopes; the pure model
+has no serialization or backend dependencies.
+
+The `bpfman-kernel` adapter supplies fields unavailable through Aya's public
+metadata API. Its private syscall module is the only unsafe exception: it
+supports read-only descriptor lookup and metadata queries, bounds its buffers,
+and owns descriptors until observation completes. Generated Aya ABI structs
+never cross its public interface. Because Cargo cannot override an inherited
+`forbid`, this crate mirrors workspace lints with `unsafe_code = "deny"` and
+allows unsafe only in that module; an architecture test checks the other gates
+remain identical.
+
+Absent kernel objects are distinct from denied observations. Get reports a
+stored program missing from the kernel as requiring reconciliation; list JSON
+uses a null kernel field for that case. Permission and other program lookup
+errors fail the command. Individual unreadable maps are omitted, as in Go,
+while the program's observed map IDs remain intact. Available zero counters are
+not null. Load omits statistics and map-pin presence observations; get includes
+them. Map pins are correlated by kernel map ID, avoiding ambiguous matches when
+names share a truncated prefix. Runtime paths alone do not assert presence.
+
+After successful load persistence, observation and output failures cannot roll
+back committed state. An observation failure reports the program ID and that it
+remains loaded. Kernel tests inject a malformed stored timestamp after commit
+and a failing output destination to check this boundary, alongside the existing
+pre-commit compensation cases. No observation retry runs automatically.
 
 ## Single-program load policy and execution
 

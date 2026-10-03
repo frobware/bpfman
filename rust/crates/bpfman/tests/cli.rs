@@ -85,7 +85,7 @@ fn invalid_flags_are_rejected_before_opening_the_database() -> Result<(), Box<dy
     for args in [
         vec!["--runtime-dir", "relative", "program", "list"],
         vec!["program", "list", "--type", "bogus"],
-        vec!["program", "list", "--output", "json"],
+        vec!["program", "list", "--output", "yaml"],
         vec!["program", "list", "--all"],
         vec!["program", "list", "--attached"],
     ] {
@@ -316,5 +316,68 @@ fn absent_and_unimplemented_commands_do_not_report_success()
         assert!(output.stdout.is_empty());
         assert!(!output.stderr.is_empty());
     }
+    Ok(())
+}
+
+#[test]
+fn get_rejects_bad_ids_before_runtime_creation() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let runtime = directory.path().join("absent");
+    for id in ["0", "-1", "4294967296", "abc"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env("BPFMAN_RUNTIME_DIR", &runtime)
+            .args(["program", "get", id, "-o", "json"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(!runtime.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn missing_and_linked_gets_fail_without_fabricating_kernel_observations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let db = support::database()?;
+    support::seed(&db)?;
+    let before = std::fs::read(&db.path)?;
+    for (id, diagnostic) in [
+        ("99", "does not exist"),
+        ("42", "attached programs is not implemented"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env("BPFMAN_RUNTIME_DIR", &db.runtime)
+            .args(["program", "get", id, "-o", "json"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains(diagnostic), "{stderr}");
+    }
+    assert_eq!(std::fs::read(&db.path)?, before);
+    assert!(!db.runtime.join("fs").exists());
+    Ok(())
+}
+
+#[test]
+fn json_list_has_an_empty_envelope_and_quiet_takes_precedence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let db = support::database()?;
+    let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env("BPFMAN_RUNTIME_DIR", &db.runtime)
+        .args(["program", "list", "-o", "json"])
+        .output()?;
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+        serde_json::json!({"programs":[]})
+    );
+    support::seed(&db)?;
+    let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env("BPFMAN_RUNTIME_DIR", &db.runtime)
+        .args(["program", "list", "-o", "json", "-q"])
+        .output()?;
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout)?, "7\n42\n");
     Ok(())
 }

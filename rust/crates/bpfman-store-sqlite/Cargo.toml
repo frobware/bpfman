@@ -12,6 +12,8 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+base64.workspace = true
+chrono.workspace = true
 bpfman-core.workspace = true
 bpfman-fs.workspace = true
 bpfman-model.workspace = true

@@ -9,6 +9,7 @@ mod create;
 mod error;
 mod open;
 mod read;
+mod records;
 mod unload;
 mod write;
 pub use unload::{delete_unloaded_program, delete_unused_map_set, observe_unload};

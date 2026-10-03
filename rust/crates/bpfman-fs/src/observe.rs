@@ -155,3 +155,47 @@ impl RuntimeWriter<'_> {
         }))
     }
 }
+
+impl RuntimeWriter<'_> {
+    /// Enumerate map pins below the opened runtime for read-only correlation.
+    /// Missing collections are empty; unsafe traversal and inspection failures
+    /// are errors, never fabricated absence or filesystem mutation.
+    pub fn read_map_pins(&self, map_set: NonZeroU32) -> Result<Vec<crate::ObservedMapPin>, Error> {
+        let Some(bpffs) = optional_dir(&self.runtime.root, "fs", BENEATH)? else {
+            return Ok(Vec::new());
+        };
+        if fstatfs(&bpffs)
+            .map_err(|e| io("verify observed bpffs", e))?
+            .f_type
+            != BPF_SUPER_MAGIC
+        {
+            return Err(Failure::Unsafe("existing fs is not bpffs").into());
+        }
+        let Some(maps) = optional_dir(&bpffs, "maps", CONFINED)? else {
+            return Ok(Vec::new());
+        };
+        let Some(directory) = optional_dir(&maps, &map_set.to_string(), CONFINED)? else {
+            return Ok(Vec::new());
+        };
+        let mut result = Vec::new();
+        for name in names(&directory)? {
+            validate_map_name(&name)?;
+            let entry = observe(
+                self,
+                &directory,
+                &format!("fs/maps/{map_set}"),
+                &name,
+                false,
+            )?
+            .ok_or(Failure::Unsafe("map pin disappeared during observation"))?;
+            let info = aya::maps::MapInfo::from_pin(proc_path(&directory).join(&name))
+                .map_err(Failure::Map)?;
+            open_owned(&entry)?;
+            result.push(crate::ObservedMapPin {
+                name,
+                id: info.id(),
+            });
+        }
+        Ok(result)
+    }
+}

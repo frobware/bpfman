@@ -4,6 +4,8 @@ mod compensation;
 mod error;
 mod kernel;
 mod list;
+mod observation;
+pub use observation::{get_program, list_program_entries};
 mod load;
 mod load_error;
 pub use load::load_tracepoint;
@@ -128,4 +130,23 @@ pub struct UnloadReport {
 /// Unload failure, retaining progress and receipts if teardown began.
 pub struct UnloadError {
     failure: unload_error::Failure,
+}
+
+/// Classification of a full program-observation failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ObservationErrorKind {
+    /// No managed record exists.
+    NotFound,
+    /// The record exists but its kernel object is absent.
+    RequiresReconciliation,
+    /// Full link observation needs a later slice.
+    Unsupported,
+    /// An observation failed; it must not be presented as absence.
+    Unavailable,
+}
+/// Opaque failure while observing a managed program.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct ObservationError {
+    cause: observation::Failure,
 }

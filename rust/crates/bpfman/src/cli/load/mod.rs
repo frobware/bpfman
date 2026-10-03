@@ -62,7 +62,7 @@ struct LoadOptions {
     /// Nonzero kernel program ID whose maps should be shared.
     #[arg(long)]
     map_owner_id: Option<NonZeroU32>,
-    /// Requested result format (JSON execution is not implemented).
+    /// Requested result format.
     #[arg(short, long, value_enum, default_value_t = LoadOutput::Text)]
     output: LoadOutput,
 }

@@ -147,6 +147,7 @@ dependencies = [
  "clap",
  "humantime",
  "rusqlite",
+ "serde_json",
  "tempfile",
 ]
 
@@ -171,6 +172,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bpfman-kernel"
+version = "0.1.0"
+dependencies = [
+ "aya-obj",
+ "bpfman-model",
+ "chrono",
+ "libc",
+ "thiserror",
+]
+
+[[package]]
 name = "bpfman-lock"
 version = "0.1.0"
 dependencies = [
@@ -191,6 +203,7 @@ dependencies = [
  "aya-obj",
  "bpfman-core",
  "bpfman-fs",
+ "bpfman-kernel",
  "bpfman-lock",
  "bpfman-model",
  "bpfman-store-sqlite",
@@ -205,10 +218,12 @@ dependencies = [
 name = "bpfman-store-sqlite"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bpfman-core",
  "bpfman-fs",
  "bpfman-lock",
  "bpfman-model",
+ "chrono",
  "rusqlite",
  "serde_json",
  "tempfile",

@@ -163,3 +163,12 @@ pub struct UnloadArtifacts {
 /// This observation is not mutation authority; operations still need a writer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RuntimeIdentity(artifacts::Identity);
+
+/// Read-only map-pin observation; carries no removal authority.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedMapPin {
+    /// Full filesystem component, unaffected by kernel name truncation.
+    pub name: String,
+    /// Identity read from the pinned BPF map.
+    pub id: u32,
+}

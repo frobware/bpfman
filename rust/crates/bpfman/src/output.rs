@@ -2,13 +2,14 @@ use std::io::{self, Write};
 
 use bpfman_model::StoredProgramSummary;
 
+mod detail;
+mod json;
 use crate::cli::OutputFormat;
 
 pub(super) fn programs(
     out: &mut impl Write,
     programs: &[StoredProgramSummary],
     quiet: bool,
-    format: OutputFormat,
 ) -> io::Result<()> {
     if quiet {
         for program in programs {
@@ -16,9 +17,7 @@ pub(super) fn programs(
         }
         return Ok(());
     }
-    match format {
-        OutputFormat::Text => table(out, programs),
-    }
+    table(out, programs)
 }
 
 fn table(out: &mut impl Write, programs: &[StoredProgramSummary]) -> io::Result<()> {
@@ -66,4 +65,37 @@ fn table(out: &mut impl Write, programs: &[StoredProgramSummary]) -> io::Result<
         }
     }
     Ok(())
+}
+
+pub(super) fn program(
+    out: &mut impl Write,
+    program: &bpfman_model::ObservedProgram,
+    format: OutputFormat,
+    loaded: bool,
+) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => detail::program(out, program),
+        OutputFormat::Json => {
+            let value = json::program(program);
+            let value = if loaded {
+                serde_json::json!({"programs":[value]})
+            } else {
+                value
+            };
+            write_json(out, &value)
+        }
+    }
+}
+pub(super) fn entries(
+    out: &mut impl Write,
+    entries: &[bpfman_model::ProgramEntry],
+) -> io::Result<()> {
+    write_json(
+        out,
+        &serde_json::json!({"programs":entries.iter().map(json::entry).collect::<Vec<_>>()}),
+    )
+}
+fn write_json(out: &mut impl Write, value: &serde_json::Value) -> io::Result<()> {
+    serde_json::to_writer_pretty(&mut *out, value).map_err(io::Error::other)?;
+    writeln!(out)
 }

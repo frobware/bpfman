@@ -9,6 +9,12 @@ use std::fmt;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum LoadCause {
+    #[error("program {id} was committed but its result could not be observed; it remains loaded")]
+    Observation {
+        id: std::num::NonZeroU32,
+        #[source]
+        source: crate::ObservationError,
+    },
     #[error("read local ELF")]
     Read(#[source] std::io::Error),
     #[error("parse local ELF")]

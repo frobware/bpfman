@@ -15,7 +15,7 @@ mod rollback;
 mod store;
 mod unload;
 
-pub use list::{ProgramFilter, list_programs};
+pub use list::{ProgramFilter, list_programs, select_records};
 pub use store::plan_store_open;
 
 use alloc::{collections::VecDeque, vec::Vec};

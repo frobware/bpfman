@@ -12,6 +12,7 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-core", 1),
     ("bpfman-lock", 1),
     ("bpfman-fs", 2),
+    ("bpfman-kernel", 2),
     ("bpfman-store-sqlite", 3),
     ("bpfman-runtime", 4),
     ("bpfman", 5),
@@ -176,9 +177,9 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                     matches!(name, "bpfman-fs" | "bpfman-runtime"),
                     "Aya is confined to pin I/O and the private kernel adapter"
                 ),
-                "aya-obj" => assert_eq!(
-                    name, "bpfman-runtime",
-                    "ELF parsing belongs in the kernel adapter"
+                "aya-obj" => assert!(
+                    matches!(name, "bpfman-runtime" | "bpfman-kernel"),
+                    "ELF parsing and generated BPF ABI layouts belong in kernel adapters"
                 ),
                 "rusqlite" | "libsqlite3-sys" => assert_eq!(
                     name, "bpfman-store-sqlite",
@@ -234,5 +235,50 @@ fn pure_closures_have_only_reviewed_dependencies_and_features() {
             }
             pending.extend(normal_dependencies(meta, id));
         }
+    }
+}
+
+#[test]
+fn syscall_exception_keeps_all_other_workspace_lint_gates() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let workspace = std::fs::read_to_string(root.join("Cargo.toml")).expect("workspace");
+    let kernel = std::fs::read_to_string(root.join("crates/bpfman-kernel/Cargo.toml"))
+        .expect("kernel manifest");
+    let section = |text: &str, header: &str| -> Vec<String> {
+        text.split_once(header)
+            .expect("lint section")
+            .1
+            .lines()
+            .take_while(|line| !line.starts_with('['))
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(str::to_owned)
+            .collect()
+    };
+    for category in ["rust", "clippy"] {
+        let expected = section(&workspace, &format!("[workspace.lints.{category}]"));
+        let actual = section(&kernel, &format!("[lints.{category}]"));
+        let expected: Vec<_> = expected
+            .into_iter()
+            .map(|line| {
+                if line == "unsafe_code = \"forbid\"" {
+                    "unsafe_code = \"deny\"".into()
+                } else {
+                    line
+                }
+            })
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "kernel must retain all other workspace gates"
+        );
+    }
+    let syscall = std::fs::read_to_string(root.join("crates/bpfman-kernel/src/syscall.rs"))
+        .expect("syscall boundary");
+    assert!(syscall.contains("#![allow(unsafe_code)]"));
+    for module in ["lib.rs", "observe.rs"] {
+        let source = std::fs::read_to_string(root.join("crates/bpfman-kernel/src").join(module))
+            .expect("safe observation module");
+        assert!(!source.contains("allow(unsafe_code)"));
     }
 }

@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+serde_json.workspace = true
 anyhow.workspace = true
 base64.workspace = true
 bpfman-fs.workspace = true

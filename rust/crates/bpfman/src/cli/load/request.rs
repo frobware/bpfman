@@ -123,8 +123,6 @@ impl LoadRequest {
             Some("global overrides")
         } else if map_owner_id.is_some() {
             Some("map-owner sharing")
-        } else if output == super::LoadOutput::Json {
-            Some("JSON output")
         } else {
             None
         };
@@ -139,11 +137,14 @@ impl LoadRequest {
         let stored = bpfman_runtime::load_tracepoint(layout, &path, name, &metadata, timeout)?;
         // Output is deliberately outside the operation: delivery failure must
         // never compensate a committed program.
-        crate::output::programs(
+        crate::output::program(
             &mut std::io::stdout().lock(),
-            &[stored],
-            false,
-            crate::cli::OutputFormat::Text,
+            &stored,
+            match output {
+                super::LoadOutput::Text => crate::cli::OutputFormat::Text,
+                super::LoadOutput::Json => crate::cli::OutputFormat::Json,
+            },
+            true,
         )?;
         Ok(())
     }

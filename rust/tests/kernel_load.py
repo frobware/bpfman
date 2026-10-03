@@ -59,8 +59,8 @@ def main():
                 assert diagnostic in bad.stderr, bad.stderr
                 assert not root.exists()
 
-            run(args.rust, root, "program", "load", "file", source, "--programs", selected,
-                "--application", "rust-slice", "--metadata", "test=acceptance")
+            loaded = json.loads(run(args.rust, root, "program", "load", "file", source, "--programs", selected,
+                "--application", "rust-slice", "--metadata", "test=acceptance", "-o", "json").stdout)["programs"][0]
             # The loader has exited: the program and maps must still be pinned.
             db = sqlite3.connect(root / "db/store.db")
             rows = db.execute("SELECT program_id, program_name, source_path, object_path, pin_path, license, updated_at FROM managed_programs").fetchall()
@@ -80,6 +80,17 @@ def main():
             observation = json.loads(run(args.go, root, "program", "get", pid, "-o", "json").stdout)
             assert observation["record"]["program_id"] == pid, observation
             assert observation["status"]["kernel"] is not None, observation
+            rust_observation = json.loads(run(args.rust, root, "program", "get", pid, "-o", "json").stdout)
+            assert rust_observation == observation, {"rust": rust_observation, "go": observation}
+            assert loaded["record"] == observation["record"]
+            assert loaded["status"]["kernel"] == observation["status"]["kernel"]
+            assert loaded["status"]["stats"] is None
+            assert all(m["pin_path"] == "" and not m["present"] for m in loaded["status"]["maps"])
+            rust_list = json.loads(run(args.rust, root, "program", "list", "-o", "json").stdout)
+            go_list = json.loads(run(args.go, root, "program", "list", "-o", "json").stdout)
+            assert rust_list == go_list, {"rust": rust_list, "go": go_list}
+            assert run(args.rust, root, "program", "get", pid).stdout == run(args.go, root, "program", "get", pid).stdout
+            print("PASS: Rust get/list JSON and get text match Go observations; load preserves its distinct shape")
             run(args.rust, root, "program", "unload", pid)
             assert not Path(pin).exists()
             assert not Path(bytecode).exists()
@@ -227,6 +238,24 @@ def main():
             staging.rename(root / "rejected-staging-link")
             (root / "saved-staging").rename(staging)
             print("PASS: publication failure compensates pins and preserves outside state")
+
+            # Observation happens after commit. Corrupting the just-written
+            # record must report that boundary, retaining every committed artifact.
+            db.execute("CREATE TRIGGER fail_observation AFTER INSERT ON managed_programs BEGIN UPDATE managed_programs SET created_at='invalid timestamp' WHERE program_id=NEW.program_id; END")
+            db.commit()
+            failed = run(args.rust, root, "program", "load", "file", source,
+                         "--programs", selected, "-o", "json", success=False)
+            assert "was committed" in failed.stderr, failed.stderr
+            pid = db.execute("SELECT program_id FROM managed_programs").fetchone()[0]
+            present(pid)
+            assert db.execute("SELECT count(*) FROM map_sets").fetchone()[0] == 1
+            created = json.loads((root / "programs" / str(pid) / "provenance.json").read_text())["loaded_at"]
+            db.execute("DROP TRIGGER fail_observation")
+            db.execute("UPDATE managed_programs SET created_at=? WHERE program_id=?", (created, pid))
+            db.commit()
+            run(args.rust, root, "program", "get", pid, "-o", "json")
+            run(args.rust, root, "program", "unload", pid)
+            print("PASS: observation failure after commit retains the loaded program and every owned artifact")
 
             # A failed write to stdout happens after commit and must not unload.
             with open("/dev/full", "w") as sink:

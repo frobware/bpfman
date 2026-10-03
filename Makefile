@@ -968,6 +968,7 @@ endif
 # BIN_DIR is passed explicitly below rather than via this list
 # because the value gets abspath'd at the call site.
 E2E_SCRIPTS_FORWARD_VARS := \
+	BPFMAN_RUNTIME_DIR \
 	BPFMAN_CONFIG \
 	BPFMAN_E2E_BYTECODE_SOURCE \
 	BPFMAN_E2E_IMAGE_REGISTRY \
@@ -1826,3 +1827,9 @@ rust-test-kernel-load: rust-build $(BIN_DIR)/bpfman e2e/testdata/bpf/tracepoint_
 	sudo unshare --mount --propagation private python3 rust/tests/kernel_load.py \
 		--rust "$(CURDIR)/rust/target/debug/bpfman" --go "$(abspath $(BIN_DIR))/bpfman" \
 		--fixtures "$(CURDIR)/e2e/testdata/bpf"
+
+# Run the unchanged Go DSL corpus against the Rust observation slice in isolation.
+.PHONY: rust-test-observation
+rust-test-observation: rust-build $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN)
+	sudo unshare --mount --propagation private python3 rust/tests/tracepoint_observation.py \
+	    --rust "$(abspath rust/target/debug/bpfman)"

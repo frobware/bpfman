@@ -9,8 +9,13 @@ extern crate alloc;
 use alloc::string::String;
 
 mod load;
+mod observation;
 mod program_type;
 mod summary;
+pub use observation::{
+    ImagePullPolicy, KernelMap, KernelProgram, ObservedMap, ObservedProgram, ProgramEntry,
+    ProgramSource, ProgramStats, StoredProgram,
+};
 
 pub use program_type::{ParseProgramTypeError, ProgramType};
 pub use summary::StoredProgramSummary;

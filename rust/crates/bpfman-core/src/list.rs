@@ -29,3 +29,21 @@ pub fn list_programs(
     selected.sort_by_key(StoredProgramSummary::id);
     selected
 }
+
+/// Select full records with the same policy used by stored summary listing.
+pub fn select_records(
+    records: Vec<bpfman_model::StoredProgram>,
+    filter: &ProgramFilter,
+) -> Vec<bpfman_model::StoredProgram> {
+    let mut selected: Vec<_> = records
+        .into_iter()
+        .filter(|p| {
+            (filter.types.is_empty() || filter.types.contains(&p.spec.kind()))
+                && filter.application.as_ref().is_none_or(|app| {
+                    app.is_empty() || p.metadata.get("bpfman.io/application") == Some(app)
+                })
+        })
+        .collect();
+    selected.sort_by_key(|p| p.id);
+    selected
+}
