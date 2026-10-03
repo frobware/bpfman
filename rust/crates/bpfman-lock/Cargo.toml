@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 rustix.workspace = true
 thiserror.workspace = true
 

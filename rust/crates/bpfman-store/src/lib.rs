@@ -5,22 +5,29 @@
 mod error;
 
 use bpfman_core::EffectFailure;
-use bpfman_fs::RuntimeWriter;
+use bpfman_fs::{RuntimeDirectory, RuntimeWriter};
 use bpfman_model::{StoredProgram, StoredProgramSummary, Symbol};
 pub use error::{Error, ErrorKind};
 use std::{collections::BTreeMap, num::NonZeroU32};
 
-/// Open compatible state under writer authority, creating only if absent.
+/// Open compatible state for independent readers or under writer authority.
 /// Corrupt, inaccessible, or incompatible state must fail without replacement.
 pub trait OpenStore {
     /// Opened read handle; owns backend evidence rather than a path to reopen.
     type Reader: ProgramReader;
+
+    /// Open existing state without acquiring the runtime writer lock or creating
+    /// application state. Only absence returns None; invalid or inaccessible state fails.
+    /// Independent readers may run concurrently with the single writer.
+    fn open_reader(&self, runtime: &RuntimeDirectory) -> Result<Option<Self::Reader>, Error>;
 
     /// Observe and open in the same writer scope. Never migrate implicitly.
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self::Reader, Error>;
 }
 
 /// Consistent read-only observations from an opened backend.
+/// Each call observes one committed snapshot. Separate calls may see newer state.
+/// Use independent handles per thread; sharing one handle concurrently is not required.
 pub trait ProgramReader {
     /// Read stored summaries without kernel observations.
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error>;

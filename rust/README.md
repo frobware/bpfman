@@ -72,14 +72,16 @@ I/O APIs out of these libraries.
 ## Store backend boundary
 
 The CLI composition root selects SQLite (the default) or JSON with `--store`
-or `BPFMAN_STORE`, and passes that backend to runtime operations. Runtime depends
+or `BPFMAN_STORE`, opens a runtime-bound `ActiveStore`, and injects it into runtime
+operations. Shared behavioural tests construct the same active store in setup.
+Runtime depends
 on `bpfman-store`, with no direct or transitive dependency on either backend.
 Architecture tests enforce this separation. The contract
 crate defines four small, statically dispatched interfaces:
 
-- `OpenStore` opens compatible state under writer authority and returns an owned
-  reader. Backend-specific format checks and missing-state initialization stay
-  inside the implementation.
+- `OpenStore` opens existing state for independent readers without the writer
+  lock, or initializes missing state with writer authority. Only absence permits
+  initialization; format checks remain inside each backend.
 - `ProgramReader` returns stored summaries or complete domain records from a
   consistent snapshot, without exposing serialized data or queries.
 - `CommitLoad` atomically publishes a tracepoint and its private map-set
@@ -158,6 +160,39 @@ test setup. JSON adds focused persistence tests for malformed state, publication
 failure, invalid relationships, and stale generations. It has no separate
 behavioural suite.
 
+`tests/concurrent_store.rs` exercises both backends with four independent readers
+opening and reading while a writer holds the runtime lock and publishes successive
+commits. Each read sees one complete committed snapshot; separate calls may see
+different generations. Concurrent first starts recheck absence under the writer
+lock. SQLite uses WAL; JSON readers retain an opened inode even if publication
+unlinks it before validation. Staging validation still requires exactly one link.
+
+## Telemetry
+
+Effectful crates emit `tracing` spans; the CLI owns collection. Set `RUST_LOG` to
+enable structured JSON events on stderr. Command output remains on stdout.
+Telemetry is disabled by default. Filters can select a crate or individual module:
+
+```sh
+RUST_LOG=bpfman_runtime=debug,bpfman_store_json=debug,bpfman_fs::snapshot=trace,bpfman_lock=trace \
+  rust/target/debug/bpfman --store json --runtime-dir /tmp/bpfman-observe \
+  --trace-file /tmp/bpfman-startup.json program list -q
+```
+
+The optional timeline file opens in Perfetto or Chrome tracing and uses the same
+filter. `--trace-file` enables debug spans when `RUST_LOG` is unset; lock spans are
+trace level and need `bpfman_lock=trace`. Existing output files are refused. Each
+file covers one CLI process. Trace guards flush on normal and error exits.
+
+Targets include `bpfman_runtime`, `bpfman_store_json`, `bpfman_store_sqlite`,
+`bpfman_fs::snapshot`, and `bpfman_lock`. Operation spans cover store opening,
+creation, snapshots, commits, deletion, publication, and program operations.
+`lock.wait` measures acquisition (including timeout/cancellation); `lock.held`
+covers the current callback and closing its descriptor. Inherited descriptors may
+retain the underlying flock after that scope. Span-close events report busy/idle
+time, and acquisition events include `wait_us`. No record contents or credentials
+are logged. Model/core crates remain uninstrumented and pure.
+
 ## CLI parity harness
 
 The production Go CLI remains the default under test. Build the new CLI with
@@ -177,11 +212,11 @@ Construction rejects empty/relative roots and filesystem-root aliases, and norma
 Go, preserving non-UTF-8 names without filesystem I/O or symlink resolution.
 It describes locations, not proof that runtime setup has happened.
 `--type` accepts repeated, comma-separated, case-insensitive types;
-`--program-type` and `-p` are aliases. Startup acquires `<runtime>/.lock` using
-the same `flock` protocol as Go, then creates a missing
-`<runtime>/db/store.db` at Go schema version 2. The private runtime operation
-`open_or_create_store` acquires the writer and calls the selected backend's
-`OpenStore` implementation. SQLite observes its schema and uses the core's
+`--program-type` and `-p` are aliases. After request and ELF validation, startup
+opens the selected active store. Existing state needs no runtime lock. Only
+missing state takes `<runtime>/.lock`, rechecks absence, and initializes the store
+before releasing the lock. SQLite creates `<runtime>/db/store.db` at Go schema
+version 2 in WAL mode. Its initialization path uses the core's
 `plan_store_open` decision inside the adapter, returning an opened read handle.
 Runtime orchestration never receives a schema version or database path.
 `StoreObservation<T>` and `StoreOpenPlan<T>` retain opaque interpreter-owned
@@ -194,7 +229,7 @@ its target from that writer; an unrelated lock cannot authorise a supplied path.
 Creation builds a complete temporary database and publishes it without
 overwriting existing state. New database files are owner-readable/writable.
 Existing databases are never repaired or migrated. Subsequent reads check the
-schema in a read-only transaction on that handle after releasing the writer lock. Production
+schema in a read-only transaction without the runtime writer lock. Production
 creation and test fixtures embed the Go migration SQL with `include_str!`.
 
 Direct file/directory removal calls are denied by the lint gate outside the
@@ -281,9 +316,9 @@ text/JSON and list JSON for the same live tracepoint.
 
 ## Program observations
 
-Full store decoding, kernel reads, map-pin correlation, and selection happen
-under one runtime writer scope. The store returns typed domain values from a
-read-only transaction, preserving nullable timestamps and nil versus empty
+Full store decoding, kernel reads, map-pin correlation, and selection require
+no runtime writer lock. The store returns typed domain values from a consistent
+snapshot, preserving nullable timestamps and nil versus empty
 global byte slices. Timestamp output matches Go's RFC3339Nano formatting,
 trimming trailing fractional zeros without reducing precision. CLI conversion
 owns JSON field names and the different load/get/list envelopes; the pure model
@@ -299,13 +334,16 @@ allows unsafe only in that module; an architecture test checks the other gates
 remain identical.
 
 Absent kernel objects are distinct from denied observations. Get reports a
-stored program missing from the kernel as requiring reconciliation; list JSON
-uses a null kernel field for that case. Permission and other program lookup
+program recorded in the store snapshot but absent during the later kernel
+observation; list JSON uses a null kernel field for that case. Concurrent unload
+can cause this observation, so it does not itself prove inconsistency. Permission and other program lookup
 errors fail the command. Individual unreadable maps are omitted, as in Go,
 while the program's observed map IDs remain intact. Available zero counters are
 not null. Load omits statistics and map-pin presence observations; get includes
 them. Map pins are correlated by kernel map ID, avoiding ambiguous matches when
-names share a truncated prefix. Runtime paths alone do not assert presence.
+names share a truncated prefix. Pins are inspected through opened descriptors;
+pins removed before opening are omitted. Runtime paths alone do not assert
+presence. Store, kernel, and pin observations are not one atomic snapshot.
 
 After successful load persistence, observation and output failures cannot roll
 back committed state. An observation failure reports the program ID and that it

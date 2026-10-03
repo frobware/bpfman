@@ -78,6 +78,16 @@ pub(super) struct Reader<R> {
 impl<S: OpenStore> OpenStore for Faults<S> {
     type Reader = Reader<S::Reader>;
 
+    fn open_reader(
+        &self,
+        runtime: &bpfman_fs::RuntimeDirectory,
+    ) -> Result<Option<Self::Reader>, Error> {
+        Ok(self.backend.open_reader(runtime)?.map(|reader| Reader {
+            reader,
+            state: self.state.clone(),
+        }))
+    }
+
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self::Reader, Error> {
         Ok(Reader {
             reader: self.backend.open(writer)?,

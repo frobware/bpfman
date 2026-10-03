@@ -28,6 +28,30 @@ fn assert_refused(runtime: &RuntimeDirectory) -> Result {
 }
 
 #[test]
+fn read_only_open_never_creates_runtime_state() -> Result {
+    let temporary = tempfile::tempdir()?;
+    let layout = RuntimeLayout::try_from(temporary.path().join("absent/runtime"))?;
+
+    assert!(RuntimeDirectory::open_existing(layout.clone())?.is_none());
+    assert!(!temporary.path().join("absent").exists());
+
+    std::fs::create_dir_all(layout.root())?;
+    let runtime = RuntimeDirectory::open_existing(layout.clone())?.ok_or("runtime missing")?;
+
+    assert!(runtime.open_store_snapshot()?.is_none());
+    assert_eq!(std::fs::read_dir(layout.root())?.count(), 0);
+
+    std::os::unix::fs::symlink(temporary.path(), layout.root().join("db"))?;
+    assert!(runtime.open_store_snapshot().is_err());
+
+    let alias = temporary.path().join("alias");
+    std::os::unix::fs::symlink(layout.root(), &alias)?;
+    assert!(RuntimeDirectory::open_existing(RuntimeLayout::try_from(alias)?).is_err());
+
+    Ok(())
+}
+
+#[test]
 fn constructing_a_directory_does_not_acquire_or_create_the_lock() -> Result {
     let temporary = tempfile::tempdir()?;
     let layout = RuntimeLayout::try_from(temporary.path().join("nested/runtime"))?;

@@ -117,10 +117,15 @@ fn creates_go_schema_and_history_idempotently() -> Result<(), Box<dyn std::error
         assert_eq!(values(&actual)?, values(&expected.connection)?);
     }
 
-    assert_eq!(
-        std::fs::read_dir(path.parent().ok_or("missing parent")?)?.count(),
-        1
-    );
+    let mode: String = actual.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+    assert_eq!(mode, "wal");
+
+    for entry in std::fs::read_dir(path.parent().ok_or("missing parent")?)? {
+        assert!(matches!(
+            entry?.file_name().to_str(),
+            Some("store.db" | "store.db-wal" | "store.db-shm")
+        ));
+    }
 
     Ok(())
 }

@@ -1,13 +1,14 @@
 //! Adoption for committed-state teardown. This does not create or mount objects.
 
 use crate::{
-    Bytecode, Error, MapDirectory, MapPin, ProgramPin, RuntimeWriter, UnloadArtifacts,
+    Bytecode, Error, MapDirectory, MapPin, ProgramPin, RuntimeDirectory, RuntimeWriter,
+    UnloadArtifacts,
     artifacts::{BPF_SUPER_MAGIC, Entry, entry, identity, proc_path, validate_map_name},
     directory::{BENEATH, CONFINED, DIRECTORY},
     error::{Failure, io},
     removal::open_owned,
 };
-use rustix::fs::{Mode, OFlags, ResolveFlags, fstatfs, openat2};
+use rustix::fs::{FileType, Mode, OFlags, ResolveFlags, fstat, fstatfs, openat2};
 use std::{num::NonZeroU32, os::fd::OwnedFd};
 
 fn optional_dir(
@@ -177,12 +178,13 @@ impl RuntimeWriter<'_> {
     }
 }
 
-impl RuntimeWriter<'_> {
+impl RuntimeDirectory {
     /// Enumerate map pins below the opened runtime for read-only correlation.
     /// Missing collections are empty; unsafe traversal and inspection failures
-    /// are errors, never fabricated absence or filesystem mutation.
+    /// are errors. Pins removed during enumeration are omitted. Each opened pin
+    /// is inspected by descriptor, without granting any removal authority.
     pub fn read_map_pins(&self, map_set: NonZeroU32) -> Result<Vec<crate::ObservedMapPin>, Error> {
-        let Some(bpffs) = optional_dir(&self.runtime.root, "fs", BENEATH)? else {
+        let Some(bpffs) = optional_dir(&self.root, "fs", BENEATH)? else {
             return Ok(Vec::new());
         };
 
@@ -204,17 +206,25 @@ impl RuntimeWriter<'_> {
 
         for name in names(&directory)? {
             validate_map_name(&name)?;
-            let entry = observe(
-                self,
+            let pin = match openat2(
                 &directory,
-                &format!("fs/maps/{map_set}"),
                 &name,
-                false,
-            )?
-            .ok_or(Failure::Unsafe("map pin disappeared during observation"))?;
-            let info = aya::maps::MapInfo::from_pin(proc_path(&directory).join(&name))
-                .map_err(Failure::Map)?;
-            open_owned(&entry)?;
+                OFlags::PATH | OFlags::CLOEXEC,
+                Mode::empty(),
+                CONFINED,
+            ) {
+                Ok(pin) => pin,
+                Err(rustix::io::Errno::NOENT) => continue,
+                Err(error) => return Err(io("open observed map pin", error)),
+            };
+            let stat = fstat(&pin).map_err(|e| io("inspect observed map pin", e))?;
+
+            // The opened inode remains readable if a concurrent unload unlinks it.
+            if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink > 1 {
+                return Err(Failure::Unsafe("map pin has unexpected type or hard links").into());
+            }
+
+            let info = aya::maps::MapInfo::from_pin(proc_path(&pin)).map_err(Failure::Map)?;
             result.push(crate::ObservedMapPin {
                 name,
                 id: info.id(),

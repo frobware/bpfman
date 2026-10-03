@@ -116,6 +116,7 @@ pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
 /// Unpin failure stops teardown; record failure still allows bytecode cleanup.
 /// Post-record cleanup failures return a successful report with warnings, as Go
 /// does. Retained receipts support explicit retry even after the row is gone.
+#[tracing::instrument(name = "program.unload", level = "debug", skip_all, fields(program_id = id.get()), err)]
 pub fn unload_tracepoint<S: UnloadStore>(
     store: &S,
     layout: &RuntimeLayout,

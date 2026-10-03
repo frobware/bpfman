@@ -1,5 +1,5 @@
 use crate::{
-    LoadError,
+    LoadError, PreparedTracepoint,
     kernel::LocalObject,
     load_error::{Failure, LoadCause, finish},
 };
@@ -30,58 +30,95 @@ pub fn load_tracepoint<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
     metadata: &BTreeMap<String, String>,
     timeout: Duration,
 ) -> Result<ObservedProgram, LoadError> {
-    let source_text = source
-        .to_str()
-        .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
+    PreparedTracepoint::new(layout, source, name, metadata.clone())?.load(store, timeout)
+}
 
-    if layout.root().to_str().is_none() {
-        return Err(
-            LoadCause::Invalid("load persistence requires a UTF-8 runtime path".into()).into(),
-        );
+impl PreparedTracepoint {
+    /// Validate the request and read the ELF without creating runtime state.
+    pub fn new(
+        layout: &RuntimeLayout,
+        source: &Path,
+        name: Symbol,
+        metadata: BTreeMap<String, String>,
+    ) -> Result<Self, LoadError> {
+        let source_text = source
+            .to_str()
+            .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
+
+        if layout.root().to_str().is_none() {
+            return Err(LoadCause::Invalid(
+                "load persistence requires a UTF-8 runtime path".into(),
+            )
+            .into());
+        }
+
+        let object = LocalObject::read(source, &name)?;
+
+        Ok(Self {
+            layout: layout.clone(),
+            object,
+            source: source_text.into(),
+            name,
+            metadata,
+        })
     }
 
-    let object = LocalObject::read(source, &name)?;
-    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
-    let runtime = RuntimeDirectory::open_or_create(layout.clone()).map_err(LoadCause::from)?;
-    runtime
-        .with_writer(
-            AcquireOptions {
-                timeout,
-                cancelled: None,
-            },
-            |writer| {
-                run(
-                    &writer,
-                    &mut Effects(store),
-                    &Inputs {
-                        object: &object,
-                        source: source_text,
-                        name: &name,
-                        metadata,
-                        created_at: &created_at,
-                    },
-                )
-                .map_err(|failure| LoadError {
-                    failure: Box::new(failure),
-                })
-                .and_then(|stored| {
-                    crate::observation::observe(
-                        store,
+    /// Load these validated bytes using the explicitly supplied active store.
+    #[tracing::instrument(name = "program.load", level = "debug", skip_all, err)]
+    pub fn load<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
+        self,
+        store: &S,
+        timeout: Duration,
+    ) -> Result<ObservedProgram, LoadError> {
+        let Self {
+            layout,
+            object,
+            source,
+            name,
+            metadata,
+        } = self;
+        let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+        let runtime = RuntimeDirectory::open_or_create(layout.clone()).map_err(LoadCause::from)?;
+        runtime
+            .with_writer(
+                AcquireOptions {
+                    timeout,
+                    cancelled: None,
+                },
+                |writer| {
+                    run(
                         &writer,
-                        stored.id(),
-                        crate::observation::View::Load,
+                        &mut Effects(store),
+                        &Inputs {
+                            object: &object,
+                            source: &source,
+                            name: &name,
+                            metadata: &metadata,
+                            created_at: &created_at,
+                        },
                     )
-                    .map_err(|source| {
-                        LoadCause::Observation {
-                            id: stored.id(),
-                            source,
-                        }
-                        .into()
+                    .map_err(|failure| LoadError {
+                        failure: Box::new(failure),
                     })
-                })
-            },
-        )
-        .map_err(LoadCause::from)?
+                    .and_then(|stored| {
+                        crate::observation::observe(
+                            store,
+                            writer.directory(),
+                            stored.id(),
+                            crate::observation::View::Load,
+                        )
+                        .map_err(|source| {
+                            LoadCause::Observation {
+                                id: stored.id(),
+                                source,
+                            }
+                            .into()
+                        })
+                    })
+                },
+            )
+            .map_err(LoadCause::from)?
+    }
 }
 
 // This is the only forward interpreter, used by the CLI and fault-injection

@@ -20,6 +20,40 @@ pub(super) const BENEATH: ResolveFlags = ResolveFlags::BENEATH.union(ResolveFlag
 pub(super) const CONFINED: ResolveFlags = BENEATH.union(ResolveFlags::NO_XDEV);
 
 impl RuntimeDirectory {
+    /// Adopt an existing root without creating directories or acquiring a lock.
+    /// Only absence returns None; symlinks, inaccessible paths and root aliases fail.
+    pub fn open_existing(layout: RuntimeLayout) -> Result<Option<Self>, Error> {
+        let filesystem =
+            open("/", DIRECTORY, Mode::empty()).map_err(|e| io("open filesystem anchor", e))?;
+        let relative = layout
+            .root()
+            .strip_prefix("/")
+            .map_err(|_| Failure::Unsafe("root must be absolute"))?;
+        let root = match openat2(&filesystem, relative, DIRECTORY, Mode::empty(), BENEATH) {
+            Ok(root) => root,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(e) => return Err(io("adopt existing runtime directory", e)),
+        };
+        let anchor = fstat(&filesystem).map_err(|e| io("inspect filesystem anchor", e))?;
+        let adopted = fstat(&root).map_err(|e| io("inspect runtime directory", e))?;
+
+        if (anchor.st_dev, anchor.st_ino) == (adopted.st_dev, adopted.st_ino) {
+            return Err(Failure::Unsafe("filesystem root cannot be adopted").into());
+        }
+
+        Ok(Some(Self { root, layout }))
+    }
+
+    /// Validated path vocabulary for read-only adapters and presentation.
+    pub fn layout(&self) -> &RuntimeLayout {
+        &self.layout
+    }
+
+    /// Descriptor identity, without granting mutation authority.
+    pub fn identity(&self) -> Result<crate::RuntimeIdentity, Error> {
+        crate::artifacts::identity(&self.root).map(crate::RuntimeIdentity)
+    }
+
     /// Open or create the configured root without following symlinks.
     ///
     /// Ancestors may cross mounts (for example `/run`); descendants may not.
@@ -127,6 +161,11 @@ impl RuntimeDirectory {
 }
 
 impl RuntimeWriter<'_> {
+    /// Borrow the adopted runtime for observations that need no writer authority.
+    pub fn directory(&self) -> &RuntimeDirectory {
+        self.runtime
+    }
+
     /// Validated path vocabulary for persistence and presentation.
     pub fn layout(&self) -> &RuntimeLayout {
         &self.runtime.layout
@@ -172,7 +211,7 @@ pub(super) fn ensure_directory(
 impl crate::RuntimeWriter<'_> {
     /// Identity of the descriptor adopted by this writer, independent of path spelling.
     pub fn identity(&self) -> Result<crate::RuntimeIdentity, crate::Error> {
-        crate::artifacts::identity(&self.runtime.root).map(crate::RuntimeIdentity)
+        self.runtime.identity()
     }
 }
 

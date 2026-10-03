@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 aya.workspace = true
 bpfman-core.workspace = true
 

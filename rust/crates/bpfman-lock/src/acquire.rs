@@ -97,7 +97,22 @@ fn acquire<T>(
     started: Instant,
     work: impl for<'lock> FnOnce(WritePermit<'lock>) -> T,
 ) -> Result<T, Error> {
-    let _active = ActiveScope::enter(&file)?;
+    let _active = wait_for_lock(&file, path, options, started)?;
+    let _held = tracing::trace_span!("lock.held", path = %path.display()).entered();
+    let result = work(WritePermit { file: &file });
+    drop(file);
+
+    Ok(result)
+}
+
+#[tracing::instrument(name = "lock.wait", level = "trace", skip_all, fields(path = %path.display(), timeout_ms = options.timeout.as_millis() as u64), err)]
+fn wait_for_lock(
+    file: &File,
+    path: &Path,
+    options: AcquireOptions<'_>,
+    started: Instant,
+) -> Result<ActiveScope, Error> {
+    let active = ActiveScope::enter(file)?;
     let mut backoff = Duration::from_millis(1);
     let mut attempted = false;
 
@@ -114,8 +129,14 @@ fn acquire<T>(
 
         attempted = true;
 
-        match flock(&file, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => return Ok(work(WritePermit { file: &file })),
+        match flock(file, FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => {
+                tracing::trace!(
+                    wait_us = started.elapsed().as_micros() as u64,
+                    "lock acquired"
+                );
+                return Ok(active);
+            }
             Err(rustix::io::Errno::WOULDBLOCK | rustix::io::Errno::INTR) => {}
             Err(error) => {
                 return Err(io_error(

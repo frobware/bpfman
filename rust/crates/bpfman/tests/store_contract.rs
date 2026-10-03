@@ -35,7 +35,7 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
         .expect("commit");
 }
 
-fn exercise<S: OpenStore + CommitLoad + UnloadStore>(store: S) {
+fn exercise<S: OpenStore + CommitLoad + UnloadStore>(backend: S) {
     let temporary = tempfile::tempdir().expect("tempdir");
     let layout = RuntimeLayout::try_from(temporary.path().join("one")).expect("layout");
     let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
@@ -44,6 +44,8 @@ fn exercise<S: OpenStore + CommitLoad + UnloadStore>(store: S) {
     )
     .expect("runtime");
     let id = NonZeroU32::new(42).expect("id");
+    let store = bpfman_runtime::ActiveStore::open(backend, &layout, Duration::from_secs(1))
+        .expect("active store");
 
     let (program, maps) = with_writer(&runtime, |w| {
         let mut reader = store.open(w).expect("open");

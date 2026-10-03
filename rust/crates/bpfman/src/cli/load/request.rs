@@ -2,17 +2,14 @@ use std::collections::BTreeSet;
 
 use clap::error::ErrorKind;
 
-use super::{Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, parse};
+use super::{
+    Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, PreparedLoad, parse,
+};
 
 impl LoadCommand {
-    pub(crate) fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
-        self,
-        store: &S,
-        layout: &bpfman_fs::RuntimeLayout,
-        timeout: std::time::Duration,
-    ) -> anyhow::Result<()> {
+    pub(crate) fn prepare(self, layout: &bpfman_fs::RuntimeLayout) -> anyhow::Result<PreparedLoad> {
         let request = self.into_request().unwrap_or_else(|error| error.exit());
-        request.execute(store, layout, timeout)
+        request.prepare(layout)
     }
 
     fn into_request(self) -> Result<LoadRequest, clap::Error> {
@@ -90,12 +87,7 @@ impl LoadOptions {
 }
 
 impl LoadRequest {
-    fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
-        self,
-        store: &S,
-        layout: &bpfman_fs::RuntimeLayout,
-        timeout: std::time::Duration,
-    ) -> anyhow::Result<()> {
+    fn prepare(self, layout: &bpfman_fs::RuntimeLayout) -> anyhow::Result<PreparedLoad> {
         let Self {
             source,
             first,
@@ -146,15 +138,27 @@ impl LoadRequest {
         let bpfman_model::ProgramSpec::Tracepoint(name) = first else {
             anyhow::bail!("unsupported program type");
         };
-        let stored =
-            bpfman_runtime::load_tracepoint(store, layout, &path, name, &metadata, timeout)?;
+        Ok(PreparedLoad {
+            request: bpfman_runtime::PreparedTracepoint::new(layout, &path, name, metadata)?,
+            output,
+        })
+    }
+}
+
+impl PreparedLoad {
+    pub(crate) fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
+        self,
+        store: &S,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<()> {
+        let stored = self.request.load(store, timeout)?;
 
         // Output is deliberately outside the operation: delivery failure must
         // never compensate a committed program.
         crate::output::program(
             &mut std::io::stdout().lock(),
             &stored,
-            match output {
+            match self.output {
                 super::LoadOutput::Text => crate::cli::OutputFormat::Text,
                 super::LoadOutput::Json => crate::cli::OutputFormat::Json,
             },

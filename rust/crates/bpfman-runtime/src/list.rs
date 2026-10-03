@@ -7,16 +7,17 @@ use bpfman_core::ProgramFilter;
 use bpfman_fs::RuntimeLayout;
 use bpfman_model::StoredProgramSummary;
 
-use crate::{Error, error::store_error, store::open_or_create_store};
+use crate::{Error, error::store_error, store::read_store};
 
-/// Open or create the store, read managed summaries, and apply pure selection.
+/// Read managed summaries from the initialized store without the writer lock.
+#[tracing::instrument(name = "program.list", level = "debug", skip_all, err)]
 pub fn list_programs<S: bpfman_store::OpenStore>(
     backend: &S,
     layout: &RuntimeLayout,
     filter: &ProgramFilter,
     lock_timeout: Duration,
 ) -> Result<Vec<StoredProgramSummary>, Error> {
-    let mut store = open_or_create_store(backend, layout, lock_timeout)?;
+    let mut store = read_store(backend, layout, lock_timeout)?;
     let programs = store.read_programs().map_err(store_error)?;
 
     Ok(bpfman_core::list_programs(programs, filter))

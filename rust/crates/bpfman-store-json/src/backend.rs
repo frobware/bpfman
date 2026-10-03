@@ -1,6 +1,6 @@
 use crate::{Backend, MapSetReceipt, ProgramReceipt, Reader, error::Failure, state::State};
 use bpfman_core::EffectFailure;
-use bpfman_fs::{RuntimeWriter, StoreSnapshot};
+use bpfman_fs::{RuntimeDirectory, RuntimeWriter, StoreSnapshot};
 use bpfman_model::{StoredProgram, StoredProgramSummary};
 use bpfman_store::{
     CommitLoad, Error, OpenStore, ProgramReader, TracepointRecord, UnloadObservation, UnloadStore,
@@ -14,6 +14,7 @@ fn read(file: &StoreSnapshot) -> Result<(Vec<u8>, State), Failure> {
     Ok((bytes, state))
 }
 
+#[tracing::instrument(name = "store.publish", level = "debug", skip_all, fields(programs = state.programs.len(), map_sets = state.map_sets.len()), err)]
 fn publish(
     writer: &RuntimeWriter<'_>,
     file: &StoreSnapshot,
@@ -29,6 +30,23 @@ fn publish(
 impl OpenStore for Backend {
     type Reader = Reader;
 
+    #[tracing::instrument(name = "store.open_reader", level = "debug", skip_all, err)]
+    fn open_reader(&self, runtime: &RuntimeDirectory) -> Result<Option<Reader>, Error> {
+        let Some(file) = runtime.open_store_snapshot().map_err(Failure::from)? else {
+            return Ok(None);
+        };
+        let Some(bytes) = file.read().map_err(Failure::from)? else {
+            return Ok(None);
+        };
+        State::decode(&bytes)?;
+
+        Ok(Some(Reader {
+            file,
+            layout: runtime.layout().clone(),
+        }))
+    }
+
+    #[tracing::instrument(name = "store.open_or_create", level = "debug", skip_all, err)]
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Reader, Error> {
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
 
@@ -36,7 +54,10 @@ impl OpenStore for Backend {
             Some(bytes) => {
                 State::decode(&bytes)?;
             }
-            None => publish(writer, &file, None, &State::empty()?)?,
+            None => {
+                let _creation = tracing::debug_span!("store.create").entered();
+                publish(writer, &file, None, &State::empty()?)?;
+            }
         }
 
         Ok(Reader {
@@ -47,12 +68,14 @@ impl OpenStore for Backend {
 }
 
 impl ProgramReader for Reader {
+    #[tracing::instrument(name = "store.read_summaries", level = "debug", skip_all, err)]
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         let (_, state) = read(&self.file)?;
 
         Ok(state.programs.iter().map(|row| row.summary()).collect())
     }
 
+    #[tracing::instrument(name = "store.snapshot", level = "debug", skip_all, err)]
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error> {
         let (_, state) = read(&self.file)?;
         state
@@ -64,6 +87,7 @@ impl ProgramReader for Reader {
 }
 
 impl CommitLoad for Backend {
+    #[tracing::instrument(name = "store.commit", level = "debug", skip_all, err)]
     fn commit_tracepoint(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -88,6 +112,7 @@ impl UnloadStore for Backend {
     type ProgramReceipt = ProgramReceipt;
     type MapSetReceipt = MapSetReceipt;
 
+    #[tracing::instrument(name = "store.observe_unload", level = "debug", skip_all, err)]
     fn observe_unload(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -123,6 +148,7 @@ impl UnloadStore for Backend {
         )))
     }
 
+    #[tracing::instrument(name = "store.delete_program", level = "debug", skip_all)]
     fn delete_program(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -155,6 +181,7 @@ impl UnloadStore for Backend {
         })
     }
 
+    #[tracing::instrument(name = "store.delete_map_set", level = "debug", skip_all)]
     fn delete_map_set(
         &self,
         writer: &RuntimeWriter<'_>,

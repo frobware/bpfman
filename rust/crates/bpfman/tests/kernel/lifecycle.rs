@@ -24,11 +24,27 @@ fn load<S: OpenStore + CommitLoad>(
 
 pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore>(backend: S) {
     let c = Context::new();
-    let store = Faults::new(backend);
+    let active =
+        bpfman_runtime::ActiveStore::open(backend, &c.layout, TIMEOUT).expect("active store");
+    let store = Faults::new(active);
     let unrelated = load(&store, &c).expect("unrelated load").record.id;
     let pid = load(&store, &c).expect("load").record.id;
     c.present(pid);
     c.present(unrelated);
+
+    // Full observations must proceed even while the giant writer lock is held.
+    c.writer(|_| {
+        let observed = bpfman_runtime::get_program(&store, &c.layout, pid, TIMEOUT)
+            .expect("get while writer held");
+        assert_eq!(observed.record.id, pid);
+        assert!(observed.maps.iter().any(|map| map.present));
+
+        let entries =
+            bpfman_runtime::list_program_entries(&store, &c.layout, &Default::default(), TIMEOUT)
+                .expect("full list while writer held");
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|entry| entry.kernel.is_some()));
+    });
 
     // Failed scope observation precedes every destructive effect.
     store.set(Some(Point::ObserveUnload));

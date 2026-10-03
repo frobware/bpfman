@@ -11,6 +11,42 @@ fn options() -> AcquireOptions<'static> {
 }
 
 #[test]
+fn reader_opened_before_publication_can_validate_and_finish_after_replacement()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let runtime =
+        RuntimeDirectory::open_or_create(RuntimeLayout::try_from(temporary.path().to_owned())?)?;
+
+    runtime.with_writer(
+        options(),
+        |writer| -> Result<(), Box<dyn std::error::Error>> {
+            let snapshot = writer.open_store_snapshot()?;
+            writer.publish_store_snapshot(&snapshot, None, b"old snapshot")?;
+            let opened = openat2(
+                &snapshot.directory,
+                DATABASE_FILE,
+                OFlags::RDONLY | OFlags::CLOEXEC,
+                Mode::empty(),
+                CONFINED,
+            )?;
+
+            // Force publication precisely between open and fstat, without relying
+            // on scheduler timing. Validation and reading use the production path.
+            writer.publish_store_snapshot(&snapshot, Some(b"old snapshot"), b"new snapshot")?;
+
+            assert_eq!(fstat(&opened)?.st_nlink, 0);
+            assert!(regular(&opened).is_err(), "staging still requires one link");
+            assert_eq!(read_opened(opened)?, b"old snapshot");
+            assert_eq!(snapshot.read()?, Some(b"new snapshot".to_vec()));
+
+            Ok(())
+        },
+    )??;
+
+    Ok(())
+}
+
+#[test]
 fn failed_publication_preserves_state_and_rejects_stale_observations()
 -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;

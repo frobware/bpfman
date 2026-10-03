@@ -12,6 +12,7 @@ use clap::Parser;
 
 mod cli;
 mod output;
+mod telemetry;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
@@ -26,6 +27,10 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: cli::Cli) -> anyhow::Result<()> {
+    let _telemetry = telemetry::init(cli.trace_file.as_deref())?;
+    let _command =
+        tracing::debug_span!("cli.command", runtime = %cli.layout.root().display()).entered();
+
     match cli.store {
         cli::StoreBackend::Sqlite => run_with_store(cli, bpfman_store_sqlite::Backend),
         cli::StoreBackend::Json => run_with_store(cli, bpfman_store_json::Backend),
@@ -36,17 +41,16 @@ fn run_with_store<S>(cli: cli::Cli, store: S) -> anyhow::Result<()>
 where
     S: bpfman_store::OpenStore + bpfman_store::CommitLoad + bpfman_store::UnloadStore + 'static,
 {
-    match cli.command {
-        cli::Command::Program {
-            command: cli::ProgramCommand::Get { id, output },
-        } => {
+    let command = cli.command.prepare(&cli.layout)?;
+    let store = bpfman_runtime::ActiveStore::open(store, &cli.layout, cli.lock_timeout)?;
+
+    match command {
+        cli::PreparedCommand::Get { id, output } => {
             let program = bpfman_runtime::get_program(&store, &cli.layout, id, cli.lock_timeout)?;
             output::program(&mut io::stdout().lock(), &program, output, false)?;
         }
 
-        cli::Command::Program {
-            command: cli::ProgramCommand::Unload { id },
-        } => {
+        cli::PreparedCommand::Unload { id } => {
             let report =
                 bpfman_runtime::unload_tracepoint(&store, &cli.layout, id, cli.lock_timeout)?;
 
@@ -62,9 +66,7 @@ where
             }
         }
 
-        cli::Command::Program {
-            command: cli::ProgramCommand::List(args),
-        } => {
+        cli::PreparedCommand::List(args) => {
             let filter = bpfman_core::ProgramFilter {
                 types: args.types,
                 application: args.application,
@@ -85,9 +87,7 @@ where
             }
         }
 
-        cli::Command::Program {
-            command: cli::ProgramCommand::Load { source },
-        } => source.execute(&store, &cli.layout, cli.lock_timeout)?,
+        cli::PreparedCommand::Load(request) => request.execute(&store, cli.lock_timeout)?,
     }
 
     Ok(())

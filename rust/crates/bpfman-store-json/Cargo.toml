@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 bpfman-core.workspace = true
 bpfman-fs.workspace = true
 bpfman-model.workspace = true

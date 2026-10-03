@@ -1,7 +1,7 @@
 //! Whole-store publication beneath verified directory descriptors.
 
 use crate::{
-    Error, RuntimeIdentity, RuntimeWriter,
+    Error, RuntimeDirectory, RuntimeIdentity, RuntimeWriter,
     artifacts::identity,
     directory::{CONFINED, DIRECTORY},
     error::{Failure, io},
@@ -34,9 +34,36 @@ fn regular(fd: &OwnedFd) -> Result<(), Error> {
     Ok(())
 }
 
+fn read_opened(fd: OwnedFd) -> Result<Vec<u8>, Error> {
+    let stat = fstat(&fd).map_err(|e| io("inspect opened store snapshot", e))?;
+
+    // A publisher may have replaced this entry after open. The unlinked inode
+    // remains an immutable snapshot owned by this descriptor. Additional hard
+    // links are still refused; staging files must retain exactly one link.
+    if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile || stat.st_nlink > 1 {
+        return Err(Failure::Unsafe(
+            "store snapshot must be a regular file without extra hard links",
+        )
+        .into());
+    }
+
+    let mut bytes = Vec::new();
+    File::from(fd)
+        .take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| io("read store snapshot", e))?;
+
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(Failure::Unsafe("store snapshot exceeds size limit").into());
+    }
+
+    Ok(bytes)
+}
+
 impl StoreSnapshot {
     /// Read the currently published file, refusing symlinks and special files.
     /// A concurrent atomic publication yields either complete snapshot.
+    #[tracing::instrument(name = "snapshot.read", level = "trace", skip_all, err)]
     pub fn read(&self) -> Result<Option<Vec<u8>>, Error> {
         let fd = match openat2(
             &self.directory,
@@ -49,39 +76,40 @@ impl StoreSnapshot {
             Err(rustix::io::Errno::NOENT) => return Ok(None),
             Err(e) => return Err(io("open store snapshot", e)),
         };
-        regular(&fd)?;
-        let mut bytes = Vec::new();
-        File::from(fd)
-            .take(MAX_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| io("read store snapshot", e))?;
-
-        if bytes.len() as u64 > MAX_BYTES {
-            return Err(Failure::Unsafe("store snapshot exceeds size limit").into());
-        }
-
-        Ok(Some(bytes))
+        read_opened(fd).map(Some)
     }
 }
 
-impl RuntimeWriter<'_> {
-    /// Open the whole-file store slot under the adopted root, without creating state.
-    /// SQLite and snapshot backends deliberately share one slot: switching format
-    /// cannot silently create a second independent inventory of managed programs.
-    pub fn open_store_snapshot(&self) -> Result<StoreSnapshot, Error> {
-        let directory = openat2(
-            &self.runtime.root,
+impl RuntimeDirectory {
+    /// Open an existing whole-file store directory without taking the writer lock.
+    /// None means the directory is absent. No filesystem objects are created.
+    pub fn open_store_snapshot(&self) -> Result<Option<StoreSnapshot>, Error> {
+        let directory = match openat2(
+            &self.root,
             DATABASE_DIRECTORY,
             DIRECTORY,
             Mode::empty(),
             CONFINED,
-        )
-        .map_err(|e| io("open store directory", e))?;
+        ) {
+            Ok(directory) => directory,
+            Err(rustix::io::Errno::NOENT) => return Ok(None),
+            Err(e) => return Err(io("open store directory", e)),
+        };
 
-        Ok(StoreSnapshot {
+        Ok(Some(StoreSnapshot {
             root: self.identity()?,
             directory,
-        })
+        }))
+    }
+}
+
+impl RuntimeWriter<'_> {
+    /// Open the store directory prepared by writer acquisition.
+    /// SQLite and snapshot backends share one store slot to prevent a second inventory.
+    pub fn open_store_snapshot(&self) -> Result<StoreSnapshot, Error> {
+        self.runtime
+            .open_store_snapshot()?
+            .ok_or_else(|| Failure::Unsafe("store directory disappeared").into())
     }
 
     /// Replace exactly the observed snapshot after writing and syncing its contents.
@@ -90,6 +118,7 @@ impl RuntimeWriter<'_> {
     /// loss: a post-rename fsync failure cannot safely authorize load compensation.
     /// An interrupted write may leave the private staging file, reused on the next
     /// attempt after verifying its type and identity. Published state stays intact.
+    #[tracing::instrument(name = "snapshot.publish", level = "trace", skip_all, fields(bytes = bytes.len()), err)]
     pub fn publish_store_snapshot(
         &self,
         snapshot: &StoreSnapshot,

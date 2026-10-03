@@ -56,6 +56,7 @@ const MIGRATIONS: [(i64, &str); 2] = [
 ///     create_if_missing(path, permit);
 /// }
 /// ```
+#[tracing::instrument(name = "store.create", level = "debug", skip_all, fields(runtime = %writer.layout().root().display()), err)]
 pub fn create_if_missing(writer: &bpfman_fs::RuntimeWriter<'_>) -> Result<(), Error> {
     create(&writer.database_path(), &MIGRATIONS).map_err(Error::from)
 }
@@ -79,6 +80,7 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
         .unwrap_or(Path::new("."));
     let temporary = tempfile::NamedTempFile::new_in(parent).map_err(filesystem)?;
     let mut connection = Connection::open(temporary.path())?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
     let tx = connection.transaction()?;
 
     // Goose creates its own migration history separately from application SQL.

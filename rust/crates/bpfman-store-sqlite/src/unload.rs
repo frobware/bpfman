@@ -155,6 +155,8 @@ fn connection(writer: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
         Connection::open_with_flags(writer.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.pragma_update(None, "foreign_keys", true)?;
+    require_supported(schema_version(&connection)?)?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
 
     Ok(connection)
 }

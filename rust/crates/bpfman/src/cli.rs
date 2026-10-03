@@ -21,6 +21,9 @@ pub(super) struct Cli {
     /// Persistence format for this runtime (existing state is never converted).
     #[arg(long = "store", global = true, env = "BPFMAN_STORE", value_enum, default_value_t = StoreBackend::Sqlite)]
     pub(super) store: StoreBackend,
+    /// Write a new Perfetto/Chrome timeline file, filtered by RUST_LOG.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub(super) trace_file: Option<std::path::PathBuf>,
     #[command(subcommand)]
     pub(super) command: Command,
 }
@@ -29,6 +32,31 @@ pub(super) struct Cli {
 pub(super) enum StoreBackend {
     Sqlite,
     Json,
+}
+
+pub(super) enum PreparedCommand {
+    Get {
+        id: std::num::NonZeroU32,
+        output: OutputFormat,
+    },
+    Unload {
+        id: std::num::NonZeroU32,
+    },
+    List(ListArgs),
+    Load(load::PreparedLoad),
+}
+
+impl Command {
+    pub(super) fn prepare(self, layout: &RuntimeLayout) -> anyhow::Result<PreparedCommand> {
+        let Self::Program { command } = self;
+
+        Ok(match command {
+            ProgramCommand::Get { id, output } => PreparedCommand::Get { id, output },
+            ProgramCommand::Unload { id } => PreparedCommand::Unload { id },
+            ProgramCommand::List(args) => PreparedCommand::List(args),
+            ProgramCommand::Load { source } => PreparedCommand::Load(source.prepare(layout)?),
+        })
+    }
 }
 
 #[derive(Subcommand)]

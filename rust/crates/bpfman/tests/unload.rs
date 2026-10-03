@@ -33,7 +33,7 @@ fn malformed_or_unsupported_unload_operands_fail_before_runtime_setup()
 }
 
 #[test]
-fn missing_program_is_an_error_and_does_not_create_a_database()
+fn missing_program_is_an_error_and_leaves_the_initialized_store_empty()
 -> Result<(), Box<dyn std::error::Error>> {
     let temp = tempfile::tempdir()?;
     let result = Command::new(env!("CARGO_BIN_EXE_bpfman"))
@@ -45,7 +45,15 @@ fn missing_program_is_an_error_and_does_not_create_a_database()
     assert_eq!(result.status.code(), Some(1));
     assert!(result.stdout.is_empty());
     assert!(String::from_utf8(result.stderr)?.contains("managed program 42 not found"));
-    assert!(!temp.path().join("db/store.db").exists());
+    let listed = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .arg("--runtime-dir")
+        .arg(temp.path())
+        .args(["program", "list", "-q"])
+        .output()?;
+
+    assert!(listed.status.success());
+    assert!(listed.stdout.is_empty());
+    assert!(!temp.path().join("fs").exists());
 
     Ok(())
 }

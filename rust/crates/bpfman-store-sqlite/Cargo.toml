@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+tracing.workspace = true
 bpfman-store.workspace = true
 base64.workspace = true
 chrono.workspace = true

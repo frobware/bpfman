@@ -1,8 +1,7 @@
 //! Full store/kernel views. Wire DTOs remain in the CLI.
 
 use crate::{ObservationError, ObservationErrorKind};
-use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
-use bpfman_lock::AcquireOptions;
+use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{
     KernelMap, KernelProgram, ObservedMap, ObservedProgram, ProgramEntry, ProgramStats,
     StoredProgram,
@@ -13,8 +12,10 @@ use std::{num::NonZeroU32, time::Duration};
 pub(super) enum Failure {
     #[error("program {0} does not exist")]
     Missing(NonZeroU32),
-    #[error("program {id} exists in store but not in kernel (requires reconciliation)")]
-    Reconciliation {
+    #[error(
+        "program {id} was recorded in the store snapshot but was absent during kernel observation"
+    )]
+    KernelMissing {
         id: NonZeroU32,
         #[source]
         cause: Box<dyn std::error::Error + Send + Sync>,
@@ -27,8 +28,8 @@ pub(super) enum Failure {
     Store(#[from] bpfman_store::Error),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
-    #[error("open program store")]
-    Open(#[source] crate::Error),
+    #[error("store has not been initialized")]
+    Uninitialized,
     #[error("observed runtime path is not UTF-8")]
     Path,
 }
@@ -50,7 +51,7 @@ impl ObservationError {
     pub fn kind(&self) -> ObservationErrorKind {
         match self.cause {
             Failure::Missing(_) => ObservationErrorKind::NotFound,
-            Failure::Reconciliation { .. } => ObservationErrorKind::RequiresReconciliation,
+            Failure::KernelMissing { .. } => ObservationErrorKind::KernelMissing,
             Failure::Links => ObservationErrorKind::Unsupported,
             _ => ObservationErrorKind::Unavailable,
         }
@@ -78,7 +79,7 @@ impl KernelObservations for Kernel {
     ) -> Result<(KernelProgram, Option<ProgramStats>), Failure> {
         bpfman_kernel::observe_program(id).map_err(|cause| {
             if cause.kind() == bpfman_kernel::ErrorKind::Missing {
-                Failure::Reconciliation {
+                Failure::KernelMissing {
                     id,
                     cause: Box::new(cause),
                 }
@@ -95,10 +96,11 @@ impl KernelObservations for Kernel {
 
 fn records<S: OpenStore>(
     store: &S,
-    writer: &RuntimeWriter<'_>,
+    runtime: &RuntimeDirectory,
 ) -> Result<Vec<StoredProgram>, Failure> {
-    crate::store::open_store(store, writer)
-        .map_err(Failure::Open)?
+    store
+        .open_reader(runtime)?
+        .ok_or(Failure::Uninitialized)?
         .read_records()
         .map_err(Failure::from)
 }
@@ -111,41 +113,27 @@ fn path(path: std::path::PathBuf) -> Result<String, Failure> {
 
 /// Observe a managed program's record, live kernel data, maps and statistics.
 /// Linked programs are rejected until full link observation is implemented.
+#[tracing::instrument(name = "program.get", level = "debug", skip_all, fields(program_id = id.get()), err)]
 pub fn get_program<S: OpenStore>(
     store: &S,
     layout: &RuntimeLayout,
     id: NonZeroU32,
-    timeout: Duration,
+    _timeout: Duration,
 ) -> Result<ObservedProgram, ObservationError> {
-    with_writer(layout, timeout, |writer| {
-        observe(store, writer, id, View::Get)
-    })
-}
-
-fn with_writer<T>(
-    layout: &RuntimeLayout,
-    timeout: Duration,
-    run: impl FnOnce(&RuntimeWriter<'_>) -> Result<T, ObservationError>,
-) -> Result<T, ObservationError> {
-    let runtime = RuntimeDirectory::open_or_create(layout.clone()).map_err(Failure::from)?;
-    runtime
-        .with_writer(
-            AcquireOptions {
-                timeout,
-                cancelled: None,
-            },
-            |writer| run(&writer),
-        )
+    let runtime = RuntimeDirectory::open_existing(layout.clone())
         .map_err(Failure::from)?
+        .ok_or(Failure::Uninitialized)?;
+
+    observe(store, &runtime, id, View::Get)
 }
 
 pub(super) fn observe<S: OpenStore>(
     store: &S,
-    writer: &RuntimeWriter<'_>,
+    runtime: &RuntimeDirectory,
     id: NonZeroU32,
     view: View,
 ) -> Result<ObservedProgram, ObservationError> {
-    let records = records(store, writer)?;
+    let records = records(store, runtime)?;
     let index = records
         .iter()
         .position(|p| p.id == id)
@@ -163,11 +151,11 @@ pub(super) fn observe<S: OpenStore>(
         .collect();
     let pins = match view {
         View::Load => Vec::new(),
-        View::Get => writer
+        View::Get => runtime
             .read_map_pins(record.map_set)
             .map_err(Failure::from)?,
     };
-    build(&mut Kernel, writer.layout(), record, users, pins, view).map_err(ObservationError::from)
+    build(&mut Kernel, runtime.layout(), record, users, pins, view).map_err(ObservationError::from)
 }
 
 fn build<K: KernelObservations>(
@@ -220,16 +208,19 @@ fn build<K: KernelObservations>(
 /// List full managed records and optional kernel observations. A missing kernel
 /// object is null; permissions and other lookup failures remain errors. Existing
 /// text/quiet listing stays available without kernel privileges.
+#[tracing::instrument(name = "program.list_observed", level = "debug", skip_all, err)]
 pub fn list_program_entries<S: OpenStore>(
     store: &S,
     layout: &RuntimeLayout,
     filter: &bpfman_core::ProgramFilter,
-    timeout: Duration,
+    _timeout: Duration,
 ) -> Result<Vec<ProgramEntry>, ObservationError> {
-    with_writer(layout, timeout, |writer| {
-        let records = bpfman_core::select_records(records(store, writer)?, filter);
-        entries(&mut Kernel, records).map_err(ObservationError::from)
-    })
+    let runtime = RuntimeDirectory::open_existing(layout.clone())
+        .map_err(Failure::from)?
+        .ok_or(Failure::Uninitialized)?;
+    let records = bpfman_core::select_records(records(store, &runtime)?, filter);
+
+    entries(&mut Kernel, records).map_err(ObservationError::from)
 }
 
 fn entries<K: KernelObservations>(
@@ -241,7 +232,7 @@ fn entries<K: KernelObservations>(
         .map(|record| {
             let kernel = match effects.program(record.id) {
                 Ok((kernel, _)) => Some(kernel),
-                Err(Failure::Reconciliation { .. }) => None,
+                Err(Failure::KernelMissing { .. }) => None,
                 Err(error) => return Err(error),
             };
 

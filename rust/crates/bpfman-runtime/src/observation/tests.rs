@@ -23,7 +23,7 @@ impl KernelObservations for Fake {
         self.calls.push(format!("program:{id}"));
 
         match self.fault {
-            Fault::Missing => Err(Failure::Reconciliation {
+            Fault::Missing => Err(Failure::KernelMissing {
                 id,
                 cause: std::io::Error::from(std::io::ErrorKind::NotFound).into(),
             }),
@@ -125,7 +125,7 @@ fn disappearance_and_permission_failure_are_not_interchangeable() {
         )
         .expect_err("failure");
         let expected = if matches!(fault, Fault::Missing) {
-            ObservationErrorKind::RequiresReconciliation
+            ObservationErrorKind::KernelMissing
         } else {
             ObservationErrorKind::Unavailable
         };

@@ -133,6 +133,15 @@ impl Memory {
 impl OpenStore for Memory {
     type Reader = Self;
 
+    fn open_reader(&self, runtime: &bpfman_fs::RuntimeDirectory) -> Result<Option<Self>, Error> {
+        if runtime.identity().expect("runtime identity") != self.root {
+            return Err(error(ErrorKind::InvalidData, "wrong runtime"));
+        }
+        self.state.lock().expect("state").enter("open")?;
+
+        Ok(Some(self.clone()))
+    }
+
     fn open(&self, writer: &RuntimeWriter<'_>) -> Result<Self, Error> {
         self.authority(writer)?;
         self.state.lock().expect("state").enter("open")?;

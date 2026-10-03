@@ -13,7 +13,18 @@ mod load_error;
 
 pub use load::load_tracepoint;
 
+/// Validated local tracepoint input, prepared before opening runtime state.
+/// Owns the exact ELF bytes that will be loaded and published.
+pub struct PreparedTracepoint {
+    layout: bpfman_fs::RuntimeLayout,
+    object: kernel::LocalObject,
+    source: String,
+    name: bpfman_model::Symbol,
+    metadata: std::collections::BTreeMap<String, String>,
+}
+
 mod store;
+pub use store::ActiveStore;
 mod unload;
 mod unload_error;
 
@@ -145,8 +156,9 @@ pub struct UnloadError<S: bpfman_store::UnloadStore> {
 pub enum ObservationErrorKind {
     /// No managed record exists.
     NotFound,
-    /// The record exists but its kernel object is absent.
-    RequiresReconciliation,
+    /// Recorded in the store snapshot but absent in the later kernel observation.
+    /// This can occur during concurrent unload; it does not prove inconsistency.
+    KernelMissing,
     /// Full link observation needs a later slice.
     Unsupported,
     /// An observation failed; it must not be presented as absence.

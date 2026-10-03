@@ -105,7 +105,12 @@ The architecture and compatibility goals are in
   while parsing, before any I/O. Convert CLI types to domain types at the boundary.
 - Bound help width to 80 columns. Let Clap provide root `--version`/`-V`; avoid
   redundant hand-written parsing and help. Test the command with `debug_assert`.
-- Keep output and logging in the front end. Libraries return values and errors.
+- Keep output and telemetry collection in the front end. Effectful libraries may
+  emit `tracing` spans/events with stable operation names and crate/module targets;
+  never install subscribers or write logs directly. The CLI configures `RUST_LOG`
+  filters, stderr output, and optional timeline export. Separate lock waiting from
+  lock ownership spans, and record durations without logging credentials, metadata
+  values, bytecode, or serialized store contents. Pure crates remain free of tracing.
 
 ## Tests and compatibility
 
@@ -120,14 +125,21 @@ The architecture and compatibility goals are in
   backend. Use domain operations, not connections or transaction callbacks.
   Associated teardown receipts stay opaque and must validate backend/runtime
   identity on deletion and explicit retry.
-- Store observations and policy execution share one writer-lock scope. The core
+- Open one active store at startup and inject it into operations; use the same
+  setup in shared behavioural tests. Existing-store readers must open and read
+  without acquiring the giant writer lock. Initialize missing state under that
+  lock after rechecking absence. Preserve early request/ELF validation before
+  initialization. All read-only operations, including combined store/kernel
+  observations, bypass the writer lock. Kernel and filesystem observations may
+  change after the store snapshot; absence alone does not prove inconsistency.
+- Store initialization observations and policy execution share one writer-lock
+  scope inside the backend. The core
   decides create/use/reject from schema observations without knowing paths,
   SQLite, or resource handles. It may move opaque interpreter-owned evidence
   into a decision, but must never inspect, duplicate, or drop that evidence.
   Existing-store decisions carry that evidence rather than requiring a parallel
   optional store and a runtime check for an impossible combination.
-  Runtime `open_or_create_store` returns an opened store, not a path
-  for a subsequent reopen. Observation errors are never treated as absence.
+  Observation errors are never treated as absence.
 - Runtime-object creation/removal must use conceptual operations owned by
   `bpfman-fs`. Operations requiring serialisation borrow `&RuntimeWriter<'_>`
   (or are methods on it), with typed object identities. Do not accept a target

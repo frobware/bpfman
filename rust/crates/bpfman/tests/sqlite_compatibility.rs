@@ -105,8 +105,8 @@ fn schema_error_retains_diagnostic_chain() -> Result<(), Box<dyn std::error::Err
 }
 
 #[test]
-fn setup_observes_schema_only_after_acquiring_writer_lock() -> Result<(), Box<dyn std::error::Error>>
-{
+fn existing_reader_rejects_incompatible_schema_without_waiting_for_writer()
+-> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     db.connection
         .execute("UPDATE goose_db_version SET version_id = 99", [])?;
@@ -127,8 +127,8 @@ fn setup_observes_schema_only_after_acquiring_writer_lock() -> Result<(), Box<dy
 
             let error = String::from_utf8(output.stderr)?;
 
-            assert!(error.contains("timed out waiting for lock"));
-            assert!(!error.contains("schema version mismatch"));
+            assert!(error.contains("schema version mismatch"));
+            assert!(!error.contains("timed out waiting for lock"));
 
             Ok(())
         },
@@ -168,7 +168,15 @@ fn first_run_creates_go_compatible_state_and_lists_nothing()
         })?;
 
     assert_eq!(version, 2);
-    assert_eq!(std::fs::read_dir(runtime.join("db"))?.count(), 1);
+    let mode: String = connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+    assert_eq!(mode, "wal");
+    for entry in std::fs::read_dir(runtime.join("db"))? {
+        let name = entry?.file_name();
+        assert!(matches!(
+            name.to_str(),
+            Some("store.db" | "store.db-wal" | "store.db-shm")
+        ));
+    }
 
     Ok(())
 }
@@ -247,7 +255,13 @@ fn concurrent_first_runs_observe_only_a_complete_database() -> Result<(), Box<dy
         assert!(output.stdout.is_empty());
     }
 
-    assert_eq!(std::fs::read_dir(runtime.join("db"))?.count(), 1);
+    for entry in std::fs::read_dir(runtime.join("db"))? {
+        let name = entry?.file_name();
+        assert!(matches!(
+            name.to_str(),
+            Some("store.db" | "store.db-wal" | "store.db-shm")
+        ));
+    }
 
     Ok(())
 }

@@ -8,6 +8,11 @@ use clap::{Args, Subcommand, ValueEnum};
 mod parse;
 mod request;
 
+pub(crate) struct PreparedLoad {
+    request: bpfman_runtime::PreparedTracepoint,
+    output: LoadOutput,
+}
+
 #[derive(Subcommand)]
 pub(crate) enum LoadCommand {
     /// Load one tracepoint from a local ELF object file.

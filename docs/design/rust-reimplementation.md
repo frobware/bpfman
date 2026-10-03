@@ -565,8 +565,10 @@ without an explicit unlock, preserves the lock until the last inherited copy
 is closed. The helper launcher will explicitly map its close-on-exec duplicate
 and set the existing `BPFMAN_WRITER_LOCK_FD` protocol variable.
 
-A private runtime `open_or_create_store` operation acquires the lock before
-calling the selected backend. Inside the SQLite adapter, the pure
+The composition root validates input, then opens a runtime-bound `ActiveStore`
+and passes it to application operations. Shared behavioural tests do the same
+in setup. Existing stores open without the giant lock; only absence acquires the
+writer and rechecks before initialization. Inside the SQLite adapter, the pure
 `plan_store_open` function receives a
 `StoreObservation<T>` and the supported schema version, and returns a
 `StoreOpenPlan<T>`: create, use existing, or reject incompatible state. Existing
@@ -583,11 +585,19 @@ general startup state machine or a separate effect for every mkdir and SQL
 statement. The adapter's `create_if_missing` requires the runtime writer, embeds the
 authoritative Go migration SQL,
 and publishes a complete database without overwriting existing state. Existing
-databases are not implicitly repaired or migrated. `open_or_create_store`
-returns an opened store handle, not a path to reopen later, and releases the lock. Ordinary
+databases are not implicitly repaired or migrated. Startup releases initialization
+authority before dispatch. The active store binds the backend to the adopted root
+and does not recreate state that disappears during an operation. Ordinary
 snapshot queries remain read-only and recheck the schema within their own
-transaction. CLI signal cancellation and namespace-helper launching are not
-implemented in this slice.
+transaction, with SQLite WAL permitting concurrent readers and a writer. JSON
+readers consume an independently opened immutable snapshot; a zero-link inode
+after concurrent rename remains valid read evidence, but never staging authority.
+All read-only commands, including combined store/kernel observations, bypass
+the writer lock. The store snapshot and subsequent kernel/filesystem reads are
+not one atomic observation: concurrent unload may remove an object between
+them. Report that absence without diagnosing inconsistency from it alone.
+CLI signal cancellation and namespace-helper launching are not implemented in
+this slice.
 
 ### Object creation and deletion boundary
 
