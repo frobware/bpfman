@@ -19,7 +19,8 @@ fn atomic_load_records_are_go_readable_and_failures_leave_no_partial_map_set() -
         create_if_missing(&writer)?;
         let name = Symbol::try_from("tracepoint_kill_recorder")?;
         let metadata = BTreeMap::from([("bpfman.io/application".into(), "rust-slice".into())]);
-        let record = |id| TracepointRecord { id: NonZeroU32::new(id).expect("nonzero fixture"), name: &name,
+        let globals = Default::default();
+        let record = |id| TracepointRecord { globals: &globals, id: NonZeroU32::new(id).expect("nonzero fixture"), name: &name,
             source: "./original.o", license: "Dual BSD/GPL", created_at: "2026-10-03T12:00:00Z", metadata: &metadata };
         persist_tracepoint(&writer, record(42))?;
         let db = Connection::open(layout.database_path())?;

@@ -147,6 +147,7 @@ name = "bpfman"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "aya",
  "base64",
  "bpfman-core",
  "bpfman-fs",
@@ -182,6 +183,7 @@ dependencies = [
  "aya",
  "bpfman-core",
  "bpfman-lock",
+ "bpfman-model",
  "rustix",
  "tempfile",
  "thiserror",

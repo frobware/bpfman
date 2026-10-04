@@ -30,6 +30,9 @@ mod cancellation;
 mod compensation;
 mod error;
 mod kernel;
+mod link;
+mod link_error;
+mod link_observation;
 mod list;
 mod load;
 mod load_error;
@@ -96,6 +99,54 @@ pub struct ActiveStore<S: bpfman_store::OpenStore> {
     backend: S,
     reader: S::Reader,
     runtime: bpfman_fs::RuntimeDirectory,
+}
+
+/// Validated tracepoint attachment intent for an already loaded program.
+pub struct TracepointAttach {
+    /// Managed program identity.
+    pub program_id: std::num::NonZeroU32,
+    /// Validated event group and name.
+    pub target: bpfman_model::Tracepoint,
+    /// Operator labels for this attachment.
+    pub metadata: std::collections::BTreeMap<String, String>,
+}
+
+/// Backend-independent attachment and detachment failure categories.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkErrorKind {
+    /// Cancelled at an admission or forward-effect boundary.
+    Cancelled,
+    /// Managed program or link does not exist.
+    NotFound,
+    /// The stored program or attachment type is outside this slice.
+    Unsupported,
+    /// Stored evidence or filesystem identity is invalid.
+    InvalidState,
+    /// The writer lock wait budget expired.
+    TimedOut,
+    /// A store, filesystem, or kernel operation failed.
+    Unavailable,
+}
+
+/// Opaque cause of a link operation or cleanup attempt.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct LinkCause {
+    cause: link_error::Cause,
+}
+
+/// Link cleanup history and retained ownership. Failed attachment retains its
+/// original cause even after a successful explicit cleanup pass.
+#[must_use = "inspect progress and retain unresolved link cleanup"]
+pub struct LinkReport<S: bpfman_store::LinkStore> {
+    id: std::num::NonZeroU64,
+    primary: Option<LinkCause>,
+    cleanup: link::StoreReport<S>,
+}
+
+/// Failed link operation, retaining all progress and unresolved cleanup receipts.
+pub struct LinkError<S: bpfman_store::LinkStore> {
+    failure: link_error::Failure<S>,
 }
 
 /// Narrow filesystem-effects boundary for failed-load cleanup.

@@ -2,6 +2,8 @@ use crate::{Error, ErrorKind};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
+    #[error("inspect BPF link")]
+    Link(#[source] aya::programs::links::LinkError),
     #[error("inspect pinned map")]
     Map(#[source] aya::maps::MapError),
     #[error("pin BPF object")]
@@ -25,9 +27,11 @@ impl Error {
     /// Classify without downcasting backend causes.
     pub fn kind(&self) -> ErrorKind {
         match self.cause.as_ref() {
-            Failure::Map(_) | Failure::Pin(_) | Failure::Program(_) | Failure::Cleanup(_) => {
-                ErrorKind::Unavailable
-            }
+            Failure::Link(_)
+            | Failure::Map(_)
+            | Failure::Pin(_)
+            | Failure::Program(_)
+            | Failure::Cleanup(_) => ErrorKind::Unavailable,
             Failure::Unsafe(_) => ErrorKind::UnsafeLayout,
             Failure::Io { source, .. } => match source.raw_os_error() {
                 Some(code)

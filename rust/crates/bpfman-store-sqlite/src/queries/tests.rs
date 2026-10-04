@@ -40,6 +40,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
                 let metadata = BTreeMap::from([("label".into(), format!("quoted '{id}' ☃"))]);
                 let metadata_json = serde_json::to_string(&metadata)?;
                 let record = TracepointRecord {
+                    globals: &Default::default(),
                     id,
                     name: &name,
                     source: &source,
@@ -53,6 +54,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
                     created_at: &created_at,
                 };
                 let program = || TracepointInsert {
+                    globals: "{}",
                     record: &record,
                     object_path: &object_path,
                     pin_path: &pin_path,

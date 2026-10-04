@@ -22,6 +22,10 @@ The architecture and compatibility goals are in
   its exit status. Investigate failures; never skip or weaken a test to get a
   green result. Run relevant real-kernel acceptance tests when the implemented
   surface and environment support them; report untested boundaries accurately.
+- Assume passwordless sudo for real-kernel tests. Keep them in the normal
+  `rust-test`/`rust-check` gate without privilege-related `#[ignore]` attributes.
+  Build fixtures as the invoking user and run the kernel test binary through
+  `sudo -n` in a private mount namespace; missing privileges must fail the gate.
 
 ## Visibility and crate boundaries
 

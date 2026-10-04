@@ -19,6 +19,29 @@ pub(super) use effects::{CleanupEffects, FailureFor, LoadEffects};
 pub(super) use real::Effects;
 
 impl PreparedTracepoint {
+    /// Validate global names and byte lengths against the captured ELF before
+    /// runtime creation. Values are applied when loading and retained in the store.
+    pub fn with_globals(mut self, globals: BTreeMap<String, Vec<u8>>) -> Result<Self, LoadError> {
+        if globals.is_empty() {
+            self.object.globals.clear();
+            return Ok(self);
+        }
+
+        let mut object = aya_obj::Object::parse(&self.object.bytes)
+            .map_err(|e| LoadCause::Parse(Box::new(e)))?;
+        object
+            .patch_map_data(
+                globals
+                    .iter()
+                    .map(|(name, bytes)| (name.as_str(), (bytes.as_slice(), true)))
+                    .collect(),
+            )
+            .map_err(|e| LoadCause::Parse(Box::new(e)))?;
+        self.object.globals = globals;
+
+        Ok(self)
+    }
+
     /// Validate the request and read the ELF without creating runtime state.
     pub fn new(
         source: &Path,

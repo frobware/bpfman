@@ -74,3 +74,23 @@ impl<S: bpfman_store::UnloadStore + 'static> From<bpfman_runtime::UnloadError<S>
         }
     }
 }
+
+impl From<bpfman_runtime::LinkCause> for Error {
+    fn from(cause: bpfman_runtime::LinkCause) -> Self {
+        let cancelled = cause.kind() == bpfman_runtime::LinkErrorKind::Cancelled;
+        Self {
+            cause: cause.into(),
+            cancelled,
+        }
+    }
+}
+
+impl<S: bpfman_store::LinkStore + 'static> From<bpfman_runtime::LinkError<S>> for Error {
+    fn from(cause: bpfman_runtime::LinkError<S>) -> Self {
+        let cancelled = cause.kind() == bpfman_runtime::LinkErrorKind::Cancelled;
+        Self {
+            cause: cause.into(),
+            cancelled,
+        }
+    }
+}

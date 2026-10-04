@@ -192,6 +192,11 @@ impl CommitLoad for Memory {
         p.license = record.license.into();
         p.created_at = record.created_at.into();
         p.metadata = record.metadata.clone();
+        p.globals = record
+            .globals
+            .iter()
+            .map(|(name, bytes)| (name.clone(), Some(bytes.clone())))
+            .collect();
         p.object_path = writer
             .layout()
             .bytecode_path(p.id)

@@ -33,6 +33,7 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
         .commit_tracepoint(
             writer,
             TracepointRecord {
+                globals: &Default::default(),
                 id: id(raw),
                 name: &Symbol::try_from("trace").expect("symbol"),
                 source: "/trace.o",

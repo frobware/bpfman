@@ -4,6 +4,9 @@ use bpfman_model::StoredProgramSummary;
 
 mod detail;
 mod json;
+mod link;
+
+pub(super) use link::{link, links};
 
 use crate::cli::OutputFormat;
 

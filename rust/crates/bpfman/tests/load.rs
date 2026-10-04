@@ -224,7 +224,6 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
 
     for options in [
         vec!["--programs", "tracepoint:a,tracepoint:b"],
-        vec!["--programs", "tracepoint:a", "--global", "counter=00"],
         vec!["--programs", "tracepoint:a", "--map-owner-id", "1"],
     ] {
         assert_failure(
@@ -236,6 +235,41 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
             "execution is not implemented",
         )?;
         assert!(!runtime.exists());
+    }
+
+    Ok(())
+}
+
+#[test]
+fn unknown_or_wrong_size_globals_fail_before_creating_runtime() -> Result {
+    let temporary = tempfile::tempdir()?;
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../e2e/testdata/bpf/tracepoint_kmod_counter.bpf.o");
+
+    for store in ["sqlite", "json"] {
+        let runtime = temporary.path().join(store);
+        for global in [
+            "missing_global=00000000",
+            "weight=00",
+            "expected_slot=0000000000000000",
+        ] {
+            let output = command(&runtime)
+                .env("BPFMAN_STORE", store)
+                .arg("file")
+                .arg(&source)
+                .args([
+                    "--programs",
+                    "tracepoint:tracepoint_kmod_recorder",
+                    "-g",
+                    global,
+                ])
+                .output()?;
+            assert_failure(output, 1, "parse local ELF")?;
+            assert!(
+                !runtime.exists(),
+                "invalid globals must precede store startup"
+            );
+        }
     }
 
     Ok(())

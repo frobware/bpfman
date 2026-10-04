@@ -18,8 +18,9 @@ impl Drop for Process {
 }
 
 #[test]
-#[ignore = "subprocess fixture; invoked by second_signal_forces_exit"]
 fn signal_child() {
+    // Only the subprocess installs process-wide handlers. The parent test below
+    // drives this fixture and asserts both signal responses.
     if std::env::var_os("BPFMAN_SIGNAL_TEST_CHILD").is_none() {
         return;
     }
@@ -46,12 +47,7 @@ fn second_signal_forces_exit() {
     ] {
         let mut process = Process(
             Command::new(std::env::current_exe().expect("test binary"))
-                .args([
-                    "--ignored",
-                    "--exact",
-                    "signals::tests::signal_child",
-                    "--nocapture",
-                ])
+                .args(["--exact", "signals::tests::signal_child", "--nocapture"])
                 .env("BPFMAN_SIGNAL_TEST_CHILD", "1")
                 .stdout(Stdio::piped())
                 .spawn()

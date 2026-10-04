@@ -129,8 +129,6 @@ impl LoadRequest {
             Some("multiple programs")
         } else if !matches!(first, bpfman_model::ProgramSpec::Tracepoint(_)) {
             Some("program types other than tracepoint")
-        } else if !globals.is_empty() {
-            Some("global overrides")
         } else if map_owner_id.is_some() {
             Some("map-owner sharing")
         } else {
@@ -156,7 +154,8 @@ impl LoadRequest {
                 name,
                 metadata,
                 cancellation,
-            )?,
+            )?
+            .with_globals(globals)?,
             output,
         })
     }

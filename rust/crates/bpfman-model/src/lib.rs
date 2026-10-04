@@ -19,7 +19,9 @@ pub use observation::{
     ProgramSource, ProgramStats, StoredProgram,
 };
 
-pub use link::{InvalidTracepoint, LinkDetails, LinkState, StoredLink, Tracepoint};
+pub use link::{
+    InvalidTracepoint, KernelLink, LinkDetails, LinkState, ObservedLink, StoredLink, Tracepoint,
+};
 pub use program_type::{ParseProgramTypeError, ProgramType};
 pub use summary::StoredProgramSummary;
 

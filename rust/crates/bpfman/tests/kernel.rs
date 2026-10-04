@@ -11,59 +11,72 @@ mod faults;
 mod go_compatibility;
 #[path = "kernel/lifecycle.rs"]
 mod lifecycle;
+#[path = "kernel/links.rs"]
+mod links;
 #[path = "kernel/support.rs"]
 mod support;
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
 fn sqlite_lifecycle_store_failures() {
     lifecycle::exercise(bpfman_store_sqlite::Backend);
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
 fn json_lifecycle_store_failures() {
     lifecycle::exercise(bpfman_store_json::Backend);
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
 fn sqlite_cli_behaviour() {
     cli::behaviour("sqlite");
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
 fn json_cli_behaviour() {
     cli::behaviour("json");
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
 fn sqlite_go_interoperability() {
     go_compatibility::exercise();
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-observation"]
 fn sqlite_unchanged_tracepoint_dsl() {
-    cli::dsl("sqlite");
+    cli::dsl("sqlite", "TestTracepoint_LoadAndGet");
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-observation"]
 fn json_unchanged_tracepoint_dsl() {
-    cli::dsl("json");
+    cli::dsl("json", "TestTracepoint_LoadAndGet");
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
 fn sqlite_cancellation_boundaries() {
     cancellation::exercise(bpfman_store_sqlite::Backend);
 }
 
 #[test]
-#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
 fn json_cancellation_boundaries() {
     cancellation::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_tracepoint_attachment_lifecycle() {
+    links::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_tracepoint_attachment_lifecycle() {
+    links::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_unchanged_tracepoint_dsl_link_round_trip() {
+    cli::dsl("sqlite", "TestTracepoint_LinkRoundTrip");
+}
+
+#[test]
+fn json_unchanged_tracepoint_dsl_link_round_trip() {
+    cli::dsl("json", "TestTracepoint_LinkRoundTrip");
 }

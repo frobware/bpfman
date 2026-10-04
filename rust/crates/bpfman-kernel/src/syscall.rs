@@ -3,7 +3,7 @@
 //! or caller-supplied pointer can enter this module's safe interface.
 #![allow(unsafe_code)]
 
-use aya_obj::generated::{bpf_map_info, bpf_prog_info};
+use aya_obj::generated::{bpf_link_info, bpf_map_info, bpf_prog_info};
 use std::{
     io,
     mem::{size_of, zeroed},
@@ -130,4 +130,23 @@ pub(super) fn map(id: u32) -> io::Result<(OwnedFd, bpf_map_info)> {
     }
 
     Ok((fd, result))
+}
+
+pub(super) fn link(id: u32) -> io::Result<bpf_link_info> {
+    use std::os::fd::AsFd;
+    let fd = by_id(id, 30)?;
+
+    // SAFETY: bpf_link_info is a generated C layout of integer fields/unions.
+    // Zeroed pointer/length fields request only fixed-size link information.
+    let mut result: bpf_link_info = unsafe { zeroed() };
+    info(fd.as_fd(), &mut result)?;
+
+    if result.id != id {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "BPF link identity mismatch",
+        ));
+    }
+
+    Ok(result)
 }

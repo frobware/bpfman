@@ -5,7 +5,7 @@
 #![allow(clippy::disallowed_methods)]
 
 use crate::{
-    Bytecode, Error, MapDirectory, MapPin, ProgramPin, RuntimeWriter,
+    Bytecode, Error, LinkPin, MapDirectory, MapPin, ProgramPin, RuntimeWriter,
     artifacts::{Entry, identity},
     directory::CONFINED,
     error::{Failure, io},
@@ -60,6 +60,15 @@ fn remove(writer: &RuntimeWriter<'_>, entry: &Entry) -> Result<(), Error> {
 }
 
 impl RuntimeWriter<'_> {
+    /// Remove an owned link pin. No live descriptor is retained by this receipt;
+    /// success releases this runtime's attachment reference before record deletion.
+    pub fn remove_link_pin(&self, receipt: LinkPin) -> Result<(), EffectFailure<LinkPin, Error>> {
+        remove(self, &receipt.entry).map_err(|cause| EffectFailure {
+            cause,
+            remaining: receipt,
+        })
+    }
+
     /// Consume an owned program pin. Failure preserves the receipt for retry.
     pub fn remove_program_pin(
         &self,

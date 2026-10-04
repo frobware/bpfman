@@ -58,7 +58,12 @@ fn run_with_store<S>(
     cancellation: &bpfman_runtime::Cancellation,
 ) -> Result<(), error::Error>
 where
-    S: bpfman_store::OpenStore + bpfman_store::CommitLoad + bpfman_store::UnloadStore + 'static,
+    S: bpfman_store::OpenStore
+        + bpfman_store::CommitLoad
+        + bpfman_store::UnloadStore
+        + bpfman_store::LinkStore
+        + 'static,
+    S::Reader: bpfman_store::LinkReader,
 {
     let command = cli.command.prepare(&cli.layout, cancellation)?;
     let store = bpfman_runtime::ActiveStore::open_with_cancellation(
@@ -106,6 +111,7 @@ where
         }
 
         cli::PreparedCommand::Load(request) => request.execute(&bpfman, cancellation)?,
+        cli::PreparedCommand::Link(command) => command.execute(&bpfman, cancellation)?,
     }
 
     Ok(())

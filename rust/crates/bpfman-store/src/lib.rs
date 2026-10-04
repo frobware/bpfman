@@ -61,6 +61,8 @@ pub struct TracepointRecord<'a> {
     pub created_at: &'a str,
     /// Operator labels, including the application label.
     pub metadata: &'a BTreeMap<String, String>,
+    /// Validated ELF global overrides as raw bytes.
+    pub globals: &'a BTreeMap<String, Vec<u8>>,
 }
 
 /// Atomic publication of a loaded program and its private map-set membership.

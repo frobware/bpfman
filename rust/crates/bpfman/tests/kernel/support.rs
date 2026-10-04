@@ -159,7 +159,7 @@ impl Context {
                 .all(|s| !s.starts_with("prog_"))
         );
 
-        for path in ["fs/maps", "programs", ".staging"] {
+        for path in ["fs/maps", "fs/links", "programs", ".staging"] {
             assert!(names(&root.join(path)).is_empty(), "residue in {path}");
         }
     }

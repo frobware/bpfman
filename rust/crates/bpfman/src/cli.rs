@@ -7,6 +7,7 @@ use clap::{
     builder::{PathBufValueParser, PossibleValuesParser, TypedValueParser},
 };
 
+mod link;
 mod load;
 
 #[derive(Parser)]
@@ -44,6 +45,7 @@ pub(super) enum PreparedCommand {
     },
     List(ListArgs),
     Load(load::PreparedLoad),
+    Link(link::LinkCommand),
 }
 
 impl Command {
@@ -52,7 +54,10 @@ impl Command {
         layout: &RuntimeLayout,
         cancellation: &bpfman_runtime::Cancellation,
     ) -> Result<PreparedCommand, crate::error::Error> {
-        let Self::Program { command } = self;
+        let command = match self {
+            Self::Program { command } => command,
+            Self::Link { command } => return Ok(PreparedCommand::Link(command)),
+        };
 
         Ok(match command {
             ProgramCommand::Get { id, output } => PreparedCommand::Get { id, output },
@@ -67,6 +72,11 @@ impl Command {
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Manage standalone BPF links.
+    Link {
+        #[command(subcommand)]
+        command: link::LinkCommand,
+    },
     /// Manage BPF programs.
     Program {
         #[command(subcommand)]

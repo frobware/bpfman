@@ -114,6 +114,7 @@ fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S) {
                             .commit_tracepoint(
                                 &writer,
                                 TracepointRecord {
+                                    globals: &Default::default(),
                                     id: NonZeroU32::new(sequence).expect("id"),
                                     name: &Symbol::try_from("trace").expect("symbol"),
                                     source: "/source.o",

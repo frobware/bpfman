@@ -504,6 +504,7 @@ fn invoke_cancellable<F: LoadEffects>(
         &Inputs {
             cancellation,
             object: &LocalObject {
+                globals: Default::default(),
                 bytes: b"ELF snapshot".to_vec(),
                 license: "GPL".into(),
                 maps: maps.iter().map(|s| (*s).into()).collect(),

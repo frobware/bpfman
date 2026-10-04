@@ -151,6 +151,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
                     license: &input.object.license,
                     created_at: input.created_at,
                     metadata: input.metadata,
+                    globals: &input.object.globals,
                 },
             )
             .map_err(LoadCause::from)

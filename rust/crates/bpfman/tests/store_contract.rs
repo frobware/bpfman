@@ -24,6 +24,10 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
         .commit_tracepoint(
             writer,
             TracepointRecord {
+                globals: &BTreeMap::from([
+                    ("weight".into(), vec![0, 1, 255]),
+                    ("empty".into(), vec![]),
+                ]),
                 id: NonZeroU32::new(raw).expect("id"),
                 name: &Symbol::try_from("trace").expect("symbol"),
                 source: "/source.o",
@@ -59,6 +63,13 @@ fn exercise<S: OpenStore + CommitLoad + UnloadStore>(backend: S) {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].id, id);
+        assert_eq!(
+            records[0].globals,
+            BTreeMap::from([
+                ("weight".into(), Some(vec![0, 1, 255])),
+                ("empty".into(), Some(vec![])),
+            ])
+        );
         assert_eq!(
             records[0].object_path,
             layout.bytecode_path(id).to_str().expect("path")

@@ -28,6 +28,7 @@ fn commit(writer: &RuntimeWriter<'_>) -> Result<(), bpfman_store::Error> {
     Backend.commit_tracepoint(
         writer,
         TracepointRecord {
+            globals: &Default::default(),
             id: NonZeroU32::new(42).expect("id"),
             name: &Symbol::try_from("trace").expect("symbol"),
             source: "/source.o",

@@ -9,6 +9,7 @@ mod artifacts;
 mod directory;
 mod error;
 mod layout;
+mod link;
 mod observe;
 mod removal;
 mod snapshot;
@@ -174,4 +175,29 @@ pub struct ObservedMapPin {
     pub name: String,
     /// Identity read from the pinned BPF map.
     pub id: u32,
+}
+
+/// Validated pinned tracepoint and link collection, ready for one attachment.
+pub struct PreparedTracepointAttach {
+    program: aya::programs::TracePoint,
+    program_pin: artifacts::Entry,
+    links: OwnedFd,
+}
+
+/// Owned, unpinned attachment. Dropping it releases the kernel link descriptor.
+/// Pinning consumes this handle and transfers ownership to a [`LinkPin`].
+#[derive(Debug)]
+pub struct LiveTracepoint {
+    root: artifacts::Identity,
+    links: OwnedFd,
+    link: aya::programs::links::FdLink,
+    id: std::num::NonZeroU32,
+}
+
+/// Non-cloneable ownership of a standalone link pin. Dropping this receipt does
+/// not unpin. Failed removal returns the receipt so its store record can remain.
+#[derive(Debug)]
+pub struct LinkPin {
+    entry: Box<artifacts::Entry>,
+    id: std::num::NonZeroU32,
 }

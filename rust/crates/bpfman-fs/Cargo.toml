@@ -15,6 +15,7 @@ workspace = true
 tracing.workspace = true
 aya.workspace = true
 bpfman-core.workspace = true
+bpfman-model.workspace = true
 
 bpfman-lock.workspace = true
 rustix.workspace = true

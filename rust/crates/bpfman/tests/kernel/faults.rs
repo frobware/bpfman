@@ -24,6 +24,11 @@ pub(super) enum Point {
     ObserveUnload,
     DeleteProgram,
     DeleteMapSet,
+    CreateLink,
+    FinaliseLink,
+    FinaliseWithBlockedPin,
+    ObserveLink,
+    DeleteLink,
 }
 
 #[derive(Default)]
@@ -33,6 +38,7 @@ struct State {
     committed: bool,
     calls: Vec<Point>,
     blocked_bytecode: Option<NonZeroU32>,
+    pending_link: Option<std::num::NonZeroU64>,
 }
 
 #[derive(Clone)]
@@ -210,5 +216,82 @@ impl<S: UnloadStore> UnloadStore for Faults<S> {
         }
 
         self.backend.delete_map_set(w, receipt)
+    }
+}
+
+impl<R: bpfman_store::LinkReader> bpfman_store::LinkReader for Reader<R> {
+    fn read_links(&mut self) -> Result<Vec<bpfman_model::StoredLink>, Error> {
+        self.reader.read_links()
+    }
+}
+
+impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
+    type LinkReceipt = S::LinkReceipt;
+
+    fn create_pending_tracepoint(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingTracepoint<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), Error> {
+        check(&self.state, Point::CreateLink)?;
+        let result = self.backend.create_pending_tracepoint(writer, request)?;
+        self.state.lock().expect("state").pending_link = Some(result.0.id);
+        Ok(result)
+    }
+
+    fn finalise_link(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::LinkReceipt,
+        kernel_id: NonZeroU32,
+    ) -> Result<bpfman_model::StoredLink, EffectFailure<Self::LinkReceipt, Error>> {
+        let result = (|| {
+            if self.state.lock().expect("state").fault == Some(Point::FinaliseWithBlockedPin) {
+                let id = self
+                    .state
+                    .lock()
+                    .expect("state")
+                    .pending_link
+                    .expect("pending link");
+                std::fs::rename(
+                    writer.layout().link_pin_path(id),
+                    writer.layout().root().join("fs/held-link"),
+                )
+                .expect("move this link pin to block cleanup");
+                check(&self.state, Point::FinaliseWithBlockedPin)?;
+            }
+            check(&self.state, Point::FinaliseLink)
+        })();
+
+        if let Err(cause) = result {
+            return Err(EffectFailure {
+                cause,
+                remaining: receipt,
+            });
+        }
+        self.backend.finalise_link(writer, receipt, kernel_id)
+    }
+
+    fn observe_link(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<bpfman_store::LinkObservation<Self>, Error> {
+        check(&self.state, Point::ObserveLink)?;
+        self.backend.observe_link(writer, id)
+    }
+
+    fn delete_link(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::LinkReceipt,
+    ) -> Result<(), EffectFailure<Self::LinkReceipt, Error>> {
+        if let Err(cause) = check(&self.state, Point::DeleteLink) {
+            return Err(EffectFailure {
+                cause,
+                remaining: receipt,
+            });
+        }
+        self.backend.delete_link(writer, receipt)
     }
 }

@@ -180,6 +180,7 @@ pub(super) struct MapSetIdentity<'a> {
 
 pub(super) struct TracepointInsert<'a> {
     pub(super) record: &'a TracepointRecord<'a>,
+    pub(super) globals: &'a str,
     pub(super) object_path: &'a str,
     pub(super) pin_path: &'a str,
     pub(super) metadata: &'a str,
@@ -327,9 +328,9 @@ pub(super) fn insert_tracepoint(
     tx.prepare_cached(
         "INSERT INTO managed_programs
          (program_id, program_name, program_type, object_path, source_path, pin_path,
-          map_set_id, license, gpl_compatible, metadata_json, created_at)
+          map_set_id, license, gpl_compatible, metadata_json, created_at, global_data)
          VALUES (:program_id, :name, 'tracepoint', :object_path, :source_path, :pin_path,
-                 :program_id, :license, :gpl_compatible, :metadata, :created_at)",
+                 :program_id, :license, :gpl_compatible, :metadata, :created_at, :globals)",
     )?
     .execute(named_params! {
         ":program_id": record.id.get(),
@@ -340,6 +341,7 @@ pub(super) fn insert_tracepoint(
         ":license": record.license,
         ":gpl_compatible": program.gpl_compatible,
         ":metadata": program.metadata,
+        ":globals": program.globals,
         ":created_at": record.created_at,
     })?;
 

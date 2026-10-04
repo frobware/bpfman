@@ -980,8 +980,11 @@ E2E_SCRIPTS_FORWARD_VARS := \
 	BPFMAN_LOG
 
 .PHONY: $(BIN_DIR)/e2e-scripts.test
+# This cgo test binary needs the platform C linker: Go's internal linker can
+# leave libc/pthread relocations unresolved in the Nix development shell.
+# Preserve the existing static-link and caller-supplied linker flags.
 $(BIN_DIR)/e2e-scripts.test: $(DISPATCHER_BPF_EMBEDS) $(E2E_BPF_OBJECTS) | $(BIN_DIR)
-	$(strip go test -c $(if $(RACE),-race,) $(EXTRA_GOFLAGS) $(if $(E2E_TAGS),-tags=$(E2E_TAGS)) $(if $(STATIC),-ldflags "$(TEST_LDFLAGS)") -o $(BIN_DIR)/e2e-scripts.test ./e2e/scriptrunner)
+	$(strip go test -c $(if $(RACE),-race,) $(EXTRA_GOFLAGS) $(if $(E2E_TAGS),-tags=$(E2E_TAGS)) -ldflags "$(strip -linkmode=external $(TEST_LDFLAGS))" -o $(BIN_DIR)/e2e-scripts.test ./e2e/scriptrunner)
 
 # Regenerate the lowerer golden fixture. The single dense fixture under
 # shell/lower/testdata is the lowerer contract; TestLanguageLoweredGolden
@@ -1035,8 +1038,14 @@ rust-check: rust-fmt rust-lint rust-test rust-doc
 rust-build:
 	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked
 
-rust-test:
-	cargo test --manifest-path $(RUST_MANIFEST) --workspace --locked
+# Build fixtures before entering the privileged test runner. Passwordless sudo
+# is required; unavailable privileges fail the gate rather than skipping tests.
+RUST_TEST_INPUTS = $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
+RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
+RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh", "$(abspath rust/test-runner.sh)"]'
+
+rust-test: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) --workspace --locked $(RUST_TEST_RUNNER)
 
 # Exercise the same load interpreter used by the CLI, with injected effects.
 .PHONY: rust-test-load-compensation
@@ -1821,16 +1830,13 @@ ci-test-e2e-grpc:
 .PHONY: ci
 ci: ci-check-vendor ci-check-fmt ci-check-goimports ci-check-vet ci-check-gofix ci-check-bpfman-shell-fmt ci-build ci-lint ci-test ci-test-e2e ci-test-e2e-scripts ci-test-e2e-grpc
 
-# Cargo builds unprivileged; its runner executes only the selected test binary
-# with BPF/mount privileges in a private mount namespace. Tests are ignored by
-# the normal workspace gate and refuse the host mount namespace.
-RUST_KERNEL_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sudo", "--preserve-env=BPFMAN_GO_BIN,BPFMAN_DSL_TEST_BIN,BPFMAN_SHELL_BIN_DIR", "unshare", "--mount", "--propagation", "private", "--"]'
+# Focused subsets of the kernel suite also run by rust-test and rust-check.
 .PHONY: rust-test-kernel-load
-rust-test-kernel-load: rust-build $(BIN_DIR)/bpfman e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
-	BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_KERNEL_RUNNER) -- --ignored --skip unchanged_tracepoint_dsl --test-threads=1 --nocapture
+rust-test-kernel-load: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- --skip unchanged_tracepoint_dsl --nocapture
 
 # Run the unchanged Go DSL script against Rust; observations use only public CLI
 # output and runtime artifacts. No storage queries or format assumptions here.
 .PHONY: rust-test-observation
-rust-test-observation: rust-build $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o
-	BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))" cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_KERNEL_RUNNER) -- --ignored unchanged_tracepoint_dsl --test-threads=1 --nocapture
+rust-test-observation: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- unchanged_tracepoint_dsl --nocapture

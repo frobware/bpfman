@@ -106,6 +106,26 @@ pub struct StoredLink {
     pub created_at: String,
 }
 
+/// Identity observed from a standalone perf-event kernel link.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KernelLink {
+    /// Kernel link ID, distinct from the store handle.
+    pub id: NonZeroU32,
+    /// Kernel program attached by this link.
+    pub program_id: NonZeroU32,
+}
+
+/// Stored intent and independently gathered kernel/filesystem observations.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedLink {
+    /// Committed intent, including pending records.
+    pub record: StoredLink,
+    /// Matching kernel link when its recorded ID is still present.
+    pub kernel: Option<KernelLink>,
+    /// A matching link pin was observed below the adopted runtime.
+    pub pin_present: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

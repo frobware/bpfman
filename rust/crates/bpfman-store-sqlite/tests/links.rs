@@ -32,6 +32,7 @@ fn scope(test: impl FnOnce(&RuntimeWriter<'_>, &Connection, &mut Store) -> Resul
             Backend.commit_tracepoint(
                 &w,
                 TracepointRecord {
+                    globals: &Default::default(),
                     id: NonZeroU32::new(42).expect("id"),
                     name: &Symbol::try_from("trace")?,
                     source: "source.o",

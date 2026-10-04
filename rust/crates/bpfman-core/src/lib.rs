@@ -9,12 +9,17 @@
 
 extern crate alloc;
 
+mod link;
 mod list;
 mod load;
 mod rollback;
 mod store;
 mod unload;
 
+pub use link::{
+    LinkAttempt, LinkCleanup, LinkCleanupContinuation, LinkCleanupKind, LinkCleanupReport,
+    LinkCleanupStep, LinkResource,
+};
 pub use list::{ProgramFilter, list_programs, select_records};
 pub use store::plan_store_open;
 

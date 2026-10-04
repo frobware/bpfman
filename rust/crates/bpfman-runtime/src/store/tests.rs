@@ -51,6 +51,7 @@ fn seed(store: &Memory, writer: &RuntimeWriter<'_>) {
         .commit_tracepoint(
             writer,
             TracepointRecord {
+                globals: &Default::default(),
                 id: id(),
                 name: &bpfman_model::Symbol::try_from("trace").expect("symbol"),
                 source: "input.o",

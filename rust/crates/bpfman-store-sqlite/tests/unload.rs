@@ -21,6 +21,7 @@ fn seed(writer: &RuntimeWriter<'_>, id: NonZeroU32) -> Result {
     persist_tracepoint(
         writer,
         TracepointRecord {
+            globals: &Default::default(),
             id,
             name: &Symbol::try_from("trace")?,
             source: "source.o",

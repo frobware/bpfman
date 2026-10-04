@@ -32,15 +32,15 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
 | `bpfman-model` | 0 | Pure program specifications, stored records, and kernel observations |
-| `bpfman-core` | 1 | Pure listing/store policy, load compensation, and forward unload continuations |
+| `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, and forward unload continuations |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
 | `bpfman-kernel` | 2 | Read-only BPF metadata and statistics with a private syscall boundary |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Local tracepoint load/unload, private Aya adapter, compensation, and observation gathering |
-| `bpfman` | 5 | Typed Clap CLI, load/get/list/unload dispatch, and Go-compatible text/JSON presentation |
+| `bpfman-runtime` | 4 | Local tracepoint load/unload and attach/detach, private Aya adapter, compensation, and observations |
+| `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
 point down through tiers, pure normal dependency closures are explicitly
@@ -115,7 +115,7 @@ Shared behavioural tests construct the same application instance in setup.
 Runtime depends
 on `bpfman-store`, with no direct or transitive dependency on either backend.
 Architecture tests enforce this separation. The contract
-crate defines four small, statically dispatched interfaces:
+crate defines small, statically dispatched interfaces:
 
 - `OpenStore` opens existing state for independent readers without the writer
   lock, or initializes missing state with writer authority. Only absence permits
@@ -127,6 +127,10 @@ crate defines four small, statically dispatched interfaces:
 - `UnloadStore` validates ownership and conditionally deletes records and map
   sets using opaque, non-cloneable backend receipts. Failed deletion returns the
   receipt for an explicit later pass.
+- `LinkStore` allocates pending intent, finalises attachment, and conditionally
+  deletes unchanged records using owned receipts.
+- `LinkReader` reads stored link intent in a consistent snapshot, including
+  pending records needed for recovery.
 
 There are no connection types, schema-version fields, or transaction callbacks
 in these contracts. SQLite and JSON implement the same operations, alongside
@@ -164,14 +168,15 @@ is outside the contract. JSON format/version checks and generation-based deletio
 evidence remain inside the JSON adapter. Unknown fields and invalid relationships
 are rejected without repair.
 
-The next attach/detach slice starts with `LinkStore` and `LinkReader`: allocate
+`LinkStore` and `LinkReader` support attachment lifecycle operations: allocate
 pending intent and its canonical pin path, finalise with the kernel link ID,
 observe, and conditionally delete using opaque receipts. The shared contract
 suite exercises both backends through an injected `ActiveStore`, including failed
 finalisation, stale receipts, lock-free reads, and program deletion blocked by
-pending or finalised links. SQLite retains Go's schema version 2. Kernel attach,
-detach, link CLI commands, and linked-program unload are not implemented yet;
-the runtime must enforce detachment before it consumes a link-deletion receipt.
+pending or finalised links. SQLite retains Go's schema version 2. The runtime
+enforces release of the managed attachment reference before consuming a
+link-deletion receipt. Linked-program unload remains unimplemented; callers
+detach links explicitly before unloading their program.
 
 Both formats occupy `<runtime>/db/store.db`. The filename is historical; selecting
 another backend refuses the existing incompatible contents rather than creating
@@ -203,9 +208,13 @@ Generic live-kernel tests inject failures at store operations through a test-onl
 filesystem effects; no production failure flags or persistence edits are needed.
 The same `lifecycle::exercise<S>` scenarios run against both SQLite and JSON.
 CLI and unchanged DSL tests inspect returned JSON and runtime artifacts, with no
-database queries. Privileged tests are ignored by the normal workspace test run;
-the Make targets use Cargo's runner to execute them in a private mount namespace.
-The harness and executable-selection tests are Rust integration tests.
+database queries. `make rust-test` and `make rust-check` build the fixtures and
+run all kernel and unchanged DSL tests as part of the normal gate. Cargo's runner
+uses passwordless `sudo -n` to execute the kernel test binary serially in a
+private mount namespace; other test binaries run as the invoking user. Missing
+privileges fail the gate. The focused kernel and observation targets select
+subsets of the same suite. The harness and executable-selection tests are Rust
+integration tests.
 
 SQL fixtures and DDL/DML remain in tests explicitly testing SQLite. Adapter tests
 verify transaction rollback, constraints, orphan map-set absence, invalid records,
@@ -221,7 +230,7 @@ Go's SQLite representation. The division preserves the previous coverage:
 | Foreign pin/map identity, failed output delivery | `tests/kernel/cli.rs`, public CLI and artifact observations |
 | Go/Rust shared-state observations and unload in both directions | SQLite-specific `tests/kernel/go_compatibility.rs` |
 | Unsupported stored relationships, noncanonical stored paths, partial writes | SQLite adapter tests using the actual Go schema |
-| CLI load/get/list/unload contract | Unchanged `TestTracepoint_LoadAndGet.bpfman` through the Rust test harness |
+| CLI tracepoint lifecycle | Unchanged `TestTracepoint_LoadAndGet.bpfman` and `TestTracepoint_LinkRoundTrip.bpfman`, each with SQLite and JSON |
 | Typed, raw, and nested-shell executable selection | `tests/e2e_selection.rs`, unprivileged Make recipe tests |
 
 Both persistent backends run the same generic lifecycle, CLI, unchanged DSL,
@@ -349,26 +358,28 @@ nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
 exits with status 2. One local tracepoint with private maps and
 metadata/application labels is executable, with Go's detailed text output or
-JSON load envelope. Image loads, other program types, batches, global overrides,
+JSON load envelope. Image loads, other program types, batches,
 and map-owner sharing exit with status 1 before source access or runtime effects.
 ELF-level unsupported PinByName maps and section/type mismatches are rejected
 before runtime setup. Credentials are not echoed in auth diagnostics or help.
 Unlike Go, this parser requires the explicit file/image verb and rejects duplicate
 ELF selections, extraneous load-time targets, and zero map-owner IDs.
 
-The unchanged `e2e/scripts/TestTracepoint_LoadAndGet.bpfman` now runs against Rust
-through the Go shell runner. The dedicated gate builds the required executables,
-uses a temporary runtime in a private mount namespace, selects local bytecode,
-and verifies that unload leaves no owned residue:
+Both unchanged `e2e/scripts/TestTracepoint_LoadAndGet.bpfman` and
+`TestTracepoint_LinkRoundTrip.bpfman` run against Rust through the Go shell runner,
+once per store. The gate builds the required executables and kernel module,
+loads the module if absent, and uses temporary runtimes in a private mount
+namespace. It selects local bytecode and verifies that unload leaves no owned
+residue:
 
 ```sh
 direnv exec . make rust-test-observation
 ```
 
 This needs the same privileged kernel environment and bytecode fixtures as
-`rust-test-kernel-load`. If the Nix Go linker needs external linking, pass
-`EXTRA_GOFLAGS=-ldflags=-linkmode=external` to Make. The full corpus still includes
-unsupported operations; passing this one script does not establish full parity.
+`rust-test-kernel-load`. The Go DSL fixture uses external linking automatically,
+including in the Nix development shell. The full corpus still includes
+unsupported operations; passing these scripts does not establish full parity.
 For manual selection with prebuilt binaries:
 
 ```sh
@@ -566,9 +577,52 @@ sudo rust/target/debug/bpfman program load file \
   --programs tracepoint:tracepoint_kill_recorder --application rust-slice
 ```
 
-Tracepoint attachment/detachment is the next slice to admit more unchanged
-lifecycle DSL scripts. Broaden
-supported options incrementally; do not weaken the scripts for Rust.
+`-g NAME=HEX` overrides globals after checking their names and byte lengths
+against the captured ELF, before creating runtime state. Aya applies the bytes
+when loading; both stores retain the overrides for later program observations.
+The stored ELF remains the original input. Empty JSON-store overrides are
+omitted, preserving existing snapshots without a version change.
+
+## Tracepoint attachment and detachment
+
+`Bpfman::attach_tracepoint` takes a `TracepointAttach` containing a managed
+program ID, validated `group/name` target, and metadata. Under one writer scope,
+it adopts the existing program pin, commits pending intent, attaches the kernel
+program, pins the link, and finalises the record with its kernel link ID. Loading
+a program alone still does not attach it. The current Aya tracepoint adapter
+opens its perf event on CPU 0, matching the current Go adapter.
+
+Before finalisation, failure or cancellation compensates the acquired resources.
+An unpinned link owns a live descriptor; a pinned link owns a filesystem receipt.
+Cleanup releases that reference before deleting the pending record. Failed
+release or unpin retains both receipts and blocks record deletion without
+inventing an attempt. Reports preserve the original failure and every successful
+or failed cleanup attempt. `retry_link_cleanup` performs one explicit pass over
+unresolved work; cancelled lock admission preserves the report. An in-flight
+successful finalisation wins over cancellation.
+
+`Bpfman::detach` observes the stored identity and pin under writer authority,
+then removes the pin and conditionally deletes the record, keeping the program
+loaded. It rejects a replacement link even when it belongs to the same program.
+Once destructive teardown starts, cancellation does not interrupt that pass.
+Removing our pin releases our managed reference; unrelated external link
+descriptors may keep the kernel attachment alive. `list_link_records` reads a
+fresh store snapshot without the writer lock and includes pending intent; it
+does not claim current kernel presence.
+
+The same real-kernel scenario runs against SQLite and JSON. It proves counter
+execution before detach and quiescence afterwards, replacement refusal, failed
+finalisation compensation, blocked unpinning, explicit retries with preserved
+history, and cancellation at store boundaries. Private interpreter tests cover
+individual forward and cleanup failures, including live-descriptor release.
+The CLI exposes `link attach tracepoint PROGRAM_ID GROUP/NAME [-m KEY=VALUE]`,
+`link get LINK_ID`, `link list`, and `link detach LINK_ID`. Attach/get/list accept
+`-o json`; JSON follows Go's record/status shapes. Other attachment kinds, list
+filters, and batch detachment are not implemented. `get_link` observes recorded
+kernel identity and a descriptor-confined pin without the writer lock; missing
+kernel state is reported as absence, while denied or inconsistent observation
+fails. Output failure after finalisation leaves the committed link manageable.
+Automatic detachment during program unload remains a separate increment.
 
 
 ## Unattached tracepoint unload

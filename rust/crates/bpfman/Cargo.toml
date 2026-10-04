@@ -30,6 +30,7 @@ tracing-subscriber.workspace = true
 tracing-chrome.workspace = true
 
 [dev-dependencies]
+aya.workspace = true
 bpfman-lock.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true

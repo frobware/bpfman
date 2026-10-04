@@ -183,3 +183,31 @@ fn get_rejects_bad_ids_before_runtime_creation() -> Result<(), Box<dyn std::erro
 
     Ok(())
 }
+
+#[test]
+fn invalid_link_requests_fail_before_runtime_creation() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let runtime = directory.path().join("absent");
+
+    for args in [
+        vec!["get", "0"],
+        vec!["detach", "18446744073709551616"],
+        vec!["attach", "tracepoint", "0", "syscalls/sys_enter_kill"],
+        vec!["attach", "tracepoint", "42", "../event"],
+        vec!["attach", "tracepoint", "42", "a/b/c"],
+        vec!["attach", "tracepoint", "42", "a/b", "-m", "=value"],
+        vec!["attach", "xdp", "42", "lo"],
+        vec!["list", "--all"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env("BPFMAN_RUNTIME_DIR", &runtime)
+            .arg("link")
+            .args(args)
+            .output()?;
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(!runtime.exists());
+    }
+
+    Ok(())
+}

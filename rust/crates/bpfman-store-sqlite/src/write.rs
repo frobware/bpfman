@@ -6,6 +6,7 @@ use crate::{
     open::{require_supported, schema_version},
     queries,
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
 use bpfman_fs::RuntimeWriter;
 use bpfman_model::{ProgramType, StoredProgramSummary};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
@@ -39,6 +40,15 @@ fn persist(
     let pin_path = utf8(&pin_path, record.id)?;
     let map_path = utf8(&map_path, record.id)?;
     let metadata = serde_json::to_string(record.metadata).map_err(|source| Failure::Metadata {
+        id: i64::from(record.id.get()),
+        source,
+    })?;
+    let globals = record
+        .globals
+        .iter()
+        .map(|(name, bytes)| (name, STANDARD.encode(bytes)))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let globals = serde_json::to_string(&globals).map_err(|source| Failure::Metadata {
         id: i64::from(record.id.get()),
         source,
     })?;
@@ -77,6 +87,7 @@ fn persist(
             object_path,
             pin_path,
             metadata: &metadata,
+            globals: &globals,
             gpl_compatible: gpl,
         },
     )?;

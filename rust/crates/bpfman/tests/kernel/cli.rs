@@ -147,6 +147,42 @@ pub(super) fn behaviour(store: &'static str) {
     c.present(pid);
     c.present(unrelated);
 
+    // Rendering happens after link finalisation. A failed output destination
+    // must leave a manageable link with its original kernel identity.
+    let output = c
+        .command(
+            &rust(),
+            &[
+                "link",
+                "attach",
+                "tracepoint",
+                &pid_text,
+                "syscalls/sys_enter_kill",
+                "-o",
+                "json",
+            ],
+        )
+        .stdout(Stdio::from(
+            fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .expect("full sink"),
+        ))
+        .output()
+        .expect("attach CLI");
+    assert_eq!(output.status.code(), Some(1));
+    let links = c.json(&rust(), &["link", "list", "-o", "json"]);
+    let links = links["links"].as_array().expect("stored links");
+    assert_eq!(links.len(), 1);
+    let link_id = links[0]["id"]
+        .as_u64()
+        .expect("managed link ID")
+        .to_string();
+    let observed = c.json(&rust(), &["link", "get", &link_id, "-o", "json"]);
+    assert_eq!(observed["status"]["kernel_seen"], true);
+    assert_eq!(observed["status"]["pin_present"], true);
+    c.run(&rust(), &["link", "detach", &link_id], true);
+
     for id in [pid, unrelated] {
         c.run(&rust(), &["program", "unload", &id.to_string()], true);
         c.absent(id);
@@ -195,7 +231,7 @@ pub(super) fn behaviour(store: &'static str) {
     c.no_artifacts();
 }
 
-pub(super) fn dsl(store: &'static str) {
+pub(super) fn dsl(store: &'static str, script: &str) {
     let c = Context::with_store(store);
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -210,7 +246,7 @@ pub(super) fn dsl(store: &'static str) {
         .arg(format!("BPFMAN_UNDER_TEST={}", rust().display()))
         .arg(format!("E2E_SCRIPTS_TEST_BIN={}", runner.display()))
         .arg(format!("BIN_DIR={}", shell_dir.display()))
-        .arg("TEST=TestBPFManScripts/scripts/TestTracepoint_LoadAndGet[.]bpfman$")
+        .arg(format!("TEST=TestBPFManScripts/scripts/{script}[.]bpfman$"))
         .env("BPFMAN_RUNTIME_DIR", c.layout.root())
         .env("BPFMAN_STORE", store)
         .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
@@ -225,8 +261,9 @@ pub(super) fn dsl(store: &'static str) {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("--- PASS: TestBPFManScripts/scripts/TestTracepoint_LoadAndGet.bpfman"),
+        String::from_utf8_lossy(&output.stdout).contains(&format!(
+            "--- PASS: TestBPFManScripts/scripts/{script}.bpfman"
+        )),
         "must execute the selected script"
     );
     assert_eq!(

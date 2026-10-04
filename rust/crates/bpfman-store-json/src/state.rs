@@ -67,6 +67,8 @@ pub(super) struct Tracepoint {
     pub(super) license: String,
     pub(super) created_at: String,
     pub(super) metadata: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) globals: BTreeMap<String, Vec<u8>>,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,6 +212,7 @@ impl State {
             license: record.license.into(),
             created_at: timestamp(record.created_at)?,
             metadata: record.metadata.clone(),
+            globals: record.globals.clone(),
         };
 
         let summary = row.summary();
@@ -264,7 +267,11 @@ impl Tracepoint {
             pin_path: path(layout.program_pin_path(self.id))?,
             map_path: path(layout.map_directory_path(self.id))?,
             map_set: self.id,
-            globals: BTreeMap::new(),
+            globals: self
+                .globals
+                .iter()
+                .map(|(name, bytes)| (name.clone(), Some(bytes.clone())))
+                .collect(),
             license: self.license.clone(),
             gpl_compatible: matches!(
                 self.license.as_str(),

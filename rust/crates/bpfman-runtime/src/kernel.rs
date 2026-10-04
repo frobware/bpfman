@@ -3,12 +3,15 @@
 use crate::load_error::LoadCause;
 use aya_obj::{Object, ProgramSection, maps::PinningType};
 use bpfman_model::Symbol;
-use std::{fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt, path::Path};
+use std::{
+    collections::BTreeMap, fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt, path::Path,
+};
 
 pub(super) struct LocalObject {
     pub(super) bytes: Vec<u8>,
     pub(super) license: String,
     pub(super) maps: Vec<String>,
+    pub(super) globals: BTreeMap<String, Vec<u8>>,
 }
 
 impl LocalObject {
@@ -69,11 +72,17 @@ impl LocalObject {
             bytes,
             license,
             maps,
+            globals: BTreeMap::new(),
         })
     }
 
     pub(super) fn load(&self, name: &Symbol) -> Result<aya::Ebpf, LoadCause> {
-        let mut bpf = aya::EbpfLoader::new()
+        let mut loader = aya::EbpfLoader::new();
+        for (name, value) in &self.globals {
+            loader.override_global(name, value.as_slice(), true);
+        }
+
+        let mut bpf = loader
             .load(&self.bytes)
             .map_err(|e| LoadCause::Kernel(Box::new(e)))?;
         let program = bpf

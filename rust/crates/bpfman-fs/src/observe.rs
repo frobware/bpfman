@@ -11,7 +11,7 @@ use crate::{
 use rustix::fs::{FileType, Mode, OFlags, ResolveFlags, fstat, fstatfs, openat2};
 use std::{num::NonZeroU32, os::fd::OwnedFd};
 
-fn optional_dir(
+pub(super) fn optional_dir(
     parent: &OwnedFd,
     name: &str,
     flags: ResolveFlags,
@@ -23,7 +23,7 @@ fn optional_dir(
     }
 }
 
-fn observe(
+pub(super) fn observe(
     writer: &RuntimeWriter<'_>,
     parent: &OwnedFd,
     path: &str,

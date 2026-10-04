@@ -221,6 +221,27 @@ fn map_kind(kind: u32) -> String {
         .map_or_else(|| format!("maptype({kind})"), |s| (*s).into())
 }
 
+/// Observe a standalone perf-event link by its kernel identity. Absence is
+/// distinct from denied observation; this acquires no bpfman writer lock.
+pub fn observe_tracepoint_link(id: NonZeroU32) -> Result<bpfman_model::KernelLink, Error> {
+    let info = syscall::link(id.get()).map_err(|e| failure("observe kernel link", e))?;
+    let program_id = NonZeroU32::new(info.prog_id)
+        .filter(|_| {
+            info.type_ == aya_obj::generated::bpf_link_type::BPF_LINK_TYPE_PERF_EVENT as u32
+        })
+        .ok_or_else(|| {
+            failure(
+                "observe kernel link",
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "expected a perf-event link with a nonzero program ID",
+                ),
+            )
+        })?;
+
+    Ok(bpfman_model::KernelLink { id, program_id })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
