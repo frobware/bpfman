@@ -1,7 +1,7 @@
 //! One outside-in attachment scenario, using both stores and real kernel links.
 
 use super::{
-    faults::{Faults, Point},
+    faults::{Faults, Point, restore_blocked_pin},
     support::*,
 };
 use bpfman_core::LinkCleanupKind;
@@ -245,7 +245,20 @@ where
         app.list_link_records().expect("pending record")[0].state,
         LinkState::Pending
     );
-    assert!(app.unload(id).is_err(), "a live pending link blocks unload");
+    let blocked = app
+        .unload(id)
+        .expect_err("obstructed pending pin blocks unload");
+    assert!(
+        blocked.report().is_none(),
+        "refuse malformed pin during preflight"
+    );
+    assert_eq!(
+        app.list_link_records()
+            .expect("pending intent retained")
+            .len(),
+        1
+    );
+    c.present(id);
 
     let cancellation = Cancellation::new();
     cancellation.cancel();
@@ -256,13 +269,7 @@ where
     assert_eq!(error.report().expect("retained").attempts().len(), 1);
     assert_eq!(error.report().expect("retained").unresolved(), 2);
 
-    c.writer(|_| {
-        std::fs::rename(
-            c.layout.root().join("fs/held-link"),
-            c.layout.link_pin_path(link_id),
-        )
-        .expect("restore owned pin")
-    });
+    c.writer(|writer| restore_blocked_pin(writer, link_id));
     store.set(Some(Point::DeleteLink));
     let error = app
         .retry_link_cleanup(error)

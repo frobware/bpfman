@@ -15,6 +15,8 @@ mod go_compatibility;
 mod lifecycle;
 #[path = "kernel/links.rs"]
 mod links;
+#[path = "kernel/pending.rs"]
+mod pending;
 #[path = "kernel/support.rs"]
 mod support;
 
@@ -106,4 +108,24 @@ fn json_unchanged_tracepoint_dsl_unload_attached() {
 #[test]
 fn go_tracepoint_dsl_unload_attached() {
     cli::go_dsl("TestTracepoint_UnloadAttached");
+}
+
+#[test]
+fn sqlite_unload_pending_pin_failures_and_retries() {
+    pending::pinned(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_unload_pending_pin_failures_and_retries() {
+    pending::pinned(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_unload_pending_intent_without_pin() {
+    pending::unpinned(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_unload_pending_intent_without_pin() {
+    pending::unpinned(bpfman_store_json::Backend);
 }

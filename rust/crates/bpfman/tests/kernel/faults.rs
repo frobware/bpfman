@@ -33,7 +33,7 @@ pub(super) enum Point {
 
 #[derive(Default)]
 struct State {
-    fault: Option<Point>,
+    faults: Vec<Point>,
     successes_before_fault: usize,
     cancellation: Option<(Point, bpfman_runtime::Cancellation)>,
     committed: bool,
@@ -62,13 +62,19 @@ impl<S> Faults<S> {
 
     pub(super) fn set(&self, fault: Option<Point>) {
         let mut state = self.state.lock().expect("fault state");
-        state.fault = fault;
+        state.faults = fault.into_iter().collect();
+        state.successes_before_fault = 0;
+    }
+
+    pub(super) fn set_many(&self, faults: &[Point]) {
+        let mut state = self.state.lock().expect("fault state");
+        state.faults = faults.to_vec();
         state.successes_before_fault = 0;
     }
 
     pub(super) fn fail_after(&self, point: Point, successes: usize) {
         let mut state = self.state.lock().expect("fault state");
-        state.fault = Some(point);
+        state.faults = vec![point];
         state.successes_before_fault = successes;
     }
 
@@ -100,12 +106,12 @@ fn check(state: &Arc<Mutex<State>>, point: Point) -> Result<(), Error> {
         }
     }
 
-    if state.fault == Some(point) && state.successes_before_fault > 0 {
+    if state.faults.contains(&point) && state.successes_before_fault > 0 {
         state.successes_before_fault -= 1;
         return Ok(());
     }
 
-    if state.fault == Some(point) {
+    if state.faults.contains(&point) {
         Err(Error::new(
             ErrorKind::Unavailable,
             std::io::Error::other(format!("injected {point:?}")),
@@ -169,7 +175,13 @@ impl<S: CommitLoad> CommitLoad for Faults<S> {
         w: &RuntimeWriter<'_>,
         record: TracepointRecord<'_>,
     ) -> Result<StoredProgramSummary, Error> {
-        if self.state.lock().expect("fault state").fault == Some(Point::CommitWithBlockedCleanup) {
+        if self
+            .state
+            .lock()
+            .expect("fault state")
+            .faults
+            .contains(&Point::CommitWithBlockedCleanup)
+        {
             // Replace only this request's bytecode directory. Cleanup must refuse
             // the symlink and retain the original directory/file receipts.
             let bytecode = w.layout().bytecode_path(record.id);
@@ -260,7 +272,13 @@ impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
         kernel_id: NonZeroU32,
     ) -> Result<bpfman_model::StoredLink, EffectFailure<Self::LinkReceipt, Error>> {
         let result = (|| {
-            if self.state.lock().expect("state").fault == Some(Point::FinaliseWithBlockedPin) {
+            if self
+                .state
+                .lock()
+                .expect("state")
+                .faults
+                .contains(&Point::FinaliseWithBlockedPin)
+            {
                 let id = self
                     .state
                     .lock()
@@ -272,6 +290,10 @@ impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
                     writer.layout().root().join("fs/held-link"),
                 )
                 .expect("move this link pin to block cleanup");
+                // Leave an explicit obstruction: a fresh observer must reject
+                // the path, not mistake a deliberately hidden pin for absence.
+                std::fs::create_dir(writer.layout().link_pin_path(id))
+                    .expect("obstruct the canonical link pin");
                 check(&self.state, Point::FinaliseWithBlockedPin)?;
             }
             check(&self.state, Point::FinaliseLink)
@@ -308,4 +330,17 @@ impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
         }
         self.backend.delete_link(writer, receipt)
     }
+}
+
+pub(super) fn restore_blocked_pin(writer: &RuntimeWriter<'_>, id: std::num::NonZeroU64) {
+    std::fs::rename(
+        writer.layout().link_pin_path(id),
+        writer.layout().root().join("fs/removed-obstruction"),
+    )
+    .expect("move obstruction away from the owned pin");
+    std::fs::rename(
+        writer.layout().root().join("fs/held-link"),
+        writer.layout().link_pin_path(id),
+    )
+    .expect("restore owned pin");
 }

@@ -175,9 +175,11 @@ suite exercises both backends through an injected `ActiveStore`, including faile
 finalisation, stale receipts, lock-free reads, and program deletion blocked by
 pending or finalised links. SQLite retains Go's schema version 2. The runtime
 enforces release of the managed attachment reference before consuming a
-link-deletion receipt. Program unload observes all finalised links before mutation
-and removes their pins and records under the same writer lock as program teardown.
-Pending attachment intent must first be resolved through link cleanup or detach.
+link-deletion receipt. Program unload observes pending and finalised links before
+mutation and removes their pins and records under the same writer lock as program
+teardown.
+Pending intent is cleaned using its canonical pin path; a missing kernel ID does
+not prevent cleanup. A present pin must still match the program and link type.
 
 Both formats occupy `<runtime>/db/store.db`. The filename is historical; selecting
 another backend refuses the existing incompatible contents rather than creating
@@ -352,7 +354,7 @@ kernel observations. `program get ID [-o text|json]` observes one managed progra
 including its maps, statistics, and links. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. `--all` and
 kernel link state filters remain unsupported. Unload supports one tracepoint
-with private maps, including its finalised standalone links.
+with private maps, including pending and finalised standalone links.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
@@ -624,7 +626,8 @@ filters, and batch detachment are not implemented. `get_link` observes recorded
 kernel identity and a descriptor-confined pin without the writer lock; missing
 kernel state is reported as absence, while denied or inconsistent observation
 fails. Output failure after finalisation leaves the committed link manageable.
-Program unload removes finalised standalone links before touching program resources.
+Program unload cleans pending and finalised standalone links before touching
+program resources.
 
 
 ## Tracepoint unload
@@ -634,14 +637,12 @@ sudo rust/target/debug/bpfman program unload PROGRAM_ID
 direnv exec . make rust-test-unload
 ```
 
-This slice accepts one managed tracepoint with finalised standalone links, its
-own map set, no other map-set users, and no shared-map-pin registrations. Pending
-attachment intent must first be resolved by link cleanup or explicit detach.
+This slice accepts one managed tracepoint with pending or finalised standalone
+links, its own map set, no other map-set users, and no shared-map-pin registrations.
 Other program types, shared state, multiple operands, and `--ignore-missing` are
 explicitly unsupported. A missing managed record returns an error without
 inspecting or adopting a kernel-only program or creating a database. It does not
-yet make Go's
-additional not-managed versus not-found distinction.
+yet make Go's additional not-managed versus not-found distinction.
 
 Under one writer scope, store preflight validates canonical artifact paths and
 exclusive ownership. Filesystem observation opens existing objects without
@@ -673,6 +674,12 @@ non-cloneable receipts. Reports preserve successful and failed attempts with
 stable instruction IDs; work skipped because a prerequisite failed is retained
 without inventing an attempt.
 
+Failed attachment requests compensate all resources acquired by that request;
+failed cleanup retains the original error, receipts, and successful/failed history.
+Unload is destructive forward teardown: successful detachments are not recreated
+if a later effect fails. A failed prerequisite preserves dependent records and
+blocks further teardown. Pending intent does not change these dependency rules.
+
 No retry runs automatically. The library exposes an optional explicit pass over
 retained receipts, including after successful unload with warnings. This does
 not make failures transient: an unchanged failing condition still fails. The
@@ -692,6 +699,10 @@ cancelled and explicit retry passes. `TestTracepoint_UnloadAttached.bpfman`
 exercises a live attachment and direct program unload through the shared DSL,
 against Go and both Rust stores. SQLite interchange tests also compare attached
 program text/JSON and unload programs loaded and attached by the other implementation.
+The shared `tests/kernel/pending.rs` scenarios recover failed attachments through
+unload, including a remaining live pin, intent whose kernel acquisition never ran,
+and a successfully removed pin followed by failed record cleanup. Both stores
+exercise cancellation, blocked teardown, and explicit retry history.
 An unchanged-fault pass must make no progress; clearing the injected faults
 allows only retained work to complete. Adapter tests cover store changes,
 ignored/failed deletes, wrong runtime authority, replacement, symlinks, hard

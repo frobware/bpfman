@@ -146,7 +146,7 @@ where
     S::Reader: LinkReader,
 {
     /// Unload one committed tracepoint with a private map set.
-    /// Pending attachment intent must first be resolved through link cleanup.
+    /// Pending and finalised links are cleaned before program teardown.
     /// Observations and teardown share one writer scope. Independent cleanup
     /// continues after record failure; post-record cleanup may return warnings.
     /// Retained receipts support explicit retry even after the row is gone.

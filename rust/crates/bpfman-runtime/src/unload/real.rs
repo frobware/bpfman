@@ -86,12 +86,10 @@ where
             }
 
             let kernel = match record.state {
-                LinkState::Pending => {
-                    return Err(Cause::Invalid(
-                        "resolve pending attachment before unloading its program",
-                    )
-                    .into());
-                }
+                // Pending intent has no recorded kernel ID. The filesystem
+                // adapter still validates the pin's program, type and identity
+                // before issuing an owned receipt for conditional removal.
+                LinkState::Pending => None,
                 LinkState::Attached { kernel_id } => Some(kernel_id),
             };
             let pin = writer.observe_link_pin(record.id, record.program_id, kernel)?;
