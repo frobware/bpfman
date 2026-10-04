@@ -3,6 +3,9 @@
 //! No connections, transaction callbacks, schema versions, or serialized data escape.
 
 mod error;
+mod link;
+
+pub use link::{LinkObservation, LinkReader, LinkStore, PendingTracepoint};
 
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeDirectory, RuntimeWriter};

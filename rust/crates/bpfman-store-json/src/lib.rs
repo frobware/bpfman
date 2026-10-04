@@ -6,6 +6,7 @@
 
 mod backend;
 mod error;
+mod link;
 mod state;
 
 use bpfman_fs::{RuntimeIdentity, RuntimeLayout, StoreSnapshot};
@@ -33,4 +34,11 @@ pub struct MapSetReceipt {
     root: RuntimeIdentity,
     store: String,
     row: state::MapSet,
+}
+
+/// Owned evidence for conditional mutation of one unchanged standalone link.
+pub struct LinkReceipt {
+    root: RuntimeIdentity,
+    store: String,
+    row: state::Link,
 }

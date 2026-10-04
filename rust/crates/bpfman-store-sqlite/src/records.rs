@@ -40,7 +40,7 @@ fn labels(raw: Option<String>, program: i64) -> Result<BTreeMap<String, String>,
         .map(|m| m.unwrap_or_default())
 }
 
-fn timestamp(raw: String, program: i64) -> Result<String, Failure> {
+pub(super) fn timestamp(raw: String, program: i64) -> Result<String, Failure> {
     use chrono::Datelike;
     let parsed = chrono::DateTime::parse_from_rfc3339(&raw)
         .map_err(|_| invalid(program, "invalid RFC3339 timestamp"))?;

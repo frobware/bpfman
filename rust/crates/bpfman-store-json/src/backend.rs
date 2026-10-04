@@ -7,15 +7,15 @@ use bpfman_store::{
 };
 use std::num::NonZeroU32;
 
-fn read(file: &StoreSnapshot) -> Result<(Vec<u8>, State), Failure> {
+pub(super) fn read(file: &StoreSnapshot) -> Result<(Vec<u8>, State), Failure> {
     let bytes = file.read()?.ok_or(Failure::Invalid("store disappeared"))?;
     let state = State::decode(&bytes)?;
 
     Ok((bytes, state))
 }
 
-#[tracing::instrument(name = "store.publish", level = "debug", skip_all, fields(programs = state.programs.len(), map_sets = state.map_sets.len()), err)]
-fn publish(
+#[tracing::instrument(name = "store.publish", level = "debug", skip_all, fields(programs = state.programs.len(), map_sets = state.map_sets.len(), links = state.links.len()), err)]
+pub(super) fn publish(
     writer: &RuntimeWriter<'_>,
     file: &StoreSnapshot,
     previous: Option<&[u8]>,
@@ -77,7 +77,19 @@ impl ProgramReader for Reader {
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
         let (_, state) = read(&self.file)?;
 
-        Ok(state.programs.iter().map(|row| row.summary()).collect())
+        Ok(state
+            .programs
+            .iter()
+            .map(|row| {
+                StoredProgramSummary::new(
+                    row.id,
+                    row.name.clone(),
+                    bpfman_model::ProgramType::Tracepoint,
+                    row.metadata.clone(),
+                    state.link_ids(row.id),
+                )
+            })
+            .collect())
     }
 
     #[tracing::instrument(name = "store.snapshot", level = "debug", skip_all, err)]
@@ -86,7 +98,12 @@ impl ProgramReader for Reader {
         state
             .programs
             .iter()
-            .map(|row| row.record(&self.layout).map_err(Into::into))
+            .map(|row| {
+                let mut record = row.record(&self.layout)?;
+                record.links = state.link_ids(row.id);
+
+                Ok(record)
+            })
             .collect()
     }
 }
@@ -132,6 +149,10 @@ impl UnloadStore for Backend {
         let Some(row) = state.programs.iter().find(|row| row.id == id) else {
             return Ok(None);
         };
+
+        if state.links.iter().any(|link| link.program_id == id) {
+            return Err(Failure::Unsupported("detach links before unloading their program").into());
+        }
         let map = state
             .map_sets
             .iter()
@@ -169,6 +190,16 @@ impl UnloadStore for Backend {
 
             if state.identity != receipt.store {
                 return Err(Failure::Invalid("store identity changed"));
+            }
+
+            if state
+                .links
+                .iter()
+                .any(|link| link.program_id == receipt.row.id)
+            {
+                return Err(Failure::Unsupported(
+                    "detach links before deleting their program",
+                ));
             }
 
             let index = state

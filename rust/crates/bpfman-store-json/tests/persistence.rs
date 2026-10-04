@@ -6,7 +6,8 @@ use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::Symbol;
 use bpfman_store::{
-    CommitLoad, ErrorKind, OpenStore, ProgramReader, TracepointRecord, UnloadStore,
+    CommitLoad, ErrorKind, LinkReader, LinkStore, OpenStore, PendingTracepoint, ProgramReader,
+    TracepointRecord, UnloadStore,
 };
 use bpfman_store_json::Backend;
 use std::{collections::BTreeMap, fs, num::NonZeroU32, os::unix::fs::symlink, time::Duration};
@@ -51,7 +52,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":2}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":3}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -225,5 +226,150 @@ fn receipts_reject_recreated_records_and_replaced_store_identity() {
                 .len(),
             1
         );
+    });
+}
+
+#[test]
+fn version_one_programs_remain_usable_without_implicit_upgrade() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    let layout = RuntimeLayout::try_from(temporary.path().to_owned()).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+
+    writer(&runtime, |w| {
+        Backend.open(w).expect("create");
+    });
+    let mut legacy: serde_json::Value =
+        serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
+    legacy["version"] = serde_json::json!(1);
+    let bytes = serde_json::to_vec(&legacy).expect("legacy snapshot");
+    fs::write(layout.database_path(), &bytes).expect("version 1 fixture");
+
+    writer(&runtime, |w| {
+        let mut reader = Backend.open(w).expect("version 1 still opens");
+
+        assert!(reader.read_links().expect("no links").is_empty());
+        assert_eq!(fs::read(layout.database_path()).expect("unchanged"), bytes);
+
+        commit(w).expect("legacy program load");
+        let committed = fs::read(layout.database_path()).expect("committed");
+        let target = "sched/sched_switch".parse().expect("target");
+        let error = Backend
+            .create_pending_tracepoint(
+                w,
+                PendingTracepoint {
+                    program_id: NonZeroU32::new(42).expect("id"),
+                    target: &target,
+                    metadata: &BTreeMap::new(),
+                    created_at: "2026-10-04T12:00:00Z",
+                },
+            )
+            .map(|_| ())
+            .expect_err("version 1 has no links");
+
+        assert_eq!(error.kind(), ErrorKind::IncompatibleState);
+        assert_eq!(
+            fs::read(layout.database_path()).expect("no implicit upgrade"),
+            committed
+        );
+
+        let (program, maps) = Backend
+            .observe_unload(w, NonZeroU32::new(42).expect("id"))
+            .expect("legacy unload")
+            .expect("present");
+        Backend
+            .delete_program(w, program)
+            .map_err(|e| e.cause)
+            .expect("delete program");
+        Backend
+            .delete_map_set(w, maps)
+            .map_err(|e| e.cause)
+            .expect("delete map set");
+        let state: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
+
+        assert_eq!(state["version"], 1);
+        assert!(state.get("links").is_none());
+        assert!(state.get("next_link_id").is_none());
+        assert!(reader.read_records().expect("empty").is_empty());
+    });
+}
+
+#[test]
+fn failed_link_publication_retains_previous_state_and_receipts() {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    let layout = RuntimeLayout::try_from(temporary.path().to_owned()).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+    let outside = temporary.path().join("outside");
+    fs::write(&outside, b"sentinel").expect("outside");
+    let pending = temporary.path().join("db/store.next");
+    let block = || symlink(&outside, &pending).expect("block publication");
+    let unblock = |step: &str| fs::rename(&pending, temporary.path().join(step)).expect("unblock");
+
+    writer(&runtime, |w| {
+        let mut reader = Backend.open(w).expect("create");
+        commit(w).expect("commit");
+        let target = "sched/sched_switch".parse().expect("target");
+        let metadata = BTreeMap::new();
+        let request = || PendingTracepoint {
+            program_id: NonZeroU32::new(42).expect("id"),
+            target: &target,
+            metadata: &metadata,
+            created_at: "2026-10-04T12:00:00Z",
+        };
+        let previous = fs::read(layout.database_path()).expect("snapshot");
+        block();
+
+        assert!(Backend.create_pending_tracepoint(w, request()).is_err());
+        assert_eq!(
+            fs::read(layout.database_path()).expect("unchanged"),
+            previous
+        );
+        assert!(reader.read_links().expect("no intent").is_empty());
+
+        unblock("create-obstruction");
+        let (record, receipt) = Backend
+            .create_pending_tracepoint(w, request())
+            .expect("intent");
+        let previous = fs::read(layout.database_path()).expect("snapshot");
+        block();
+        let error = Backend
+            .finalise_link(w, receipt, NonZeroU32::new(7).expect("kernel ID"))
+            .expect_err("finalisation not committed");
+
+        assert_eq!(
+            fs::read(layout.database_path()).expect("unchanged"),
+            previous
+        );
+        assert_eq!(reader.read_links().expect("still pending"), [record]);
+
+        unblock("finalise-obstruction");
+        let attached = Backend
+            .finalise_link(w, error.remaining, NonZeroU32::new(7).expect("kernel ID"))
+            .map_err(|e| e.cause)
+            .expect("explicit finalisation attempt");
+        let (_, receipt) = Backend
+            .observe_link(w, attached.id)
+            .expect("observe")
+            .expect("present");
+        let previous = fs::read(layout.database_path()).expect("snapshot");
+        block();
+        let error = Backend
+            .delete_link(w, receipt)
+            .expect_err("deletion not committed");
+
+        assert_eq!(
+            fs::read(layout.database_path()).expect("unchanged"),
+            previous
+        );
+        assert_eq!(reader.read_links().expect("record retained"), [attached]);
+
+        unblock("delete-obstruction");
+        Backend
+            .delete_link(w, error.remaining)
+            .map_err(|e| e.cause)
+            .expect("explicit deletion attempt");
+
+        assert!(reader.read_links().expect("empty").is_empty());
+        assert_eq!(fs::read(&outside).expect("sentinel"), b"sentinel");
     });
 }

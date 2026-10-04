@@ -60,6 +60,11 @@ impl RuntimeLayout {
 }
 
 impl RuntimeLayout {
+    /// Go-compatible standalone link pin location, for persistence and presentation.
+    pub fn link_pin_path(&self, id: std::num::NonZeroU64) -> PathBuf {
+        self.root.join("fs/links").join(id.to_string())
+    }
+
     /// Go-compatible program pin path, for stored records and presentation only.
     pub fn program_pin_path(&self, id: std::num::NonZeroU32) -> PathBuf {
         self.root.join("fs").join(format!("prog_{id}"))

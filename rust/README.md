@@ -152,7 +152,10 @@ and stored column types are checked at runtime, with domain validation afterward
 Creation still executes the authoritative Go schema DDL. Neither SQL nor query
 row types appear in the generic store contracts or behavioural tests.
 
-JSON version 1 stores private, unattached tracepoints in a whole-file snapshot.
+JSON version 2 stores private tracepoints and standalone pending/finalised link
+records in a whole-file snapshot. Existing version 1 stores still support their
+program operations; link creation requires a separately initialized version 2
+runtime. Opening or mutating a version 1 store never upgrades it implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
 descriptor and atomically renames it into place under the runtime writer lock.
 Failed publication leaves the old state intact; interrupted staging files are
@@ -160,6 +163,15 @@ reused after validation. This is runtime state under `/run`; power-loss recovery
 is outside the contract. JSON format/version checks and generation-based deletion
 evidence remain inside the JSON adapter. Unknown fields and invalid relationships
 are rejected without repair.
+
+The next attach/detach slice starts with `LinkStore` and `LinkReader`: allocate
+pending intent and its canonical pin path, finalise with the kernel link ID,
+observe, and conditionally delete using opaque receipts. The shared contract
+suite exercises both backends through an injected `ActiveStore`, including failed
+finalisation, stale receipts, lock-free reads, and program deletion blocked by
+pending or finalised links. SQLite retains Go's schema version 2. Kernel attach,
+detach, link CLI commands, and linked-program unload are not implemented yet;
+the runtime must enforce detachment before it consumes a link-deletion receipt.
 
 Both formats occupy `<runtime>/db/store.db`. The filename is historical; selecting
 another backend refuses the existing incompatible contents rather than creating

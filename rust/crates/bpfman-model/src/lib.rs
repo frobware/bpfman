@@ -8,6 +8,7 @@ extern crate alloc;
 
 use alloc::string::String;
 
+mod link;
 mod load;
 mod observation;
 mod program_type;
@@ -18,6 +19,7 @@ pub use observation::{
     ProgramSource, ProgramStats, StoredProgram,
 };
 
+pub use link::{InvalidTracepoint, LinkDetails, LinkState, StoredLink, Tracepoint};
 pub use program_type::{ParseProgramTypeError, ProgramType};
 pub use summary::StoredProgramSummary;
 

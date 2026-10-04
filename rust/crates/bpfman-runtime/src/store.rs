@@ -191,6 +191,60 @@ pub(super) fn open_store<S: OpenStore>(
     store.open(writer).map_err(store_error)
 }
 
+impl<S: OpenStore + bpfman_store::LinkStore> bpfman_store::LinkStore for ActiveStore<S> {
+    type LinkReceipt = S::LinkReceipt;
+
+    fn create_pending_tracepoint(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingTracepoint<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), bpfman_store::Error> {
+        self.check_writer(writer)?;
+        self.backend.create_pending_tracepoint(writer, request)
+    }
+
+    fn finalise_link(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::LinkReceipt,
+        kernel_id: NonZeroU32,
+    ) -> Result<bpfman_model::StoredLink, EffectFailure<Self::LinkReceipt, bpfman_store::Error>>
+    {
+        if let Err(cause) = self.check_writer(writer) {
+            return Err(EffectFailure {
+                remaining: receipt,
+                cause,
+            });
+        }
+
+        self.backend.finalise_link(writer, receipt, kernel_id)
+    }
+
+    fn observe_link(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<bpfman_store::LinkObservation<Self>, bpfman_store::Error> {
+        self.check_writer(writer)?;
+        self.backend.observe_link(writer, id)
+    }
+
+    fn delete_link(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::LinkReceipt,
+    ) -> Result<(), EffectFailure<Self::LinkReceipt, bpfman_store::Error>> {
+        if let Err(cause) = self.check_writer(writer) {
+            return Err(EffectFailure {
+                remaining: receipt,
+                cause,
+            });
+        }
+
+        self.backend.delete_link(writer, receipt)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod testing;
 #[cfg(test)]

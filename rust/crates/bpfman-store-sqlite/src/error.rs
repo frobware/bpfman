@@ -25,14 +25,17 @@ impl Error {
     /// Classification for callers; the backend cause is diagnostic information.
     pub fn kind(&self) -> ErrorKind {
         match self.cause {
-            Failure::Unsupported(_) => ErrorKind::Unsupported,
+            Failure::Unsupported(_) | Failure::UnsupportedLink => ErrorKind::Unsupported,
             Failure::Sqlite(_) | Failure::Runtime(_) | Failure::Filesystem { .. } => {
                 ErrorKind::Unavailable
             }
             Failure::SchemaVersion(_) | Failure::UnsupportedSchema { .. } => {
                 ErrorKind::IncompatibleSchema
             }
-            Failure::InvalidRecord { .. } | Failure::Metadata { .. } => ErrorKind::InvalidData,
+            Failure::InvalidRecord { .. }
+            | Failure::InvalidLink(_)
+            | Failure::LinkMetadata(_)
+            | Failure::Metadata { .. } => ErrorKind::InvalidData,
         }
     }
 }
@@ -49,6 +52,12 @@ pub(super) enum Failure {
     Runtime(#[from] bpfman_fs::Error),
     #[error("unsupported unload: {0}")]
     Unsupported(&'static str),
+    #[error("only standalone tracepoint links are implemented")]
+    UnsupportedLink,
+    #[error("invalid link: {0}")]
+    InvalidLink(&'static str),
+    #[error("invalid link metadata")]
+    LinkMetadata(#[source] serde_json::Error),
     #[error("SQLite operation failed")]
     Sqlite(#[from] rusqlite::Error),
     #[error("access database at {}", path.display())]

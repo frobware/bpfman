@@ -7,6 +7,7 @@
 
 mod create;
 mod error;
+mod link;
 mod open;
 mod queries;
 mod read;
@@ -58,4 +59,9 @@ pub struct ProgramRecord {
 /// Non-cloneable deletion evidence for a map set whose last user is unloading.
 pub struct PrivateMapSet {
     evidence: Box<unload::MapSetEvidence>,
+}
+
+/// Non-cloneable evidence for conditional mutation of one standalone link.
+pub struct LinkReceipt {
+    evidence: Box<link::Evidence>,
 }

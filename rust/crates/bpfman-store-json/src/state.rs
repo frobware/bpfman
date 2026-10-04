@@ -1,17 +1,20 @@
-//! Version 1 supports private, unattached, locally loaded tracepoints only.
+//! Version 2 adds standalone links to private, locally loaded tracepoints.
+//! Version 1 retains its existing program operations; link creation requires a
+//! separately initialized version 2 store. Never upgrade a snapshot implicitly.
 //! Paths are derived from the runtime layout; serialized values never authorize I/O.
 
 use crate::error::Failure;
 use bpfman_fs::RuntimeLayout;
 use bpfman_model::{
-    ProgramSource, ProgramSpec, ProgramType, StoredProgram, StoredProgramSummary, Symbol,
+    LinkDetails, LinkState, ProgramSource, ProgramSpec, ProgramType, StoredLink, StoredProgram,
+    StoredProgramSummary, Symbol,
 };
 use bpfman_store::TracepointRecord;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroU64},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -22,6 +25,36 @@ pub(super) struct State {
     pub(super) next_generation: u64,
     pub(super) programs: Vec<Tracepoint>,
     pub(super) map_sets: Vec<MapSet>,
+    #[serde(default = "first_link_id", skip_serializing_if = "is_first_link_id")]
+    pub(super) next_link_id: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) links: Vec<Link>,
+}
+
+fn first_link_id() -> u64 {
+    1
+}
+
+fn is_first_link_id(id: &u64) -> bool {
+    *id == 1
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Link {
+    pub(super) id: NonZeroU64,
+    pub(super) program_id: NonZeroU32,
+    pub(super) target: String,
+    pub(super) state: LinkProgress,
+    pub(super) metadata: BTreeMap<String, String>,
+    pub(super) created_at: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum LinkProgress {
+    Pending,
+    Attached { kernel_id: NonZeroU32 },
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -49,11 +82,13 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 1,
+            version: 2,
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
             next_generation: 1,
             programs: Vec::new(),
             map_sets: Vec::new(),
+            next_link_id: 1,
+            links: Vec::new(),
         })
     }
 
@@ -66,7 +101,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if header.version != 1 {
+        if !matches!(header.version, 1 | 2) {
             return Err(Failure::Version(header.version));
         }
 
@@ -77,6 +112,10 @@ impl State {
     }
 
     fn validate(&self) -> Result<(), Failure> {
+        if self.version == 1 && (!self.links.is_empty() || self.next_link_id != 1) {
+            return Err(Failure::LinkVersion);
+        }
+
         if self.next_generation == 0 {
             return Err(Failure::Invalid("invalid next generation"));
         }
@@ -117,6 +156,35 @@ impl State {
             }
         }
 
+        if self.next_link_id == 0 || self.next_link_id > i64::MAX as u64 + 1 {
+            return Err(Failure::Invalid("invalid next link ID"));
+        }
+
+        let mut link_ids = BTreeSet::new();
+        let mut kernel_ids = BTreeSet::new();
+
+        for link in &self.links {
+            if !link_ids.insert(link.id)
+                || link.id.get() >= self.next_link_id
+                || !program_ids.contains(&link.program_id)
+            {
+                return Err(Failure::Invalid(
+                    "duplicate link, invalid ID, or missing program",
+                ));
+            }
+
+            if let LinkProgress::Attached { kernel_id } = link.state {
+                if !kernel_ids.insert(kernel_id) {
+                    return Err(Failure::Invalid("duplicate kernel link ID"));
+                }
+            }
+
+            link.target
+                .parse::<bpfman_model::Tracepoint>()
+                .map_err(|_| Failure::Invalid("invalid tracepoint target"))?;
+            timestamp(&link.created_at)?;
+        }
+
         Ok(())
     }
 
@@ -152,6 +220,18 @@ impl State {
         self.programs.push(row);
 
         Ok(summary)
+    }
+
+    pub(super) fn link_ids(&self, program: NonZeroU32) -> Vec<NonZeroU64> {
+        let mut links: Vec<_> = self
+            .links
+            .iter()
+            .filter(|row| row.program_id == program)
+            .map(|row| row.id)
+            .collect();
+        links.sort_unstable();
+
+        links
     }
 }
 
@@ -201,6 +281,33 @@ impl Tracepoint {
             created_at: timestamp(&self.created_at)?,
             updated_at: None,
             links: Vec::new(),
+        })
+    }
+}
+
+impl Link {
+    pub(super) fn record(&self, layout: &RuntimeLayout) -> Result<StoredLink, Failure> {
+        let target = self
+            .target
+            .parse()
+            .map_err(|_| Failure::Invalid("invalid tracepoint target"))?;
+        let state = match self.state {
+            LinkProgress::Pending => LinkState::Pending,
+            LinkProgress::Attached { kernel_id } => LinkState::Attached { kernel_id },
+        };
+
+        Ok(StoredLink {
+            id: self.id,
+            program_id: self.program_id,
+            details: LinkDetails::Tracepoint(target),
+            state,
+            pin_path: layout
+                .link_pin_path(self.id)
+                .into_os_string()
+                .into_string()
+                .map_err(|_| Failure::Invalid("runtime path is not UTF-8"))?,
+            metadata: self.metadata.clone(),
+            created_at: timestamp(&self.created_at)?,
         })
     }
 }
