@@ -607,6 +607,40 @@ not one atomic observation: concurrent unload may remove an object between
 them. Report that absence without diagnosing inconsistency from it alone.
 Namespace-helper launching is not implemented in this slice.
 
+### Planned namespace helper
+
+Use a hidden subcommand of the same `bpfman` executable, provisionally
+`bpfman __ns-helper open-uprobe-target ...`. This is a separate child process,
+not a separately installed `bpfman-ns` binary. The subcommand selects the mode
+explicitly and gives it typed argument parsing, without an inherited environment
+variable changing normal CLI behaviour. Hidden means omitted from normal help;
+the helper must still validate its arguments and inherited descriptors.
+
+Dispatch this mode at the start of `main`, before ordinary signal handling,
+store construction, or any other initialization that starts threads. The child
+calls `setns()` directly from synchronous Rust while still single-threaded; it
+does not need Go's pre-runtime C constructor. Keep helper dispatch and execution
+in a private binary module, with process launching behind an injected effect
+boundary so the reusable `Bpfman` API does not expose CLI mechanics.
+
+Preserve the current Go helper's division of responsibility:
+
+1. The parent launches the same executable with the target mount namespace and
+   target lookup arguments, an inherited Unix socket, and a duplicate writer-lock
+   descriptor using the existing `BPFMAN_WRITER_LOCK_FD` protocol.
+2. The child enters the target mount namespace, resolves and opens the target
+   binary, and sends its file descriptor to the parent through the socket using
+   `SCM_RIGHTS`. It performs no BPF attachment and exits without switching back.
+3. The parent attaches through `/proc/self/fd/<received-fd>` and pins the link in
+   its own namespace. Attachment ownership, receipts, and compensation remain
+   with the parent. Helper errors propagate as operation failures; the parent
+   closes transferred descriptors and reaps the child on every outcome.
+
+The legacy Rust helper instead attached inside the target mount namespace and
+switched back to pin the link. Retaining Go's file-descriptor handoff keeps BPF
+effects and their cleanup in the parent while isolating target filesystem lookup
+in the child. This remains planned work, not an implemented command.
+
 ### Object creation and deletion boundary
 
 The invariant is confinement to the supplied runtime root, not merely a blacklist
@@ -723,8 +757,9 @@ committed operation.
 
 ### Signals and cooperative cancellation
 
-The CLI installs `SIGINT` and `SIGTERM` handling before preparing the request or
-opening the store. The first signal requests cancellation through a caller-owned
+The normal CLI path, after excluding namespace-helper mode, installs `SIGINT`
+and `SIGTERM` handling before preparing the request or opening the store.
+The first signal requests cancellation through a caller-owned
 `Cancellation`. Signal-safe handlers record/wake only; an ordinary signal thread
 translates delivery into the library request. A second signal forces immediate
 exit (130 for INT, 143 for TERM), explicitly abandoning graceful cleanup. The
