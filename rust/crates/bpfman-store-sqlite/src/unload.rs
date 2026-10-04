@@ -42,12 +42,6 @@ fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Resul
         return Err(Failure::Unsupported("only tracepoints are implemented"));
     }
 
-    if row.links != 0 {
-        return Err(Failure::Unsupported(
-            "program has links; detach is not implemented",
-        ));
-    }
-
     if row.map_set != i64::from(id.get()) || row.users != 1 || row.shared != 0 {
         return Err(Failure::Unsupported(
             "only private map sets without shared pins are implemented",
@@ -73,7 +67,8 @@ fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Resul
 }
 
 /// Observe and validate the complete supported teardown scope without mutation.
-/// Linked programs, shared map sets/pins, and noncanonical paths are refused.
+/// Shared map sets/pins and noncanonical paths are refused. Link removal must
+/// precede record deletion.
 /// Absence is distinct from invalid or unreadable state. Call under one writer
 /// scope with filesystem observation and the subsequent deletion operations.
 pub fn observe_unload(
@@ -83,10 +78,12 @@ pub fn observe_unload(
     let Some(store) = crate::Store::inspect(&writer.database_path())? else {
         return Ok(None);
     };
-    let Some(row) = store.reader.read(|connection| snapshot(connection, id))? else {
+    let Some(mut row) = store.reader.read(|connection| snapshot(connection, id))? else {
         return Ok(None);
     };
     validate(writer, id, &row)?;
+    // Links are a teardown prerequisite, not part of the program identity.
+    row.links = 0;
 
     Ok(Some(UnloadRecord {
         map_set: PrivateMapSet {
@@ -150,6 +147,10 @@ pub fn delete_unloaded_program(
         let row = snapshot(&tx, receipt.evidence.id)?
             .ok_or_else(|| invalid(receipt.evidence.id, "program record disappeared"))?;
         validate(writer, receipt.evidence.id, &row)?;
+
+        if row.links != 0 {
+            return Err(invalid(receipt.evidence.id, "program still has links"));
+        }
 
         if row != receipt.evidence.snapshot {
             return Err(invalid(

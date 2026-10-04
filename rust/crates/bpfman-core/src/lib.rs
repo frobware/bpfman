@@ -324,9 +324,31 @@ pub enum StoreOpenPlan<T> {
     },
 }
 
+/// Validated link work observed before destructive program teardown.
+pub struct UnloadLink<P, R> {
+    /// Managed link identity, used only for reporting.
+    pub id: core::num::NonZeroU64,
+    /// Existing pin; absence is already satisfied.
+    pub pin: Option<P>,
+    /// Owned record deletion evidence.
+    pub record: R,
+}
+
+/// Owned link evidence paired with its diagnostic identity.
+pub struct UnloadLinkReceipt<T> {
+    /// Managed link identity, never deletion authority.
+    pub id: core::num::NonZeroU64,
+    /// Adapter-owned deletion evidence.
+    pub receipt: T,
+}
+
 /// One unload effect, in Go's forward teardown order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnloadKind {
+    /// Remove a standalone link pin before deleting its record.
+    LinkPin(core::num::NonZeroU64),
+    /// Delete a detached link record before proceeding to the next link.
+    LinkRecord(core::num::NonZeroU64),
     /// Unpin before any destructive store or artifact cleanup.
     ProgramPin,
     /// Delete the managed record; failure still permits bytecode cleanup.
@@ -342,7 +364,11 @@ pub enum UnloadKind {
 }
 
 /// Owned teardown work, distinct from compensation of an uncommitted load.
-pub enum UnloadInstruction<P, R, M, D, S, B> {
+pub enum UnloadInstruction<P, R, M, D, S, B, L = (), Q = ()> {
+    /// Existing standalone link pin.
+    LinkPin(UnloadLinkReceipt<L>),
+    /// Validated standalone link record.
+    LinkRecord(UnloadLinkReceipt<Q>),
     /// Existing program pin.
     ProgramPin(P),
     /// Validated committed program record.
@@ -358,9 +384,9 @@ pub enum UnloadInstruction<P, R, M, D, S, B> {
 }
 
 /// Stable identity and owned receipt for unresolved teardown work.
-pub struct PendingUnload<P, R, M, D, S, B> {
+pub struct PendingUnload<P, R, M, D, S, B, L = (), Q = ()> {
     id: usize,
-    instruction: UnloadInstruction<P, R, M, D, S, B>,
+    instruction: UnloadInstruction<P, R, M, D, S, B, L, Q>,
 }
 
 /// Receipt-free history, including successful effects; blocked work is not an attempt.
@@ -375,16 +401,16 @@ pub struct UnloadAttempt<E> {
 
 /// One bounded forward teardown pass. No rollback or automatic retry.
 #[must_use = "execute each permitted effect and retain the report"]
-pub struct UnloadProgram<P, R, M, D, S, B, E> {
-    pending: VecDeque<PendingUnload<P, R, M, D, S, B>>,
-    remaining: Vec<PendingUnload<P, R, M, D, S, B>>,
+pub struct UnloadProgram<P, R, M, D, S, B, E, L = (), Q = ()> {
+    pending: UnloadQueue<P, R, M, D, S, B, L, Q>,
+    remaining: UnloadResidue<P, R, M, D, S, B, L, Q>,
     attempts: Vec<UnloadAttempt<E>>,
 }
 
 /// Terminal unload outcome, including owned residue and all prior outcomes.
 #[must_use = "report failures and retain unresolved work for explicit retry"]
-pub struct UnloadReport<P, R, M, D, S, B, E> {
-    remaining: Vec<PendingUnload<P, R, M, D, S, B>>,
+pub struct UnloadReport<P, R, M, D, S, B, E, L = (), Q = ()> {
+    remaining: UnloadResidue<P, R, M, D, S, B, L, Q>,
     attempts: Vec<UnloadAttempt<E>>,
 }
 
@@ -411,60 +437,78 @@ pub struct UnloadReport<P, R, M, D, S, B, E> {
 /// }
 /// ```
 #[must_use = "report the effect and continue teardown"]
-pub struct UnloadContinuation<T, P, R, M, D, S, B, E> {
-    operation: UnloadProgram<P, R, M, D, S, B, E>,
+pub struct UnloadContinuation<T, P, R, M, D, S, B, E, L = (), Q = ()> {
+    operation: UnloadProgram<P, R, M, D, S, B, E, L, Q>,
     id: usize,
     kind: UnloadKind,
-    wrap: UnloadWrap<T, P, R, M, D, S, B>,
+    wrap: UnloadWrap<T, P, R, M, D, S, B, L, Q>,
 }
 
 /// Next permitted effect, or a terminal report when the pass is exhausted.
 #[must_use = "execute the effect or retain the terminal report"]
-pub enum UnloadStep<P, R, M, D, S, B, E> {
+pub enum UnloadStep<P, R, M, D, S, B, E, L = (), Q = ()> {
+    /// Remove a standalone link pin.
+    LinkPin {
+        /// Managed identity and owned pin receipt.
+        receipt: UnloadLinkReceipt<L>,
+        /// Continuation retaining the same identity on failure.
+        next: UnloadContinuation<UnloadLinkReceipt<L>, P, R, M, D, S, B, E, L, Q>,
+    },
+    /// Delete a detached standalone link record.
+    LinkRecord {
+        /// Managed identity and owned record receipt.
+        receipt: UnloadLinkReceipt<Q>,
+        /// Continuation retaining the same identity on failure.
+        next: UnloadContinuation<UnloadLinkReceipt<Q>, P, R, M, D, S, B, E, L, Q>,
+    },
     /// Execute ProgramPin teardown.
     ProgramPin {
         /// Owned receipt consumed by the adapter on success.
         receipt: P,
         /// Continuation accepting only this receipt type on failure.
-        next: UnloadContinuation<P, P, R, M, D, S, B, E>,
+        next: UnloadContinuation<P, P, R, M, D, S, B, E, L, Q>,
     },
     /// Execute ProgramRecord teardown.
     ProgramRecord {
         /// Owned receipt consumed by the adapter on success.
         receipt: R,
         /// Continuation accepting only this receipt type on failure.
-        next: UnloadContinuation<R, P, R, M, D, S, B, E>,
+        next: UnloadContinuation<R, P, R, M, D, S, B, E, L, Q>,
     },
     /// Execute MapPin teardown.
     MapPin {
         /// Owned receipt consumed by the adapter on success.
         receipt: M,
         /// Continuation accepting only this receipt type on failure.
-        next: UnloadContinuation<M, P, R, M, D, S, B, E>,
+        next: UnloadContinuation<M, P, R, M, D, S, B, E, L, Q>,
     },
     /// Execute MapDirectory teardown.
     MapDirectory {
         /// Owned receipt consumed by the adapter on success.
         receipt: D,
         /// Continuation accepting only this receipt type on failure.
-        next: UnloadContinuation<D, P, R, M, D, S, B, E>,
+        next: UnloadContinuation<D, P, R, M, D, S, B, E, L, Q>,
     },
     /// Execute MapSet teardown.
     MapSet {
         /// Owned receipt consumed by the adapter on success.
         receipt: S,
         /// Continuation accepting only this receipt type on failure.
-        next: UnloadContinuation<S, P, R, M, D, S, B, E>,
+        next: UnloadContinuation<S, P, R, M, D, S, B, E, L, Q>,
     },
     /// Execute Bytecode teardown.
     Bytecode {
         /// Owned receipt consumed by the adapter on success.
         receipt: B,
         /// Continuation accepting only this receipt type on failure.
-        next: UnloadContinuation<B, P, R, M, D, S, B, E>,
+        next: UnloadContinuation<B, P, R, M, D, S, B, E, L, Q>,
     },
     /// All independent work was attempted once; blocked work remains owned.
-    Complete(UnloadReport<P, R, M, D, S, B, E>),
+    Complete(UnloadReport<P, R, M, D, S, B, E, L, Q>),
 }
 
-type UnloadWrap<T, P, R, M, D, S, B> = fn(T) -> UnloadInstruction<P, R, M, D, S, B>;
+type UnloadWrap<T, P, R, M, D, S, B, L, Q> = fn(T) -> UnloadInstruction<P, R, M, D, S, B, L, Q>;
+
+type UnloadQueue<P, R, M, D, S, B, L, Q> = VecDeque<PendingUnload<P, R, M, D, S, B, L, Q>>;
+type UnloadResidue<P, R, M, D, S, B, L, Q> = Vec<PendingUnload<P, R, M, D, S, B, L, Q>>;
+type UnloadRemaining<'a, P, R, M, D, S, B, L, Q> = &'a [PendingUnload<P, R, M, D, S, B, L, Q>];

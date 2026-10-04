@@ -85,7 +85,8 @@ pub trait CommitLoad {
     ) -> Result<StoredProgramSummary, Error>;
 }
 
-/// Conditional teardown of an unattached tracepoint with exclusively owned maps.
+/// Conditional teardown of a tracepoint with exclusively owned maps.
+/// Observation may precede link teardown; deletion must refuse remaining links.
 /// Receipts must retain backend and runtime identity, remain non-cloneable, and
 /// be revalidated atomically on deletion. They are evidence, not bare IDs.
 ///

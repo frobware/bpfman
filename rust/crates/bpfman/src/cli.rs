@@ -86,7 +86,7 @@ pub(super) enum Command {
 
 #[derive(Subcommand)]
 pub(super) enum ProgramCommand {
-    /// Get a managed program with kernel and map observations (unattached only).
+    /// Get a managed program with kernel, map, and link observations.
     Get {
         /// Managed kernel program ID.
         #[arg(value_name = "PROGRAM_ID")]
@@ -95,7 +95,7 @@ pub(super) enum ProgramCommand {
         #[arg(short,long,value_enum,default_value_t=OutputFormat::Text)]
         output: OutputFormat,
     },
-    /// Unload one unattached tracepoint with private maps.
+    /// Unload one tracepoint, its standalone links, and private maps.
     Unload {
         /// Managed kernel program ID.
         #[arg(value_name = "PROGRAM_ID")]

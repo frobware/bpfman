@@ -267,16 +267,13 @@ fn concurrent_first_runs_observe_only_a_complete_database() -> Result<(), Box<dy
 }
 
 #[test]
-fn missing_and_linked_gets_fail_without_fabricating_kernel_observations()
+fn missing_and_unobservable_gets_fail_without_fabricating_kernel_observations()
 -> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     support::seed(&db)?;
     let before = std::fs::read(&db.path)?;
 
-    for (id, diagnostic) in [
-        ("99", "does not exist"),
-        ("42", "attached programs is not implemented"),
-    ] {
+    for (id, diagnostic) in [("99", "does not exist"), ("42", "kernel")] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
             .env("BPFMAN_RUNTIME_DIR", &db.runtime)
             .args(["program", "get", id, "-o", "json"])

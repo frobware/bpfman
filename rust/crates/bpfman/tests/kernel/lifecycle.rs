@@ -19,7 +19,13 @@ fn load<S: OpenStore + CommitLoad>(
     bpfman.load(request)
 }
 
-pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore + Clone + Sync>(backend: S) {
+pub(super) fn exercise<
+    S: OpenStore + CommitLoad + UnloadStore + bpfman_store::LinkStore + Clone + Sync,
+>(
+    backend: S,
+) where
+    S::Reader: bpfman_store::LinkReader,
+{
     let c = Context::new();
     let store = Faults::new(backend);
     let active =

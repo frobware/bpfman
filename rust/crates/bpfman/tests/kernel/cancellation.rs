@@ -19,7 +19,11 @@ fn request() -> PreparedTracepoint {
     .expect("prepare")
 }
 
-pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore + Clone>(backend: S) {
+pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore + bpfman_store::LinkStore + Clone>(
+    backend: S,
+) where
+    S::Reader: bpfman_store::LinkReader,
+{
     let c = Context::new();
     let store = Faults::new(backend);
     let app = Bpfman::new(

@@ -245,7 +245,7 @@ pub enum UnloadErrorKind {
     Cancelled,
     /// No managed record exists for this ID; no kernel-only identity is adopted.
     NotFound,
-    /// Linked programs, other program types, or shared maps need a later slice.
+    /// Other program types or shared maps need a later slice.
     Unsupported,
     /// Stored paths or observed objects violate the ownership contract.
     InvalidState,
@@ -263,12 +263,12 @@ pub struct UnloadCause {
 /// Unload progress and residue, including successful steps and earlier failures.
 /// A successful operation may retain cleanup warnings, matching Go's contract.
 #[must_use = "inspect cleanup warnings and retain any unresolved work"]
-pub struct UnloadReport<S: bpfman_store::UnloadStore> {
+pub struct UnloadReport<S: bpfman_store::UnloadStore + bpfman_store::LinkStore> {
     report: unload::StoreReport<S>,
 }
 
 /// Unload failure, retaining progress and receipts if teardown began.
-pub struct UnloadError<S: bpfman_store::UnloadStore> {
+pub struct UnloadError<S: bpfman_store::UnloadStore + bpfman_store::LinkStore> {
     failure: unload_error::Failure<S>,
 }
 

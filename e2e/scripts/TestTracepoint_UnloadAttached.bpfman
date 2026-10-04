@@ -1,0 +1,45 @@
+# -*- mode: bpfman -*-
+# Unloading an attached program removes its links before its program and maps.
+
+import ../lib.bpfman
+
+guard fn <- kfunc acquire
+defer kfunc release $fn
+
+guard loaded <- bpfman program load file testdata/bpf/tracepoint_kmod_counter.bpf.o --programs tracepoint:tracepoint_kmod_recorder -g "expected_slot=0x${u32le $fn.index}" -g "weight=0x${u64le 17}"
+let prog = $loaded.programs[0]
+let pid = $prog.record.program_id
+
+guard link <- bpfman link attach tracepoint $prog bpfman_e2e/bpfman_e2e_ping -m owner=unload-attached
+expect_pinned_link_identity $link
+
+guard got <- bpfman program get $pid
+let count = $got |> jq '.status.links | length'
+assert $count == 1
+expect_link_get_identity $got.status.links[0] $link $link.record.id
+
+# The attachment must execute before the direct program unload.
+guard _ <- kfunc fire $fn 5
+let mapID = $prog |> jq '[.status.maps[] | select(.name == "tp_kmod_count") | .id][0]'
+guard dump <- bpftool map dump id $mapID -j
+let counter = $dump.stdout |> jq 'fromjson | .[0].formatted.value | tonumber'
+assert $counter == 85
+
+bpfman program unload $pid
+assert_kernel_link_gone $link
+assert fail bpfman program get $pid
+assert fail bpfman link get $link.record.id
+
+guard listed <- bpfman link list -o json
+assert_link_absent $listed $link.record.id
+
+# Link teardown releases references synchronously, but kernel program/map
+# reclamation can complete later. Poll observations; never retry the unload.
+poll timeout 2s every 50ms {
+    let program <- bpftool prog show id $pid
+    retry "waiting for kernel program reclamation" unless $program.ok == false
+}
+poll timeout 2s every 50ms {
+    let map <- bpftool map show id $mapID
+    retry "waiting for kernel map reclamation" unless $map.ok == false
+}

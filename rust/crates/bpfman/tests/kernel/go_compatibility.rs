@@ -30,7 +30,36 @@ pub(super) fn exercise() {
             c.run(&rust(), &["program", "get", &pid_text], true).stdout,
             c.run(&go(), &["program", "get", &pid_text], true).stdout
         );
+        // A program loaded and attached by either implementation remains fully
+        // observable and can be unloaded directly by the other implementation.
+        let attached = c.json(
+            &loader,
+            &[
+                "link",
+                "attach",
+                "tracepoint",
+                &pid_text,
+                "syscalls/sys_enter_kill",
+                "-m",
+                "test=attached-interchange",
+                "-o",
+                "json",
+            ],
+        );
+        assert_eq!(
+            c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]),
+            c.json(&go(), &["program", "get", &pid_text, "-o", "json"])
+        );
+        assert_eq!(
+            c.run(&rust(), &["program", "get", &pid_text], true).stdout,
+            c.run(&go(), &["program", "get", &pid_text], true).stdout
+        );
         c.run(&unloader, &["program", "unload", &pid_text], true);
+        c.run(
+            &unloader,
+            &["link", "get", &attached["record"]["id"].to_string()],
+            false,
+        );
         c.absent(pid);
         assert_eq!(
             c.json(&rust(), &["program", "list", "-o", "json"])["programs"],

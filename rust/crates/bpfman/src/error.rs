@@ -65,7 +65,9 @@ impl From<bpfman_runtime::ObservationError> for Error {
     }
 }
 
-impl<S: bpfman_store::UnloadStore + 'static> From<bpfman_runtime::UnloadError<S>> for Error {
+impl<S: bpfman_store::UnloadStore + bpfman_store::LinkStore + 'static>
+    From<bpfman_runtime::UnloadError<S>> for Error
+{
     fn from(cause: bpfman_runtime::UnloadError<S>) -> Self {
         let cancelled = cause.kind() == bpfman_runtime::UnloadErrorKind::Cancelled;
         Self {

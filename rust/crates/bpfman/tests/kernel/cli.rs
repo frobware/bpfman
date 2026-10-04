@@ -181,13 +181,22 @@ pub(super) fn behaviour(store: &'static str) {
     let observed = c.json(&rust(), &["link", "get", &link_id, "-o", "json"]);
     assert_eq!(observed["status"]["kernel_seen"], true);
     assert_eq!(observed["status"]["pin_present"], true);
-    c.run(&rust(), &["link", "detach", &link_id], true);
+    let program = c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]);
+    assert_eq!(program["status"]["links"], serde_json::json!([observed]));
+    let text = c.run(&rust(), &["program", "get", &pid_text], true);
+    let text = String::from_utf8(text.stdout).expect("text");
+    assert!(text.contains("syscalls/sys_enter_kill"));
+    assert!(!text.contains("Links: None"));
 
     for id in [pid, unrelated] {
         c.run(&rust(), &["program", "unload", &id.to_string()], true);
         c.absent(id);
     }
 
+    assert_eq!(
+        c.json(&rust(), &["link", "list", "-o", "json"])["links"],
+        serde_json::json!([])
+    );
     c.no_artifacts();
 
     // Output delivery is after commit, independently of the backend format.
@@ -232,6 +241,17 @@ pub(super) fn behaviour(store: &'static str) {
 }
 
 pub(super) fn dsl(store: &'static str, script: &str) {
+    run_dsl(store, script, &rust());
+}
+
+pub(super) fn go_dsl(script: &str) {
+    let binary = std::env::var_os("BPFMAN_GO_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repository().join("bin/bpfman"));
+    run_dsl("sqlite", script, &binary);
+}
+
+fn run_dsl(store: &'static str, script: &str, binary: &std::path::Path) {
     let c = Context::with_store(store);
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -243,7 +263,7 @@ pub(super) fn dsl(store: &'static str, script: &str) {
         .arg("180s")
         .arg("make")
         .arg("run-e2e-scripts")
-        .arg(format!("BPFMAN_UNDER_TEST={}", rust().display()))
+        .arg(format!("BPFMAN_UNDER_TEST={}", binary.display()))
         .arg(format!("E2E_SCRIPTS_TEST_BIN={}", runner.display()))
         .arg(format!("BIN_DIR={}", shell_dir.display()))
         .arg(format!("TEST=TestBPFManScripts/scripts/{script}[.]bpfman$"))
@@ -267,7 +287,7 @@ pub(super) fn dsl(store: &'static str, script: &str) {
         "must execute the selected script"
     );
     assert_eq!(
-        c.json(&rust(), &["program", "list", "-o", "json"])["programs"],
+        c.json(binary, &["program", "list", "-o", "json"])["programs"],
         serde_json::json!([])
     );
     c.no_artifacts();

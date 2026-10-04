@@ -23,8 +23,8 @@ pub(super) enum Failure {
         #[source]
         cause: Box<dyn std::error::Error + Send + Sync>,
     },
-    #[error("full observation of attached programs is not implemented")]
-    Links,
+    #[error(transparent)]
+    Link(#[from] crate::LinkCause),
     #[error("observe kernel object")]
     Kernel(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error(transparent)]
@@ -54,7 +54,9 @@ impl ObservationError {
             Failure::Cancelled => ObservationErrorKind::Cancelled,
             Failure::Missing(_) => ObservationErrorKind::NotFound,
             Failure::KernelMissing { .. } => ObservationErrorKind::KernelMissing,
-            Failure::Links => ObservationErrorKind::Unsupported,
+            Failure::Link(ref error) if error.kind() == crate::LinkErrorKind::Cancelled => {
+                ObservationErrorKind::Cancelled
+            }
             _ => ObservationErrorKind::Unavailable,
         }
     }
@@ -107,10 +109,12 @@ fn path(path: std::path::PathBuf) -> Result<String, Failure> {
         .map_err(|_| Failure::Path)
 }
 
-impl<S: OpenStore> Bpfman<S> {
+impl<S: OpenStore> Bpfman<S>
+where
+    S::Reader: bpfman_store::LinkReader,
+{
     /// Observe a managed record and its live kernel data without the writer lock.
     /// Kernel and pin observations may change after the store snapshot.
-    /// Linked programs are rejected until full link observation is implemented.
     pub fn get(&self, id: NonZeroU32) -> Result<ObservedProgram, ObservationError> {
         self.get_with_cancellation(id, &crate::Cancellation::new())
     }
@@ -122,13 +126,28 @@ impl<S: OpenStore> Bpfman<S> {
         id: NonZeroU32,
         cancellation: &crate::Cancellation,
     ) -> Result<ObservedProgram, ObservationError> {
-        observe_cancellable(
+        let mut observed = observe_cancellable(
             &self.store,
             self.store.runtime(),
             id,
             View::Get,
             cancellation,
-        )
+        )?;
+        check(cancellation)?;
+        let links = self
+            .list_link_records_with_cancellation(cancellation)
+            .map_err(Failure::from)?;
+
+        // Store, kernel and pin observations are independent snapshots. Links
+        // removed concurrently may be absent; never synthesize their presence.
+        for record in links.into_iter().filter(|record| record.program_id == id) {
+            observed.links.push(
+                crate::link_observation::observe_record(self.store.runtime(), record, cancellation)
+                    .map_err(Failure::from)?,
+            );
+        }
+
+        Ok(observed)
     }
 }
 
@@ -164,10 +183,6 @@ fn observe_cancellable<S: OpenStore>(
         .position(|p| p.id == id)
         .ok_or(Failure::Missing(id))?;
     let record = records[index].clone();
-
-    if !record.links.is_empty() {
-        return Err(Failure::Links.into());
-    }
 
     let users = records
         .iter()
@@ -238,6 +253,7 @@ fn build<K: KernelObservations>(
         },
         maps,
         map_used_by: users,
+        links: Vec::new(),
     })
 }
 

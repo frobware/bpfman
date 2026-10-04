@@ -148,7 +148,7 @@ pub struct ObservedMap {
     pub present: bool,
 }
 
-/// An unattached managed program with a successful kernel observation.
+/// A managed program with a successful kernel observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObservedProgram {
     /// Stored identity and intent.
@@ -163,6 +163,8 @@ pub struct ObservedProgram {
     pub map_dir: String,
     /// Canonical bytecode location.
     pub bytecode: String,
+    /// Stored links and independently observed kernel/pin presence.
+    pub links: Vec<crate::ObservedLink>,
     /// Observed maps.
     pub maps: Vec<ObservedMap>,
     /// Managed programs belonging to this map set.

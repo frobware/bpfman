@@ -1,6 +1,8 @@
 //! Privileged outside-in tests. Run with the Make targets in a private mount namespace.
 //! Only this composition point selects a store; generic scenarios know no storage format.
 #![allow(clippy::expect_used)]
+#[path = "kernel/attached.rs"]
+mod attached;
 #[path = "kernel/cancellation.rs"]
 mod cancellation;
 #[path = "kernel/cli.rs"]
@@ -79,4 +81,29 @@ fn sqlite_unchanged_tracepoint_dsl_link_round_trip() {
 #[test]
 fn json_unchanged_tracepoint_dsl_link_round_trip() {
     cli::dsl("json", "TestTracepoint_LinkRoundTrip");
+}
+
+#[test]
+fn sqlite_attached_unload_failures_and_cancellation() {
+    attached::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_attached_unload_failures_and_cancellation() {
+    attached::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_unchanged_tracepoint_dsl_unload_attached() {
+    cli::dsl("sqlite", "TestTracepoint_UnloadAttached");
+}
+
+#[test]
+fn json_unchanged_tracepoint_dsl_unload_attached() {
+    cli::dsl("json", "TestTracepoint_UnloadAttached");
+}
+
+#[test]
+fn go_tracepoint_dsl_unload_attached() {
+    cli::go_dsl("TestTracepoint_UnloadAttached");
 }

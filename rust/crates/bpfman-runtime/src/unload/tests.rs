@@ -109,6 +109,12 @@ impl Fake {
         }
 
         match name {
+            "link-a-record" => assert!(!self.state.contains("link-a-pin")),
+            "link-b-pin" => assert!(!self.state.contains("link-a-record")),
+            "link-b-record" => assert!(!self.state.contains("link-b-pin")),
+            "pin" => assert!(
+                !self.state.contains("link-a-record") && !self.state.contains("link-b-record")
+            ),
             "record" | "bytecode" => assert!(!self.state.contains("pin")),
             "map-a" | "map-b" | "map-c" => assert!(!self.state.contains("record")),
             "directory" => assert!(
@@ -149,6 +155,8 @@ impl Fake {
 }
 
 impl UnloadEffects for Fake {
+    type LinkPin = Receipt;
+    type LinkRecord = Receipt;
     type Pin = Pin;
     type Record = Record;
     type Map = Map;
@@ -202,6 +210,44 @@ impl UnloadEffects for Fake {
                 .contains("bytecode")
                 .then(|| Bytecode(self.receipt(writer, "bytecode"))),
         })
+    }
+
+    fn observe_links(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        _id: NonZeroU32,
+    ) -> Result<Vec<bpfman_core::UnloadLink<Receipt, Receipt>>, Fault> {
+        self.observe("observe-links")?;
+        let mut links = Vec::new();
+        for (id, pin, record) in [
+            (1, "link-a-pin", "link-a-record"),
+            (2, "link-b-pin", "link-b-record"),
+        ] {
+            if self.state.contains(record) {
+                links.push(bpfman_core::UnloadLink {
+                    id: std::num::NonZeroU64::new(id).expect("id"),
+                    pin: self.state.contains(pin).then(|| self.receipt(writer, pin)),
+                    record: self.receipt(writer, record),
+                });
+            }
+        }
+        Ok(links)
+    }
+
+    fn unpin_link(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Receipt,
+    ) -> Result<(), EffectFailure<Receipt, Fault>> {
+        self.step(writer, receipt)
+    }
+
+    fn delete_link(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Receipt,
+    ) -> Result<(), EffectFailure<Receipt, Fault>> {
+        self.step(writer, receipt)
     }
 
     fn unpin(
@@ -351,7 +397,7 @@ fn every_failure_subset_preserves_order_residue_status_and_successful_history() 
             assert_eq!(
                 fake.calls,
                 [
-                    vec!["observe-store", "observe-artifacts"],
+                    vec!["observe-store", "observe-links", "observe-artifacts"],
                     attempted.clone()
                 ]
                 .concat(),
@@ -432,7 +478,7 @@ fn every_failure_subset_preserves_order_residue_status_and_successful_history() 
 #[test]
 fn preflight_failures_never_mutate_committed_resources() {
     scope(|writer| {
-        for failure in ["observe-store", "observe-artifacts"] {
+        for failure in ["observe-store", "observe-links", "observe-artifacts"] {
             let mut fake = Fake::new([failure].into_iter().collect());
             let before = fake.state.clone();
             let result = run(
@@ -469,7 +515,13 @@ fn absent_artifacts_require_only_store_teardown() {
 
         assert_eq!(
             fake.calls,
-            ["observe-store", "observe-artifacts", "record", "map-set"]
+            [
+                "observe-store",
+                "observe-links",
+                "observe-artifacts",
+                "record",
+                "map-set"
+            ]
         );
         assert!(report.remaining().is_empty());
         assert!(!report.failed());
@@ -573,7 +625,12 @@ fn unload_trace_distinguishes_failures_from_unattempted_dependencies() {
 #[test]
 fn cancellation_before_teardown_preserves_all_committed_resources() {
     scope(|writer| {
-        for boundary in [None, Some("observe-store"), Some("observe-artifacts")] {
+        for boundary in [
+            None,
+            Some("observe-store"),
+            Some("observe-links"),
+            Some("observe-artifacts"),
+        ] {
             let mut fake = Fake::new(BTreeSet::new());
             fake.cancel_on = boundary;
             let cancellation = fake.cancellation.clone();
@@ -604,7 +661,7 @@ fn cancellation_during_teardown_preserves_full_pass_and_failure_history() {
                     .expect("admitted teardown");
 
                 let expected = expected(&faults);
-                assert_eq!(&fake.calls[2..], expected);
+                assert_eq!(&fake.calls[3..], expected);
                 assert_eq!(report.attempts().len(), expected.len());
                 assert_eq!(report.remaining().len(), fake.residue().len());
                 fake.faults.clear();
@@ -615,6 +672,79 @@ fn cancellation_during_teardown_preserves_full_pass_and_failure_history() {
                 assert!(fake.residue().is_empty());
                 fake.unrelated_preserved();
             }
+        }
+    });
+}
+
+const LINKS: [&str; 4] = ["link-a-pin", "link-a-record", "link-b-pin", "link-b-record"];
+
+#[test]
+fn link_failures_block_dependents_and_explicit_retry_keeps_successes() {
+    scope(|writer| {
+        for (index, failure) in LINKS.iter().enumerate() {
+            let mut fake = Fake::new([*failure].into());
+            fake.state.extend(LINKS);
+            let report = run(
+                writer,
+                &mut fake,
+                NonZeroU32::MIN,
+                &crate::Cancellation::new(),
+            )
+            .expect("preflight");
+
+            assert!(report.failed());
+            assert_eq!(&fake.calls[3..], &LINKS[..=index]);
+            assert_eq!(report.attempts().len(), index + 1);
+            assert_eq!(report.remaining().len(), WORK.len() + LINKS.len() - index);
+            assert_eq!(fake.residue(), WORK.into_iter().collect());
+            assert!(report.attempts()[..index].iter().all(|a| a.outcome.is_ok()));
+            assert!(report.attempts()[index].outcome.is_err());
+
+            fake.calls.clear();
+            let report = drain(writer, &mut fake, report.retry());
+            assert_eq!(fake.calls, [*failure]);
+            assert_eq!(report.attempts().len(), index + 2);
+            assert_eq!(report.attempts()[index + 1].id, index);
+
+            fake.faults.clear();
+            fake.calls.clear();
+            let report = drain(writer, &mut fake, report.retry());
+            assert_eq!(fake.calls, [&LINKS[index..], &WORK].concat());
+            assert!(!report.failed());
+            assert!(report.remaining().is_empty());
+            assert_eq!(
+                report
+                    .attempts()
+                    .iter()
+                    .filter(|a| a.outcome.is_err())
+                    .count(),
+                2
+            );
+            assert!(fake.residue().is_empty());
+            assert!(LINKS.iter().all(|n| !fake.state.contains(n)));
+            fake.unrelated_preserved();
+            drop(report);
+            assert_eq!(fake.drops.get(), fake.minted);
+        }
+    });
+}
+
+#[test]
+fn cancellation_at_each_link_effect_finishes_the_admitted_pass() {
+    scope(|writer| {
+        for boundary in LINKS {
+            let mut fake = Fake::new(BTreeSet::new());
+            fake.state.extend(LINKS);
+            fake.cancel_on = Some(boundary);
+            let cancellation = fake.cancellation.clone();
+            let report = run(writer, &mut fake, NonZeroU32::MIN, &cancellation).expect("admitted");
+
+            assert!(cancellation.is_cancelled());
+            assert_eq!(&fake.calls[3..], [&LINKS[..], &WORK].concat());
+            assert!(report.remaining().is_empty());
+            assert!(report.attempts().iter().all(|a| a.outcome.is_ok()));
+            assert!(fake.residue().is_empty());
+            fake.unrelated_preserved();
         }
     });
 }

@@ -67,7 +67,6 @@ fn counts(db: &Connection) -> (usize, usize) {
 fn preflight_rejects_every_unsupported_relationship_and_noncanonical_path() -> Result {
     for sql in [
         "UPDATE managed_programs SET program_type='xdp'",
-        "INSERT INTO links(kind,kernel_prog_id,created_at) VALUES ('tracepoint',42,'now')",
         "INSERT INTO shared_map_pins VALUES ('shared',42)",
         "INSERT INTO managed_programs(program_id,program_name,program_type,object_path,pin_path,map_set_id,created_at) VALUES (99,'borrower','tracepoint','unused','unused',42,'now')",
         "INSERT INTO map_sets VALUES(99,'unused','now'); UPDATE managed_programs SET map_set_id=99",
@@ -227,6 +226,26 @@ fn store_receipts_require_the_original_opened_runtime() -> Result {
             Connection::open(RuntimeLayout::try_from(other.path().to_owned())?.database_path())?;
 
         assert_eq!(counts(&other_db), (1, 1));
+
+        Ok(())
+    })
+}
+
+#[test]
+fn linked_preflight_receipt_requires_links_removed_before_deletion() -> Result {
+    scope(|writer, db| {
+        db.execute_batch(
+            "INSERT INTO links(kind,kernel_prog_id,created_at) VALUES ('tracepoint',42,'now')",
+        )?;
+        let (record, _) = observe_unload(writer, id())?
+            .expect("linked program")
+            .into_parts();
+        let failure = delete_unloaded_program(writer, record).expect_err("link prerequisite");
+        assert_eq!(counts(db), (1, 1));
+
+        db.execute_batch("DELETE FROM links WHERE kernel_prog_id=42")?;
+        delete_unloaded_program(writer, failure.remaining).map_err(|f| f.cause)?;
+        assert_eq!(counts(db), (0, 1));
 
         Ok(())
     })

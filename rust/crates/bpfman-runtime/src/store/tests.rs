@@ -149,7 +149,10 @@ fn retained_backend_receipts_survive_failed_unload_and_explicit_retry() {
     let error = bpfman.unload(id()).expect_err("record failure");
 
     assert_eq!(store.residue(), (true, true));
-    assert_eq!(calls(&store), ["commit", "observe", "delete program"]);
+    assert_eq!(
+        calls(&store),
+        ["commit", "observe", "validate", "delete program"]
+    );
 
     let error = bpfman.retry_unload(error).expect_err("unchanged fault");
 

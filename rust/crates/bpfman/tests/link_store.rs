@@ -102,7 +102,14 @@ where
             first.pin_path,
             layout.link_pin_path(first.id).to_str().expect("path")
         );
-        assert!(store.observe_unload(w, id(42)).is_err());
+        let (linked_program, _) = store
+            .observe_unload(w, id(42))
+            .expect("linked preflight")
+            .expect("program");
+        assert!(
+            store.delete_program(w, linked_program).is_err(),
+            "links block deletion"
+        );
 
         let blocked = store
             .delete_program(w, program)
@@ -142,7 +149,14 @@ where
             std::slice::from_ref(&attached)
         );
         assert!(store.delete_link(w, stale_pending).is_err());
-        assert!(store.observe_unload(w, id(42)).is_err());
+        let (linked_program, _) = store
+            .observe_unload(w, id(42))
+            .expect("linked preflight")
+            .expect("program");
+        assert!(
+            store.delete_program(w, linked_program).is_err(),
+            "links block deletion"
+        );
 
         let (_, finalised) = store
             .observe_link(w, first.id)

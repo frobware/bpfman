@@ -64,6 +64,7 @@ pub(crate) fn map() -> KernelMap {
 pub(crate) fn program() -> ObservedProgram {
     let record = record();
     ObservedProgram {
+        links: Vec::new(),
         kernel: kernel(),
         stats: Some(ProgramStats {
             runtime_ns: 0,

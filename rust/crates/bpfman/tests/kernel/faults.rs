@@ -34,6 +34,7 @@ pub(super) enum Point {
 #[derive(Default)]
 struct State {
     fault: Option<Point>,
+    successes_before_fault: usize,
     cancellation: Option<(Point, bpfman_runtime::Cancellation)>,
     committed: bool,
     calls: Vec<Point>,
@@ -60,7 +61,15 @@ impl<S> Faults<S> {
     }
 
     pub(super) fn set(&self, fault: Option<Point>) {
-        self.state.lock().expect("fault state").fault = fault;
+        let mut state = self.state.lock().expect("fault state");
+        state.fault = fault;
+        state.successes_before_fault = 0;
+    }
+
+    pub(super) fn fail_after(&self, point: Point, successes: usize) {
+        let mut state = self.state.lock().expect("fault state");
+        state.fault = Some(point);
+        state.successes_before_fault = successes;
     }
 
     pub(super) fn blocked_bytecode(&self) -> NonZeroU32 {
@@ -89,6 +98,11 @@ fn check(state: &Arc<Mutex<State>>, point: Point) -> Result<(), Error> {
         if *boundary == point {
             cancellation.cancel();
         }
+    }
+
+    if state.fault == Some(point) && state.successes_before_fault > 0 {
+        state.successes_before_fault -= 1;
+        return Ok(());
     }
 
     if state.fault == Some(point) {

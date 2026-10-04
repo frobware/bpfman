@@ -1,6 +1,6 @@
 use crate::{Bpfman, UnloadCause, UnloadError, UnloadErrorKind, UnloadReport, unload};
 use bpfman_core::{UnloadAttempt, UnloadKind};
-use bpfman_store::UnloadStore;
+use bpfman_store::{LinkReader, LinkStore, OpenStore, UnloadStore};
 use std::{fmt, num::NonZeroU32};
 
 #[derive(Debug, thiserror::Error)]
@@ -9,13 +9,15 @@ pub(super) enum Cause {
     Cancelled,
     #[error("managed program {0} not found")]
     NotFound(NonZeroU32),
+    #[error("{0}")]
+    Invalid(&'static str),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
     #[error(transparent)]
     Store(#[from] bpfman_store::Error),
 }
 
-pub(super) enum Failure<S: UnloadStore> {
+pub(super) enum Failure<S: UnloadStore + LinkStore> {
     Before(UnloadCause),
     Incomplete(Box<UnloadReport<S>>),
     RetryBlocked {
@@ -42,7 +44,7 @@ impl From<bpfman_store::Error> for UnloadCause {
     }
 }
 
-impl<S: UnloadStore> From<UnloadCause> for UnloadError<S> {
+impl<S: UnloadStore + LinkStore> From<UnloadCause> for UnloadError<S> {
     fn from(cause: UnloadCause) -> Self {
         Self {
             failure: Failure::Before(cause),
@@ -54,6 +56,7 @@ impl UnloadCause {
     /// Application category; concrete backend diagnostics remain in the source chain.
     pub fn kind(&self) -> UnloadErrorKind {
         match &self.cause {
+            Cause::Invalid(_) => UnloadErrorKind::InvalidState,
             Cause::Cancelled => UnloadErrorKind::Cancelled,
             Cause::Filesystem(e) if e.kind() == bpfman_fs::ErrorKind::Cancelled => {
                 UnloadErrorKind::Cancelled
@@ -73,7 +76,7 @@ impl UnloadCause {
     }
 }
 
-impl<S: UnloadStore> UnloadReport<S> {
+impl<S: UnloadStore + LinkStore> UnloadReport<S> {
     /// All attempted effects, including successful ones and previous retry passes.
     pub fn attempts(&self) -> &[UnloadAttempt<UnloadCause>] {
         self.report.attempts()
@@ -85,7 +88,7 @@ impl<S: UnloadStore> UnloadReport<S> {
     }
 }
 
-impl<S: UnloadStore> UnloadError<S> {
+impl<S: UnloadStore + LinkStore> UnloadError<S> {
     /// Backend-independent failure category.
     pub fn kind(&self) -> UnloadErrorKind {
         self.primary()
@@ -106,13 +109,24 @@ impl<S: UnloadStore> UnloadError<S> {
             Failure::Incomplete(report) => report
                 .attempts()
                 .iter()
-                .filter(|a| matches!(a.kind, UnloadKind::ProgramPin | UnloadKind::ProgramRecord))
+                .filter(|a| {
+                    matches!(
+                        a.kind,
+                        UnloadKind::LinkPin(_)
+                            | UnloadKind::LinkRecord(_)
+                            | UnloadKind::ProgramPin
+                            | UnloadKind::ProgramRecord
+                    )
+                })
                 .find_map(|a| a.outcome.as_ref().err()),
         }
     }
 }
 
-impl<S: bpfman_store::OpenStore + UnloadStore> Bpfman<S> {
+impl<S: OpenStore + UnloadStore + LinkStore> Bpfman<S>
+where
+    S::Reader: LinkReader,
+{
     /// Retry retained teardown once, acquiring this instance's writer lock.
     /// Preflight failures are returned unchanged and require a fresh request.
     pub fn retry_unload(&self, error: UnloadError<S>) -> Result<UnloadReport<S>, UnloadError<S>> {
@@ -191,7 +205,7 @@ impl<S: bpfman_store::OpenStore + UnloadStore> Bpfman<S> {
     }
 }
 
-impl<S: UnloadStore> fmt::Debug for UnloadReport<S> {
+impl<S: UnloadStore + LinkStore> fmt::Debug for UnloadReport<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("UnloadReport")
             .field("attempts", &self.attempts().len())
@@ -200,13 +214,13 @@ impl<S: UnloadStore> fmt::Debug for UnloadReport<S> {
     }
 }
 
-impl<S: UnloadStore> fmt::Debug for UnloadError<S> {
+impl<S: UnloadStore + LinkStore> fmt::Debug for UnloadError<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
 }
 
-impl<S: UnloadStore> fmt::Display for UnloadError<S> {
+impl<S: UnloadStore + LinkStore> fmt::Display for UnloadError<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "unload program")?;
 
@@ -241,7 +255,7 @@ impl<S: UnloadStore> fmt::Display for UnloadError<S> {
     }
 }
 
-impl<S: UnloadStore> std::error::Error for UnloadError<S> {
+impl<S: UnloadStore + LinkStore> std::error::Error for UnloadError<S> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.primary().map(|e| e as _)
     }

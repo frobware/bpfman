@@ -24,25 +24,7 @@ pub(crate) fn link(
     format: OutputFormat,
 ) -> io::Result<()> {
     if format == OutputFormat::Json {
-        // These other-kind fields are zero-shaped in Go's kernel wire format.
-        // The runtime currently admits only standalone perf-event links.
-        let kernel = link.kernel.as_ref().map(|k| {
-            json!({
-                "id": k.id.get(), "program_id": k.program_id.get(), "link_type": "perf_event",
-                "attach_type": "", "ifindex": 0, "target_obj_id": 0, "target_btf_id": 0,
-                "cgroup_id": 0, "netns_ino": 0, "netfilter_pf": 0, "netfilter_hooknum": 0,
-                "netfilter_priority": 0, "netfilter_flags": 0, "kprobe_multi_count": 0,
-                "kprobe_multi_flags": 0, "kprobe_multi_missed": 0, "kprobe_address": 0,
-                "kprobe_missed": 0,
-            })
-        });
-        return super::write_json(
-            out,
-            &json!({
-                "record": record(&link.record),
-                "status": { "kernel": kernel, "kernel_seen": link.kernel.is_some(), "pin_present": link.pin_present },
-            }),
-        );
+        return super::write_json(out, &observed(link));
     }
 
     let LinkDetails::Tracepoint(target) = &link.record.details;
@@ -91,4 +73,23 @@ pub(crate) fn links(
     }
 
     Ok(())
+}
+
+pub(super) fn observed(link: &ObservedLink) -> Value {
+    // These other-kind fields are zero-shaped in Go's kernel wire format.
+    // The runtime currently admits only standalone perf-event links.
+    let kernel = link.kernel.as_ref().map(|k| {
+        json!({
+            "id": k.id.get(), "program_id": k.program_id.get(), "link_type": "perf_event",
+            "attach_type": "", "ifindex": 0, "target_obj_id": 0, "target_btf_id": 0,
+            "cgroup_id": 0, "netns_ino": 0, "netfilter_pf": 0, "netfilter_hooknum": 0,
+            "netfilter_priority": 0, "netfilter_flags": 0, "kprobe_multi_count": 0,
+            "kprobe_multi_flags": 0, "kprobe_multi_missed": 0, "kprobe_address": 0,
+            "kprobe_missed": 0,
+        })
+    });
+    json!({
+        "record": record(&link.record),
+        "status": { "kernel": kernel, "kernel_seen": link.kernel.is_some(), "pin_present": link.pin_present },
+    })
 }

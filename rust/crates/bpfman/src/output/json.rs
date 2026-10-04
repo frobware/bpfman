@@ -66,7 +66,7 @@ fn map(m: &KernelMap, pin: &Option<String>, present: bool) -> Value {
 pub(super) fn program(p: &ObservedProgram) -> Value {
     json!({"record":record(&p.record),"status":{"kernel":kernel(&p.kernel),
         "stats":p.stats.as_ref().map(|s|json!({"runtime":s.runtime_ns,"run_count":s.run_count,"recursion_misses":s.recursion_misses})),
-        "prog_pin":p.prog_pin,"map_dir":p.map_dir,"bytecode":p.bytecode,"links":[],"maps":p.maps.iter().map(|m|map(&m.kernel,&m.pin_path,m.present)).collect::<Vec<_>>(),"map_used_by":p.map_used_by}})
+        "prog_pin":p.prog_pin,"map_dir":p.map_dir,"bytecode":p.bytecode,"links":p.links.iter().map(super::link::observed).collect::<Vec<_>>(),"maps":p.maps.iter().map(|m|map(&m.kernel,&m.pin_path,m.present)).collect::<Vec<_>>(),"map_used_by":p.map_used_by}})
 }
 
 pub(super) fn entry(p: &ProgramEntry) -> Value {

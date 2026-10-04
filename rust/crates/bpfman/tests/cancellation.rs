@@ -10,7 +10,10 @@ use std::{num::NonZeroU32, sync::mpsc, time::Duration};
 
 const BUDGET: Duration = Duration::from_secs(3);
 
-fn exercise<S: OpenStore + UnloadStore + Copy + Send + Sync>(backend: S) {
+fn exercise<S: OpenStore + UnloadStore + bpfman_store::LinkStore + Copy + Send + Sync>(backend: S)
+where
+    S::Reader: bpfman_store::LinkReader,
+{
     let temp = tempfile::tempdir().expect("runtime");
     let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
     let cancelled = Cancellation::new();

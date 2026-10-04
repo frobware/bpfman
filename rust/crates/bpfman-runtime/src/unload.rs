@@ -4,7 +4,7 @@ use crate::{Bpfman, UnloadError, UnloadReport};
 use bpfman_core::{EffectFailure, UnloadProgram, UnloadStep};
 use bpfman_fs::RuntimeWriter;
 use bpfman_lock::AcquireOptions;
-use bpfman_store::UnloadStore;
+use bpfman_store::{LinkReader, LinkStore, UnloadStore};
 use std::num::NonZeroU32;
 
 pub(super) mod real;
@@ -19,6 +19,8 @@ pub(super) struct Artifacts<P, M, D, B> {
 }
 
 pub(super) trait UnloadEffects {
+    type LinkPin;
+    type LinkRecord;
     type Pin;
     type Record;
     type Map;
@@ -40,6 +42,24 @@ pub(super) trait UnloadEffects {
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
     ) -> Result<ArtifactsFor<Self>, Self::Error>;
+
+    fn observe_links(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+    ) -> Result<LinksFor<Self>, Self::Error>;
+
+    fn unpin_link(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::LinkPin,
+    ) -> Result<(), EffectFailure<Self::LinkPin, Self::Error>>;
+
+    fn delete_link(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::LinkRecord,
+    ) -> Result<(), EffectFailure<Self::LinkRecord, Self::Error>>;
 
     fn unpin(
         &mut self,
@@ -78,6 +98,8 @@ pub(super) trait UnloadEffects {
     ) -> Result<(), EffectFailure<Self::Bytecode, Self::Error>>;
 }
 
+type LinksFor<F> =
+    Vec<bpfman_core::UnloadLink<<F as UnloadEffects>::LinkPin, <F as UnloadEffects>::LinkRecord>>;
 type ArtifactsFor<F> = Artifacts<
     <F as UnloadEffects>::Pin,
     <F as UnloadEffects>::Map,
@@ -92,6 +114,8 @@ type OperationFor<F> = UnloadProgram<
     <F as UnloadEffects>::MapSet,
     <F as UnloadEffects>::Bytecode,
     <F as UnloadEffects>::Error,
+    <F as UnloadEffects>::LinkPin,
+    <F as UnloadEffects>::LinkRecord,
 >;
 pub(super) type ReportFor<F> = bpfman_core::UnloadReport<
     <F as UnloadEffects>::Pin,
@@ -101,6 +125,8 @@ pub(super) type ReportFor<F> = bpfman_core::UnloadReport<
     <F as UnloadEffects>::MapSet,
     <F as UnloadEffects>::Bytecode,
     <F as UnloadEffects>::Error,
+    <F as UnloadEffects>::LinkPin,
+    <F as UnloadEffects>::LinkRecord,
 >;
 
 pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
@@ -111,10 +137,16 @@ pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
     <S as UnloadStore>::MapSetReceipt,
     bpfman_fs::Bytecode,
     crate::UnloadCause,
+    bpfman_fs::LinkPin,
+    <S as LinkStore>::LinkReceipt,
 >;
 
-impl<S: bpfman_store::OpenStore + UnloadStore> Bpfman<S> {
-    /// Unload one committed, unattached tracepoint with a private map set.
+impl<S: bpfman_store::OpenStore + UnloadStore + LinkStore> Bpfman<S>
+where
+    S::Reader: LinkReader,
+{
+    /// Unload one committed tracepoint with a private map set.
+    /// Pending attachment intent must first be resolved through link cleanup.
     /// Observations and teardown share one writer scope. Independent cleanup
     /// continues after record failure; post-record cleanup may return warnings.
     /// Retained receipts support explicit retry even after the row is gone.
@@ -162,6 +194,8 @@ fn run<F: UnloadEffects>(
     check(effects)?;
     let (record, map_set) = effects.observe_store(writer, id)?;
     check(effects)?;
+    let links = effects.observe_links(writer, id)?;
+    check(effects)?;
     let artifacts = effects.observe_artifacts(writer, id)?;
 
     check(effects)?;
@@ -171,7 +205,8 @@ fn run<F: UnloadEffects>(
     Ok(drain(
         writer,
         effects,
-        UnloadProgram::new(
+        UnloadProgram::new_with_links(
+            links,
             artifacts.pin,
             record,
             artifacts.maps,
@@ -188,31 +223,58 @@ pub(super) fn drain<F: UnloadEffects>(
     mut operation: OperationFor<F>,
 ) -> ReportFor<F> {
     loop {
-        operation = match operation.next() {
-            UnloadStep::ProgramPin { receipt, next } => {
-                next.completed(effects.unpin(writer, receipt))
-            }
-            UnloadStep::ProgramRecord { receipt, next } => {
-                next.completed(effects.delete_record(writer, receipt))
-            }
-            UnloadStep::MapPin { receipt, next } => {
-                next.completed(effects.remove_map(writer, receipt))
-            }
-            UnloadStep::MapDirectory { receipt, next } => {
-                next.completed(effects.remove_directory(writer, receipt))
-            }
-            UnloadStep::MapSet { receipt, next } => {
-                next.completed(effects.delete_map_set(writer, receipt))
-            }
-            UnloadStep::Bytecode { receipt, next } => {
-                next.completed(effects.remove_bytecode(writer, receipt))
-            }
-            UnloadStep::Complete(report) => return report,
-        };
+        operation =
+            match operation.next() {
+                UnloadStep::LinkPin { receipt, next } => {
+                    let id = receipt.id;
+                    next.completed(
+                        effects
+                            .unpin_link(writer, receipt.receipt)
+                            .map_err(|failure| EffectFailure {
+                                remaining: bpfman_core::UnloadLinkReceipt {
+                                    id,
+                                    receipt: failure.remaining,
+                                },
+                                cause: failure.cause,
+                            }),
+                    )
+                }
+                UnloadStep::LinkRecord { receipt, next } => {
+                    let id = receipt.id;
+                    next.completed(effects.delete_link(writer, receipt.receipt).map_err(
+                        |failure| EffectFailure {
+                            remaining: bpfman_core::UnloadLinkReceipt {
+                                id,
+                                receipt: failure.remaining,
+                            },
+                            cause: failure.cause,
+                        },
+                    ))
+                }
+                UnloadStep::ProgramPin { receipt, next } => {
+                    next.completed(effects.unpin(writer, receipt))
+                }
+                UnloadStep::ProgramRecord { receipt, next } => {
+                    next.completed(effects.delete_record(writer, receipt))
+                }
+                UnloadStep::MapPin { receipt, next } => {
+                    next.completed(effects.remove_map(writer, receipt))
+                }
+                UnloadStep::MapDirectory { receipt, next } => {
+                    next.completed(effects.remove_directory(writer, receipt))
+                }
+                UnloadStep::MapSet { receipt, next } => {
+                    next.completed(effects.delete_map_set(writer, receipt))
+                }
+                UnloadStep::Bytecode { receipt, next } => {
+                    next.completed(effects.remove_bytecode(writer, receipt))
+                }
+                UnloadStep::Complete(report) => return report,
+            };
     }
 }
 
-pub(super) fn finish<S: UnloadStore>(
+pub(super) fn finish<S: UnloadStore + LinkStore>(
     report: StoreReport<S>,
 ) -> Result<UnloadReport<S>, UnloadError<S>> {
     let failed = report.failed();

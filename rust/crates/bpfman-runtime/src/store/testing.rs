@@ -306,3 +306,54 @@ impl UnloadStore for Memory {
         })
     }
 }
+
+// This fixture models only unattached programs. Its link receipt is uninhabited,
+// so no test can accidentally claim a link mutation succeeded.
+pub(crate) enum NoLink {}
+
+impl bpfman_store::LinkReader for Memory {
+    fn read_links(&mut self) -> Result<Vec<bpfman_model::StoredLink>, Error> {
+        Ok(Vec::new())
+    }
+}
+
+impl bpfman_store::LinkStore for Memory {
+    type LinkReceipt = NoLink;
+
+    fn create_pending_tracepoint(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        _request: bpfman_store::PendingTracepoint<'_>,
+    ) -> Result<(bpfman_model::StoredLink, NoLink), Error> {
+        Err(error(
+            ErrorKind::Unsupported,
+            "fixture models unattached programs",
+        ))
+    }
+
+    fn finalise_link(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        receipt: NoLink,
+        _kernel_id: NonZeroU32,
+    ) -> Result<bpfman_model::StoredLink, EffectFailure<NoLink, Error>> {
+        match receipt {}
+    }
+
+    fn observe_link(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        _id: std::num::NonZeroU64,
+    ) -> Result<bpfman_store::LinkObservation<Self>, Error> {
+        self.authority(writer)?;
+        Ok(None)
+    }
+
+    fn delete_link(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        receipt: NoLink,
+    ) -> Result<(), EffectFailure<NoLink, Error>> {
+        match receipt {}
+    }
+}

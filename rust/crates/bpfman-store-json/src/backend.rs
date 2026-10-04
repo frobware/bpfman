@@ -150,9 +150,6 @@ impl UnloadStore for Backend {
             return Ok(None);
         };
 
-        if state.links.iter().any(|link| link.program_id == id) {
-            return Err(Failure::Unsupported("detach links before unloading their program").into());
-        }
         let map = state
             .map_sets
             .iter()

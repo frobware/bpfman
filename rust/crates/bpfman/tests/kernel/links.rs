@@ -12,7 +12,7 @@ use bpfman_runtime::{
 use bpfman_store::{CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore};
 use std::{num::NonZeroU32, process::Command};
 
-fn request(id: NonZeroU32) -> TracepointAttach {
+pub(super) fn request(id: NonZeroU32) -> TracepointAttach {
     TracepointAttach {
         program_id: id,
         target: "syscalls/sys_enter_kill".parse().expect("target"),
@@ -46,7 +46,7 @@ fn fire() {
     );
 }
 
-fn assert_gone(kernel: NonZeroU32) {
+pub(super) fn assert_gone(kernel: NonZeroU32) {
     let links = aya::programs::loaded_links()
         .collect::<Result<Vec<_>, _>>()
         .expect("kernel links");
@@ -106,6 +106,13 @@ where
             .expect("observe under writer lock");
         assert_eq!(observed.kernel.expect("live kernel link").id, kernel_id);
         assert!(observed.pin_present);
+        let program = app.get(id).expect("attached program under writer lock");
+        assert_eq!(program.links.len(), 1);
+        assert_eq!(program.links[0].record, attached);
+        assert_eq!(
+            program.links[0].kernel.as_ref().expect("link").id,
+            kernel_id
+        );
     });
 
     // A different link for the same program must not satisfy the stored kernel
@@ -129,6 +136,15 @@ where
         app.get_link(attached.id).expect_err("replaced pin").kind(),
         LinkErrorKind::InvalidState
     );
+    assert!(
+        app.get(id).is_err(),
+        "program observation validates link identity"
+    );
+    let unload = app
+        .unload(id)
+        .expect_err("refuse replaced pin before any teardown");
+    assert!(unload.report().is_none());
+    c.present(id);
     let error = app.detach(attached.id).expect_err("replaced kernel link");
     assert!(error.report().is_none(), "refused before teardown");
     assert!(c.layout.link_pin_path(attached.id).exists());
@@ -154,6 +170,9 @@ where
         .expect("stored intent without kernel state");
     assert!(missing.kernel.is_none());
     assert!(!missing.pin_present);
+    let program = app.get(id).expect("observe absent link kernel state");
+    assert_eq!(program.links.len(), 2);
+    assert_eq!(program.links[1], missing);
     let report = app.detach(other.id).expect("detach second link");
     assert_eq!(report.unresolved(), 0);
     assert_eq!(report.attempts().len(), 1);

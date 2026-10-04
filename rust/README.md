@@ -175,8 +175,9 @@ suite exercises both backends through an injected `ActiveStore`, including faile
 finalisation, stale receipts, lock-free reads, and program deletion blocked by
 pending or finalised links. SQLite retains Go's schema version 2. The runtime
 enforces release of the managed attachment reference before consuming a
-link-deletion receipt. Linked-program unload remains unimplemented; callers
-detach links explicitly before unloading their program.
+link-deletion receipt. Program unload observes all finalised links before mutation
+and removes their pins and records under the same writer lock as program teardown.
+Pending attachment intent must first be resolved through link cleanup or detach.
 
 Both formats occupy `<runtime>/db/store.db`. The filename is historical; selecting
 another backend refuses the existing incompatible contents rather than creating
@@ -230,7 +231,7 @@ Go's SQLite representation. The division preserves the previous coverage:
 | Foreign pin/map identity, failed output delivery | `tests/kernel/cli.rs`, public CLI and artifact observations |
 | Go/Rust shared-state observations and unload in both directions | SQLite-specific `tests/kernel/go_compatibility.rs` |
 | Unsupported stored relationships, noncanonical stored paths, partial writes | SQLite adapter tests using the actual Go schema |
-| CLI tracepoint lifecycle | Unchanged `TestTracepoint_LoadAndGet.bpfman` and `TestTracepoint_LinkRoundTrip.bpfman`, each with SQLite and JSON |
+| CLI tracepoint lifecycle | Unchanged `TestTracepoint_LoadAndGet.bpfman` and `TestTracepoint_LinkRoundTrip.bpfman`, plus `TestTracepoint_UnloadAttached.bpfman`, each with SQLite and JSON |
 | Typed, raw, and nested-shell executable selection | `tests/e2e_selection.rs`, unprivileged Make recipe tests |
 
 Both persistent backends run the same generic lifecycle, CLI, unchanged DSL,
@@ -347,10 +348,11 @@ privileges; `/run/bpfman` will normally require sudo.
 
 Listing supports managed table, quiet-ID and JSON output. Text and quiet output
 use stored summaries without kernel privileges; JSON adds full records and live
-kernel observations. `program get ID [-o text|json]` observes one unattached
-managed program, including its maps and statistics. `--all`, kernel link state
-filters, attach, detach, and full observation of attached programs remain
-unsupported. Unload supports one unattached tracepoint with private maps.
+kernel observations. `program get ID [-o text|json]` observes one managed program,
+including its maps, statistics, and links. Link observations use the same
+record/status shape as `link get` and do not take the writer lock. `--all` and
+kernel link state filters remain unsupported. Unload supports one tracepoint
+with private maps, including its finalised standalone links.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
@@ -622,21 +624,23 @@ filters, and batch detachment are not implemented. `get_link` observes recorded
 kernel identity and a descriptor-confined pin without the writer lock; missing
 kernel state is reported as absence, while denied or inconsistent observation
 fails. Output failure after finalisation leaves the committed link manageable.
-Automatic detachment during program unload remains a separate increment.
+Program unload removes finalised standalone links before touching program resources.
 
 
-## Unattached tracepoint unload
+## Tracepoint unload
 
 ```sh
 sudo rust/target/debug/bpfman program unload PROGRAM_ID
 direnv exec . make rust-test-unload
 ```
 
-This slice accepts one managed tracepoint with no stored links, its own map set,
-no other map-set users, and no shared-map-pin registrations. Other program types,
-linked/shared state, multiple operands, and `--ignore-missing` are explicitly
-unsupported. A missing managed record returns an error without inspecting or
-adopting a kernel-only program or creating a database. It does not yet make Go's
+This slice accepts one managed tracepoint with finalised standalone links, its
+own map set, no other map-set users, and no shared-map-pin registrations. Pending
+attachment intent must first be resolved by link cleanup or explicit detach.
+Other program types, shared state, multiple operands, and `--ignore-missing` are
+explicitly unsupported. A missing managed record returns an error without
+inspecting or adopting a kernel-only program or creating a database. It does not
+yet make Go's
 additional not-managed versus not-found distinction.
 
 Under one writer scope, store preflight validates canonical artifact paths and
@@ -652,13 +656,15 @@ artifacts are treated as already absent.
 
 Unload is forward teardown of committed state, with its own pure continuations:
 
-1. Remove the program pin. Failure stops all later effects.
-2. Delete the managed record. Failure is returned, but independent bytecode
+1. For each link, remove its pin and then delete its record. A failure stops
+   later links and all program teardown; successful detachments remain complete.
+2. Remove the program pin. Failure stops all later effects.
+3. Delete the managed record. Failure is returned, but independent bytecode
    cleanup still runs; maps and their map-set row remain untouched.
-3. After record deletion, remove each private map pin once, continuing after
+4. After record deletion, remove each private map pin once, continuing after
    individual failures. Remove the container only after all pins succeed, then
    delete the unused map-set row only after the container is gone.
-4. Attempt bytecode cleanup independently of the record/map cleanup outcomes.
+5. Attempt bytecode cleanup independently of the record/map cleanup outcomes.
 
 As in Go, post-record map/bytecode cleanup failures are warnings: the program is
 unloaded even if GC leaves residue. Store deletions revalidate evidence in atomic
@@ -679,6 +685,13 @@ remaining GC residue requires separate repair, which this slice does not add.
 The stateful fake enters the production unload interpreter and checks all 256
 subsets of failure across eight individual effects, including exact order,
 status, successful history, blocked work, residue, and unrelated resources.
+Additional cases inject failures and cancellation at every link effect. The same
+real-kernel scenario runs against both stores, failing the first or second link
+record deletion, observing partial teardown, and retaining history through
+cancelled and explicit retry passes. `TestTracepoint_UnloadAttached.bpfman`
+exercises a live attachment and direct program unload through the shared DSL,
+against Go and both Rust stores. SQLite interchange tests also compare attached
+program text/JSON and unload programs loaded and attached by the other implementation.
 An unchanged-fault pass must make no progress; clearing the injected faults
 allows only retained work to complete. Adapter tests cover store changes,
 ignored/failed deletes, wrong runtime authority, replacement, symlinks, hard

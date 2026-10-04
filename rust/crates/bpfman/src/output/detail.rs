@@ -164,7 +164,36 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
     }
 
     sort(&mut status);
-    status.push(field("Links", "None"));
+
+    if p.links.is_empty() {
+        status.push(field("Links", "None"));
+    } else {
+        status.push(section(
+            "Links",
+            p.links
+                .iter()
+                .map(|link| {
+                    let bpfman_model::LinkDetails::Tracepoint(target) = &link.record.details;
+                    section(
+                        link.record.id.to_string(),
+                        vec![
+                            field("Attach", target),
+                            field("Kind", "tracepoint"),
+                            field(
+                                "Pin",
+                                format!(
+                                    "{}{}",
+                                    link.record.pin_path,
+                                    if link.pin_present { "" } else { " (missing)" }
+                                ),
+                            ),
+                        ],
+                    )
+                })
+                .collect(),
+        ));
+    }
+
     let maps = p
         .maps
         .iter()

@@ -10,7 +10,10 @@ use std::{collections::BTreeMap, num::NonZeroU32, sync::mpsc, time::Duration};
 
 const BUDGET: Duration = Duration::from_secs(5);
 
-fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S) {
+fn exercise<S: OpenStore + CommitLoad + Copy + Send + Sync>(backend: S)
+where
+    S::Reader: bpfman_store::LinkReader,
+{
     let temporary = tempfile::tempdir().expect("runtime directory");
     let layout = RuntimeLayout::try_from(temporary.path().to_owned()).expect("layout");
     let store = ActiveStore::open(backend, &layout, BUDGET).expect("startup");
