@@ -89,17 +89,15 @@ fn create(path: &Path, migrations: &[(i64, &str)]) -> Result<(), Failure> {
              id INTEGER PRIMARY KEY AUTOINCREMENT,
              version_id INTEGER NOT NULL, is_applied INTEGER NOT NULL,
              tstamp TIMESTAMP DEFAULT (datetime('now'))
-         );
-         INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1);",
+         );",
     )?;
+
+    crate::queries::record_schema_version(&tx, 0)?;
 
     for &(version, sql) in migrations {
         let up = sql.split_once("-- +goose Down").map_or(sql, |(up, _)| up);
         tx.execute_batch(up)?;
-        tx.execute(
-            "INSERT INTO goose_db_version (version_id, is_applied) VALUES (?1, 1)",
-            [version],
-        )?;
+        crate::queries::record_schema_version(&tx, version)?;
     }
 
     tx.commit()?;

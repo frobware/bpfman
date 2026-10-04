@@ -4,12 +4,12 @@ use crate::{
     Error, Store,
     error::Failure,
     open::{require_supported, schema_version},
+    queries,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bpfman_model::{
     ImagePullPolicy, ProgramSource, ProgramSpec, ProgramType, StoredProgram, Symbol,
 };
-use rusqlite::Row;
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64},
@@ -66,16 +66,16 @@ fn timestamp(raw: String, program: i64) -> Result<String, Failure> {
     ))
 }
 
-fn decode(row: &Row<'_>) -> Result<StoredProgram, Failure> {
-    let raw: i64 = row.get(0)?;
-    let name: String = row.get(1)?;
+fn decode(row: queries::ProgramRow) -> Result<StoredProgram, Failure> {
+    let raw = row.id;
+    let name = row.name;
     let symbol =
         Symbol::try_from(name.as_str()).map_err(|_| invalid(raw, "invalid program name"))?;
-    let kind: String = row.get(2)?;
+    let kind = row.kind;
     let kind = kind
         .parse::<ProgramType>()
         .map_err(|_| invalid(raw, "unknown program type"))?;
-    let target: Option<String> = row.get(6)?;
+    let target = row.attach_func;
     let target = || {
         Symbol::try_from(target.as_deref().unwrap_or_default())
             .map_err(|_| invalid(raw, "missing or invalid attach target"))
@@ -102,8 +102,8 @@ fn decode(row: &Row<'_>) -> Result<StoredProgram, Failure> {
             hook: target()?,
         },
     };
-    let source_path: Option<String> = row.get(4)?;
-    let image: Option<String> = row.get(8)?;
+    let source_path = row.source_path;
+    let image = row.image_source;
     let source = match image {
         None => ProgramSource::File(source_path.filter(|s| !s.is_empty())),
         Some(image) => {
@@ -132,7 +132,7 @@ fn decode(row: &Row<'_>) -> Result<StoredProgram, Failure> {
             }
         }
     };
-    let global_json: Option<String> = row.get(7)?;
+    let global_json = row.global_data;
     let encoded = global_json
         .map(|s| {
             serde_json::from_str::<Option<BTreeMap<String, Option<String>>>>(&s)
@@ -159,21 +159,18 @@ fn decode(row: &Row<'_>) -> Result<StoredProgram, Failure> {
         id: id(raw)?,
         spec,
         source,
-        object_path: row.get(3)?,
-        pin_path: row.get(5)?,
+        object_path: row.object_path,
+        pin_path: row.pin_path,
         globals,
-        owner: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
-        description: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
-        license: row.get::<_, Option<String>>(11)?.unwrap_or_default(),
-        gpl_compatible: row.get::<_, i64>(12)? != 0,
-        metadata: labels(row.get(13)?, raw)?,
-        created_at: timestamp(row.get(14)?, raw)?,
-        updated_at: row
-            .get::<_, Option<String>>(15)?
-            .map(|s| timestamp(s, raw))
-            .transpose()?,
-        map_set: id(row.get(16)?)?,
-        map_path: row.get(17)?,
+        owner: row.owner.unwrap_or_default(),
+        description: row.description.unwrap_or_default(),
+        license: row.license.unwrap_or_default(),
+        gpl_compatible: row.gpl_compatible != 0,
+        metadata: labels(row.metadata, raw)?,
+        created_at: timestamp(row.created_at, raw)?,
+        updated_at: row.updated_at.map(|s| timestamp(s, raw)).transpose()?,
+        map_set: id(row.map_set)?,
+        map_path: row.map_path,
         links: Vec::new(),
     })
 }
@@ -189,22 +186,14 @@ impl Store {
 fn read(connection: &mut rusqlite::Connection) -> Result<Vec<StoredProgram>, Failure> {
     let tx = connection.transaction()?;
     require_supported(schema_version(&tx)?)?;
-    let mut statement=tx.prepare("SELECT p.program_id,p.program_name,p.program_type,p.object_path,p.source_path,p.pin_path,p.attach_func,p.global_data,p.image_source,p.owner,p.description,p.license,p.gpl_compatible,p.metadata_json,p.created_at,p.updated_at,p.map_set_id,m.pin_path FROM managed_programs p LEFT JOIN map_sets m ON m.id=p.map_set_id ORDER BY p.program_id").map_err(Failure::from)?;
-    let mut rows = statement.query([]).map_err(Failure::from)?;
-    let mut records = Vec::new();
+    let mut records = queries::programs(&tx)?
+        .into_iter()
+        .map(decode)
+        .collect::<Result<Vec<_>, _>>()?;
 
-    while let Some(row) = rows.next().map_err(Failure::from)? {
-        records.push(decode(row)?);
-    }
-
-    let mut links = tx
-        .prepare("SELECT kernel_prog_id,id FROM links ORDER BY id")
-        .map_err(Failure::from)?;
-    let mut rows = links.query([]).map_err(Failure::from)?;
-
-    while let Some(row) = rows.next().map_err(Failure::from)? {
-        let program: i64 = row.get(0).map_err(Failure::from)?;
-        let raw: i64 = row.get(1).map_err(Failure::from)?;
+    for row in queries::links(&tx)? {
+        let program = row.program_id;
+        let raw = row.link_id;
         let link = u64::try_from(raw)
             .ok()
             .and_then(NonZeroU64::new)

@@ -188,6 +188,13 @@ The architecture and compatibility goals are in
   database under the Go-compatible writer lock; store reads remain read-only.
   Never repair or migrate existing state implicitly. Embed the actual Go
   migration SQL with `include_str!` for creation and fixtures.
+- SQLite queries and DML use cached prepared statements behind private, typed
+  query functions. Bind named parameters completely on every execution and decode
+  columns by name into persistence row types before domain validation. Keep raw
+  SQL and rusqlite rows inside the adapter's query module; schema DDL remains in
+  the authoritative Go migrations. These Rust signatures do not provide
+  compile-time SQL/schema checking. Keep statement and transaction lifetimes
+  within a connection checkout, with no cache mutex held across execution.
 - Rusqlite owns database access and SQLite's journal/WAL/shared-memory lifecycle.
   The database pathname handoff is not descriptor-relative confinement against
   external filesystem replacement. Do not add a custom VFS or manipulate those

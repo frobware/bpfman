@@ -8,6 +8,7 @@
 mod create;
 mod error;
 mod open;
+mod queries;
 mod read;
 mod reader;
 mod records;

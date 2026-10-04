@@ -4,10 +4,11 @@ use crate::{
     Error, TracepointRecord,
     error::Failure,
     open::{require_supported, schema_version},
+    queries,
 };
 use bpfman_fs::RuntimeWriter;
 use bpfman_model::{ProgramType, StoredProgramSummary};
-use rusqlite::{Connection, OpenFlags, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 /// Atomically insert a private map set and its loaded tracepoint. Existing rows
 /// are never overwritten. Failure means no successful commit was reported.
@@ -31,35 +32,34 @@ fn persist(
     record: TracepointRecord<'_>,
 ) -> Result<StoredProgramSummary, Failure> {
     let layout = writer.layout();
-    let paths = [
-        layout.bytecode_path(record.id),
-        layout.program_pin_path(record.id),
-        layout.map_directory_path(record.id),
-    ];
-    let paths = paths
-        .iter()
-        .map(|path| {
-            path.to_str().ok_or_else(|| Failure::InvalidRecord {
-                id: i64::from(record.id.get()),
-                reason: "runtime path is not UTF-8".into(),
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let object_path = layout.bytecode_path(record.id);
+    let pin_path = layout.program_pin_path(record.id);
+    let map_path = layout.map_directory_path(record.id);
+    let object_path = utf8(&object_path, record.id)?;
+    let pin_path = utf8(&pin_path, record.id)?;
+    let map_path = utf8(&map_path, record.id)?;
     let metadata = serde_json::to_string(record.metadata).map_err(|source| Failure::Metadata {
         id: i64::from(record.id.get()),
         source,
     })?;
+
     let mut connection =
         Connection::open_with_flags(writer.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     connection.busy_timeout(std::time::Duration::from_secs(5))?;
     connection.pragma_update(None, "foreign_keys", true)?;
     require_supported(schema_version(&connection)?)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
+
     let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     require_supported(schema_version(&tx)?)?;
-    tx.execute(
-        "INSERT INTO map_sets (id, pin_path, created_at) VALUES (?1, ?2, ?3)",
-        params![record.id.get(), paths[2], record.created_at],
+
+    queries::insert_map_set(
+        &tx,
+        queries::MapSetIdentity {
+            id: record.id,
+            pin_path: map_path,
+            created_at: record.created_at,
+        },
     )?;
     let gpl = matches!(
         record.license,
@@ -70,22 +70,15 @@ fn persist(
             | "Dual MIT/GPL"
             | "Dual MPL/GPL"
     );
-    tx.execute(
-        "INSERT INTO managed_programs
-        (program_id, program_name, program_type, object_path, source_path, pin_path,
-         map_set_id, license, gpl_compatible, metadata_json, created_at)
-        VALUES (?1, ?2, 'tracepoint', ?3, ?4, ?5, ?1, ?6, ?7, ?8, ?9)",
-        params![
-            record.id.get(),
-            record.name.as_str(),
-            paths[0],
-            record.source,
-            paths[1],
-            record.license,
-            gpl,
-            metadata,
-            record.created_at
-        ],
+    queries::insert_tracepoint(
+        &tx,
+        queries::TracepointInsert {
+            record: &record,
+            object_path,
+            pin_path,
+            metadata: &metadata,
+            gpl_compatible: gpl,
+        },
     )?;
 
     // Construct output before commit. Nothing fallible follows a successful commit.
@@ -99,4 +92,11 @@ fn persist(
     tx.commit()?;
 
     Ok(summary)
+}
+
+fn utf8(path: &std::path::Path, id: std::num::NonZeroU32) -> Result<&str, Failure> {
+    path.to_str().ok_or_else(|| Failure::InvalidRecord {
+        id: i64::from(id.get()),
+        reason: "runtime path is not UTF-8".into(),
+    })
 }

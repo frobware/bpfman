@@ -1,13 +1,15 @@
 //! Conditional forward deletion of committed state. No load rollback is reused.
 
+use crate::queries::UnloadRow as Snapshot;
 use crate::{
     Error, PrivateMapSet, ProgramRecord, UnloadRecord,
     error::Failure,
     open::{require_supported, schema_version},
+    queries,
 };
 use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
-use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::num::NonZeroU32;
 
 pub(super) struct RecordEvidence {
@@ -22,49 +24,10 @@ pub(super) struct MapSetEvidence {
     created_at: String,
 }
 
-#[derive(PartialEq, Eq)]
-struct Snapshot {
-    kind: String,
-    object: String,
-    pin: String,
-    map_set: i64,
-    map_path: String,
-    created: String,
-    map_created: String,
-    links: i64,
-    users: i64,
-    shared: i64,
-}
-
 fn snapshot(connection: &Connection, id: NonZeroU32) -> Result<Option<Snapshot>, Failure> {
     require_supported(schema_version(connection)?)?;
 
-    Ok(connection
-        .query_row(
-            "SELECT p.program_type, p.object_path, p.pin_path, p.map_set_id, m.pin_path,
-         p.created_at, m.created_at,
-         (SELECT count(*) FROM links WHERE kernel_prog_id = p.program_id),
-         (SELECT count(*) FROM managed_programs WHERE map_set_id = p.map_set_id),
-         (SELECT count(*) FROM shared_map_pins WHERE program_id = p.program_id)
-         FROM managed_programs p LEFT JOIN map_sets m ON m.id = p.map_set_id
-         WHERE p.program_id = ?1",
-            [id.get()],
-            |r| {
-                Ok(Snapshot {
-                    kind: r.get(0)?,
-                    object: r.get(1)?,
-                    pin: r.get(2)?,
-                    map_set: r.get(3)?,
-                    map_path: r.get(4)?,
-                    created: r.get(5)?,
-                    map_created: r.get(6)?,
-                    links: r.get(7)?,
-                    users: r.get(8)?,
-                    shared: r.get(9)?,
-                })
-            },
-        )
-        .optional()?)
+    queries::unload(connection, id).map_err(Failure::from)
 }
 
 fn invalid(id: NonZeroU32, reason: &str) -> Failure {
@@ -195,10 +158,7 @@ pub fn delete_unloaded_program(
             ));
         }
 
-        let count = tx.execute(
-            "DELETE FROM managed_programs WHERE program_id = ?1",
-            [receipt.evidence.id.get()],
-        )?;
+        let count = queries::delete_program(&tx, receipt.evidence.id)?;
 
         if count != 1 {
             return Err(invalid(
@@ -234,17 +194,17 @@ pub fn delete_unused_map_set(
         let mut connection = connection(writer)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
         require_supported(schema_version(&tx)?)?;
-        let count = tx.execute(
-            "DELETE FROM map_sets WHERE id = ?1 AND created_at = ?2 AND pin_path = ?3
-            AND NOT EXISTS (SELECT 1 FROM managed_programs WHERE map_set_id = ?1)",
-            params![
-                receipt.evidence.id.get(),
-                receipt.evidence.created_at,
-                writer
-                    .layout()
-                    .map_directory_path(receipt.evidence.id)
-                    .to_str()
-            ],
+        let path = writer.layout().map_directory_path(receipt.evidence.id);
+        let pin_path = path
+            .to_str()
+            .ok_or_else(|| invalid(receipt.evidence.id, "runtime path is not UTF-8"))?;
+        let count = queries::delete_map_set(
+            &tx,
+            queries::MapSetIdentity {
+                id: receipt.evidence.id,
+                created_at: &receipt.evidence.created_at,
+                pin_path,
+            },
         )?;
 
         if count != 1 {

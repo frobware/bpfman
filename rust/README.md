@@ -142,6 +142,16 @@ handle and reads the currently published snapshot on each call. Mutation
 preflight revalidates the retained handle, and reads check compatibility inside
 their own snapshots.
 
+SQLite's private query functions use `prepare_cached`, named parameter bindings,
+and typed persistence rows decoded by column name. All parameters are rebound on
+each call. Statements return to their connection's cache after use, so the
+retained reader also retains prepared statements without holding a transaction or
+snapshot. Writes remain scoped to separate connections and explicit transactions.
+Rust checks the query function inputs and result fields; SQL/schema compatibility
+and stored column types are checked at runtime, with domain validation afterwards.
+Creation still executes the authoritative Go schema DDL. Neither SQL nor query
+row types appear in the generic store contracts or behavioural tests.
+
 JSON version 1 stores private, unattached tracepoints in a whole-file snapshot.
 The filesystem adapter writes the pending snapshot beneath a verified directory
 descriptor and atomically renames it into place under the runtime writer lock.

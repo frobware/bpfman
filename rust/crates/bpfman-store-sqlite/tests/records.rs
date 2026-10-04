@@ -147,3 +147,46 @@ fn full_reads_recheck_the_schema_on_the_open_handle() -> Result {
 
     Ok(())
 }
+
+#[test]
+fn cached_reads_release_failed_snapshots_and_decode_fresh_nullable_fields() -> Result {
+    let db = support::database()?;
+    support::seed(&db)?;
+    let mut store = Store::open(&db.path)?;
+    assert_eq!(store.read_records()?.len(), 2);
+
+    db.connection.execute(
+        "UPDATE managed_programs SET global_data='broken' WHERE program_id=7",
+        [],
+    )?;
+    assert_eq!(
+        store.read_records().expect_err("invalid globals").kind(),
+        ErrorKind::InvalidData
+    );
+
+    db.connection.execute_batch(
+        "UPDATE managed_programs SET global_data=NULL, owner='new owner',
+         source_path='new source', updated_at='2026-10-04T00:00:00Z' WHERE program_id=7;",
+    )?;
+    let records = store.read_records()?;
+    assert_eq!(records[0].owner, "new owner");
+    assert_eq!(
+        records[0].source,
+        ProgramSource::File(Some("new source".into()))
+    );
+    assert_eq!(
+        records[0].updated_at.as_deref(),
+        Some("2026-10-04T00:00:00Z")
+    );
+    assert!(records[0].globals.is_empty());
+
+    db.connection.execute_batch(
+        "UPDATE managed_programs SET owner=NULL, source_path=NULL, updated_at=NULL WHERE program_id=7;",
+    )?;
+    let records = store.read_records()?;
+    assert!(records[0].owner.is_empty());
+    assert_eq!(records[0].source, ProgramSource::File(None));
+    assert!(records[0].updated_at.is_none());
+
+    Ok(())
+}

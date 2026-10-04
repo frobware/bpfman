@@ -52,11 +52,7 @@ impl Store {
 }
 
 pub(super) fn schema_version(connection: &Connection) -> Result<i64, Failure> {
-    connection
-        .query_row("SELECT MAX(version_id) FROM goose_db_version", [], |row| {
-            row.get(0)
-        })
-        .map_err(Failure::SchemaVersion)
+    crate::queries::schema_version(connection).map_err(Failure::SchemaVersion)
 }
 
 pub(super) fn require_supported(found: i64) -> Result<(), Failure> {
