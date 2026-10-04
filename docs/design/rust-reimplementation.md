@@ -605,8 +605,7 @@ All read-only commands, including combined store/kernel observations, bypass
 the writer lock. The store snapshot and subsequent kernel/filesystem reads are
 not one atomic observation: concurrent unload may remove an object between
 them. Report that absence without diagnosing inconsistency from it alone.
-CLI signal cancellation and namespace-helper launching are not implemented in
-this slice.
+Namespace-helper launching is not implemented in this slice.
 
 ### Object creation and deletion boundary
 
@@ -721,6 +720,62 @@ must not replace the error that caused rollback or skip unrelated cleanup.
 Clean compensation and unresolved residue must be distinguishable. After a
 successful commit, a reporting failure is not permission to compensate the
 committed operation.
+
+### Signals and cooperative cancellation
+
+The CLI installs `SIGINT` and `SIGTERM` handling before preparing the request or
+opening the store. The first signal requests cancellation through a caller-owned
+`Cancellation`. Signal-safe handlers record/wake only; an ordinary signal thread
+translates delivery into the library request. A second signal forces immediate
+exit (130 for INT, 143 for TERM), explicitly abandoning graceful cleanup. The
+signal implementation is confined to the binary; libraries install no handlers.
+
+`Bpfman` remains reusable across independent callers. Each operation has an
+explicit `*_with_cancellation` entry point; convenience methods use an independent
+uncancelled token. Cloning a token shares one request; creating another token
+keeps cancellation independent. Tokens have no reset operation. Startup and ELF
+preparation also accept cancellation. Existing-store reads still bypass the
+writer lock. Lock waiting checks cancellation with a maximum 25 ms backoff when
+a token is supplied, and checks again after acquisition before admitting work.
+This is a polling interval, not a bound on scheduling or filesystem latency.
+
+Cancellation is observed at safe boundaries, not by interrupting arbitrary
+adapter calls:
+
+- Preparation and read operations check before and after blocking observations;
+  full views also check between kernel queries. A single query or syscall may
+  still take time to return.
+- Missing-store initialization can cancel admission. Once initialization starts,
+  its atomic publication finishes; cancellation may leave an empty valid store.
+- Loading checks before each forward effect. Before commit, cancellation becomes
+  the primary failure and uses the same receipt-bearing compensation interpreter
+  as adapter failures. The writer lock remains held through cleanup.
+- Once the commit effect starts, its actual success or failure wins over a later
+  request. Successful commit ends compensation authority. Result observation
+  and output still describe the committed program; late cancellation cannot
+  turn success into a claim that no program was loaded.
+- Unload checks during preflight and immediately before teardown. After admission
+  to destructive work, finish the full pass, respecting dependencies and retaining
+  both successful attempts and failures. Removing an existing pin cannot generally
+  be undone.
+- Compensation attempts each independent instruction once even if cancellation
+  arrives during cleanup. It preserves the original failure and unresolved
+  receipts. Explicit retry may cancel lock admission without losing those
+  receipts, but an admitted pass runs to completion. No automatic retries follow
+  a signal.
+
+An operation that stops for a signal reports cancellation and exits 130 or 143
+after unwinding and flushing telemetry. A completed mutation retains its real
+success or failure status even if the token was set concurrently. Cleanup errors
+and unresolved work remain visible. Retained receipts are in-process evidence,
+not persisted recovery jobs; they do not survive process exit. No crash, power
+loss, or forced-termination recovery guarantee is added.
+
+Tests inject cancellation at production effect boundaries, cross cancellation
+with cleanup failures, retain history across explicit retries, and exercise the
+same lifecycle against SQLite and JSON. Separate subprocess tests send real
+signals during startup and mutation lock contention, check trace flushing, and
+prove that a second signal terminates an unresponsive operation.
 
 ## Compatibility contract
 

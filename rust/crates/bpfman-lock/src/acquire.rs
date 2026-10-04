@@ -98,6 +98,7 @@ fn acquire<T>(
     work: impl for<'lock> FnOnce(WritePermit<'lock>) -> T,
 ) -> Result<T, Error> {
     let _active = wait_for_lock(&file, path, options, started)?;
+    check_cancelled(options)?;
     let _held = tracing::trace_span!("lock.held", path = %path.display()).entered();
     let result = work(WritePermit { file: &file });
     drop(file);
@@ -162,14 +163,18 @@ fn wait_for_lock(
             backoff.min(remaining)
         };
         std::thread::sleep(wait);
-        backoff = (backoff * 2).min(Duration::from_millis(500));
+        backoff = (backoff * 2).min(Duration::from_millis(if options.cancelled.is_some() {
+            25
+        } else {
+            500
+        }));
     }
 }
 
 fn check_cancelled(options: AcquireOptions<'_>) -> Result<(), Error> {
     if options
         .cancelled
-        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        .is_some_and(|flag| flag.load(Ordering::Acquire))
     {
         return Err(Failure::Cancelled.into());
     }

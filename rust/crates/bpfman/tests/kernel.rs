@@ -1,6 +1,8 @@
 //! Privileged outside-in tests. Run with the Make targets in a private mount namespace.
 //! Only this composition point selects a store; generic scenarios know no storage format.
 #![allow(clippy::expect_used)]
+#[path = "kernel/cancellation.rs"]
+mod cancellation;
 #[path = "kernel/cli.rs"]
 mod cli;
 #[path = "kernel/faults.rs"]
@@ -52,4 +54,16 @@ fn sqlite_unchanged_tracepoint_dsl() {
 #[ignore = "requires BPF privileges and a private mount namespace; make rust-test-observation"]
 fn json_unchanged_tracepoint_dsl() {
     cli::dsl("json");
+}
+
+#[test]
+#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
+fn sqlite_cancellation_boundaries() {
+    cancellation::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+#[ignore = "requires BPF privileges and a private mount namespace; make rust-test-kernel-load"]
+fn json_cancellation_boundaries() {
+    cancellation::exercise(bpfman_store_json::Backend);
 }

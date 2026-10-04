@@ -71,6 +71,10 @@ impl LoadEffects for StoreEffects<'_> {
     type Prepared = ();
     type Kernel = Kernel;
 
+    fn cancelled(&self) -> Error {
+        LoadCause::Cancelled.into()
+    }
+
     fn open_store(&mut self, w: &RuntimeWriter<'_>) -> Result<Memory, Error> {
         real::Effects(self.store).open_store(w).map_err(Into::into)
     }

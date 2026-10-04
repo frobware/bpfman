@@ -47,6 +47,7 @@ enum Event {
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Fault {
+    Cancelled,
     Before(Event),
     AfterAcquisition(Event),
     StagedPublication,
@@ -111,6 +112,8 @@ struct Fake {
     map_sets: BTreeSet<u32>,
     faults: BTreeSet<Fault>,
     events: Vec<Event>,
+    cancel_on: Option<Event>,
+    cancellation: crate::Cancellation,
 }
 
 fn baseline() -> BTreeSet<Resource> {
@@ -132,6 +135,8 @@ impl Fake {
             map_sets: BTreeSet::from([7]),
             faults: faults.into_iter().collect(),
             events: vec![],
+            cancel_on: None,
+            cancellation: crate::Cancellation::new(),
         }
     }
 
@@ -155,6 +160,9 @@ impl Fake {
 
     fn enter(&mut self, writer: &RuntimeWriter<'_>, event: Event) -> Result<(), TestError> {
         self.events.push(event);
+        if self.cancel_on == Some(event) {
+            self.cancellation.cancel();
+        }
 
         if writer.database_path() != self.runtime {
             return Err(self.error(Fault::WrongRuntime(event)));
@@ -293,6 +301,10 @@ impl LoadEffects for Fake {
     type Store = ();
     type Prepared = ();
     type Kernel = Kernel;
+
+    fn cancelled(&self) -> TestError {
+        self.error(Fault::Cancelled)
+    }
 
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<(), TestError> {
         self.enter(writer, Event::OpenStore)
@@ -475,12 +487,22 @@ fn invoke<F: LoadEffects>(
     fake: &mut F,
     maps: &[&str],
 ) -> Result<StoredProgramSummary, FailureFor<F>> {
+    invoke_cancellable(writer, fake, maps, &crate::Cancellation::new())
+}
+
+fn invoke_cancellable<F: LoadEffects>(
+    writer: &RuntimeWriter<'_>,
+    fake: &mut F,
+    maps: &[&str],
+    cancellation: &crate::Cancellation,
+) -> Result<StoredProgramSummary, FailureFor<F>> {
     // Inputs are already validated at the public boundary. Nothing here
     // constructs policy transitions: run() is exactly the CLI's interpreter.
     run(
         writer,
         fake,
         &Inputs {
+            cancellation,
             object: &LocalObject {
                 bytes: b"ELF snapshot".to_vec(),
                 license: "GPL".into(),
@@ -1114,3 +1136,115 @@ fn directory_retry_waits_for_maps_then_retains_failed_and_successful_attempts() 
 }
 
 mod store;
+
+#[test]
+fn cancellation_at_each_forward_boundary_compensates_and_preserves_failed_receipts() {
+    with_writer(|writer| {
+        for &boundary in FORWARD.iter().filter(|event| **event != Event::Persist) {
+            for mask in 0..(1 << CLEANUP.len()) {
+                let faults = CLEANUP.iter().enumerate().filter_map(|(i, event)| {
+                    (mask & (1 << i) != 0).then_some(Fault::Before(*event))
+                });
+                let mut fake = Fake::new(writer, faults);
+                fake.cancel_on = Some(boundary);
+                let cancellation = fake.cancellation.clone();
+
+                let failure = failed(invoke_cancellable(
+                    writer,
+                    &mut fake,
+                    &["1", "2", "3"],
+                    &cancellation,
+                ));
+
+                assert_eq!(primary(&failure).fault, Fault::Cancelled);
+                assert!(cancellation.is_cancelled());
+                let forward: Vec<_> = fake
+                    .events
+                    .iter()
+                    .copied()
+                    .filter(|e| FORWARD.contains(e))
+                    .collect();
+                let end = FORWARD
+                    .iter()
+                    .position(|e| *e == boundary)
+                    .expect("boundary");
+                assert_eq!(forward, FORWARD[..=end]);
+                assert_eq!(fake.records, BTreeSet::from([7]));
+                assert_eq!(
+                    fake.resources
+                        .difference(&baseline())
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                    unresolved(&failure)
+                );
+                assert_eq!(fake.counts.handles.get(), 0);
+
+                // A separate caller-budgeted pass uses retained receipts even though
+                // the original token remains cancelled. Successful work is not repeated.
+                let earlier = history(&failure);
+                fake.faults.clear();
+                fake.events.clear();
+                let failure = retry(writer, &mut fake, failure);
+                assert_eq!(&history(&failure)[..earlier.len()], earlier);
+                assert_eq!(primary(&failure).fault, Fault::Cancelled);
+                fake.assert_clean();
+                drop(failure);
+                assert_dropped_once(&fake.counts);
+            }
+        }
+    });
+}
+
+#[test]
+fn cancellation_during_commit_preserves_success_or_the_original_commit_error() {
+    with_writer(|writer| {
+        for fail in [false, true] {
+            let mut fake = Fake::new(writer, fail.then_some(Fault::BeforeCommit));
+            fake.cancel_on = Some(Event::Persist);
+            let cancellation = fake.cancellation.clone();
+
+            let result = invoke_cancellable(writer, &mut fake, &["1", "2", "3"], &cancellation);
+
+            assert!(cancellation.is_cancelled());
+            if fail {
+                let failure = failed(result);
+                assert_eq!(primary(&failure).fault, Fault::BeforeCommit);
+                assert_eq!(
+                    fake.events.iter().filter(|e| CLEANUP.contains(e)).count(),
+                    CLEANUP.len()
+                );
+                fake.assert_clean();
+            } else {
+                assert_eq!(result.map(|p| p.id()).ok(), Some(id()));
+                assert!(fake.records.contains(&42));
+                assert!(!fake.events.iter().any(|e| CLEANUP.contains(e)));
+            }
+        }
+    });
+}
+
+#[test]
+fn cancellation_during_compensation_does_not_truncate_the_pass() {
+    with_writer(|writer| {
+        for &boundary in CLEANUP {
+            let mut fake = Fake::new(writer, [Fault::BeforeCommit]);
+            fake.cancel_on = Some(boundary);
+            let cancellation = fake.cancellation.clone();
+
+            let failure = failed(invoke_cancellable(
+                writer,
+                &mut fake,
+                &["1", "2", "3"],
+                &cancellation,
+            ));
+
+            assert!(cancellation.is_cancelled());
+            assert_eq!(primary(&failure).fault, Fault::BeforeCommit);
+            assert_eq!(
+                fake.events.iter().filter(|e| CLEANUP.contains(e)).count(),
+                CLEANUP.len()
+            );
+            fake.assert_clean();
+        }
+    });
+}

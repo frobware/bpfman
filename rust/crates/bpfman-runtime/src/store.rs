@@ -27,8 +27,20 @@ impl<S: OpenStore> ActiveStore<S> {
     }
 
     /// Open the selected backend once at startup, creating state only if absent.
-    #[tracing::instrument(name = "store.open", level = "debug", skip_all, fields(runtime = %layout.root().display()), err)]
     pub fn open(backend: S, layout: &RuntimeLayout, timeout: Duration) -> Result<Self, Error> {
+        Self::open_with_cancellation(backend, layout, timeout, &crate::Cancellation::new())
+    }
+
+    /// Open a store with cancellable admission, including initialization lock waiting.
+    /// Once initialization begins, its atomic publication is allowed to finish.
+    #[tracing::instrument(name = "store.open", level = "debug", skip_all, fields(runtime = %layout.root().display()), err)]
+    pub fn open_with_cancellation(
+        backend: S,
+        layout: &RuntimeLayout,
+        timeout: Duration,
+        cancellation: &crate::Cancellation,
+    ) -> Result<Self, Error> {
+        cancellation.check()?;
         let runtime = match RuntimeDirectory::open_existing(layout.clone())
             .map_err(filesystem_error)?
         {
@@ -36,18 +48,25 @@ impl<S: OpenStore> ActiveStore<S> {
             None => RuntimeDirectory::open_or_create(layout.clone()).map_err(filesystem_error)?,
         };
 
+        cancellation.check()?;
+
         let reader = match backend.open_reader(&runtime).map_err(store_error)? {
             Some(reader) => reader,
             None => runtime
                 .with_writer(
                     AcquireOptions {
                         timeout,
-                        cancelled: None,
+                        cancelled: Some(cancellation.flag()),
                     },
-                    |writer| backend.open(&writer).map_err(store_error),
+                    |writer| {
+                        cancellation.check()?;
+                        backend.open(&writer).map_err(store_error)
+                    },
                 )
                 .map_err(filesystem_error)??,
         };
+
+        cancellation.check()?;
 
         Ok(Self {
             backend,

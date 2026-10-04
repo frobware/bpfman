@@ -109,6 +109,14 @@ The architecture and compatibility goals are in
   while parsing, before any I/O. Convert CLI types to domain types at the boundary.
 - Bound help width to 80 columns. Let Clap provide root `--version`/`-V`; avoid
   redundant hand-written parsing and help. Test the command with `debug_assert`.
+- Keep signal policy in the CLI and cancellation caller-owned, per operation.
+  Check cancellation during admission, lock waiting, and between forward load
+  effects. Never abandon owned receipts: cancellation before commit must use the
+  production compensation path under the same writer lock. An in-flight commit
+  determines its own outcome. After destructive unload starts, finish that pass.
+  Compensation does not observe the cancelled forward token; explicit retries
+  may cancel admission but must retain receipts. No automatic retries. Test
+  effect-boundary cancellation and real process signals with both stores.
 - Keep output and telemetry collection in the front end. Effectful libraries may
   emit `tracing` spans/events with stable operation names and crate/module targets;
   never install subscribers or write logs directly. The CLI configures `RUST_LOG`

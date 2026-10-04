@@ -9,6 +9,8 @@ impl Error {
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Failure {
+    #[error("operation cancelled")]
+    Cancelled,
     #[error(transparent)]
     Store(bpfman_store::Error),
     #[error(transparent)]

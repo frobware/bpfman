@@ -25,11 +25,23 @@ impl PreparedTracepoint {
         name: Symbol,
         metadata: BTreeMap<String, String>,
     ) -> Result<Self, LoadError> {
+        Self::new_with_cancellation(source, name, metadata, &crate::Cancellation::new())
+    }
+
+    /// Prepare inputs, checking cancellation before and after reading the ELF.
+    pub fn new_with_cancellation(
+        source: &Path,
+        name: Symbol,
+        metadata: BTreeMap<String, String>,
+        cancellation: &crate::Cancellation,
+    ) -> Result<Self, LoadError> {
+        cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         let source_text = source
             .to_str()
             .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
 
         let object = LocalObject::read(source, &name)?;
+        cancellation.check().map_err(|_| LoadCause::Cancelled)?;
 
         Ok(Self {
             object,
@@ -43,8 +55,19 @@ impl PreparedTracepoint {
 impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
     /// Load one prepared local tracepoint without attaching it. Private maps are
     /// pinned; failures retain unresolved ownership for an explicit cleanup pass.
-    #[tracing::instrument(name = "program.load", level = "debug", skip_all, err)]
     pub fn load(&self, request: PreparedTracepoint) -> Result<ObservedProgram, LoadError> {
+        self.load_with_cancellation(request, &crate::Cancellation::new())
+    }
+
+    /// Load with cancellation before commit. Acquired artifacts are compensated
+    /// under the same writer lock; successful commit ends cancellation authority.
+    #[tracing::instrument(name = "program.load", level = "debug", skip_all, err)]
+    pub fn load_with_cancellation(
+        &self,
+        request: PreparedTracepoint,
+        cancellation: &crate::Cancellation,
+    ) -> Result<ObservedProgram, LoadError> {
+        cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         let PreparedTracepoint {
             object,
             source,
@@ -66,13 +89,14 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
             .with_writer(
                 AcquireOptions {
                     timeout: self.lock_timeout,
-                    cancelled: None,
+                    cancelled: Some(cancellation.flag()),
                 },
                 |writer| {
                     run(
                         &writer,
                         &mut Effects(store),
                         &Inputs {
+                            cancellation,
                             object: &object,
                             source: &source,
                             name: &name,
@@ -112,15 +136,22 @@ fn run<F: LoadEffects>(
     effects: &mut F,
     input: &Inputs<'_>,
 ) -> Result<StoredProgramSummary, FailureFor<F>> {
+    check_cancelled(effects, input)?;
     let _store = effects
         .open_store(writer)
         .map_err(Failure::NoOwnedArtifacts)?;
+
+    check_cancelled(effects, input)?;
     let filesystem = effects.prepare(writer).map_err(Failure::NoOwnedArtifacts)?;
     let operation = LoadProgram::new(ProgramSpec::Tracepoint(input.name.clone()));
+
+    check_cancelled(effects, input)?;
     let mut kernel = effects
         .load_kernel(writer, input)
         .map_err(Failure::NoOwnedArtifacts)?;
-    let program_pin = match effects.pin_program(writer, &filesystem, &mut kernel, input.name) {
+    let program_pin = match admission(effects, input, None)
+        .and_then(|()| effects.pin_program(writer, &filesystem, &mut kernel, input.name))
+    {
         Ok(pin) => pin,
         Err(failure) => {
             return Err(finish(
@@ -139,7 +170,9 @@ fn run<F: LoadEffects>(
         }
     };
     let id = F::program_id(&program_pin);
-    let directory = match effects.create_map_directory(writer, &filesystem, id) {
+    let directory = match admission(effects, input, None)
+        .and_then(|()| effects.create_map_directory(writer, &filesystem, id))
+    {
         Ok(directory) => directory,
         Err(failure) => {
             return Err(finish(
@@ -160,7 +193,9 @@ fn run<F: LoadEffects>(
     let mut pins = Vec::new();
 
     for name in &input.object.maps {
-        match effects.pin_map(writer, &kernel, &directory, name) {
+        match admission(effects, input, None)
+            .and_then(|()| effects.pin_map(writer, &kernel, &directory, name))
+        {
             Ok(pin) => pins.push(pin),
             Err(failure) => {
                 pins.extend(failure.remaining);
@@ -183,21 +218,22 @@ fn run<F: LoadEffects>(
     }
 
     let publish = operation.loaded(program_pin, pins);
-    let bytecode = match effects.publish(writer, id, input) {
-        Ok(bytecode) => bytecode,
-        Err(failure) => {
-            return Err(finish(
-                writer,
-                effects,
-                publish.failed(failure),
-                Some(directory),
-                vec![],
-            ));
-        }
-    };
+    let bytecode =
+        match admission(effects, input, vec![]).and_then(|()| effects.publish(writer, id, input)) {
+            Ok(bytecode) => bytecode,
+            Err(failure) => {
+                return Err(finish(
+                    writer,
+                    effects,
+                    publish.failed(failure),
+                    Some(directory),
+                    vec![],
+                ));
+            }
+        };
     let persist = publish.published(bytecode);
 
-    match effects.persist(writer, id, input) {
+    match cancellation_cause(effects, input).and_then(|()| effects.persist(writer, id, input)) {
         Ok(stored) => Ok(persist.committed(stored).stored),
         Err(cause) => Err(finish(
             writer,
@@ -207,4 +243,27 @@ fn run<F: LoadEffects>(
             vec![],
         )),
     }
+}
+
+// Checks live in the interpreter so fake and real adapters follow identical policy.
+// Cleanup has no token; cancellation can never skip receipt-bearing instructions.
+fn cancellation_cause<F: LoadEffects>(effects: &F, input: &Inputs<'_>) -> Result<(), F::Error> {
+    if input.cancellation.is_cancelled() {
+        tracing::debug!("load cancelled before commit; compensating acquisitions");
+        Err(effects.cancelled())
+    } else {
+        Ok(())
+    }
+}
+
+fn check_cancelled<F: LoadEffects>(effects: &F, input: &Inputs<'_>) -> Result<(), FailureFor<F>> {
+    cancellation_cause(effects, input).map_err(Failure::NoOwnedArtifacts)
+}
+
+fn admission<F: LoadEffects, R>(
+    effects: &F,
+    input: &Inputs<'_>,
+    remaining: R,
+) -> Result<(), EffectFailure<R, F::Error>> {
+    cancellation_cause(effects, input).map_err(|cause| EffectFailure { cause, remaining })
 }

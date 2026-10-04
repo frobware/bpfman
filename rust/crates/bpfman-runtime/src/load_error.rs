@@ -9,6 +9,8 @@ use std::fmt;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum LoadCause {
+    #[error("load cancelled before commit")]
+    Cancelled,
     #[error("program {id} was committed but its result could not be observed; it remains loaded")]
     Observation {
         id: std::num::NonZeroU32,
@@ -64,6 +66,13 @@ impl LoadError {
         };
 
         match cause {
+            LoadCause::Cancelled => LoadErrorKind::Cancelled,
+            LoadCause::Open(e) if e.kind() == crate::ErrorKind::Cancelled => {
+                LoadErrorKind::Cancelled
+            }
+            LoadCause::Filesystem(e) if e.kind() == bpfman_fs::ErrorKind::Cancelled => {
+                LoadErrorKind::Cancelled
+            }
             LoadCause::Invalid(_) | LoadCause::Parse(_) => LoadErrorKind::InvalidInput,
             LoadCause::Unsupported(_) => LoadErrorKind::Unsupported,
             _ => LoadErrorKind::Unavailable,
@@ -100,8 +109,18 @@ impl<S: bpfman_store::OpenStore> Bpfman<S> {
     /// Retry unresolved load cleanup once under this instance's writer lock.
     /// The original failure remains the result, including after complete cleanup.
     /// Acquisition failure retains all receipts and is exposed by `retry_lock_error`.
-    #[tracing::instrument(name = "program.retry_load_cleanup", level = "debug", skip_all)]
     pub fn retry_load_cleanup(&self, error: LoadError) -> LoadError {
+        self.retry_load_cleanup_with_cancellation(error, &crate::Cancellation::new())
+    }
+
+    /// Cancel admission to an explicit cleanup pass without losing receipts.
+    /// Once admitted, every eligible cleanup instruction is attempted once.
+    #[tracing::instrument(name = "program.retry_load_cleanup", level = "debug", skip_all)]
+    pub fn retry_load_cleanup_with_cancellation(
+        &self,
+        error: LoadError,
+        cancellation: &crate::Cancellation,
+    ) -> LoadError {
         if error.unresolved() == 0 {
             return error;
         }
@@ -110,7 +129,7 @@ impl<S: bpfman_store::OpenStore> Bpfman<S> {
         let acquired = self.store.runtime().with_writer(
             bpfman_lock::AcquireOptions {
                 timeout: self.lock_timeout,
-                cancelled: None,
+                cancelled: Some(cancellation.flag()),
             },
             |writer| {
                 if let Some(error) = pending.take() {

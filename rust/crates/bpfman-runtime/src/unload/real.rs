@@ -25,6 +25,10 @@ impl<S: UnloadStore> UnloadEffects for Effects<'_, S> {
     type Bytecode = Bytecode;
     type Error = UnloadCause;
 
+    fn cancelled(&self) -> UnloadCause {
+        Cause::Cancelled.into()
+    }
+
     fn observe_store(
         &mut self,
         writer: &RuntimeWriter<'_>,

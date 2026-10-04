@@ -11,48 +11,72 @@ use std::{
 use clap::Parser;
 
 mod cli;
+mod error;
 mod output;
+mod signals;
 mod telemetry;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
 
-    match run(cli) {
+    let shutdown = match signals::Shutdown::install() {
+        Ok(shutdown) => shutdown,
+        Err(error) => {
+            let _ = writeln!(
+                io::stderr().lock(),
+                "Error: install signal handling: {error}"
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match run(cli, shutdown.cancellation()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             let _ = writeln!(io::stderr().lock(), "Error: {error:#}");
-            ExitCode::FAILURE
+            shutdown.exit_code(&error)
         }
     }
 }
 
-fn run(cli: cli::Cli) -> anyhow::Result<()> {
+fn run(cli: cli::Cli, cancellation: &bpfman_runtime::Cancellation) -> Result<(), error::Error> {
     let _telemetry = telemetry::init(cli.trace_file.as_deref())?;
     let _command =
         tracing::debug_span!("cli.command", runtime = %cli.layout.root().display()).entered();
 
     match cli.store {
-        cli::StoreBackend::Sqlite => run_with_store(cli, bpfman_store_sqlite::Backend),
-        cli::StoreBackend::Json => run_with_store(cli, bpfman_store_json::Backend),
+        cli::StoreBackend::Sqlite => {
+            run_with_store(cli, bpfman_store_sqlite::Backend, cancellation)
+        }
+        cli::StoreBackend::Json => run_with_store(cli, bpfman_store_json::Backend, cancellation),
     }
 }
 
-fn run_with_store<S>(cli: cli::Cli, store: S) -> anyhow::Result<()>
+fn run_with_store<S>(
+    cli: cli::Cli,
+    store: S,
+    cancellation: &bpfman_runtime::Cancellation,
+) -> Result<(), error::Error>
 where
     S: bpfman_store::OpenStore + bpfman_store::CommitLoad + bpfman_store::UnloadStore + 'static,
 {
-    let command = cli.command.prepare(&cli.layout)?;
-    let store = bpfman_runtime::ActiveStore::open(store, &cli.layout, cli.lock_timeout)?;
+    let command = cli.command.prepare(&cli.layout, cancellation)?;
+    let store = bpfman_runtime::ActiveStore::open_with_cancellation(
+        store,
+        &cli.layout,
+        cli.lock_timeout,
+        cancellation,
+    )?;
     let bpfman = bpfman_runtime::Bpfman::new(store, cli.lock_timeout);
 
     match command {
         cli::PreparedCommand::Get { id, output } => {
-            let program = bpfman.get(id)?;
+            let program = bpfman.get_with_cancellation(id, cancellation)?;
             output::program(&mut io::stdout().lock(), &program, output, false)?;
         }
 
         cli::PreparedCommand::Unload { id } => {
-            let report = bpfman.unload(id)?;
+            let report = bpfman.unload_with_cancellation(id, cancellation)?;
 
             for attempt in report.attempts() {
                 if let Err(error) = &attempt.outcome {
@@ -73,15 +97,15 @@ where
             };
 
             if args.output == cli::OutputFormat::Json && !args.quiet {
-                let entries = bpfman.list_entries(&filter)?;
+                let entries = bpfman.list_entries_with_cancellation(&filter, cancellation)?;
                 output::entries(&mut io::stdout().lock(), &entries)?;
             } else {
-                let programs = bpfman.list(&filter)?;
+                let programs = bpfman.list_with_cancellation(&filter, cancellation)?;
                 output::programs(&mut io::stdout().lock(), &programs, args.quiet)?;
             }
         }
 
-        cli::PreparedCommand::Load(request) => request.execute(&bpfman)?,
+        cli::PreparedCommand::Load(request) => request.execute(&bpfman, cancellation)?,
     }
 
     Ok(())

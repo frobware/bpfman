@@ -7,6 +7,7 @@ use bpfman_model::{StoredProgramSummary, Symbol};
 use std::{collections::BTreeMap, num::NonZeroU32};
 
 pub(crate) struct Inputs<'a> {
+    pub(super) cancellation: &'a crate::Cancellation,
     pub(super) object: &'a LocalObject,
     pub(super) source: &'a str,
     pub(super) name: &'a Symbol,
@@ -32,6 +33,8 @@ pub(crate) trait LoadEffects: CleanupEffects {
     type Store;
     type Prepared;
     type Kernel;
+
+    fn cancelled(&self) -> Self::Error;
 
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, Self::Error>;
 

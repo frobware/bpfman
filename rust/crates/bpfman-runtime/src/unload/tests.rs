@@ -42,6 +42,8 @@ struct Fake {
     faults: BTreeSet<&'static str>,
     calls: Vec<&'static str>,
     minted: usize,
+    cancel_on: Option<&'static str>,
+    cancellation: crate::Cancellation,
     drops: Rc<Cell<usize>>,
 }
 
@@ -55,6 +57,8 @@ impl Fake {
             faults,
             calls: Vec::new(),
             minted: 0,
+            cancel_on: None,
+            cancellation: crate::Cancellation::new(),
             drops: Rc::new(Cell::new(0)),
         }
     }
@@ -70,6 +74,9 @@ impl Fake {
 
     fn observe(&mut self, name: &'static str) -> Result<(), Fault> {
         self.calls.push(name);
+        if self.cancel_on == Some(name) {
+            self.cancellation.cancel();
+        }
 
         if self.faults.contains(name) {
             Err(Fault(name))
@@ -85,6 +92,9 @@ impl Fake {
     ) -> Result<(), EffectFailure<Receipt, Fault>> {
         let name = receipt.name;
         self.calls.push(name);
+        if self.cancel_on == Some(name) {
+            self.cancellation.cancel();
+        }
 
         assert!(
             self.state.contains(name),
@@ -146,6 +156,10 @@ impl UnloadEffects for Fake {
     type MapSet = MapSet;
     type Bytecode = Bytecode;
     type Error = Fault;
+
+    fn cancelled(&self) -> Fault {
+        Fault("cancelled")
+    }
 
     fn observe_store(
         &mut self,
@@ -325,7 +339,13 @@ fn every_failure_subset_preserves_order_residue_status_and_successful_history() 
                 .map(|(_, n)| n)
                 .collect::<BTreeSet<_>>();
             let mut fake = Fake::new(faults.clone());
-            let report = run(writer, &mut fake, NonZeroU32::MIN).expect("preflight");
+            let report = run(
+                writer,
+                &mut fake,
+                NonZeroU32::MIN,
+                &crate::Cancellation::new(),
+            )
+            .expect("preflight");
             let attempted = expected(&faults);
 
             assert_eq!(
@@ -415,7 +435,12 @@ fn preflight_failures_never_mutate_committed_resources() {
         for failure in ["observe-store", "observe-artifacts"] {
             let mut fake = Fake::new([failure].into_iter().collect());
             let before = fake.state.clone();
-            let result = run(writer, &mut fake, NonZeroU32::MIN);
+            let result = run(
+                writer,
+                &mut fake,
+                NonZeroU32::MIN,
+                &crate::Cancellation::new(),
+            );
 
             assert!(matches!(result, Err(Fault(name)) if name == failure));
             assert_eq!(fake.state, before);
@@ -434,7 +459,13 @@ fn absent_artifacts_require_only_store_teardown() {
             fake.state.remove(name);
         }
 
-        let report = run(writer, &mut fake, NonZeroU32::MIN).expect("preflight");
+        let report = run(
+            writer,
+            &mut fake,
+            NonZeroU32::MIN,
+            &crate::Cancellation::new(),
+        )
+        .expect("preflight");
 
         assert_eq!(
             fake.calls,
@@ -450,7 +481,13 @@ fn absent_artifacts_require_only_store_teardown() {
 fn wrong_runtime_cannot_consume_retained_receipts() {
     scope(|writer| {
         let mut fake = Fake::new(["pin"].into_iter().collect());
-        let report = run(writer, &mut fake, NonZeroU32::MIN).expect("preflight");
+        let report = run(
+            writer,
+            &mut fake,
+            NonZeroU32::MIN,
+            &crate::Cancellation::new(),
+        )
+        .expect("preflight");
         let original = fake.state.clone();
         fake.faults.clear();
         fake.calls.clear();
@@ -487,7 +524,13 @@ fn unload_trace_distinguishes_failures_from_unattempted_dependencies() {
     scope(|writer| {
         for faults in [["record", "bytecode"], ["map-b", "bytecode"]] {
             let mut fake = Fake::new(faults.into_iter().collect());
-            let report = run(writer, &mut fake, NonZeroU32::MIN).expect("preflight");
+            let report = run(
+                writer,
+                &mut fake,
+                NonZeroU32::MIN,
+                &crate::Cancellation::new(),
+            )
+            .expect("preflight");
             println!(
                 "unload with injected {faults:?}: failed={}",
                 report.failed()
@@ -523,6 +566,55 @@ fn unload_trace_distinguishes_failures_from_unattempted_dependencies() {
                     .any(|a| a.kind == UnloadKind::Bytecode)
             );
             assert_eq!(report.remaining().len(), fake.residue().len());
+        }
+    });
+}
+
+#[test]
+fn cancellation_before_teardown_preserves_all_committed_resources() {
+    scope(|writer| {
+        for boundary in [None, Some("observe-store"), Some("observe-artifacts")] {
+            let mut fake = Fake::new(BTreeSet::new());
+            fake.cancel_on = boundary;
+            let cancellation = fake.cancellation.clone();
+            if boundary.is_none() {
+                cancellation.cancel();
+            }
+
+            let result = run(writer, &mut fake, NonZeroU32::MIN, &cancellation);
+
+            assert_eq!(result.err().expect("cancelled").0, "cancelled");
+            assert_eq!(fake.residue(), WORK.into_iter().collect());
+            assert!(!fake.calls.iter().any(|name| WORK.contains(name)));
+            assert_eq!(fake.minted, fake.drops.get());
+            fake.unrelated_preserved();
+        }
+    });
+}
+
+#[test]
+fn cancellation_during_teardown_preserves_full_pass_and_failure_history() {
+    scope(|writer| {
+        for boundary in WORK {
+            for faults in [BTreeSet::new(), BTreeSet::from(["map-b", "bytecode"])] {
+                let mut fake = Fake::new(faults.clone());
+                fake.cancel_on = Some(boundary);
+                let cancellation = fake.cancellation.clone();
+                let report = run(writer, &mut fake, NonZeroU32::MIN, &cancellation)
+                    .expect("admitted teardown");
+
+                let expected = expected(&faults);
+                assert_eq!(&fake.calls[2..], expected);
+                assert_eq!(report.attempts().len(), expected.len());
+                assert_eq!(report.remaining().len(), fake.residue().len());
+                fake.faults.clear();
+                let previous = report.attempts().len();
+                let report = drain(writer, &mut fake, report.retry());
+                assert!(report.remaining().is_empty());
+                assert!(report.attempts().len() >= previous);
+                assert!(fake.residue().is_empty());
+                fake.unrelated_preserved();
+            }
         }
     });
 }

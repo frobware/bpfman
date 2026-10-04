@@ -150,6 +150,18 @@ pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore + Clone + Sync>(b
     let remaining = error.unresolved();
     assert!(remaining > 0);
 
+    let cancellation = bpfman_runtime::Cancellation::new();
+    cancellation.cancel();
+    let error = bpfman.retry_load_cleanup_with_cancellation(error, &cancellation);
+    assert_eq!(error.unresolved(), remaining);
+    assert_eq!(
+        error
+            .retry_lock_error()
+            .expect("cancelled admission")
+            .kind(),
+        bpfman_runtime::ErrorKind::Cancelled
+    );
+
     let error = c.writer(|_| {
         std::thread::scope(|threads| {
             threads

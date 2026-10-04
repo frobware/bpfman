@@ -5,6 +5,8 @@ use std::{fmt, num::NonZeroU32};
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum Cause {
+    #[error("unload cancelled before teardown")]
+    Cancelled,
     #[error("managed program {0} not found")]
     NotFound(NonZeroU32),
     #[error(transparent)]
@@ -52,6 +54,10 @@ impl UnloadCause {
     /// Application category; concrete backend diagnostics remain in the source chain.
     pub fn kind(&self) -> UnloadErrorKind {
         match &self.cause {
+            Cause::Cancelled => UnloadErrorKind::Cancelled,
+            Cause::Filesystem(e) if e.kind() == bpfman_fs::ErrorKind::Cancelled => {
+                UnloadErrorKind::Cancelled
+            }
             Cause::NotFound(_) => UnloadErrorKind::NotFound,
             Cause::Store(error) => match error.kind() {
                 bpfman_store::ErrorKind::Unsupported => UnloadErrorKind::Unsupported,
@@ -110,27 +116,46 @@ impl<S: bpfman_store::OpenStore + UnloadStore> Bpfman<S> {
     /// Retry retained teardown once, acquiring this instance's writer lock.
     /// Preflight failures are returned unchanged and require a fresh request.
     pub fn retry_unload(&self, error: UnloadError<S>) -> Result<UnloadReport<S>, UnloadError<S>> {
+        self.retry_unload_with_cancellation(error, &crate::Cancellation::new())
+    }
+
+    /// Retry retained teardown with cancellable lock admission.
+    pub fn retry_unload_with_cancellation(
+        &self,
+        error: UnloadError<S>,
+        cancellation: &crate::Cancellation,
+    ) -> Result<UnloadReport<S>, UnloadError<S>> {
         match error.failure {
             Failure::Before(_) => Err(error),
             Failure::Incomplete(report) | Failure::RetryBlocked { report, .. } => {
-                self.retry_unload_cleanup(*report)
+                self.retry_unload_cleanup_with_cancellation(*report, cancellation)
             }
         }
     }
 
     /// Retry retained cleanup once, preserving receipts if lock acquisition fails.
     /// No new observations or automatic retry loops are performed.
-    #[tracing::instrument(name = "program.retry_unload_cleanup", level = "debug", skip_all, err)]
     pub fn retry_unload_cleanup(
         &self,
         report: UnloadReport<S>,
+    ) -> Result<UnloadReport<S>, UnloadError<S>> {
+        self.retry_unload_cleanup_with_cancellation(report, &crate::Cancellation::new())
+    }
+
+    /// Cancel admission without losing receipts. An admitted cleanup pass runs
+    /// to completion even if cancellation is requested while it is executing.
+    #[tracing::instrument(name = "program.retry_unload_cleanup", level = "debug", skip_all, err)]
+    pub fn retry_unload_cleanup_with_cancellation(
+        &self,
+        report: UnloadReport<S>,
+        cancellation: &crate::Cancellation,
     ) -> Result<UnloadReport<S>, UnloadError<S>> {
         // The callback borrows this slot so acquisition failure cannot drop its receipts.
         let mut pending = Some(report);
         let result = self.store.runtime().with_writer(
             bpfman_lock::AcquireOptions {
                 timeout: self.lock_timeout,
-                cancelled: None,
+                cancelled: Some(cancellation.flag()),
             },
             |writer| {
                 pending.take().map(|report| {

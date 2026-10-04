@@ -27,6 +27,8 @@ pub(super) trait UnloadEffects {
     type Bytecode;
     type Error;
 
+    fn cancelled(&self) -> Self::Error;
+
     fn observe_store(
         &mut self,
         writer: &RuntimeWriter<'_>,
@@ -116,17 +118,27 @@ impl<S: bpfman_store::OpenStore + UnloadStore> Bpfman<S> {
     /// Observations and teardown share one writer scope. Independent cleanup
     /// continues after record failure; post-record cleanup may return warnings.
     /// Retained receipts support explicit retry even after the row is gone.
-    #[tracing::instrument(name = "program.unload", level = "debug", skip_all, fields(program_id = id.get()), err)]
     pub fn unload(&self, id: NonZeroU32) -> Result<UnloadReport<S>, UnloadError<S>> {
+        self.unload_with_cancellation(id, &crate::Cancellation::new())
+    }
+
+    /// Cancel before teardown begins; once admitted, finish one complete pass
+    /// under the writer lock, retaining every failed or blocked instruction.
+    #[tracing::instrument(name = "program.unload", level = "debug", skip_all, fields(program_id = id.get()), err)]
+    pub fn unload_with_cancellation(
+        &self,
+        id: NonZeroU32,
+        cancellation: &crate::Cancellation,
+    ) -> Result<UnloadReport<S>, UnloadError<S>> {
         self.store
             .runtime()
             .with_writer(
                 AcquireOptions {
                     timeout: self.lock_timeout,
-                    cancelled: None,
+                    cancelled: Some(cancellation.flag()),
                 },
                 |writer| {
-                    let report = run(&writer, &mut real::Effects(&self.store), id)?;
+                    let report = run(&writer, &mut real::Effects(&self.store), id, cancellation)?;
                     finish::<S>(report)
                 },
             )
@@ -138,10 +150,24 @@ fn run<F: UnloadEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
     id: NonZeroU32,
+    cancellation: &crate::Cancellation,
 ) -> Result<ReportFor<F>, F::Error> {
+    let check = |effects: &F| {
+        if cancellation.is_cancelled() {
+            Err(effects.cancelled())
+        } else {
+            Ok(())
+        }
+    };
+    check(effects)?;
     let (record, map_set) = effects.observe_store(writer, id)?;
+    check(effects)?;
     let artifacts = effects.observe_artifacts(writer, id)?;
 
+    check(effects)?;
+
+    // Removing an existing pin is irreversible. Cancellation after admission
+    // must not strand a half-completed teardown.
     Ok(drain(
         writer,
         effects,

@@ -15,6 +15,9 @@ use std::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Point {
+    Validate,
+    ReadSummaries,
+    ReadRecords,
     Commit,
     CommitWithBlockedCleanup,
     ReadAfterCommit,
@@ -26,6 +29,7 @@ pub(super) enum Point {
 #[derive(Default)]
 struct State {
     fault: Option<Point>,
+    cancellation: Option<(Point, bpfman_runtime::Cancellation)>,
     committed: bool,
     calls: Vec<Point>,
     blocked_bytecode: Option<NonZeroU32>,
@@ -43,6 +47,10 @@ impl<S> Faults<S> {
             backend,
             state: Arc::default(),
         }
+    }
+
+    pub(super) fn cancel_at(&self, point: Point, cancellation: &bpfman_runtime::Cancellation) {
+        self.state.lock().expect("fault state").cancellation = Some((point, cancellation.clone()));
     }
 
     pub(super) fn set(&self, fault: Option<Point>) {
@@ -71,6 +79,11 @@ impl<S> Faults<S> {
 fn check(state: &Arc<Mutex<State>>, point: Point) -> Result<(), Error> {
     let mut state = state.lock().expect("fault state");
     state.calls.push(point);
+    if let Some((boundary, cancellation)) = &state.cancellation {
+        if *boundary == point {
+            cancellation.cancel();
+        }
+    }
 
     if state.fault == Some(point) {
         Err(Error::new(
@@ -111,14 +124,17 @@ impl<S: OpenStore> OpenStore for Faults<S> {
 
 impl<R: ProgramReader> ProgramReader for Reader<R> {
     fn validate(&mut self) -> Result<(), Error> {
+        check(&self.state, Point::Validate)?;
         self.reader.validate()
     }
 
     fn read_programs(&mut self) -> Result<Vec<StoredProgramSummary>, Error> {
+        check(&self.state, Point::ReadSummaries)?;
         self.reader.read_programs()
     }
 
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error> {
+        check(&self.state, Point::ReadRecords)?;
         if self.state.lock().expect("fault state").committed {
             check(&self.state, Point::ReadAfterCommit)?;
         }

@@ -51,6 +51,10 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     type Prepared = PreparedLoad;
     type Kernel = aya::Ebpf;
 
+    fn cancelled(&self) -> LoadCause {
+        LoadCause::Cancelled
+    }
+
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, LoadCause> {
         crate::store::open_store(self.0, writer).map_err(LoadCause::Open)
     }

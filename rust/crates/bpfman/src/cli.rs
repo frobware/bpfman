@@ -47,14 +47,20 @@ pub(super) enum PreparedCommand {
 }
 
 impl Command {
-    pub(super) fn prepare(self, layout: &RuntimeLayout) -> anyhow::Result<PreparedCommand> {
+    pub(super) fn prepare(
+        self,
+        layout: &RuntimeLayout,
+        cancellation: &bpfman_runtime::Cancellation,
+    ) -> Result<PreparedCommand, crate::error::Error> {
         let Self::Program { command } = self;
 
         Ok(match command {
             ProgramCommand::Get { id, output } => PreparedCommand::Get { id, output },
             ProgramCommand::Unload { id } => PreparedCommand::Unload { id },
             ProgramCommand::List(args) => PreparedCommand::List(args),
-            ProgramCommand::Load { source } => PreparedCommand::Load(source.prepare(layout)?),
+            ProgramCommand::Load { source } => {
+                PreparedCommand::Load(source.prepare(layout, cancellation)?)
+            }
         })
     }
 }

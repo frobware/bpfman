@@ -24,6 +24,7 @@ bpfman-core.workspace = true
 bpfman-runtime.workspace = true
 clap.workspace = true
 humantime.workspace = true
+signal-hook.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-chrome.workspace = true

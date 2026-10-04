@@ -3,7 +3,11 @@
 //! Open the selected store once, then inject it into [`Bpfman`]. Read methods
 //! borrow the instance without acquiring the writer lock. Mutations and explicit
 //! cleanup passes acquire scoped writer authority internally. The library never
-//! installs a telemetry subscriber or formats command output.
+//! installs signal handlers, a telemetry subscriber, or formats command output.
+//! Use the `*_with_cancellation` methods with a caller-owned [`Cancellation`] to
+//! stop at safe operation boundaries. Ordinary methods use an independent token.
+//! Once commit or teardown starts, its outcome is preserved; compensation runs
+//! with the writer lock held regardless of the forward request's cancellation.
 //!
 //! ```no_run
 //! use bpfman_runtime::{ActiveStore, Bpfman, Error};
@@ -22,6 +26,7 @@
 //! ```
 
 mod application;
+mod cancellation;
 mod compensation;
 mod error;
 mod kernel;
@@ -58,6 +63,14 @@ mod unload_error;
 pub struct Bpfman<S: bpfman_store::OpenStore> {
     store: ActiveStore<S>,
     lock_timeout: std::time::Duration,
+}
+
+/// A caller-owned, one-way cancellation request for an operation.
+/// Clones share the request; independent operations can use independent tokens.
+/// Cancellation is cooperative and never interrupts compensation or a commit.
+#[derive(Clone, Debug, Default)]
+pub struct Cancellation {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Validated local tracepoint input, prepared before opening runtime state.
@@ -138,7 +151,7 @@ pub enum ErrorKind {
     Unavailable,
     /// The writer lock could not be acquired within its wait budget.
     TimedOut,
-    /// The writer-lock acquisition was cancelled.
+    /// The operation was cancelled at a safe boundary.
     Cancelled,
     /// Stored state requires another schema version or initialisation.
     IncompatibleState,
@@ -164,6 +177,8 @@ pub struct LoadError {
 /// Backend-independent classification for the supported load operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LoadErrorKind {
+    /// The operation was cancelled before its completion boundary.
+    Cancelled,
     /// The local ELF or supplied request is invalid.
     InvalidInput,
     /// The requested capability is outside the implemented slice.
@@ -175,6 +190,8 @@ pub enum LoadErrorKind {
 /// Backend-independent classification of an unload failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum UnloadErrorKind {
+    /// The operation was cancelled before its completion boundary.
+    Cancelled,
     /// No managed record exists for this ID; no kernel-only identity is adopted.
     NotFound,
     /// Linked programs, other program types, or shared maps need a later slice.
@@ -207,6 +224,8 @@ pub struct UnloadError<S: bpfman_store::UnloadStore> {
 /// Classification of a full program-observation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ObservationErrorKind {
+    /// The operation was cancelled before its completion boundary.
+    Cancelled,
     /// No managed record exists.
     NotFound,
     /// Recorded in the store snapshot but absent in the later kernel observation.

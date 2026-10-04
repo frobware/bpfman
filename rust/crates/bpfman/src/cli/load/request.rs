@@ -7,9 +7,13 @@ use super::{
 };
 
 impl LoadCommand {
-    pub(crate) fn prepare(self, layout: &bpfman_fs::RuntimeLayout) -> anyhow::Result<PreparedLoad> {
+    pub(crate) fn prepare(
+        self,
+        layout: &bpfman_fs::RuntimeLayout,
+        cancellation: &bpfman_runtime::Cancellation,
+    ) -> Result<PreparedLoad, crate::error::Error> {
         let request = self.into_request().unwrap_or_else(|error| error.exit());
-        request.prepare(layout)
+        request.prepare(layout, cancellation)
     }
 
     fn into_request(self) -> Result<LoadRequest, clap::Error> {
@@ -87,7 +91,11 @@ impl LoadOptions {
 }
 
 impl LoadRequest {
-    fn prepare(self, layout: &bpfman_fs::RuntimeLayout) -> anyhow::Result<PreparedLoad> {
+    fn prepare(
+        self,
+        layout: &bpfman_fs::RuntimeLayout,
+        cancellation: &bpfman_runtime::Cancellation,
+    ) -> Result<PreparedLoad, crate::error::Error> {
         let Self {
             source,
             first,
@@ -110,9 +118,9 @@ impl LoadRequest {
                     let _credentials = (username, password);
                 }
 
-                anyhow::bail!(
+                return Err(anyhow::anyhow!(
                     "program load image execution is not implemented in the Rust CLI; no runtime state was changed"
-                );
+                ).into());
             }
         };
 
@@ -130,20 +138,25 @@ impl LoadRequest {
         };
 
         if let Some(reason) = reason {
-            anyhow::bail!(
+            return Err(anyhow::anyhow!(
                 "program load file execution is not implemented for {reason}; no runtime state was changed"
-            );
+            ).into());
         }
 
         let bpfman_model::ProgramSpec::Tracepoint(name) = first else {
-            anyhow::bail!("unsupported program type");
+            return Err(anyhow::anyhow!("unsupported program type").into());
         };
         if layout.root().to_str().is_none() {
-            anyhow::bail!("load persistence requires a UTF-8 runtime path");
+            return Err(anyhow::anyhow!("load persistence requires a UTF-8 runtime path").into());
         }
 
         Ok(PreparedLoad {
-            request: bpfman_runtime::PreparedTracepoint::new(&path, name, metadata)?,
+            request: bpfman_runtime::PreparedTracepoint::new_with_cancellation(
+                &path,
+                name,
+                metadata,
+                cancellation,
+            )?,
             output,
         })
     }
@@ -153,8 +166,9 @@ impl PreparedLoad {
     pub(crate) fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
         self,
         bpfman: &bpfman_runtime::Bpfman<S>,
-    ) -> anyhow::Result<()> {
-        let stored = bpfman.load(self.request)?;
+        cancellation: &bpfman_runtime::Cancellation,
+    ) -> Result<(), crate::error::Error> {
+        let stored = bpfman.load_with_cancellation(self.request, cancellation)?;
 
         // Output is deliberately outside the operation: delivery failure must
         // never compensate a committed program.
