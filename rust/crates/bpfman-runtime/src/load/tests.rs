@@ -8,6 +8,7 @@ use crate::{
 };
 use bpfman_core::{CompensationKind, EffectFailure};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
+use bpfman_model::Symbol;
 use std::time::Duration;
 use std::{
     cell::{Cell, RefCell},
@@ -332,7 +333,7 @@ impl LoadEffects for Fake {
     ) -> Result<Kernel, TestError> {
         self.enter(writer, Event::LoadKernel)?;
 
-        assert_eq!(input.name.as_str(), "trace");
+        assert_eq!(input.spec.name().as_str(), "trace");
         self.counts.handles.set(self.counts.handles.get() + 1);
 
         let kernel = Kernel(self.counts.clone(), input.object.maps.clone());
@@ -521,7 +522,9 @@ fn invoke_cancellable<F: LoadEffects>(
                 maps: maps.iter().map(|s| (*s).into()).collect(),
             },
             source: "original.o",
-            name: &Symbol::try_from("trace").expect("symbol"),
+            spec: &bpfman_model::ProgramSpec::Tracepoint(
+                Symbol::try_from("trace").expect("symbol"),
+            ),
             metadata: &BTreeMap::from([("bpfman.io/application".into(), "fault-test".into())]),
             created_at: "2026-10-03T00:00:00Z",
         },

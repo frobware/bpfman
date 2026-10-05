@@ -5,9 +5,7 @@
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::Symbol;
-use bpfman_store::{
-    CommitLoad, LinkReader, LinkStore, OpenStore, PendingTracepoint, TracepointRecord,
-};
+use bpfman_store::{CommitLoad, LinkReader, LinkStore, LoadRecord, OpenStore, PendingTracepoint};
 use bpfman_store_sqlite::{Backend, Store};
 use rusqlite::Connection;
 use std::{
@@ -29,12 +27,12 @@ fn scope(test: impl FnOnce(&RuntimeWriter<'_>, &Connection, &mut Store) -> Resul
         },
         |w| -> Result {
             let mut reader = Backend.open(&w)?;
-            Backend.commit_tracepoint(
+            Backend.commit_program(
                 &w,
-                TracepointRecord {
+                LoadRecord {
                     globals: &Default::default(),
                     id: NonZeroU32::new(42).expect("id"),
-                    name: &Symbol::try_from("trace")?,
+                    spec: &bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from("trace")?),
                     source: "source.o",
                     license: "GPL",
                     created_at: "2026-10-04T12:00:00Z",

@@ -5,15 +5,17 @@ use super::{
     support::*,
 };
 use bpfman_runtime::{
-    ActiveStore, Bpfman, Cancellation, LoadErrorKind, ObservationErrorKind, PreparedTracepoint,
+    ActiveStore, Bpfman, Cancellation, LoadErrorKind, ObservationErrorKind, PreparedProgram,
     UnloadErrorKind,
 };
 use bpfman_store::{CommitLoad, OpenStore, UnloadStore};
 
-fn request() -> PreparedTracepoint {
-    PreparedTracepoint::new(
+fn request() -> PreparedProgram {
+    PreparedProgram::new(
         &fixture("tracepoint_counter.bpf.o"),
-        bpfman_model::Symbol::try_from(NAME).expect("symbol"),
+        bpfman_model::ProgramSpec::Tracepoint(
+            bpfman_model::Symbol::try_from(NAME).expect("symbol"),
+        ),
         Default::default(),
     )
     .expect("prepare")

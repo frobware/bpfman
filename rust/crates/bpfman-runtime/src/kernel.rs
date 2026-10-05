@@ -2,10 +2,13 @@
 
 use crate::load_error::LoadCause;
 use aya_obj::{Object, ProgramSection, maps::PinningType};
-use bpfman_model::Symbol;
+use bpfman_model::ProgramSpec;
+
 use std::{
     collections::BTreeMap, fs::OpenOptions, io::Read, os::unix::fs::OpenOptionsExt, path::Path,
 };
+
+mod xdp;
 
 pub(super) struct LocalObject {
     pub(super) bytes: Vec<u8>,
@@ -20,7 +23,7 @@ pub(super) struct LoadedObject {
 }
 
 impl LocalObject {
-    pub(super) fn read(path: &Path, name: &Symbol) -> Result<Self, LoadCause> {
+    pub(super) fn read(path: &Path, spec: &ProgramSpec) -> Result<Self, LoadCause> {
         // O_NONBLOCK makes a FIFO fail regular-file validation instead of hanging.
         // This is input I/O, not a managed-object filesystem operation.
         let mut file = OpenOptions::new()
@@ -38,15 +41,7 @@ impl LocalObject {
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(LoadCause::Read)?;
         let object = Object::parse(&bytes).map_err(|e| LoadCause::Parse(Box::new(e)))?;
-        let program = object.programs.get(name.as_str()).ok_or_else(|| {
-            LoadCause::Invalid(format!("ELF program {:?} does not exist", name.as_str()))
-        })?;
-
-        if !matches!(program.section, ProgramSection::TracePoint) {
-            return Err(LoadCause::Invalid(
-                "selected ELF program is not a tracepoint".into(),
-            ));
-        }
+        validate_selection(&object, spec)?;
 
         let mut maps = Vec::new();
 
@@ -81,8 +76,11 @@ impl LocalObject {
         })
     }
 
-    pub(super) fn load(&self, name: &Symbol) -> Result<LoadedObject, LoadCause> {
+    pub(super) fn load(&self, spec: &ProgramSpec) -> Result<LoadedObject, LoadCause> {
         let mut loader = aya::EbpfLoader::new();
+        if matches!(spec, ProgramSpec::Xdp(_)) {
+            loader.extension(spec.name().as_str());
+        }
         for (name, value) in &self.globals {
             loader.override_global(name, value.as_slice(), true);
         }
@@ -91,16 +89,22 @@ impl LocalObject {
             .load(&self.bytes)
             .map_err(|e| LoadCause::Kernel(Box::new(e)))?;
         let program = bpf
-            .program_mut(name.as_str())
+            .program_mut(spec.name().as_str())
             .ok_or_else(|| LoadCause::Invalid("selected program disappeared during load".into()))?;
-        let tracepoint: &mut aya::programs::TracePoint = program
-            .try_into()
-            .map_err(|e| LoadCause::Program(Box::new(e)))?;
-        tracepoint
-            .load()
-            .map_err(|e| LoadCause::Program(Box::new(e)))?;
+        match spec {
+            ProgramSpec::Tracepoint(_) => {
+                let program: &mut aya::programs::TracePoint = program
+                    .try_into()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+                program
+                    .load()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+            }
+            ProgramSpec::Xdp(_) => xdp::load(program)?,
+            _ => return Err(LoadCause::Unsupported("program type")),
+        }
 
-        let ids = tracepoint
+        let ids = program
             .info()
             .and_then(|info| info.map_ids())
             .map_err(|e| LoadCause::Program(Box::new(e)))?
@@ -160,4 +164,26 @@ fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
     data.info()
         .map(|info| info.id())
         .map_err(|e| LoadCause::Map(Box::new(e)))
+}
+
+// Validate every selection before runtime initialization. XDP sections become
+// extensions at the kernel boundary.
+pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<(), LoadCause> {
+    let program = object.programs.get(spec.name().as_str()).ok_or_else(|| {
+        LoadCause::Invalid(format!(
+            "ELF program {:?} does not exist",
+            spec.name().as_str()
+        ))
+    })?;
+    match (spec, &program.section) {
+        (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint)
+        | (ProgramSpec::Xdp(_), ProgramSection::Xdp { .. }) => Ok(()),
+        (ProgramSpec::Tracepoint(_), _) => Err(LoadCause::Invalid(
+            "selected ELF program is not a tracepoint".into(),
+        )),
+        (ProgramSpec::Xdp(_), _) => {
+            Err(LoadCause::Invalid("selected ELF program is not XDP".into()))
+        }
+        _ => Err(LoadCause::Unsupported("program type")),
+    }
 }

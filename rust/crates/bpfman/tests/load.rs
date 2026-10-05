@@ -210,7 +210,7 @@ fn native_object_paths_are_not_lossily_decoded_or_opened() -> Result {
         .arg(OsString::from_vec(b"object-\xff.o".to_vec()))
         .args(["--programs", "xdp:p"])
         .output()?;
-    assert_failure(output, 1, "execution is not implemented")?;
+    assert_failure(output, 1, "source path is not UTF-8")?;
 
     assert_eq!(std::fs::read_dir(temporary.path())?.count(), 0);
 
@@ -223,7 +223,7 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
     let runtime = temporary.path().join("runtime");
 
     for options in [
-        vec!["--programs", "tracepoint:a,xdp:b"],
+        vec!["--programs", "tracepoint:a,tc:b"],
         vec!["--programs", "tracepoint:a", "--map-owner-id", "1"],
     ] {
         assert_failure(
@@ -323,15 +323,18 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
         .join("../../../e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o");
     std::fs::copy(fixture, &source)?;
     let prepare = || {
-        bpfman_runtime::PreparedTracepoint::new(
+        bpfman_runtime::PreparedProgram::new(
             &source,
-            "tp_a".try_into().expect("symbol"),
+            bpfman_model::ProgramSpec::Tracepoint("tp_a".try_into().expect("symbol")),
             Default::default(),
         )
     };
 
     for extra in ["tp_a", "missing"] {
-        let result = prepare()?.with_additional_programs(vec![extra.try_into().expect("symbol")]);
+        let result =
+            prepare()?.with_additional_programs(vec![bpfman_model::ProgramSpec::Tracepoint(
+                extra.try_into().expect("symbol"),
+            )]);
         match result {
             Err(error) => assert_eq!(error.kind(), bpfman_runtime::LoadErrorKind::InvalidInput),
             Ok(_) => return Err("invalid batch selection accepted".into()),
@@ -340,6 +343,8 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
 
     let prepared = prepare()?;
     std::fs::write(&source, b"replaced after validation")?;
-    let _batch = prepared.with_additional_programs(vec!["tp_b".try_into().expect("symbol")])?;
+    let _batch = prepared.with_additional_programs(vec![bpfman_model::ProgramSpec::Tracepoint(
+        "tp_b".try_into().expect("symbol"),
+    )])?;
     Ok(())
 }

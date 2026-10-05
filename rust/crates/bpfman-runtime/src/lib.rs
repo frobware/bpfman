@@ -76,27 +76,27 @@ pub struct Cancellation {
     flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-/// Validated local tracepoint input, prepared before opening runtime state.
+/// Validated local program input, prepared before opening runtime state.
 /// Owns the exact ELF bytes that will be loaded and published.
 /// Request contents are private and cannot be changed after validation:
 /// ```compile_fail,E0616
-/// use bpfman_runtime::PreparedTracepoint;
-/// fn change(request: &mut PreparedTracepoint) {
+/// use bpfman_runtime::PreparedProgram;
+/// fn change(request: &mut PreparedProgram) {
 ///     request.source = "another.o".into();
 /// }
 /// ```
-pub struct PreparedTracepoint {
+pub struct PreparedProgram {
     object: kernel::LocalObject,
     source: String,
-    name: bpfman_model::Symbol,
+    spec: bpfman_model::ProgramSpec,
     metadata: std::collections::BTreeMap<String, String>,
 }
 
-/// Validated, nonempty local tracepoint batch sharing one captured ELF snapshot.
+/// Validated, nonempty local program batch sharing one captured ELF snapshot.
 /// Each member owns private maps; persistence publishes the entire batch atomically.
-pub struct PreparedTracepoints {
-    first: PreparedTracepoint,
-    remaining: Vec<bpfman_model::Symbol>,
+pub struct PreparedPrograms {
+    first: PreparedProgram,
+    remaining: Vec<bpfman_model::ProgramSpec>,
 }
 
 /// Store opened at startup and bound to an adopted runtime directory.

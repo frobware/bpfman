@@ -193,12 +193,13 @@ fn invoke_batch(
     };
     let name = Symbol::try_from("trace").expect("symbol");
     let metadata = BTreeMap::new();
+    let spec = bpfman_model::ProgramSpec::Tracepoint(name.clone());
     let inputs: Vec<_> = (0..3)
         .map(|_| Inputs {
             cancellation: &cancellation,
             object: &object,
             source: "source.o",
-            name: &name,
+            spec: &spec,
             metadata: &metadata,
             created_at: "2026-10-05T00:00:00Z",
         })

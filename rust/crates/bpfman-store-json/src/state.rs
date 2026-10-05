@@ -1,6 +1,6 @@
-//! Version 2 adds standalone links to private, locally loaded tracepoints.
+//! Version 3 adds XDP extension loads; version 2 adds standalone tracepoint links.
 //! Version 1 retains its existing program operations; link creation requires a
-//! separately initialized version 2 store. Never upgrade a snapshot implicitly.
+//! separately initialized version 2 or newer store. Never upgrade a snapshot implicitly.
 //! Paths are derived from the runtime layout; serialized values never authorize I/O.
 
 use crate::error::Failure;
@@ -9,7 +9,7 @@ use bpfman_model::{
     LinkDetails, LinkState, ProgramSource, ProgramSpec, ProgramType, StoredLink, StoredProgram,
     StoredProgramSummary, Symbol,
 };
-use bpfman_store::TracepointRecord;
+use bpfman_store::LoadRecord;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,7 +23,7 @@ pub(super) struct State {
     pub(super) version: u32,
     pub(super) identity: String,
     pub(super) next_generation: u64,
-    pub(super) programs: Vec<Tracepoint>,
+    pub(super) programs: Vec<Program>,
     pub(super) map_sets: Vec<MapSet>,
     #[serde(default = "first_link_id", skip_serializing_if = "is_first_link_id")]
     pub(super) next_link_id: u64,
@@ -59,7 +59,9 @@ pub(super) enum LinkProgress {
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Tracepoint {
+pub(super) struct Program {
+    #[serde(default, skip_serializing_if = "Kind::is_tracepoint")]
+    pub(super) kind: Kind,
     pub(super) id: NonZeroU32,
     pub(super) generation: u64,
     pub(super) name: String,
@@ -84,7 +86,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 2,
+            version: 3,
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
             next_generation: 1,
             programs: Vec::new(),
@@ -103,7 +105,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1 | 2) {
+        if !matches!(header.version, 1..=3) {
             return Err(Failure::Version(header.version));
         }
 
@@ -142,6 +144,9 @@ impl State {
         let mut program_ids = BTreeSet::new();
 
         for row in &self.programs {
+            if self.version < 3 && row.kind == Kind::Xdp {
+                return Err(Failure::XdpVersion);
+            }
             Symbol::try_from(row.name.as_str())
                 .map_err(|_| Failure::Invalid("invalid ELF symbol"))?;
             timestamp(&row.created_at)?;
@@ -168,7 +173,10 @@ impl State {
         for link in &self.links {
             if !link_ids.insert(link.id)
                 || link.id.get() >= self.next_link_id
-                || !program_ids.contains(&link.program_id)
+                || !self
+                    .programs
+                    .iter()
+                    .any(|p| p.id == link.program_id && p.kind == Kind::Tracepoint)
             {
                 return Err(Failure::Invalid(
                     "duplicate link, invalid ID, or missing program",
@@ -192,7 +200,7 @@ impl State {
 
     pub(super) fn insert(
         &mut self,
-        record: &TracepointRecord<'_>,
+        record: &LoadRecord<'_>,
     ) -> Result<StoredProgramSummary, Failure> {
         if self.map_sets.iter().any(|m| m.id == record.id)
             || self.programs.iter().any(|p| p.id == record.id)
@@ -204,10 +212,16 @@ impl State {
         self.next_generation = generation
             .checked_add(1)
             .ok_or(Failure::Invalid("generation exhausted"))?;
-        let row = Tracepoint {
+        let row = Program {
+            kind: match record.spec {
+                ProgramSpec::Tracepoint(_) => Kind::Tracepoint,
+                ProgramSpec::Xdp(_) if self.version >= 3 => Kind::Xdp,
+                ProgramSpec::Xdp(_) => return Err(Failure::XdpVersion),
+                _ => return Err(Failure::Unsupported("program type")),
+            },
             id: record.id,
             generation,
-            name: record.name.as_str().into(),
+            name: record.spec.name().as_str().into(),
             source: record.source.into(),
             license: record.license.into(),
             created_at: timestamp(record.created_at)?,
@@ -238,12 +252,12 @@ impl State {
     }
 }
 
-impl Tracepoint {
+impl Program {
     pub(super) fn summary(&self) -> StoredProgramSummary {
         StoredProgramSummary::new(
             self.id,
             self.name.clone(),
-            ProgramType::Tracepoint,
+            self.kind.model(),
             self.metadata.clone(),
             Vec::new(),
         )
@@ -258,10 +272,14 @@ impl Tracepoint {
 
         Ok(StoredProgram {
             id: self.id,
-            spec: ProgramSpec::Tracepoint(
-                Symbol::try_from(self.name.as_str())
-                    .map_err(|_| Failure::Invalid("invalid ELF symbol"))?,
-            ),
+            spec: {
+                let name = Symbol::try_from(self.name.as_str())
+                    .map_err(|_| Failure::Invalid("invalid ELF symbol"))?;
+                match self.kind {
+                    Kind::Tracepoint => ProgramSpec::Tracepoint(name),
+                    Kind::Xdp => ProgramSpec::Xdp(name),
+                }
+            },
             source: ProgramSource::File(Some(self.source.clone())),
             object_path: path(layout.bytecode_path(self.id))?,
             pin_path: path(layout.program_pin_path(self.id))?,
@@ -344,4 +362,25 @@ fn timestamp(raw: &str) -> Result<String, Failure> {
         fraction.trim_end_matches('0'),
         &base[19..]
     ))
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Kind {
+    #[default]
+    Tracepoint,
+    Xdp,
+}
+
+impl Kind {
+    fn is_tracepoint(&self) -> bool {
+        *self == Self::Tracepoint
+    }
+
+    pub(super) fn model(self) -> ProgramType {
+        match self {
+            Self::Tracepoint => ProgramType::Tracepoint,
+            Self::Xdp => ProgramType::Xdp,
+        }
+    }
 }

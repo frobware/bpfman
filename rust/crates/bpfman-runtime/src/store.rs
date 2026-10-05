@@ -8,7 +8,7 @@ use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_store::{
-    CommitLoad, OpenStore, ProgramReader, TracepointRecord, UnloadObservation, UnloadStore,
+    CommitLoad, LoadRecord, OpenStore, ProgramReader, UnloadObservation, UnloadStore,
 };
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -129,13 +129,13 @@ impl<S: OpenStore> OpenStore for ActiveStore<S> {
 }
 
 impl<S: OpenStore + CommitLoad> CommitLoad for ActiveStore<S> {
-    fn commit_tracepoints(
+    fn commit_programs(
         &self,
         writer: &RuntimeWriter<'_>,
-        records: &[TracepointRecord<'_>],
+        records: &[LoadRecord<'_>],
     ) -> Result<(), bpfman_store::Error> {
         self.check_writer(writer)?;
-        self.backend.commit_tracepoints(writer, records)
+        self.backend.commit_programs(writer, records)
     }
 }
 

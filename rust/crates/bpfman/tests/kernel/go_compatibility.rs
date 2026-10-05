@@ -67,4 +67,39 @@ pub(super) fn exercise() {
         );
         c.no_artifacts();
     }
+
+    for (loader, unloader) in [(rust(), go()), (go(), rust())] {
+        let loaded = c.json(
+            &loader,
+            &[
+                "program",
+                "load",
+                "file",
+                fixture("xdp_pass.bpf.o").to_str().expect("path"),
+                "--programs",
+                "xdp:pass",
+                "-m",
+                "test=xdp-interchange",
+                "-o",
+                "json",
+            ],
+        );
+        let pid = id(&loaded["programs"][0]);
+        let pid_text = pid.to_string();
+        assert_eq!(
+            c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]),
+            c.json(&go(), &["program", "get", &pid_text, "-o", "json"])
+        );
+        assert_eq!(
+            c.json(&rust(), &["program", "list", "-o", "json"]),
+            c.json(&go(), &["program", "list", "-o", "json"])
+        );
+        assert_eq!(
+            c.run(&rust(), &["program", "get", &pid_text], true).stdout,
+            c.run(&go(), &["program", "get", &pid_text], true).stdout
+        );
+        c.run(&unloader, &["program", "unload", &pid_text], true);
+        c.absent(pid);
+        c.no_artifacts();
+    }
 }

@@ -36,6 +36,11 @@ pub(super) fn behaviour(store: &'static str) {
             "tracepoint:pass",
             "not a tracepoint",
         ),
+        (
+            fixture("tracepoint_counter.bpf.o"),
+            "xdp:tracepoint_kill_recorder",
+            "not XDP",
+        ),
     ] {
         let output = c.run(
             &rust(),

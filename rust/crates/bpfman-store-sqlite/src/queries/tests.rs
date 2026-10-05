@@ -39,10 +39,10 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
                 let created_at = format!("2026-10-04T00:00:{id}Z");
                 let metadata = BTreeMap::from([("label".into(), format!("quoted '{id}' ☃"))]);
                 let metadata_json = serde_json::to_string(&metadata)?;
-                let record = TracepointRecord {
+                let record = LoadRecord {
                     globals: &Default::default(),
                     id,
-                    name: &name,
+                    spec: &bpfman_model::ProgramSpec::Tracepoint(name.clone()),
                     source: &source,
                     license,
                     created_at: &created_at,
@@ -53,7 +53,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
                     pin_path: &map_path,
                     created_at: &created_at,
                 };
-                let program = || TracepointInsert {
+                let program = || ProgramInsert {
                     globals: "{}",
                     record: &record,
                     object_path: &object_path,
@@ -63,9 +63,9 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
                 };
 
                 insert_map_set(&tx, map())?;
-                insert_tracepoint(&tx, program())?;
+                insert_program(&tx, program())?;
                 assert!(
-                    insert_tracepoint(&tx, program()).is_err(),
+                    insert_program(&tx, program()).is_err(),
                     "duplicate must fail without poisoning the cached statement"
                 );
 

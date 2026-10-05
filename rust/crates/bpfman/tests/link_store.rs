@@ -7,8 +7,8 @@ use bpfman_lock::AcquireOptions;
 use bpfman_model::{LinkDetails, LinkState, StoredLink, Symbol, Tracepoint};
 use bpfman_runtime::ActiveStore;
 use bpfman_store::{
-    CommitLoad, LinkReader, LinkStore, OpenStore, PendingTracepoint, ProgramReader,
-    TracepointRecord, UnloadStore,
+    CommitLoad, LinkReader, LinkStore, LoadRecord, OpenStore, PendingTracepoint, ProgramReader,
+    UnloadStore,
 };
 use std::{collections::BTreeMap, num::NonZeroU32, time::Duration};
 
@@ -30,12 +30,14 @@ fn writer<T>(runtime: &RuntimeDirectory, work: impl FnOnce(&RuntimeWriter<'_>) -
 
 fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
     store
-        .commit_tracepoint(
+        .commit_program(
             writer,
-            TracepointRecord {
+            LoadRecord {
                 globals: &Default::default(),
                 id: id(raw),
-                name: &Symbol::try_from("trace").expect("symbol"),
+                spec: &bpfman_model::ProgramSpec::Tracepoint(
+                    Symbol::try_from("trace").expect("symbol"),
+                ),
                 source: "/trace.o",
                 license: "GPL",
                 created_at: "2026-10-04T09:00:00Z",

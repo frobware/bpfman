@@ -145,7 +145,7 @@ impl<S: bpfman_store::OpenStore + UnloadStore + LinkStore> Bpfman<S>
 where
     S::Reader: LinkReader,
 {
-    /// Unload one committed tracepoint with a private map set.
+    /// Unload one committed tracepoint or XDP extension with a private map set.
     /// Pending and finalised links are cleaned before program teardown.
     /// Observations and teardown share one writer scope. Independent cleanup
     /// continues after record failure; post-record cleanup may return warnings.

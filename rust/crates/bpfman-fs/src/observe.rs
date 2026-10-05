@@ -63,7 +63,7 @@ fn names(fd: &OwnedFd) -> Result<Vec<String>, Error> {
 }
 
 impl RuntimeWriter<'_> {
-    /// Inspect a committed private tracepoint's canonical artifact locations.
+    /// Inspect a committed private program's canonical artifact locations.
     /// Call only after validating stored exclusive ownership under this writer.
     /// Refuse symlinks, foreign mounts/types, mismatched program/map identities,
     /// hard links and unknown bytecode children before returning any receipts.
@@ -93,7 +93,9 @@ impl RuntimeWriter<'_> {
                         .map_err(Failure::Program)?;
 
                 if info.id() != id.get()
-                    || info.program_type() != aya::programs::ProgramType::TracePoint.into()
+                    || !matches!(info.program_type(),
+                        kind if kind == aya::programs::ProgramType::TracePoint.into()
+                            || kind == aya::programs::ProgramType::Extension.into())
                 {
                     return Err(Failure::Unsafe(
                         "program pin has a different kernel identity or type",

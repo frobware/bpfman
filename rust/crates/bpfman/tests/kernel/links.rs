@@ -7,7 +7,7 @@ use super::{
 use bpfman_core::LinkCleanupKind;
 use bpfman_model::LinkState;
 use bpfman_runtime::{
-    ActiveStore, Bpfman, Cancellation, LinkErrorKind, PreparedTracepoint, TracepointAttach,
+    ActiveStore, Bpfman, Cancellation, LinkErrorKind, PreparedProgram, TracepointAttach,
 };
 use bpfman_store::{CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore};
 use std::{num::NonZeroU32, process::Command};
@@ -64,9 +64,11 @@ where
     );
     let loaded = app
         .load(
-            PreparedTracepoint::new(
+            PreparedProgram::new(
                 &fixture("tracepoint_counter.bpf.o"),
-                bpfman_model::Symbol::try_from(NAME).expect("symbol"),
+                bpfman_model::ProgramSpec::Tracepoint(
+                    bpfman_model::Symbol::try_from(NAME).expect("symbol"),
+                ),
                 Default::default(),
             )
             .expect("prepared"),

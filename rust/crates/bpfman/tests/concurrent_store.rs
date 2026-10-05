@@ -5,7 +5,7 @@ use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::Symbol;
 use bpfman_runtime::{ActiveStore, Bpfman};
-use bpfman_store::{CommitLoad, OpenStore, ProgramReader, TracepointRecord};
+use bpfman_store::{CommitLoad, LoadRecord, OpenStore, ProgramReader};
 use std::{collections::BTreeMap, num::NonZeroU32, sync::mpsc, time::Duration};
 
 const BUDGET: Duration = Duration::from_secs(5);
@@ -114,12 +114,14 @@ where
                         }
 
                         store
-                            .commit_tracepoint(
+                            .commit_program(
                                 &writer,
-                                TracepointRecord {
+                                LoadRecord {
                                     globals: &Default::default(),
                                     id: NonZeroU32::new(sequence).expect("id"),
-                                    name: &Symbol::try_from("trace").expect("symbol"),
+                                    spec: &bpfman_model::ProgramSpec::Tracepoint(
+                                        Symbol::try_from("trace").expect("symbol"),
+                                    ),
                                     source: "/source.o",
                                     license: "GPL",
                                     created_at: "2026-10-03T12:00:00Z",

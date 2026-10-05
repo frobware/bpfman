@@ -9,7 +9,7 @@ use std::num::NonZeroU32;
 
 use rusqlite::{Connection, OptionalExtension, Transaction, named_params};
 
-use crate::TracepointRecord;
+use crate::LoadRecord;
 
 #[derive(Clone, Eq, PartialEq)]
 pub(super) struct StoredLinkRow {
@@ -178,8 +178,8 @@ pub(super) struct MapSetIdentity<'a> {
     pub(super) created_at: &'a str,
 }
 
-pub(super) struct TracepointInsert<'a> {
-    pub(super) record: &'a TracepointRecord<'a>,
+pub(super) struct ProgramInsert<'a> {
+    pub(super) record: &'a LoadRecord<'a>,
     pub(super) globals: &'a str,
     pub(super) object_path: &'a str,
     pub(super) pin_path: &'a str,
@@ -320,21 +320,22 @@ pub(super) fn insert_map_set(
     Ok(())
 }
 
-pub(super) fn insert_tracepoint(
+pub(super) fn insert_program(
     tx: &Transaction<'_>,
-    program: TracepointInsert<'_>,
+    program: ProgramInsert<'_>,
 ) -> rusqlite::Result<()> {
     let record = program.record;
     tx.prepare_cached(
         "INSERT INTO managed_programs
          (program_id, program_name, program_type, object_path, source_path, pin_path,
           map_set_id, license, gpl_compatible, metadata_json, created_at, global_data)
-         VALUES (:program_id, :name, 'tracepoint', :object_path, :source_path, :pin_path,
+         VALUES (:program_id, :name, :kind, :object_path, :source_path, :pin_path,
                  :program_id, :license, :gpl_compatible, :metadata, :created_at, :globals)",
     )?
     .execute(named_params! {
         ":program_id": record.id.get(),
-        ":name": record.name.as_str(),
+        ":name": record.spec.name().as_str(),
+        ":kind": record.spec.kind().as_str(),
         ":object_path": program.object_path,
         ":source_path": record.source,
         ":pin_path": program.pin_path,

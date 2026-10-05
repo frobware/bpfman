@@ -3,8 +3,8 @@
 ## Status
 
 Implementation in progress in the independent `rust/` workspace. Managed
-observation, atomic local-file tracepoint batches, standalone attach/detach,
-and unload are executable with SQLite and JSON stores.
+observation, atomic local-file tracepoint/XDP batches, standalone tracepoint
+attach/detach, and unload are executable with SQLite and JSON stores.
 See [the workspace checkpoint](../../rust/README.md) for supported options and
 the focused kernel acceptance gate; full behavioural parity remains unfinished.
 
@@ -1082,7 +1082,10 @@ unload. The gate exercises both stores, failure compensation and explicit retry,
 cancellation, real-kernel lifecycle tests, and the unchanged single- and
 multi-program tracepoint DSL scripts. The batch implementation pins only maps
 referenced by each loaded program so unload can verify their ownership.
-Dispatcher work remains the next implementation phase.
+XDP extension load/get/unload now provides the entry to Phase 3, using Go's
+unpinned one-slot verification dispatcher. Both stores pass unchanged XDP
+load/get and named-selection DSL scripts. XDP attachment and dispatcher
+replacement remain the next implementation slice.
 
 ### Phase 3: dispatcher proof
 

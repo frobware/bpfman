@@ -6,7 +6,7 @@ use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeIdentity, RuntimeWriter};
 use bpfman_model::{ProgramSource, ProgramSpec, StoredProgram, StoredProgramSummary};
 use bpfman_store::{
-    CommitLoad, Error, ErrorKind, OpenStore, ProgramReader, TracepointRecord, UnloadObservation,
+    CommitLoad, Error, ErrorKind, LoadRecord, OpenStore, ProgramReader, UnloadObservation,
     UnloadStore,
 };
 use std::{
@@ -171,19 +171,19 @@ impl ProgramReader for Memory {
 }
 
 impl CommitLoad for Memory {
-    fn commit_tracepoints(
+    fn commit_programs(
         &self,
         writer: &RuntimeWriter<'_>,
-        records: &[TracepointRecord<'_>],
+        records: &[LoadRecord<'_>],
     ) -> Result<(), Error> {
         // This fixture models one program; reject unsupported batches before mutation.
         assert_eq!(records.len(), 1);
         let record = &records[0];
-        self.commit_tracepoint(
+        self.commit_program(
             writer,
-            TracepointRecord {
+            LoadRecord {
                 id: record.id,
-                name: record.name,
+                spec: record.spec,
                 source: record.source,
                 license: record.license,
                 created_at: record.created_at,
@@ -194,10 +194,10 @@ impl CommitLoad for Memory {
         .map(|_| ())
     }
 
-    fn commit_tracepoint(
+    fn commit_program(
         &self,
         writer: &RuntimeWriter<'_>,
-        record: TracepointRecord<'_>,
+        record: LoadRecord<'_>,
     ) -> Result<StoredProgramSummary, Error> {
         self.authority(writer)?;
         let mut s = self.state.lock().expect("state");
@@ -210,7 +210,7 @@ impl CommitLoad for Memory {
         let mut p = sample::record();
         p.id = record.id;
         p.map_set = record.id;
-        p.spec = ProgramSpec::Tracepoint(record.name.clone());
+        p.spec = record.spec.clone();
         p.source = ProgramSource::File(Some(record.source.into()));
         p.license = record.license.into();
         p.created_at = record.created_at.into();

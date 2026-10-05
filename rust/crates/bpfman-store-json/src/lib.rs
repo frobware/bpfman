@@ -26,7 +26,7 @@ pub struct Reader {
 pub struct ProgramReceipt {
     root: RuntimeIdentity,
     store: String,
-    row: state::Tracepoint,
+    row: state::Program,
 }
 
 /// Owned evidence for conditional deletion of an unused private map generation.

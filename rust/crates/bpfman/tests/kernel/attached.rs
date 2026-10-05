@@ -7,7 +7,7 @@ use super::{
 };
 use bpfman_core::UnloadKind;
 use bpfman_model::LinkState;
-use bpfman_runtime::{ActiveStore, Bpfman, Cancellation, PreparedTracepoint, UnloadErrorKind};
+use bpfman_runtime::{ActiveStore, Bpfman, Cancellation, PreparedProgram, UnloadErrorKind};
 use bpfman_store::{CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore};
 
 pub(super) fn exercise<S>(backend: S)
@@ -25,9 +25,9 @@ where
     for successful_links in 0..2 {
         let loaded = app
             .load(
-                PreparedTracepoint::new(
+                PreparedProgram::new(
                     &fixture("tracepoint_counter.bpf.o"),
-                    NAME.try_into().expect("symbol"),
+                    bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                     Default::default(),
                 )
                 .expect("request"),

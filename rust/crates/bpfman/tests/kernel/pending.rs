@@ -7,7 +7,7 @@ use super::{
 };
 use bpfman_core::{LinkCleanupKind, UnloadKind};
 use bpfman_model::LinkState;
-use bpfman_runtime::{ActiveStore, Bpfman, Cancellation, PreparedTracepoint, UnloadErrorKind};
+use bpfman_runtime::{ActiveStore, Bpfman, Cancellation, PreparedProgram, UnloadErrorKind};
 use bpfman_store::{CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore};
 
 pub(super) fn pinned<S>(backend: S)
@@ -23,9 +23,9 @@ where
     );
     let loaded = app
         .load(
-            PreparedTracepoint::new(
+            PreparedProgram::new(
                 &fixture("tracepoint_counter.bpf.o"),
-                NAME.try_into().expect("symbol"),
+                bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                 Default::default(),
             )
             .expect("request"),
@@ -188,9 +188,9 @@ where
         );
         let loaded = app
             .load(
-                PreparedTracepoint::new(
+                PreparedProgram::new(
                     &fixture("tracepoint_counter.bpf.o"),
-                    NAME.try_into().expect("symbol"),
+                    bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                     Default::default(),
                 )
                 .expect("request"),

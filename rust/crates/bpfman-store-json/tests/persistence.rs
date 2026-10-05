@@ -6,8 +6,8 @@ use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::Symbol;
 use bpfman_store::{
-    CommitLoad, ErrorKind, LinkReader, LinkStore, OpenStore, PendingTracepoint, ProgramReader,
-    TracepointRecord, UnloadStore,
+    CommitLoad, ErrorKind, LinkReader, LinkStore, LoadRecord, OpenStore, PendingTracepoint,
+    ProgramReader, UnloadStore,
 };
 use bpfman_store_json::Backend;
 use std::{collections::BTreeMap, fs, num::NonZeroU32, os::unix::fs::symlink, time::Duration};
@@ -25,12 +25,14 @@ fn writer<T>(runtime: &RuntimeDirectory, work: impl FnOnce(&RuntimeWriter<'_>) -
 }
 
 fn commit(writer: &RuntimeWriter<'_>) -> Result<(), bpfman_store::Error> {
-    Backend.commit_tracepoint(
+    Backend.commit_program(
         writer,
-        TracepointRecord {
+        LoadRecord {
             globals: &Default::default(),
             id: NonZeroU32::new(42).expect("id"),
-            name: &Symbol::try_from("trace").expect("symbol"),
+            spec: &bpfman_model::ProgramSpec::Tracepoint(
+                Symbol::try_from("trace").expect("symbol"),
+            ),
             source: "/source.o",
             license: "GPL",
             created_at: "2026-10-03T12:00:00Z",
@@ -53,7 +55,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":3}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":4}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -373,4 +375,82 @@ fn failed_link_publication_retains_previous_state_and_receipts() {
         assert!(reader.read_links().expect("empty").is_empty());
         assert_eq!(fs::read(&outside).expect("sentinel"), b"sentinel");
     });
+}
+
+#[test]
+fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
+    for version in [1, 2] {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let layout = RuntimeLayout::try_from(temporary.path().to_owned()).expect("layout");
+        let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+        writer(&runtime, |w| {
+            Backend.open(w).expect("create");
+        });
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
+        assert_eq!(state["version"], 3);
+        state["version"] = version.into();
+        fs::write(
+            layout.database_path(),
+            serde_json::to_vec(&state).expect("encode"),
+        )
+        .expect("fixture");
+        writer(&runtime, |w| {
+            let mut reader = Backend.open(w).expect("open legacy");
+            commit(w).expect("tracepoint works without upgrade");
+            if version == 2 {
+                Backend
+                    .create_pending_tracepoint(
+                        w,
+                        PendingTracepoint {
+                            program_id: NonZeroU32::new(42).expect("id"),
+                            target: &"sched/sched_switch".parse().expect("target"),
+                            metadata: &BTreeMap::new(),
+                            created_at: "2026-10-05T00:00:00Z",
+                        },
+                    )
+                    .expect("version 2 retains link support");
+            }
+            let previous = fs::read(layout.database_path()).expect("snapshot");
+            let xdp = bpfman_model::ProgramSpec::Xdp(Symbol::try_from("pass").expect("symbol"));
+            let tracepoint =
+                bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from("trace").expect("symbol"));
+            let metadata = BTreeMap::new();
+            let globals = BTreeMap::new();
+            let record = |id, spec| LoadRecord {
+                id: NonZeroU32::new(id).expect("id"),
+                spec,
+                source: "source.o",
+                license: "GPL",
+                metadata: &metadata,
+                globals: &globals,
+                created_at: "2026-10-05T00:00:00Z",
+            };
+            let failure = Backend
+                .commit_programs(w, &[record(43, &tracepoint), record(44, &xdp)])
+                .expect_err("requires explicit new format");
+            assert_eq!(failure.kind(), ErrorKind::IncompatibleState);
+            assert_eq!(
+                fs::read(layout.database_path()).expect("unchanged"),
+                previous
+            );
+            assert_eq!(reader.read_records().expect("records").len(), 1);
+            // A forged kind field cannot smuggle an extension into an old format.
+            let mut invalid: serde_json::Value = serde_json::from_slice(&previous).expect("JSON");
+            invalid["programs"][0]["kind"] = "xdp".into();
+            let invalid = serde_json::to_vec(&invalid).expect("encode");
+            fs::write(layout.database_path(), &invalid).expect("fixture");
+            assert_eq!(
+                reader
+                    .read_records()
+                    .expect_err("reject wrong version")
+                    .kind(),
+                ErrorKind::IncompatibleState
+            );
+            assert_eq!(
+                fs::read(layout.database_path()).expect("unchanged"),
+                invalid
+            );
+        });
+    }
 }

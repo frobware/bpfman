@@ -72,7 +72,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
         _writer: &RuntimeWriter<'_>,
         input: &Inputs<'_>,
     ) -> Result<Self::Kernel, LoadCause> {
-        input.object.load(input.name)
+        input.object.load(input.spec)
     }
 
     fn pin_program(
@@ -132,7 +132,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
         input: &Inputs<'_>,
     ) -> Result<Bytecode, EffectFailure<Vec<Bytecode>, LoadCause>> {
         let provenance = serde_json::to_vec_pretty(&serde_json::json!({
-            "version": 1, "program_id": id.get(), "program_name": input.name.as_str(),
+            "version": 1, "program_id": id.get(), "program_name": input.spec.name().as_str(),
             "source": input.source, "source_kind": "file", "loaded_at": input.created_at,
         }))
         .map_err(|cause| EffectFailure {
@@ -151,9 +151,9 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     ) -> Result<(), LoadCause> {
         let records: Vec<_> = inputs
             .iter()
-            .map(|(id, input)| bpfman_store::TracepointRecord {
+            .map(|(id, input)| bpfman_store::LoadRecord {
                 id: *id,
-                name: input.name,
+                spec: input.spec,
                 source: input.source,
                 license: &input.object.license,
                 created_at: input.created_at,
@@ -162,7 +162,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
             })
             .collect();
         self.0
-            .commit_tracepoints(writer, &records)
+            .commit_programs(writer, &records)
             .map_err(LoadCause::from)
     }
 }

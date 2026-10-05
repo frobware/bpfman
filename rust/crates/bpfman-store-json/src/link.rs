@@ -53,15 +53,13 @@ impl LinkStore for Backend {
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
         let (previous, mut state) = read(&file)?;
 
-        if state.version != 2 {
+        if state.version < 2 {
             return Err(Failure::LinkVersion.into());
         }
 
-        if !state
-            .programs
-            .iter()
-            .any(|program| program.id == request.program_id)
-        {
+        if !state.programs.iter().any(|program| {
+            program.id == request.program_id && program.kind == crate::state::Kind::Tracepoint
+        }) {
             return Err(Failure::Invalid("missing tracepoint program").into());
         }
 

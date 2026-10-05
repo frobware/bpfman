@@ -37,9 +37,9 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-kernel` | 2 | Read-only BPF metadata and statistics with a private syscall boundary |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
-| `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic tracepoint/map-set persistence and conditional teardown |
+| `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Local tracepoint load/unload and attach/detach, private Aya adapter, compensation, and observations |
+| `bpfman-runtime` | 4 | Local tracepoint/XDP load/unload and tracepoint attach/detach, private Aya adapter, compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -83,8 +83,8 @@ let loaded = bpfman.load(request)?;
 let report = bpfman.unload(id)?;
 ```
 
-Prepare a local ELF with `PreparedTracepoint::new` before startup to reject bad
-input without creating runtime state. The request owns validated bytes and has
+Prepare a local ELF with `PreparedProgram::new` and a typed `ProgramSpec`
+before startup to reject bad input without creating runtime state. The request owns validated bytes and has
 no runtime path; the instance supplies its adopted runtime for execution.
 `list` returns summaries without kernel privileges; `list_entries` adds live
 kernel observations. Read methods take `&self` and no lock parameter. Mutations
@@ -122,7 +122,7 @@ crate defines small, statically dispatched interfaces:
   initialization; format checks remain inside each backend.
 - `ProgramReader` returns stored summaries or complete domain records from a
   consistent snapshot, without exposing serialized data or queries.
-- `CommitLoad` atomically publishes a nonempty tracepoint batch and every
+- `CommitLoad` atomically publishes a nonempty program batch and every
   private map-set membership (an empty batch is a no-op). An error means no commit, so compensation remains safe.
 - `UnloadStore` validates ownership and conditionally deletes records and map
   sets using opaque, non-cloneable backend receipts. Failed deletion returns the
@@ -156,10 +156,10 @@ and stored column types are checked at runtime, with domain validation afterward
 Creation still executes the authoritative Go schema DDL. Neither SQL nor query
 row types appear in the generic store contracts or behavioural tests.
 
-JSON version 2 stores private tracepoints and standalone pending/finalised link
-records in a whole-file snapshot. Existing version 1 stores still support their
-program operations; link creation requires a separately initialized version 2
-runtime. Opening or mutating a version 1 store never upgrades it implicitly.
+JSON version 3 stores private tracepoint and XDP programs and standalone
+tracepoint links in a whole-file snapshot. Version 1 and 2 stores retain their
+tracepoint operations; version 2 also retains link support. XDP loads require a
+separately initialized version 3 runtime. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
 descriptor and atomically renames it into place under the runtime writer lock.
 Failed publication leaves the old state intact; interrupted staging files are
@@ -353,14 +353,14 @@ use stored summaries without kernel privileges; JSON adds full records and live
 kernel observations. `program get ID [-o text|json]` observes one managed program,
 including its maps, statistics, and links. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. `--all` and
-kernel link state filters remain unsupported. Unload supports one tracepoint
-with private maps, including pending and finalised standalone links.
+kernel link state filters remain unsupported. Unload supports a tracepoint with private maps and pending or finalised
+standalone links, or an unattached XDP extension with private maps.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint batches with private maps and
+exits with status 2. Local tracepoint and XDP batches with private maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads, other program types,
 and map-owner sharing exit with status 1 before source access or runtime effects.
@@ -556,14 +556,14 @@ mounted bpffs may remain after a failed load. Crash recovery is separate work.
 Non-UTF-8 source/runtime paths are rejected before load effects because this
 slice persists paths as SQLite text; read-only listing still accepts native paths.
 
-SQLite creates every selected tracepoint and private map set in one transaction;
+SQLite creates every selected program and private map set in one transaction;
 JSON publishes one complete snapshot. Records retain Go's source path, license,
 metadata, UTC creation time, and null update time.
 Existing rows are not overwritten. On commit, ownership transfers to stored
 state; failed output delivery never compensates the successful load.
 
-For multiple selections, call `PreparedTracepoint::with_additional_programs`
-with the remaining symbols, then `Bpfman::load_batch`. The prepared batch keeps
+For multiple selections, call `PreparedProgram::with_additional_programs`
+with the remaining `ProgramSpec` selections, then `Bpfman::load_batch`. The prepared batch keeps
 one captured ELF and validates every symbol before runtime initialization.
 Each member passes through the same forward interpreter as a single load.
 Kernel/filesystem work finishes for all members before the single store commit.
@@ -654,15 +654,16 @@ Program unload cleans pending and finalised standalone links before touching
 program resources.
 
 
-## Tracepoint unload
+## Program unload
 
 ```sh
 sudo rust/target/debug/bpfman program unload PROGRAM_ID
 direnv exec . make rust-test-unload
 ```
 
-This slice accepts one managed tracepoint with pending or finalised standalone
-links, its own map set, no other map-set users, and no shared-map-pin registrations.
+This slice accepts a managed tracepoint with pending or finalised standalone
+links, or an unattached XDP extension. Each must have its own map set, no other
+map-set users, and no shared-map-pin registrations.
 Other program types, shared state, multiple operands, and `--ignore-missing` are
 explicitly unsupported. A missing managed record returns an error without
 inspecting or adopting a kernel-only program or creating a database. It does not
@@ -672,7 +673,7 @@ Under one writer scope, store preflight validates canonical artifact paths and
 exclusive ownership. Filesystem observation opens existing objects without
 creating or mounting collections. It verifies descriptor confinement, types,
 hard-link counts and inode identities; a live program pin must match the ID and
-tracepoint type, and its map pins must refer to that program's maps. If the
+tracepoint or extension type, and its map pins must refer to that program's maps. If the
 program pin is already absent after a partial unload, the validated private
 map-set record authorizes inspection of its remaining BPF map pins. Bytecode
 adoption accepts only `bytecode.o` and `provenance.json`. Unknown children and
@@ -732,3 +733,23 @@ allows only retained work to complete. Adapter tests cover store changes,
 ignored/failed deletes, wrong runtime authority, replacement, symlinks, hard
 links, FIFOs, and unexpected children. The kernel gate supplies the BPF identity
 and lifetime checks that these fakes cannot establish.
+
+## XDP extension load checkpoint
+
+Local XDP loads use the same preparation, atomic batch commit, compensation,
+observations, and unload interpreter as tracepoints. A selection is stored as
+`xdp` while its kernel type is `extension`. The Aya adapter verifies it against
+`prog0` of an unpinned one-slot XDP dispatcher, matching Go. The Makefile builds
+the shared `dispatcher/bpf/xdp_dispatcher_v2.bpf.c` object for Rust compilation;
+the independent workspace has no dependency on legacy Rust.
+
+Both stores run the unchanged `TestXDP_LoadAndGet.bpfman` and
+`TestLoad_NamedProgramSkipsBrokenSibling.bpfman`. Kernel tests also cover
+`xdp.frags` section loads, temporary dispatcher release, later-member verifier
+failure, commit failure, unload retry, and refusal of tracepoint attachment to
+an XDP program. SQLite interchange tests load with either Go or Rust, compare
+get/list observations, and unload with the other implementation.
+
+XDP attachment, dispatcher replacement, traffic, and detach remain the next
+slice. Loading an `xdp.frags` section does not establish fragmented-packet
+execution support; that requires attachment and traffic acceptance tests.

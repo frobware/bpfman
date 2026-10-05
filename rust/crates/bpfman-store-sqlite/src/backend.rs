@@ -5,7 +5,7 @@ use bpfman_core::{EffectFailure, StoreObservation, StoreOpenPlan, plan_store_ope
 use bpfman_fs::{RuntimeDirectory, RuntimeWriter};
 use bpfman_model::{StoredProgram, StoredProgramSummary};
 use bpfman_store::{
-    CommitLoad, Error, OpenStore, ProgramReader, TracepointRecord, UnloadObservation, UnloadStore,
+    CommitLoad, Error, LoadRecord, OpenStore, ProgramReader, UnloadObservation, UnloadStore,
 };
 use std::num::NonZeroU32;
 
@@ -71,10 +71,10 @@ impl ProgramReader for Store {
 
 impl CommitLoad for Backend {
     #[tracing::instrument(name = "store.commit", level = "debug", skip_all, err)]
-    fn commit_tracepoints(
+    fn commit_programs(
         &self,
         writer: &RuntimeWriter<'_>,
-        records: &[TracepointRecord<'_>],
+        records: &[LoadRecord<'_>],
     ) -> Result<(), Error> {
         crate::write::persist_batch(writer, records).map_err(Into::into)
     }

@@ -161,3 +161,28 @@ fn sqlite_batch_cli() {
 fn json_batch_cli() {
     batch::cli("json");
 }
+
+#[path = "kernel/xdp.rs"]
+mod xdp;
+
+#[test]
+fn sqlite_xdp_load_lifecycle() {
+    xdp::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_xdp_load_lifecycle() {
+    xdp::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_unchanged_xdp_load_dsl() {
+    cli::dsl("sqlite", "TestXDP_LoadAndGet");
+    cli::dsl("sqlite", "TestLoad_NamedProgramSkipsBrokenSibling");
+}
+
+#[test]
+fn json_unchanged_xdp_load_dsl() {
+    cli::dsl("json", "TestXDP_LoadAndGet");
+    cli::dsl("json", "TestLoad_NamedProgramSkipsBrokenSibling");
+}

@@ -125,11 +125,13 @@ impl LoadRequest {
         };
 
         // Reject the complete unsupported request before touching even the source.
-        let reason = if !std::iter::once(&first)
-            .chain(&remaining)
-            .all(|spec| matches!(spec, bpfman_model::ProgramSpec::Tracepoint(_)))
-        {
-            Some("program types other than tracepoint")
+        let reason = if !std::iter::once(&first).chain(&remaining).all(|spec| {
+            matches!(
+                spec,
+                bpfman_model::ProgramSpec::Tracepoint(_) | bpfman_model::ProgramSpec::Xdp(_)
+            )
+        }) {
+            Some("program types other than tracepoint and xdp")
         } else if map_owner_id.is_some() {
             Some("map-owner sharing")
         } else {
@@ -142,27 +144,19 @@ impl LoadRequest {
             ).into());
         }
 
-        let bpfman_model::ProgramSpec::Tracepoint(name) = first else {
-            return Err(anyhow::anyhow!("unsupported program type").into());
-        };
         if layout.root().to_str().is_none() {
             return Err(anyhow::anyhow!("load persistence requires a UTF-8 runtime path").into());
         }
 
         Ok(PreparedLoad {
-            request: bpfman_runtime::PreparedTracepoint::new_with_cancellation(
+            request: bpfman_runtime::PreparedProgram::new_with_cancellation(
                 &path,
-                name,
+                first,
                 metadata,
                 cancellation,
             )?
             .with_globals(globals)?
-            .with_additional_programs(
-                remaining
-                    .into_iter()
-                    .map(|spec| spec.name().clone())
-                    .collect(),
-            )?,
+            .with_additional_programs(remaining)?,
             output,
         })
     }

@@ -12,6 +12,8 @@ pub(super) enum Failure {
     Version(u32),
     #[error("link persistence requires JSON store version 2; use a separately initialized runtime")]
     LinkVersion,
+    #[error("XDP persistence requires JSON store version 3; use a separately initialized runtime")]
+    XdpVersion,
     #[error("unsupported JSON store operation: {0}")]
     Unsupported(&'static str),
     #[error("invalid JSON store: {0}")]
@@ -22,7 +24,9 @@ impl From<Failure> for Error {
     fn from(cause: Failure) -> Self {
         let kind = match &cause {
             Failure::Filesystem(_) | Failure::Random(_) => ErrorKind::Unavailable,
-            Failure::Version(_) | Failure::LinkVersion => ErrorKind::IncompatibleState,
+            Failure::Version(_) | Failure::LinkVersion | Failure::XdpVersion => {
+                ErrorKind::IncompatibleState
+            }
             Failure::Unsupported(_) => ErrorKind::Unsupported,
             Failure::Json(_) | Failure::Invalid(_) => ErrorKind::InvalidData,
         };

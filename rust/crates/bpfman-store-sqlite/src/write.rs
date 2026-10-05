@@ -1,34 +1,34 @@
 //! A load becomes visible in one transaction: map set and program together.
 
 use crate::{
-    Error, TracepointRecord,
+    Error, LoadRecord,
     error::Failure,
     open::{require_supported, schema_version},
     queries,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bpfman_fs::RuntimeWriter;
-use bpfman_model::{ProgramType, StoredProgramSummary};
+use bpfman_model::{ProgramSpec, StoredProgramSummary};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
-/// Atomically insert a private map set and its loaded tracepoint. Existing rows
+/// Atomically insert a private map set and its loaded program. Existing rows
 /// are never overwritten. Failure means no successful commit was reported.
 /// The caller must compensate kernel/filesystem acquisitions on failure only.
 ///
 /// ```compile_fail
-/// use bpfman_store_sqlite::{persist_tracepoint, TracepointRecord};
-/// fn unlocked(runtime: &bpfman_fs::RuntimeDirectory, record: TracepointRecord<'_>) {
-///     persist_tracepoint(runtime, record);
+/// use bpfman_store_sqlite::{persist_program, LoadRecord};
+/// fn unlocked(runtime: &bpfman_fs::RuntimeDirectory, record: LoadRecord<'_>) {
+///     persist_program(runtime, record);
 /// }
 /// ```
-pub fn persist_tracepoint(
+pub fn persist_program(
     writer: &RuntimeWriter<'_>,
-    record: TracepointRecord<'_>,
+    record: LoadRecord<'_>,
 ) -> Result<StoredProgramSummary, Error> {
     let summary = StoredProgramSummary::new(
         record.id,
-        record.name.as_str().into(),
-        ProgramType::Tracepoint,
+        record.spec.name().as_str().into(),
+        record.spec.kind(),
         record.metadata.clone(),
         Vec::new(),
     );
@@ -39,12 +39,12 @@ pub fn persist_tracepoint(
 
 pub(crate) fn persist_batch(
     writer: &RuntimeWriter<'_>,
-    records: &[TracepointRecord<'_>],
+    records: &[LoadRecord<'_>],
 ) -> Result<(), Error> {
     persist(writer, records).map_err(Error::from)
 }
 
-fn persist(writer: &RuntimeWriter<'_>, records: &[TracepointRecord<'_>]) -> Result<(), Failure> {
+fn persist(writer: &RuntimeWriter<'_>, records: &[LoadRecord<'_>]) -> Result<(), Failure> {
     if records.is_empty() {
         return Ok(());
     }
@@ -71,8 +71,14 @@ fn persist(writer: &RuntimeWriter<'_>, records: &[TracepointRecord<'_>]) -> Resu
 fn insert(
     tx: &rusqlite::Transaction<'_>,
     writer: &RuntimeWriter<'_>,
-    record: &TracepointRecord<'_>,
+    record: &LoadRecord<'_>,
 ) -> Result<(), Failure> {
+    if !matches!(
+        record.spec,
+        ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_)
+    ) {
+        return Err(Failure::Unsupported("program type"));
+    }
     let layout = writer.layout();
     let object_path = layout.bytecode_path(record.id);
     let pin_path = layout.program_pin_path(record.id);
@@ -111,9 +117,9 @@ fn insert(
             | "Dual MIT/GPL"
             | "Dual MPL/GPL"
     );
-    queries::insert_tracepoint(
+    queries::insert_program(
         tx,
-        queries::TracepointInsert {
+        queries::ProgramInsert {
             record,
             object_path,
             pin_path,

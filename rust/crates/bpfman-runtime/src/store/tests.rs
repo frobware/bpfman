@@ -4,7 +4,7 @@ use super::testing::Memory;
 use crate::{ActiveStore, Bpfman};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
-use bpfman_store::{CommitLoad, ErrorKind, TracepointRecord};
+use bpfman_store::{CommitLoad, ErrorKind, LoadRecord};
 use std::{collections::BTreeMap, num::NonZeroU32, time::Duration};
 
 const TIMEOUT: Duration = Duration::from_secs(1);
@@ -48,12 +48,14 @@ fn id() -> NonZeroU32 {
 
 fn seed(store: &Memory, writer: &RuntimeWriter<'_>) {
     store
-        .commit_tracepoint(
+        .commit_program(
             writer,
-            TracepointRecord {
+            LoadRecord {
                 globals: &Default::default(),
                 id: id(),
-                name: &bpfman_model::Symbol::try_from("trace").expect("symbol"),
+                spec: &bpfman_model::ProgramSpec::Tracepoint(
+                    bpfman_model::Symbol::try_from("trace").expect("symbol"),
+                ),
                 source: "input.o",
                 license: "GPL",
                 created_at: "2026-10-03T00:00:00Z",

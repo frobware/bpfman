@@ -11,9 +11,9 @@ use std::{collections::BTreeMap, fs};
 fn load<S: OpenStore + CommitLoad>(
     bpfman: &bpfman_runtime::Bpfman<S>,
 ) -> Result<ObservedProgram, bpfman_runtime::LoadError> {
-    let request = bpfman_runtime::PreparedTracepoint::new(
+    let request = bpfman_runtime::PreparedProgram::new(
         &fixture("tracepoint_counter.bpf.o"),
-        Symbol::try_from(NAME).expect("symbol"),
+        bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from(NAME).expect("symbol")),
         BTreeMap::new(),
     )?;
     bpfman.load(request)

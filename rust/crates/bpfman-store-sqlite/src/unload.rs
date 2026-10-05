@@ -38,8 +38,10 @@ fn invalid(id: NonZeroU32, reason: &str) -> Failure {
 }
 
 fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Result<(), Failure> {
-    if row.kind != "tracepoint" {
-        return Err(Failure::Unsupported("only tracepoints are implemented"));
+    if !matches!(row.kind.as_str(), "tracepoint" | "xdp") {
+        return Err(Failure::Unsupported(
+            "only tracepoints and XDP programs are implemented",
+        ));
     }
 
     if row.map_set != i64::from(id.get()) || row.users != 1 || row.shared != 0 {

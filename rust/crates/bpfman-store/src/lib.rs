@@ -9,7 +9,7 @@ pub use link::{LinkObservation, LinkReader, LinkStore, PendingTracepoint};
 
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeDirectory, RuntimeWriter};
-use bpfman_model::{StoredProgram, StoredProgramSummary, Symbol};
+use bpfman_model::{ProgramSpec, StoredProgram, StoredProgramSummary};
 pub use error::{Error, ErrorKind};
 use std::{collections::BTreeMap, num::NonZeroU32};
 
@@ -46,13 +46,13 @@ pub trait ProgramReader {
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error>;
 }
 
-/// Inputs for committing one private, local tracepoint.
+/// Inputs for committing one private, local program.
 /// Managed paths are derived from writer authority, never supplied as targets.
-pub struct TracepointRecord<'a> {
+pub struct LoadRecord<'a> {
     /// Kernel-assigned identity.
     pub id: NonZeroU32,
     /// Validated ELF selection.
-    pub name: &'a Symbol,
+    pub spec: &'a ProgramSpec,
     /// Original local file operand.
     pub source: &'a str,
     /// ELF license.
@@ -69,28 +69,28 @@ pub struct TracepointRecord<'a> {
 ///
 /// An unlocked runtime cannot authorize a commit, regardless of backend:
 /// ```compile_fail
-/// use bpfman_store::{CommitLoad, TracepointRecord};
-/// fn unlocked<S: CommitLoad>(store: &S, runtime: &bpfman_fs::RuntimeDirectory, record: TracepointRecord<'_>) {
-///     store.commit_tracepoint(runtime, record);
+/// use bpfman_store::{CommitLoad, LoadRecord};
+/// fn unlocked<S: CommitLoad>(store: &S, runtime: &bpfman_fs::RuntimeDirectory, record: LoadRecord<'_>) {
+///     store.commit_program(runtime, record);
 /// }
 /// ```
 pub trait CommitLoad {
     /// Never overwrite existing state. Err means the load was not committed and
     /// the caller may compensate its acquisitions. Nothing fallible may turn a
     /// successful commit into Err; later observation/delivery failures are separate.
-    fn commit_tracepoint(
+    fn commit_program(
         &self,
         writer: &RuntimeWriter<'_>,
-        record: TracepointRecord<'_>,
+        record: LoadRecord<'_>,
     ) -> Result<StoredProgramSummary, Error> {
         let summary = StoredProgramSummary::new(
             record.id,
-            record.name.as_str().into(),
-            bpfman_model::ProgramType::Tracepoint,
+            record.spec.name().as_str().into(),
+            record.spec.kind(),
             record.metadata.clone(),
             Vec::new(),
         );
-        self.commit_tracepoints(writer, &[record])?;
+        self.commit_programs(writer, &[record])?;
 
         Ok(summary)
     }
@@ -98,14 +98,14 @@ pub trait CommitLoad {
     /// Publish every member in one atomic operation, in input order. A failure
     /// publishes none of the batch, including map sets. Never overwrite records.
     /// An empty batch is a no-op. Success ends compensation authority for all members.
-    fn commit_tracepoints(
+    fn commit_programs(
         &self,
         writer: &RuntimeWriter<'_>,
-        records: &[TracepointRecord<'_>],
+        records: &[LoadRecord<'_>],
     ) -> Result<(), Error>;
 }
 
-/// Conditional teardown of a tracepoint with exclusively owned maps.
+/// Conditional teardown of a program with exclusively owned maps.
 /// Observation may precede link teardown; deletion must refuse remaining links.
 /// Receipts must retain backend and runtime identity, remain non-cloneable, and
 /// be revalidated atomically on deletion. They are evidence, not bare IDs.

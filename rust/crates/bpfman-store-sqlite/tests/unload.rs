@@ -5,8 +5,8 @@ use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
 use bpfman_model::Symbol;
 use bpfman_store_sqlite::{
-    TracepointRecord, create_if_missing, delete_unloaded_program, delete_unused_map_set,
-    observe_unload, persist_tracepoint,
+    LoadRecord, create_if_missing, delete_unloaded_program, delete_unused_map_set, observe_unload,
+    persist_program,
 };
 use rusqlite::Connection;
 use std::{collections::BTreeMap, num::NonZeroU32, time::Duration};
@@ -18,12 +18,12 @@ fn id() -> NonZeroU32 {
 }
 
 fn seed(writer: &RuntimeWriter<'_>, id: NonZeroU32) -> Result {
-    persist_tracepoint(
+    persist_program(
         writer,
-        TracepointRecord {
+        LoadRecord {
             globals: &Default::default(),
             id,
-            name: &Symbol::try_from("trace")?,
+            spec: &bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from("trace")?),
             source: "source.o",
             license: "GPL",
             created_at: "2026-10-03T12:00:00Z",
@@ -66,7 +66,7 @@ fn counts(db: &Connection) -> (usize, usize) {
 #[test]
 fn preflight_rejects_every_unsupported_relationship_and_noncanonical_path() -> Result {
     for sql in [
-        "UPDATE managed_programs SET program_type='xdp'",
+        "UPDATE managed_programs SET program_type='tc'",
         "INSERT INTO shared_map_pins VALUES ('shared',42)",
         "INSERT INTO managed_programs(program_id,program_name,program_type,object_path,pin_path,map_set_id,created_at) VALUES (99,'borrower','tracepoint','unused','unused',42,'now')",
         "INSERT INTO map_sets VALUES(99,'unused','now'); UPDATE managed_programs SET map_set_id=99",

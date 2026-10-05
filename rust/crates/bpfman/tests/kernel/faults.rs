@@ -5,7 +5,7 @@ use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
 use bpfman_model::{StoredProgram, StoredProgramSummary};
 use bpfman_store::{
-    CommitLoad, Error, ErrorKind, OpenStore, ProgramReader, TracepointRecord, UnloadObservation,
+    CommitLoad, Error, ErrorKind, LoadRecord, OpenStore, ProgramReader, UnloadObservation,
     UnloadStore,
 };
 use std::{
@@ -170,10 +170,10 @@ impl<R: ProgramReader> ProgramReader for Reader<R> {
 }
 
 impl<S: CommitLoad> CommitLoad for Faults<S> {
-    fn commit_tracepoints(
+    fn commit_programs(
         &self,
         w: &RuntimeWriter<'_>,
-        records: &[TracepointRecord<'_>],
+        records: &[LoadRecord<'_>],
     ) -> Result<(), Error> {
         if self
             .state
@@ -195,7 +195,7 @@ impl<S: CommitLoad> CommitLoad for Faults<S> {
         }
 
         check(&self.state, Point::Commit)?;
-        self.backend.commit_tracepoints(w, records)?;
+        self.backend.commit_programs(w, records)?;
         self.state.lock().expect("fault state").committed = true;
 
         Ok(())

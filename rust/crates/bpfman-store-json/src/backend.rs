@@ -3,7 +3,7 @@ use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeDirectory, RuntimeWriter, StoreSnapshot};
 use bpfman_model::{StoredProgram, StoredProgramSummary};
 use bpfman_store::{
-    CommitLoad, Error, OpenStore, ProgramReader, TracepointRecord, UnloadObservation, UnloadStore,
+    CommitLoad, Error, LoadRecord, OpenStore, ProgramReader, UnloadObservation, UnloadStore,
 };
 use std::num::NonZeroU32;
 
@@ -84,7 +84,7 @@ impl ProgramReader for Reader {
                 StoredProgramSummary::new(
                     row.id,
                     row.name.clone(),
-                    bpfman_model::ProgramType::Tracepoint,
+                    row.kind.model(),
                     row.metadata.clone(),
                     state.link_ids(row.id),
                 )
@@ -110,10 +110,10 @@ impl ProgramReader for Reader {
 
 impl CommitLoad for Backend {
     #[tracing::instrument(name = "store.commit", level = "debug", skip_all, err)]
-    fn commit_tracepoints(
+    fn commit_programs(
         &self,
         writer: &RuntimeWriter<'_>,
-        records: &[TracepointRecord<'_>],
+        records: &[LoadRecord<'_>],
     ) -> Result<(), Error> {
         if records.is_empty() {
             return Ok(());

@@ -1,12 +1,12 @@
 use crate::{
-    Bpfman, LoadError, PreparedTracepoint, PreparedTracepoints,
+    Bpfman, LoadError, PreparedProgram, PreparedPrograms,
     kernel::LocalObject,
     load_error::{Failure, LoadCause, finish},
 };
 use bpfman_core::{EffectFailure, KernelAcquisitions, LoadProgram};
 use bpfman_fs::RuntimeWriter;
 use bpfman_lock::AcquireOptions;
-use bpfman_model::{ObservedProgram, ProgramSpec, StoredProgramSummary, Symbol};
+use bpfman_model::{ObservedProgram, ProgramSpec, StoredProgramSummary};
 use std::{collections::BTreeMap, path::Path};
 
 mod effects;
@@ -18,45 +18,39 @@ use effects::Inputs;
 pub(super) use effects::{CleanupEffects, FailureFor, LoadEffects};
 pub(super) use real::Effects;
 
-impl PreparedTracepoint {
-    /// Add distinct tracepoint selections from the same captured ELF. Validate
+impl PreparedProgram {
+    /// Add distinct program selections from the same captured ELF. Validate
     /// every selection before opening runtime state; preserve input order.
     pub fn with_additional_programs(
         self,
-        names: Vec<Symbol>,
-    ) -> Result<PreparedTracepoints, LoadError> {
-        if names.is_empty() {
-            return Ok(PreparedTracepoints {
+        specs: Vec<ProgramSpec>,
+    ) -> Result<PreparedPrograms, LoadError> {
+        if specs.is_empty() {
+            return Ok(PreparedPrograms {
                 first: self,
-                remaining: names,
+                remaining: specs,
             });
         }
 
         let object = aya_obj::Object::parse(&self.object.bytes)
             .map_err(|e| LoadCause::Parse(Box::new(e)))?;
-        let mut seen = std::collections::BTreeSet::from([self.name.clone()]);
+        let mut seen = std::collections::BTreeSet::from([self.spec.name().clone()]);
         let mut remaining = Vec::new();
 
-        for name in names {
+        for spec in specs {
+            let name = spec.name();
             if !seen.insert(name.clone()) {
                 return Err(LoadCause::Invalid(
                     "each ELF program must be selected only once".into(),
                 )
                 .into());
             }
-            let program = object.programs.get(name.as_str()).ok_or_else(|| {
-                LoadCause::Invalid(format!("ELF program {:?} does not exist", name.as_str()))
-            })?;
-            if !matches!(program.section, aya_obj::ProgramSection::TracePoint) {
-                return Err(
-                    LoadCause::Invalid("selected ELF program is not a tracepoint".into()).into(),
-                );
-            }
+            crate::kernel::validate_selection(&object, &spec)?;
 
-            remaining.push(name);
+            remaining.push(spec);
         }
 
-        Ok(PreparedTracepoints {
+        Ok(PreparedPrograms {
             first: self,
             remaining,
         })
@@ -85,43 +79,47 @@ impl PreparedTracepoint {
         Ok(self)
     }
 
-    /// Validate the request and read the ELF without creating runtime state.
+    /// Validate a tracepoint or XDP selection and read the ELF without creating
+    /// runtime state. Other program kinds are rejected before source access.
     pub fn new(
         source: &Path,
-        name: Symbol,
+        spec: ProgramSpec,
         metadata: BTreeMap<String, String>,
     ) -> Result<Self, LoadError> {
-        Self::new_with_cancellation(source, name, metadata, &crate::Cancellation::new())
+        Self::new_with_cancellation(source, spec, metadata, &crate::Cancellation::new())
     }
 
     /// Prepare inputs, checking cancellation before and after reading the ELF.
     pub fn new_with_cancellation(
         source: &Path,
-        name: Symbol,
+        spec: ProgramSpec,
         metadata: BTreeMap<String, String>,
         cancellation: &crate::Cancellation,
     ) -> Result<Self, LoadError> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
+        if !matches!(spec, ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_)) {
+            return Err(LoadCause::Unsupported("program type").into());
+        }
         let source_text = source
             .to_str()
             .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
 
-        let object = LocalObject::read(source, &name)?;
+        let object = LocalObject::read(source, &spec)?;
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
 
         Ok(Self {
             object,
             source: source_text.into(),
-            name,
+            spec,
             metadata,
         })
     }
 }
 
 impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
-    /// Load one prepared local tracepoint without attaching it. Private maps are
+    /// Load one prepared local program without attaching it. Private maps are
     /// pinned; failures retain unresolved ownership for an explicit cleanup pass.
-    pub fn load(&self, request: PreparedTracepoint) -> Result<ObservedProgram, LoadError> {
+    pub fn load(&self, request: PreparedProgram) -> Result<ObservedProgram, LoadError> {
         self.load_with_cancellation(request, &crate::Cancellation::new())
     }
 
@@ -130,7 +128,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
     #[tracing::instrument(name = "program.load", level = "debug", skip_all, err)]
     pub fn load_with_cancellation(
         &self,
-        request: PreparedTracepoint,
+        request: PreparedProgram,
         cancellation: &crate::Cancellation,
     ) -> Result<ObservedProgram, LoadError> {
         self.load_prepared(request, Vec::new(), cancellation)
@@ -138,10 +136,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
     }
 
     /// Load a nonempty batch with private maps and a single atomic store commit.
-    pub fn load_batch(
-        &self,
-        request: PreparedTracepoints,
-    ) -> Result<Vec<ObservedProgram>, LoadError> {
+    pub fn load_batch(&self, request: PreparedPrograms) -> Result<Vec<ObservedProgram>, LoadError> {
         self.load_batch_with_cancellation(request, &crate::Cancellation::new())
     }
 
@@ -150,7 +145,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
     #[tracing::instrument(name = "program.load_batch", level = "debug", skip_all, err)]
     pub fn load_batch_with_cancellation(
         &self,
-        request: PreparedTracepoints,
+        request: PreparedPrograms,
         cancellation: &crate::Cancellation,
     ) -> Result<Vec<ObservedProgram>, LoadError> {
         let (first, remaining) =
@@ -160,15 +155,15 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
 
     fn load_prepared(
         &self,
-        request: PreparedTracepoint,
-        remaining: Vec<Symbol>,
+        request: PreparedProgram,
+        remaining: Vec<ProgramSpec>,
         cancellation: &crate::Cancellation,
     ) -> Result<(ObservedProgram, Vec<ObservedProgram>), LoadError> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
-        let PreparedTracepoint {
+        let PreparedProgram {
             object,
             source,
-            name,
+            spec,
             metadata,
         } = request;
         let runtime = self.store.runtime();
@@ -191,11 +186,11 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
                 |writer| {
                     let remaining: Vec<_> = remaining
                         .iter()
-                        .map(|name| Inputs {
+                        .map(|spec| Inputs {
                             cancellation,
                             object: &object,
                             source: &source,
-                            name,
+                            spec,
                             metadata: &metadata,
                             created_at: &created_at,
                         })
@@ -207,7 +202,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
                             cancellation,
                             object: &object,
                             source: &source,
-                            name: &name,
+                            spec: &spec,
                             metadata: &metadata,
                             created_at: &created_at,
                         },
@@ -301,8 +296,8 @@ fn run_batch<F: LoadEffects>(
         .map(|(id, input)| {
             StoredProgramSummary::new(
                 *id,
-                input.name.as_str().into(),
-                bpfman_model::ProgramType::Tracepoint,
+                input.spec.name().as_str().into(),
+                input.spec.kind(),
                 input.metadata.clone(),
                 Vec::new(),
             )
@@ -378,14 +373,14 @@ fn acquire<F: LoadEffects>(
     input: &Inputs<'_>,
 ) -> Result<Acquired<F>, FailureFor<F>> {
     check_cancelled(effects, input)?;
-    let operation = LoadProgram::new(ProgramSpec::Tracepoint(input.name.clone()));
+    let operation = LoadProgram::new(input.spec.clone());
 
     check_cancelled(effects, input)?;
     let mut kernel = effects
         .load_kernel(writer, input)
         .map_err(Failure::NoOwnedArtifacts)?;
     let program_pin = match admission(effects, input, None)
-        .and_then(|()| effects.pin_program(writer, filesystem, &mut kernel, input.name))
+        .and_then(|()| effects.pin_program(writer, filesystem, &mut kernel, input.spec.name()))
     {
         Ok(pin) => pin,
         Err(failure) => {
