@@ -537,6 +537,38 @@ behaviour. Validate through `direnv exec . make rust-check`, including the uncha
 tracepoint and admitted XDP scripts on both stores, before starting dispatcher
 replacement.
 
+### Rust generics at the backend boundary
+
+Use generics to express the store and kernel dependencies, conceptually
+`Bpfman<S, K>`. Each operation should require only the capability traits it uses.
+The concrete application shape remains subject to the kernel-boundary refactor;
+this is a design direction, not an API already implemented.
+
+Associated types on the relevant capabilities keep backend-owned resources opaque:
+for example, `K::LoadedProgram` and `K::Link`. The concrete adapter owns Aya objects;
+the fake owns simulated resources. Runtime orchestration uses the same contracts
+for both. These types must encapsulate implementation details rather than expose
+Aya through public aliases or accessors.
+
+Ownership is part of those contracts. Operations consume owned handles or receipts,
+and failures return unresolved ownership with their causes. Non-`Copy`,
+non-`Clone` receipts and consuming continuations let the compiler reject reuse
+after consumption. Preserve this across the generic boundary, including partial
+acquisition and explicit cleanup retries.
+
+Keep small capability traits and operation-specific effect interfaces. Introduce
+type parameters where they express substitution or a useful type relationship;
+avoid propagating long lists of receipt parameters through application APIs.
+Associated types and private aliases should keep those relationships local and
+readable. Test the same public application orchestration with both stores and a
+shared fake kernel.
+
+Generic parameters distinguish backend types; they do not distinguish two
+instances of the same backend or two runtime roots. Opaque receipts must still
+carry the identity evidence needed to reject a different runtime, backend
+instance where relevant, or changed resource. Compile-time ownership checks do
+not replace runtime revalidation or prove that a kernel object has disappeared.
+
 ### Adapter operation shape
 
 The kernel adapter should expose complete, resource-safe operations rather than
