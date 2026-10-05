@@ -26,9 +26,13 @@ tests. Both backends run the unchanged `TestXDP_LinkRoundTrip.bpfman` and
 `TestDispatcher_LifecycleAfterLastDetachXDP.bpfman` scripts. This establishes the
 first-member lifecycle; it does not establish multi-member or traffic parity.
 
-The next slice is XDP dispatcher replacement: adding a member, removing a member
-while preserving survivors, and restoring the old attachment when publication
-fails. Go remains the behavioural authority for that work.
+The next step is a replaceable kernel boundary and containment of Aya, before
+adding dispatcher replacement. The current store boundary is injectable; kernel
+operations are still coupled to Aya and concrete Linux adapters across runtime
+and filesystem code. Establish narrow kernel capabilities and one shared backend
+per application instance, preserve owned-resource and confinement guarantees, and
+prove substitution with a stateful fake. Dispatcher replacement follows that
+refactor. Go remains the behavioural authority throughout.
 
 ## Summary
 
@@ -345,13 +349,18 @@ meaningful:
 | `bpfman-store` | Boundary | Backend-independent read, atomic commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | Effectful | SQLite schema, migrations, queries, and atomic persistence operations |
 | `bpfman-store-json` | Effectful | Versioned JSON snapshots, atomic publication, and conditional teardown |
-| `bpfman-kernel-aya` | Effectful | Aya-backed program, map, link, dispatcher, netlink, tracefs, and namespace operations |
+| `bpfman-kernel` | Boundary | Target: backend-independent kernel capabilities, observations, errors, and opaque ownership contracts |
+| `bpfman-kernel-aya` | Effectful | Target: concrete Aya/Linux implementation; owns Aya types and BPF syscall details |
 | `bpfman-image-oci` | Effectful | OCI pull, cache, authentication, and signature-policy adapters |
 | `bpfman-runtime` | Interpreter | Drives core machines, routes effects, retains effect error sources, and exposes the `Bpfman` application API |
 | `bpfman-proto` | Boundary | Generated protobuf vocabulary only; not the domain model |
 | `bpfman-api` | Front end | gRPC request conversion, status mapping, and server implementation |
 | `bpfman-csi` | Front end | CSI integration using narrow runtime capabilities |
 | `bpfman` | Composition root | CLI, daemon mode, namespace-helper mode, configuration, logging, and dependency construction |
+
+The kernel split above is the next step, not the current implementation:
+`bpfman-kernel` currently provides concrete read-only Linux observations, and
+`bpfman-kernel-aya` does not yet exist in the new workspace.
 
 This is a starting point, not a target crate count. A crate should be split when
 doing so enforces a dependency rule, isolates a portability constraint, or
@@ -392,8 +401,12 @@ More concretely:
 - Effect adapters may depend on `bpfman-model` and the effect vocabulary
   exposed by `bpfman-core`.
 - Effect adapters must not depend on one another.
-- `bpfman-runtime` composes effects through narrow contracts. Persistence
-  implementations are selected by the binary and cannot enter runtime's dependency closure.
+- `bpfman-runtime` composes effects through narrow contracts. Persistence and
+  kernel implementations are selected by the binary and must not enter runtime's
+  normal dependency closure once the kernel-boundary refactor is complete.
+- Aya and aya-obj belong to the concrete kernel adapter's normal dependency closure.
+  Model, core, runtime, store contracts, and filesystem capability contracts must
+  not import their types or expose them in signatures.
 - Front ends depend on runtime and boundary-specific types, never on Aya or
   SQLite.
 - The binary is the only general composition root.
@@ -461,6 +474,70 @@ remain sequential. The design must not build a generic workflow framework
 before two or more operations demonstrate the same abstraction.
 
 ## Kernel and bpffs adapter
+
+### Next step: contain Aya behind an injectable kernel boundary
+
+The current implementation has operation-level test seams, but it does not yet
+have a kernel abstraction equivalent to the store boundary:
+
+- `Bpfman<S>` selects a store only; callers cannot supply a kernel backend.
+- `bpfman-kernel` exports four concrete observation functions for programs, maps,
+  tracepoint links, and extension links, rather than injectable capabilities.
+- Private load, unload, tracepoint, and XDP effect traits support fault injection
+  through the production interpreters. They combine kernel, filesystem, and store
+  effects; they do not provide one coherent kernel backend across operations.
+- Runtime loading and dispatcher code directly use Aya and aya-obj. Filesystem
+  pinning methods accept Aya program/map objects, and attachment helpers retain
+  Aya objects internally. Linux BPF syscalls also live in both observation and
+  filesystem adapters.
+
+Aya has not entered the pure model/core or the public `Bpfman` request and result
+surface. However, hiding it from application callers alone is insufficient: its
+spread across runtime and filesystem code couples orchestration to one backend.
+Address this before adding further dispatcher mechanisms.
+
+The next slice must:
+
+1. Define small kernel capability traits for the existing supported operations:
+   observations, program loading, standalone attachment, and XDP dispatcher/link
+   lifecycle. Compose only the capabilities each consumer needs; do not translate
+   Go's aggregate `KernelOperations` into one large Rust trait.
+2. Inject one kernel backend alongside the store at application construction.
+   Reads, load, attach, detach, unload, and explicit retries must use that same
+   instance. A real store must be usable with a stateful fake kernel without
+   replacing the entire operation interpreter.
+3. Move Aya loading, ELF parsing details, concrete program/map/link objects, and
+   BPF syscall machinery behind the concrete kernel adapter. Runtime and shared
+   interfaces must use domain requests, portable observations, classified errors,
+   and opaque owned handles or associated receipt types. Renaming or re-exporting
+   Aya types through a wrapper crate does not establish this boundary.
+4. Preserve early request/ELF validation before runtime initialization. Hide
+   concrete Aya failures behind diagnostic source chains; public error payloads
+   must remain independent of the backend.
+5. Keep runtime-root verification, descriptor-relative traversal, pin-path
+   authority, and managed-object removal in `bpfman-fs`. Define the narrow bridge
+   needed for kernel pinning without Aya-typed filesystem methods, arbitrary
+   path-plus-permit mutations, or cyclic adapter dependencies. Kernel attachment
+   lifetime and filesystem pin ownership remain distinct responsibilities.
+6. Preserve non-cloneable ownership, partial-acquisition receipts, synchronous
+   outer-link detach, cancellation boundaries, dependency-aware compensation,
+   and explicit retry history. Backend substitution must not reduce these
+   contracts to bare IDs or cleanup hidden in `Drop`.
+
+Completion requires dependency and API checks that prevent Aya/aya-obj from
+re-entering runtime or filesystem interfaces, plus a shared stateful fake that
+tracks kernel identities, live handles, attachments, and dispatcher targets
+across operations. Run lifecycle and failure scenarios through the public
+application with that fake and both stores. Keep the existing operation-level
+fault tests and real filesystem/kernel acceptance: a fake cannot establish
+verifier, syscall, confinement, or actual kernel-lifetime guarantees.
+
+The refactor must preserve the current CLI, persistence formats, and supported
+behaviour. Validate through `direnv exec . make rust-check`, including the unchanged
+tracepoint and admitted XDP scripts on both stores, before starting dispatcher
+replacement.
+
+### Adapter operation shape
 
 The kernel adapter should expose complete, resource-safe operations rather than
 individual low-level syscalls. Examples include:
@@ -550,10 +627,10 @@ link creation, inspection, fd-preserving pinning, and synchronous detach. All ot
 filesystem modules deny unsafe code, and workspace-law tests preserve the remaining
 lint gates. Read-only kernel observations remain in `bpfman-kernel`.
 
-### Next: dispatcher replacement
+### After the kernel boundary: dispatcher replacement
 
-Dispatcher replacement is the most important early proof of the architecture.
-The core owns:
+Once the kernel-boundary refactor passes its acceptance gate, dispatcher
+replacement provides the next proof of the architecture. The core owns:
 
 - the attach-point key;
 - ordering by priority and deterministic tie-breaker;
@@ -1169,7 +1246,13 @@ Completed checkpoint:
 - Store contracts for stale/foreign receipts, plus SQLite rollback, ignored-deletion,
   malformed-snapshot, and JSON format-compatibility checks.
 
-Next implementation slice:
+Next implementation slice: the kernel-boundary refactor described under
+[Kernel and bpffs adapter](#next-step-contain-aya-behind-an-injectable-kernel-boundary).
+Make the kernel injectable alongside the store, contain Aya in its concrete
+adapter, and retain the current behaviour and acceptance coverage. Complete this
+before expanding XDP functionality.
+
+Following slice: dispatcher replacement.
 
 1. Derive ordering, bounded slots, and the next revision from the complete member set.
 2. Add a second member by staging a revision and updating the durable outer link.
