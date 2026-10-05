@@ -29,6 +29,8 @@ pub(super) enum Point {
     FinaliseWithBlockedPin,
     ObserveLink,
     DeleteLink,
+    XdpCommit,
+    XdpDelete,
 }
 
 #[derive(Default)]
@@ -344,4 +346,52 @@ pub(super) fn restore_blocked_pin(writer: &RuntimeWriter<'_>, id: std::num::NonZ
         writer.layout().link_pin_path(id),
     )
     .expect("restore owned pin");
+}
+
+impl<S: bpfman_store::XdpStore> bpfman_store::XdpStore for Faults<S> {
+    type XdpReceipt = S::XdpReceipt;
+    fn preflight_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+        p: NonZeroU32,
+    ) -> Result<(), Error> {
+        self.backend.preflight_xdp(w, key, p)
+    }
+    fn commit_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: bpfman_store::XdpCommit<'_>,
+    ) -> Result<bpfman_model::StoredLink, Error> {
+        check(&self.state, Point::XdpCommit)?;
+        self.backend.commit_xdp(w, r)
+    }
+    fn observe_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::XdpSnapshot, Self::XdpReceipt)>, Error> {
+        self.backend.observe_xdp(w, id)
+    }
+    fn delete_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: Self::XdpReceipt,
+    ) -> Result<(), EffectFailure<Self::XdpReceipt, Error>> {
+        if let Err(cause) = check(&self.state, Point::XdpDelete) {
+            return Err(EffectFailure {
+                cause,
+                remaining: r,
+            });
+        }
+        self.backend.delete_xdp(w, r)
+    }
+}
+impl<R: bpfman_store::XdpReader> bpfman_store::XdpReader for Reader<R> {
+    fn read_xdp(
+        &mut self,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<bpfman_model::XdpSnapshot>, Error> {
+        self.reader.read_xdp(key)
+    }
 }

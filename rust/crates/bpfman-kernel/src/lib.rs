@@ -5,7 +5,7 @@
 mod observe;
 mod syscall;
 
-pub use observe::{observe_map, observe_program, observe_tracepoint_link};
+pub use observe::{observe_extension_link, observe_map, observe_program, observe_tracepoint_link};
 
 /// Portable classification of a kernel observation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

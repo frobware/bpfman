@@ -185,6 +185,7 @@ dependencies = [
  "bpfman-core",
  "bpfman-lock",
  "bpfman-model",
+ "libc",
  "rustix",
  "tempfile",
  "thiserror",

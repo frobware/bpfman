@@ -9,6 +9,12 @@
 
 extern crate alloc;
 
+mod xdp;
+pub use xdp::{
+    XdpAttempt, XdpCleanup, XdpCleanupContinuation, XdpCleanupKind, XdpCleanupReport,
+    XdpCleanupStep, XdpResource,
+};
+
 mod link;
 mod list;
 mod load;

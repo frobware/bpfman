@@ -161,10 +161,19 @@ impl LinkReader for Store {
             .read(|connection| {
                 let tx = connection.transaction()?;
                 open::require_supported(open::schema_version(&tx)?)?;
-                queries::stored_links(&tx, None)?
+                let mut links = queries::stored_links(&tx, None)?
                     .iter()
+                    .filter(|row| row.kind != "xdp")
                     .map(decode)
-                    .collect()
+                    .collect::<Result<Vec<_>, _>>()?;
+                links.extend(
+                    queries::xdp::rows(&tx, None, None)?
+                        .iter()
+                        .map(|row| crate::xdp::decode(row).map(|s| s.member))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+                links.sort_by_key(|l| l.id);
+                Ok(links)
             })
             .map_err(crate::Error::from)
             .map_err(Into::into)

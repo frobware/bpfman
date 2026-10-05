@@ -39,7 +39,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Local tracepoint/XDP load/unload and tracepoint attach/detach, private Aya adapter, compensation, and observations |
+| `bpfman-runtime` | 4 | Local tracepoint/XDP load/unload and tracepoint and first-member XDP attach/detach, private Aya adapter, compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -131,6 +131,9 @@ crate defines small, statically dispatched interfaces:
   deletes unchanged records using owned receipts.
 - `LinkReader` reads stored link intent in a consistent snapshot, including
   pending records needed for recovery.
+- `XdpStore` atomically publishes a first-member dispatcher snapshot and
+  conditionally deletes it using owned evidence; `XdpReader` reads that complete
+  snapshot without the writer lock.
 
 There are no connection types, schema-version fields, or transaction callbacks
 in these contracts. SQLite and JSON implement the same operations, alongside
@@ -156,10 +159,11 @@ and stored column types are checked at runtime, with domain validation afterward
 Creation still executes the authoritative Go schema DDL. Neither SQL nor query
 row types appear in the generic store contracts or behavioural tests.
 
-JSON version 3 stores private tracepoint and XDP programs and standalone
-tracepoint links in a whole-file snapshot. Version 1 and 2 stores retain their
-tracepoint operations; version 2 also retains link support. XDP loads require a
-separately initialized version 3 runtime. Existing stores never upgrade implicitly.
+JSON version 4 adds complete single-member XDP dispatcher snapshots to private
+tracepoint/XDP programs and standalone tracepoint links. Versions 1–3 retain
+their existing operations: tracepoint programs from version 1, tracepoint links
+from version 2, and XDP loads from version 3. XDP attachment requires a separately
+initialized version 4 runtime. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
 descriptor and atomically renames it into place under the runtime writer lock.
 Failed publication leaves the old state intact; interrupted staging files are
@@ -175,7 +179,7 @@ suite exercises both backends through an injected `ActiveStore`, including faile
 finalisation, stale receipts, lock-free reads, and program deletion blocked by
 pending or finalised links. SQLite retains Go's schema version 2. The runtime
 enforces release of the managed attachment reference before consuming a
-link-deletion receipt. Program unload observes pending and finalised links before
+link-deletion receipt. Tracepoint unload observes pending and finalised links before
 mutation and removes their pins and records under the same writer lock as program
 teardown.
 Pending intent is cleaned using its canonical pin path; a missing kernel ID does
@@ -645,7 +649,7 @@ history, and cancellation at store boundaries. Private interpreter tests cover
 individual forward and cleanup failures, including live-descriptor release.
 The CLI exposes `link attach tracepoint PROGRAM_ID GROUP/NAME [-m KEY=VALUE]`,
 `link get LINK_ID`, `link list`, and `link detach LINK_ID`. Attach/get/list accept
-`-o json`; JSON follows Go's record/status shapes. Other attachment kinds, list
+`-o json`; JSON follows Go's record/status shapes. Other attachment kinds except the XDP slice below, list
 filters, and batch detachment are not implemented. `get_link` observes recorded
 kernel identity and a descriptor-confined pin without the writer lock; missing
 kernel state is reported as absence, while denied or inconsistent observation
@@ -750,6 +754,49 @@ failure, commit failure, unload retry, and refusal of tracepoint attachment to
 an XDP program. SQLite interchange tests load with either Go or Rust, compare
 get/list observations, and unload with the other implementation.
 
-XDP attachment, dispatcher replacement, traffic, and detach remain the next
-slice. Loading an `xdp.frags` section does not establish fragmented-packet
-execution support; that requires attachment and traffic acceptance tests.
+## XDP first attach and last detach
+
+`link attach xdp PROGRAM_ID INTERFACE --priority N [-m KEY=VALUE]` attaches the
+first member of a dispatcher in the current network namespace. `--proceed-on`
+accepts comma-separated or repeated `aborted`, `drop`, `pass`, `tx`, `redirect`,
+and `dispatcher_return`; the default is `pass,dispatcher_return`. The command
+supports text and JSON output. `link get`, `link list`, and `program get` expose
+stored XDP details and actual tracing-link observations. `dispatcher get xdp
+NSID IFINDEX -o json` reads the complete stored snapshot without a writer lock.
+
+The runtime resolves the interface, validates the managed EXT program, loads a
+one-slot dispatcher, and pins its program, extension link, and outer interface
+link using Go's path layout. Only driver mode and BPF links are supported. An
+occupied attach point is refused; there is no replacement or netlink fallback.
+SQLite atomically publishes the dispatcher header, managed link, and member
+using Go schema version 2. JSON publishes the same domain snapshot in version 4.
+A successful commit ends compensation, including when cancellation arrives late.
+
+`link detach LINK_ID` synchronously detaches the outer link before releasing
+its pin. This stops the interface attachment even if another observer holds a
+link descriptor. Extension and dispatcher pins are then removed independently;
+the empty revision directory and unchanged store snapshot follow only after
+their prerequisites succeed. A missing outer pin with a still-live kernel link
+is refused before teardown. Wrong identities, unexpected revision children,
+and changed snapshots are also refused. All acquisitions and removals remain
+beneath verified descriptors; the filesystem adapter's private syscall module
+is the narrow unsafe boundary for link creation, inspection, pinning, and detach.
+
+Failed forward effects retain their original cause and every cleanup attempt.
+`retry_xdp_cleanup` runs one explicit pass over unresolved ownership. Cancellation
+can stop admission or forward attachment before commit; an admitted cleanup pass
+finishes without observing cancellation. The CLI performs one pass and reports
+failure; it does not persist a recovery queue.
+
+Both stores run unchanged `TestXDP_LinkRoundTrip.bpfman` and
+`TestDispatcher_LifecycleAfterLastDetachXDP.bpfman`. The kernel suite also checks
+commit failure, occupied attachment refusal, mismatched pins, retained outer
+link descriptors, store deletion failure, cancelled retry, reattachment, and
+residue-free teardown. Shared store tests cover atomic snapshots, stale receipts,
+and foreign runtime authority; production-interpreter fakes cross acquisition,
+cancellation, and individual cleanup failures.
+
+This is a single-member checkpoint. Detach an XDP link explicitly before program
+unload. Additional members, dispatcher replacement, explicit `--netns`, selectable
+XDP modes, and traffic/proceed-on execution acceptance remain unfinished. Loading
+an `xdp.frags` section does not establish fragmented-packet execution support.

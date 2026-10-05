@@ -55,7 +55,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":4}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":5}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -388,7 +388,7 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
         });
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
-        assert_eq!(state["version"], 3);
+        assert_eq!(state["version"], 4);
         state["version"] = version.into();
         fs::write(
             layout.database_path(),
@@ -450,6 +450,86 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
             assert_eq!(
                 fs::read(layout.database_path()).expect("unchanged"),
                 invalid
+            );
+        });
+    }
+}
+
+#[test]
+fn older_formats_refuse_dispatcher_publication_without_migration() {
+    use bpfman_model::{ProgramSpec, XdpKey, XdpLink};
+    use bpfman_store::{XdpCommit, XdpStore};
+    for version in 1..=3 {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let layout = RuntimeLayout::try_from(temporary.path().to_owned()).expect("layout");
+        let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+        writer(&runtime, |w| {
+            Backend.open(w).expect("create");
+        });
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
+        state["version"] = version.into();
+        fs::write(
+            layout.database_path(),
+            serde_json::to_vec(&state).expect("encode"),
+        )
+        .expect("fixture");
+        writer(&runtime, |w| {
+            Backend.open(w).expect("legacy store");
+            if version == 3 {
+                Backend
+                    .commit_program(
+                        w,
+                        LoadRecord {
+                            id: NonZeroU32::new(42).expect("id"),
+                            spec: &ProgramSpec::Xdp("pass".try_into().expect("symbol")),
+                            source: "source.o",
+                            license: "GPL",
+                            created_at: "2026-10-05T00:00:00Z",
+                            metadata: &BTreeMap::new(),
+                            globals: &BTreeMap::new(),
+                        },
+                    )
+                    .expect("version 3 still loads XDP");
+            }
+            let previous = fs::read(layout.database_path()).expect("snapshot");
+            let key = XdpKey {
+                nsid: std::num::NonZeroU64::MIN,
+                ifindex: NonZeroU32::MIN,
+            };
+            assert_eq!(
+                Backend
+                    .preflight_xdp(w, key, NonZeroU32::new(42).expect("id"))
+                    .expect_err("attachment requires new format")
+                    .kind(),
+                ErrorKind::IncompatibleState
+            );
+            let details = XdpLink {
+                key,
+                interface: "eth0".parse().expect("interface"),
+                priority: 50,
+                proceed_on: Default::default(),
+                dispatcher_id: NonZeroU32::new(55).expect("dispatcher"),
+                revision: NonZeroU32::MIN,
+            };
+            let result = Backend.commit_xdp(
+                w,
+                XdpCommit {
+                    program_id: NonZeroU32::new(42).expect("id"),
+                    details: &details,
+                    extension_link_id: NonZeroU32::new(66).expect("extension"),
+                    outer_link_id: NonZeroU32::new(77).expect("outer"),
+                    metadata: &BTreeMap::new(),
+                    created_at: "2026-10-05T00:00:00Z",
+                },
+            );
+            assert_eq!(
+                result.expect_err("no upgrade on commit").kind(),
+                ErrorKind::IncompatibleState
+            );
+            assert_eq!(
+                fs::read(layout.database_path()).expect("unchanged"),
+                previous
             );
         });
     }

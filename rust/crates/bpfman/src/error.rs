@@ -96,3 +96,13 @@ impl<S: bpfman_store::LinkStore + 'static> From<bpfman_runtime::LinkError<S>> fo
         }
     }
 }
+
+impl<S: bpfman_store::XdpStore + 'static> From<bpfman_runtime::XdpError<S>> for Error {
+    fn from(cause: bpfman_runtime::XdpError<S>) -> Self {
+        let cancelled = cause.kind() == bpfman_runtime::LinkErrorKind::Cancelled;
+        Self {
+            cause: cause.into(),
+            cancelled,
+        }
+    }
+}

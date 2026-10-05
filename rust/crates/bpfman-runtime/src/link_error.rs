@@ -8,8 +8,10 @@ pub(super) enum Cause {
     Cancelled,
     #[error("managed program or link not found")]
     NotFound,
-    #[error("only tracepoint attachment is implemented")]
+    #[error("attachment is outside the supported slice")]
     Unsupported,
+    #[error("XDP kernel operation")]
+    Xdp(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("invalid attachment state: {0}")]
     Invalid(&'static str),
     #[error(transparent)]
@@ -68,6 +70,7 @@ impl LinkCause {
             Cause::Cancelled => LinkErrorKind::Cancelled,
             Cause::NotFound => LinkErrorKind::NotFound,
             Cause::Unsupported => LinkErrorKind::Unsupported,
+            Cause::Xdp(_) => LinkErrorKind::Unavailable,
             Cause::Invalid(_) => LinkErrorKind::InvalidState,
             Cause::Kernel(cause) => match cause.kind() {
                 bpfman_kernel::ErrorKind::InvalidData => LinkErrorKind::InvalidState,

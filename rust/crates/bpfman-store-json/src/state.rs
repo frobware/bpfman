@@ -21,6 +21,8 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub(super) struct State {
     pub(super) version: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) xdp: Vec<crate::xdp::Row>,
     pub(super) identity: String,
     pub(super) next_generation: u64,
     pub(super) programs: Vec<Program>,
@@ -86,7 +88,8 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 3,
+            version: 4,
+            xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
             next_generation: 1,
             programs: Vec::new(),
@@ -105,7 +108,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=3) {
+        if !matches!(header.version, 1..=4) {
             return Err(Failure::Version(header.version));
         }
 
@@ -115,7 +118,7 @@ impl State {
         Ok(state)
     }
 
-    fn validate(&self) -> Result<(), Failure> {
+    pub(super) fn validate(&self) -> Result<(), Failure> {
         if self.version == 1 && (!self.links.is_empty() || self.next_link_id != 1) {
             return Err(Failure::LinkVersion);
         }
@@ -167,6 +170,9 @@ impl State {
             return Err(Failure::Invalid("invalid next link ID"));
         }
 
+        if self.version < 4 && !self.xdp.is_empty() {
+            return Err(Failure::DispatcherVersion);
+        }
         let mut link_ids = BTreeSet::new();
         let mut kernel_ids = BTreeSet::new();
 
@@ -193,6 +199,29 @@ impl State {
                 .parse::<bpfman_model::Tracepoint>()
                 .map_err(|_| Failure::Invalid("invalid tracepoint target"))?;
             timestamp(&link.created_at)?;
+        }
+
+        let mut keys = BTreeSet::new();
+        let mut dispatchers = BTreeSet::new();
+        for row in &self.xdp {
+            if !keys.insert(row.key())
+                || !link_ids.insert(row.link_id)
+                || row.link_id.get() >= self.next_link_id
+                || !kernel_ids.insert(row.extension_link_id)
+                || !kernel_ids.insert(row.outer_link_id)
+                || !self
+                    .programs
+                    .iter()
+                    .any(|p| p.id == row.program_id && p.kind == Kind::Xdp)
+            {
+                return Err(Failure::Invalid(
+                    "duplicate or invalid XDP snapshot identity",
+                ));
+            }
+            let details = row.details()?;
+            if !dispatchers.insert(details.dispatcher_id) {
+                return Err(Failure::Invalid("duplicate dispatcher ID"));
+            }
         }
 
         Ok(())
@@ -239,6 +268,19 @@ impl State {
         Ok(summary)
     }
 
+    pub(super) fn xdp_snapshot(
+        &self,
+        row: &crate::xdp::Row,
+        layout: &RuntimeLayout,
+    ) -> Result<bpfman_model::XdpSnapshot, Failure> {
+        let program = self
+            .programs
+            .iter()
+            .find(|p| p.id == row.program_id && p.kind == Kind::Xdp)
+            .ok_or(Failure::Invalid("missing XDP program"))?;
+        row.snapshot(layout, &program.name)
+    }
+
     pub(super) fn link_ids(&self, program: NonZeroU32) -> Vec<NonZeroU64> {
         let mut links: Vec<_> = self
             .links
@@ -246,6 +288,12 @@ impl State {
             .filter(|row| row.program_id == program)
             .map(|row| row.id)
             .collect();
+        links.extend(
+            self.xdp
+                .iter()
+                .filter(|row| row.program_id == program)
+                .map(|row| row.link_id),
+        );
         links.sort_unstable();
 
         links
@@ -337,7 +385,7 @@ impl Link {
     }
 }
 
-fn timestamp(raw: &str) -> Result<String, Failure> {
+pub(super) fn timestamp(raw: &str) -> Result<String, Failure> {
     use chrono::Datelike;
 
     let parsed = chrono::DateTime::parse_from_rfc3339(raw)

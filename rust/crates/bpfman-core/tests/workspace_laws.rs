@@ -319,24 +319,28 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
             .collect()
     };
 
-    for category in ["rust", "clippy"] {
-        let expected = section(&workspace, &format!("[workspace.lints.{category}]"));
-        let actual = section(&kernel, &format!("[lints.{category}]"));
-        let expected: Vec<_> = expected
-            .into_iter()
-            .map(|line| {
-                if line == "unsafe_code = \"forbid\"" {
-                    "unsafe_code = \"deny\"".into()
-                } else {
-                    line
-                }
-            })
-            .collect();
+    let filesystem = std::fs::read_to_string(root.join("crates/bpfman-fs/Cargo.toml"))
+        .expect("filesystem manifest");
+    for manifest in [&kernel, &filesystem] {
+        for category in ["rust", "clippy"] {
+            let expected = section(&workspace, &format!("[workspace.lints.{category}]"));
+            let actual = section(manifest, &format!("[lints.{category}]"));
+            let expected: Vec<_> = expected
+                .into_iter()
+                .map(|line| {
+                    if line == "unsafe_code = \"forbid\"" {
+                        "unsafe_code = \"deny\"".into()
+                    } else {
+                        line
+                    }
+                })
+                .collect();
 
-        assert_eq!(
-            actual, expected,
-            "kernel must retain all other workspace gates"
-        );
+            assert_eq!(
+                actual, expected,
+                "syscall adapters must retain all other workspace gates"
+            );
+        }
     }
 
     let syscall = std::fs::read_to_string(root.join("crates/bpfman-kernel/src/syscall.rs"))
@@ -349,5 +353,27 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
             .expect("safe observation module");
 
         assert!(!source.contains("allow(unsafe_code)"));
+    }
+}
+
+#[test]
+fn filesystem_unsafe_is_confined_to_xdp_syscall_boundary() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bpfman-fs/src");
+    let boundary = std::fs::read_to_string(root.join("xdp/syscall.rs")).expect("syscalls");
+    assert!(boundary.contains("#![allow(unsafe_code)]"));
+    for file in [
+        "lib.rs",
+        "artifacts.rs",
+        "directory.rs",
+        "error.rs",
+        "layout.rs",
+        "link.rs",
+        "observe.rs",
+        "removal.rs",
+        "snapshot.rs",
+        "xdp.rs",
+    ] {
+        let source = std::fs::read_to_string(root.join(file)).expect("safe filesystem module");
+        assert!(!source.contains("allow(unsafe_code)"), "{file}");
     }
 }

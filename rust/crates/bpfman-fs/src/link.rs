@@ -115,7 +115,7 @@ impl RuntimeWriter<'_> {
     }
 }
 
-fn verify_bpffs(fd: &std::os::fd::OwnedFd) -> Result<(), Error> {
+pub(super) fn verify_bpffs(fd: &std::os::fd::OwnedFd) -> Result<(), Error> {
     if rustix::fs::fstatfs(fd)
         .map_err(|e| io("verify attachment bpffs", e))?
         .f_type
@@ -252,6 +252,10 @@ impl crate::RuntimeDirectory {
         let program_id =
             NonZeroU32::new(info.program_id()).ok_or(Failure::Unsafe("zero program ID"))?;
 
-        Ok(Some(bpfman_model::KernelLink { id, program_id }))
+        Ok(Some(bpfman_model::KernelLink {
+            details: bpfman_model::KernelLinkDetails::PerfEvent,
+            id,
+            program_id,
+        }))
     }
 }

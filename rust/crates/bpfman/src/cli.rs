@@ -7,6 +7,7 @@ use clap::{
     builder::{PathBufValueParser, PossibleValuesParser, TypedValueParser},
 };
 
+mod dispatcher;
 mod link;
 mod load;
 
@@ -46,6 +47,7 @@ pub(super) enum PreparedCommand {
     List(ListArgs),
     Load(load::PreparedLoad),
     Link(link::LinkCommand),
+    Dispatcher(dispatcher::DispatcherCommand),
 }
 
 impl Command {
@@ -56,6 +58,7 @@ impl Command {
     ) -> Result<PreparedCommand, crate::error::Error> {
         let command = match self {
             Self::Program { command } => command,
+            Self::Dispatcher { command } => return Ok(PreparedCommand::Dispatcher(command)),
             Self::Link { command } => return Ok(PreparedCommand::Link(command)),
         };
 
@@ -72,6 +75,11 @@ impl Command {
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Inspect dispatcher snapshots.
+    Dispatcher {
+        #[command(subcommand)]
+        command: dispatcher::DispatcherCommand,
+    },
     /// Manage standalone BPF links.
     Link {
         #[command(subcommand)]
@@ -95,7 +103,7 @@ pub(super) enum ProgramCommand {
         #[arg(short,long,value_enum,default_value_t=OutputFormat::Text)]
         output: OutputFormat,
     },
-    /// Unload one tracepoint, its standalone links, and private maps.
+    /// Unload a tracepoint with its links or an unattached XDP program.
     Unload {
         /// Managed kernel program ID.
         #[arg(value_name = "PROGRAM_ID")]
@@ -106,7 +114,7 @@ pub(super) enum ProgramCommand {
     /// Text/quiet output reads stored summaries without kernel privileges.
     /// --all and attachment-state filtering are not yet implemented.
     List(ListArgs),
-    /// Load one local tracepoint; other requests are explicitly rejected.
+    /// Load a local tracepoint/XDP batch; other requests are explicitly rejected.
     Load {
         #[command(subcommand)]
         source: load::LoadCommand,

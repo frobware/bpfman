@@ -244,6 +244,48 @@ impl<S: OpenStore + bpfman_store::LinkStore> bpfman_store::LinkStore for ActiveS
     }
 }
 
+impl<S: bpfman_store::XdpStore> bpfman_store::XdpStore for ActiveStore<S> {
+    type XdpReceipt = S::XdpReceipt;
+    fn preflight_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+        program: NonZeroU32,
+    ) -> Result<(), bpfman_store::Error> {
+        self.check_writer(w)?;
+        self.backend.preflight_xdp(w, key, program)
+    }
+    fn commit_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: bpfman_store::XdpCommit<'_>,
+    ) -> Result<bpfman_model::StoredLink, bpfman_store::Error> {
+        self.check_writer(w)?;
+        self.backend.commit_xdp(w, r)
+    }
+    fn observe_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::XdpSnapshot, Self::XdpReceipt)>, bpfman_store::Error> {
+        self.check_writer(w)?;
+        self.backend.observe_xdp(w, id)
+    }
+    fn delete_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: Self::XdpReceipt,
+    ) -> Result<(), EffectFailure<Self::XdpReceipt, bpfman_store::Error>> {
+        if let Err(cause) = self.check_writer(w) {
+            return Err(EffectFailure {
+                cause,
+                remaining: r,
+            });
+        }
+        self.backend.delete_xdp(w, r)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod testing;
 #[cfg(test)]

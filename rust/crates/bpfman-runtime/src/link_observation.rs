@@ -35,7 +35,19 @@ pub(super) fn observe_record(
     record: bpfman_model::StoredLink,
     cancellation: &Cancellation,
 ) -> Result<ObservedLink, LinkCause> {
-    if runtime.layout().link_pin_path(record.id).to_str() != Some(record.pin_path.as_str()) {
+    let (path, observer): (_, fn(_) -> _) = match &record.details {
+        bpfman_model::LinkDetails::Tracepoint(_) => (
+            runtime.layout().link_pin_path(record.id),
+            bpfman_kernel::observe_tracepoint_link,
+        ),
+        bpfman_model::LinkDetails::Xdp(details) => (
+            runtime
+                .layout()
+                .xdp_extension_path(details.key, details.revision),
+            bpfman_kernel::observe_extension_link,
+        ),
+    };
+    if path.to_str() != Some(record.pin_path.as_str()) {
         return Err(Cause::Invalid("link pin differs from canonical runtime layout").into());
     }
 
@@ -43,15 +55,15 @@ pub(super) fn observe_record(
         LinkState::Pending => None,
         LinkState::Attached { kernel_id } => Some(kernel_id),
     };
-    let kernel = match kernel_id
-        .map(bpfman_kernel::observe_tracepoint_link)
-        .transpose()
-    {
+    let kernel = match kernel_id.map(observer).transpose() {
         Ok(kernel) => kernel,
         Err(error) if error.kind() == bpfman_kernel::ErrorKind::Missing => None,
         Err(error) => return Err(error.into()),
     };
-    let pin = runtime.read_link_pin(record.id)?;
+    let pin = match &record.details {
+        bpfman_model::LinkDetails::Tracepoint(_) => runtime.read_link_pin(record.id)?,
+        bpfman_model::LinkDetails::Xdp(details) => runtime.read_xdp_link_pin(details)?,
+    };
     if kernel
         .as_ref()
         .is_some_and(|k| k.program_id != record.program_id)
@@ -60,6 +72,15 @@ pub(super) fn observe_record(
         })
     {
         return Err(Cause::Invalid("observed link differs from stored identity").into());
+    }
+    if let (bpfman_model::LinkDetails::Xdp(expected), Some(observed)) = (&record.details, &kernel) {
+        if !matches!(
+            observed.details,
+            bpfman_model::KernelLinkDetails::Tracing { target_obj_id, .. }
+                if target_obj_id == expected.dispatcher_id.get()
+        ) {
+            return Err(Cause::Invalid("extension target differs from stored dispatcher").into());
+        }
     }
     cancellation.check().map_err(|_| Cause::Cancelled)?;
 

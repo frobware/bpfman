@@ -25,6 +25,9 @@
 //! }
 //! ```
 
+mod xdp;
+pub use xdp::{XdpAttach, XdpError, XdpReport};
+
 mod application;
 mod cancellation;
 mod compensation;

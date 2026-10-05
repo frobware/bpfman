@@ -186,3 +186,28 @@ fn json_unchanged_xdp_load_dsl() {
     cli::dsl("json", "TestXDP_LoadAndGet");
     cli::dsl("json", "TestLoad_NamedProgramSkipsBrokenSibling");
 }
+
+#[test]
+fn sqlite_unchanged_xdp_attach_dsl() {
+    cli::dsl("sqlite", "TestXDP_LinkRoundTrip");
+    cli::dsl("sqlite", "TestDispatcher_LifecycleAfterLastDetachXDP");
+}
+
+#[test]
+fn json_unchanged_xdp_attach_dsl() {
+    cli::dsl("json", "TestXDP_LinkRoundTrip");
+    cli::dsl("json", "TestDispatcher_LifecycleAfterLastDetachXDP");
+}
+
+#[path = "kernel/xdp_attach.rs"]
+mod xdp_attach;
+
+#[test]
+fn sqlite_xdp_attachment_failures() {
+    xdp_attach::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_xdp_attachment_failures() {
+    xdp_attach::exercise(bpfman_store_json::Backend);
+}

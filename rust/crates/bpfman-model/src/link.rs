@@ -72,6 +72,8 @@ impl fmt::Display for Tracepoint {
 pub enum LinkDetails {
     /// A standalone tracepoint attachment.
     Tracepoint(Tracepoint),
+    /// XDP extension attached through a dispatcher.
+    Xdp(crate::XdpLink),
 }
 
 /// Stored progress of the pending-link protocol. Neither variant asserts that
@@ -109,6 +111,8 @@ pub struct StoredLink {
 /// Identity observed from a standalone perf-event kernel link.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct KernelLink {
+    /// Type-specific kernel observations.
+    pub details: KernelLinkDetails,
     /// Kernel link ID, distinct from the store handle.
     pub id: NonZeroU32,
     /// Kernel program attached by this link.
@@ -124,6 +128,22 @@ pub struct ObservedLink {
     pub kernel: Option<KernelLink>,
     /// A matching link pin was observed below the adopted runtime.
     pub pin_present: bool,
+}
+
+/// Type-specific facts observed from a kernel BPF link.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum KernelLinkDetails {
+    /// Standalone tracepoint perf-event link.
+    PerfEvent,
+    /// Dispatcher extension link.
+    Tracing {
+        /// Kernel attach-type numeric value.
+        attach_type: u32,
+        /// Target dispatcher program ID.
+        target_obj_id: u32,
+        /// Target function BTF ID.
+        target_btf_id: u32,
+    },
 }
 
 #[cfg(test)]

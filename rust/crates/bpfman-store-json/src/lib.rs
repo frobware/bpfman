@@ -8,6 +8,7 @@ mod backend;
 mod error;
 mod link;
 mod state;
+mod xdp;
 
 use bpfman_fs::{RuntimeIdentity, RuntimeLayout, StoreSnapshot};
 
@@ -41,4 +42,11 @@ pub struct LinkReceipt {
     root: RuntimeIdentity,
     store: String,
     row: state::Link,
+}
+
+/// Owned evidence for conditional deletion of one complete XDP snapshot.
+pub struct XdpReceipt {
+    root: RuntimeIdentity,
+    store: String,
+    row: xdp::Row,
 }

@@ -2,11 +2,33 @@
 
 ## Status
 
-Implementation in progress in the independent `rust/` workspace. Managed
-observation, atomic local-file tracepoint/XDP batches, standalone tracepoint
-attach/detach, and unload are executable with SQLite and JSON stores.
-See [the workspace checkpoint](../../rust/README.md) for supported options and
-the focused kernel acceptance gate; full behavioural parity remains unfinished.
+Implementation is in progress in the independent `rust/` workspace. The current
+checkpoint completes XDP first attach and last detach alongside the tracepoint
+lifecycle, using both SQLite and JSON stores. Full behavioural parity remains
+unfinished.
+
+| Surface | Implemented checkpoint | Remaining boundary |
+| --- | --- | --- |
+| Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
+| Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
+| XDP links | One member per interface, current network namespace, driver-mode BPF link, last detach | Additional members, replacement, explicit namespaces, selectable modes |
+| XDP observations | Program/link get and list; complete dispatcher snapshot as JSON | Broader dispatcher CLI and traffic acceptance |
+| Persistence | Go-compatible SQLite schema 2; JSON format 4 for XDP attachment | No implicit upgrade or conversion of existing state |
+
+XDP programs must be explicitly detached before unload. Occupied attach points are
+refused; unsupported commands and flags fail clearly. See
+[the workspace checkpoint](../../rust/README.md#xdp-first-attach-and-last-detach)
+for the supported command surface.
+
+Validation for this checkpoint passed through `direnv exec . make rust-check`,
+including formatting, Clippy, workspace tests, documentation, and 36 real-kernel
+tests. Both backends run the unchanged `TestXDP_LinkRoundTrip.bpfman` and
+`TestDispatcher_LifecycleAfterLastDetachXDP.bpfman` scripts. This establishes the
+first-member lifecycle; it does not establish multi-member or traffic parity.
+
+The next slice is XDP dispatcher replacement: adding a member, removing a member
+while preserving survivors, and restoring the old attachment when publication
+fails. Go remains the behavioural authority for that work.
 
 ## Summary
 
@@ -239,8 +261,9 @@ decision logic rerun implicitly by the database layer.
 ### Replaceable persistence backend
 
 Persistence is selected at the binary composition root. `bpfman-store` owns
-backend-independent `OpenStore`, `ProgramReader`, `CommitLoad`, and `UnloadStore`
-contracts. Runtime operations are generic over the capabilities they consume;
+backend-independent `OpenStore`, `ProgramReader`, `CommitLoad`, `UnloadStore`,
+`LinkReader`, `LinkStore`, `XdpReader`, and `XdpStore` contracts. Runtime operations
+are generic over the capabilities they consume;
 they neither import a backend nor know its storage format or version.
 `bpfman-store-sqlite` implements the contracts and owns all SQL, schema checks,
 transactions, and concrete receipt evidence. `bpfman-store-json` implements the
@@ -465,8 +488,13 @@ the rest of the workspace.
 
 ## Store adapter
 
-The new implementation will use SQLite and retain compatibility with the Go
-schema and migration history. It will not use sled.
+The implementation supports SQLite and JSON behind the same store contracts.
+SQLite retains Go schema version 2 and its migration history. JSON format 4 adds
+complete single-member XDP dispatcher snapshots. Older JSON formats retain their
+existing operations: tracepoint programs from version 1, tracepoint links from
+version 2, and XDP loads from version 3. XDP attachment requires a separately
+initialized version 4 runtime. Neither backend implicitly migrates or repairs
+existing state. The implementation does not use sled.
 
 The store has two classes of operation:
 
@@ -484,6 +512,46 @@ query or execute those reads in an adapter-owned read transaction.
 
 ## Dispatcher lifecycle
 
+### Implemented: XDP first attach and last detach
+
+The model owns validated interface names, proceed-on masks, the namespace/interface
+key, and one-slot dispatcher configuration. A private runtime interpreter performs
+forward acquisitions; the pure core owns cleanup ordering and consuming
+continuations. Aya objects and filesystem/store receipts remain outside the model.
+
+First attach resolves the interface in the current network namespace and adopts
+the managed EXT program. Under one writer lock it checks that the attach point is
+vacant, loads a configured revision, pins the dispatcher and extension link, and
+creates and pins the outer interface link. It then publishes the complete snapshot
+atomically. SQLite commits the dispatcher header, managed link, and XDP details in
+one transaction; JSON publishes one complete file. No pending standalone-link
+record is used for this operation. A successful commit ends compensation, including
+when cancellation arrives during that commit.
+
+Last detach observes the complete stored snapshot and validates every present
+artifact before mutation. It synchronously detaches the outer BPF link before
+removing its pin, so an observer retaining another descriptor cannot keep the
+interface attachment active. Extension-link and dispatcher-program cleanup are
+independent once traffic has stopped. Revision-directory deletion waits for both;
+conditional snapshot deletion waits for all owned artifacts. A missing outer pin
+is accepted only when its kernel link is absent or proven detached. Mismatched
+pins, unexpected revision children, and changed store evidence are refused.
+
+Forward failures retain the original error, unresolved ownership, and every cleanup
+attempt. Each pass attempts independent work once, retains blocked dependents, and
+never retries inline. `retry_xdp_cleanup` performs one explicit pass over retained
+receipts under the same runtime authority. Cancellation can stop admission or
+forward attachment before commit; admitted cleanup runs to completion. The CLI
+reports one pass and does not persist a recovery queue.
+
+`bpfman-fs` owns descriptor-confined XDP artifact operations and typed removal
+receipts. Its private `xdp/syscall.rs` is the narrowly reviewed unsafe boundary for
+link creation, inspection, fd-preserving pinning, and synchronous detach. All other
+filesystem modules deny unsafe code, and workspace-law tests preserve the remaining
+lint gates. Read-only kernel observations remain in `bpfman-kernel`.
+
+### Next: dispatcher replacement
+
 Dispatcher replacement is the most important early proof of the architecture.
 The core owns:
 
@@ -499,7 +567,7 @@ The kernel adapter owns how a revision is loaded, pinned, attached, swapped, and
 removed. The store adapter owns atomic replacement of the dispatcher snapshot
 and member records.
 
-The initial implementation must preserve the Go ordering:
+Replacement must preserve the Go ordering:
 
 1. observe the existing snapshot;
 2. compute the complete desired member set and next revision;
@@ -947,9 +1015,9 @@ store decorator. CLI and DSL acceptance inspect public output and artifacts.
 Backend-specific adapter tests retain SQL triggers and direct state inspection
 where they test SQLite's own guarantees. A second store backend must run the
 same generic scenarios in addition to its own persistence-format tests. SQLite
-and JSON now run the same lifecycle, CLI, and unchanged tracepoint DSL scenarios,
-with backend selection confined to setup. The runtime and pure crates did not
-need backend-specific branches.
+and JSON now run the same lifecycle, CLI, and unchanged tracepoint and admitted
+XDP DSL scenarios, with backend selection confined to setup. The runtime and pure
+crates did not need backend-specific branches.
 
 The JSON adapter publishes versioned whole-file snapshots through descriptor-
 relative filesystem operations under the runtime writer. Program and private
@@ -957,12 +1025,13 @@ map-set membership commit together. Deletion receipts bind the runtime, store
 identity, and record generation; failed deletion retains the receipt. Publication
 errors precede the atomic rename and therefore authorize compensation safely.
 Interrupted staging can be reused without changing published state. Runtime state
-lives under `/run`; power-loss durability is outside this contract.
+lives under `/run`; power-loss durability is outside this contract. XDP deletion
+receipts additionally bind the complete dispatcher/member snapshot, so a retry
+cannot delete a replacement snapshot.
 
 The CLI selects `sqlite` (default) or `json` with `--store` / `BPFMAN_STORE`.
 Both occupy the same runtime store slot, so a format mismatch is rejected rather
 than opening an independent inventory. Existing state is never converted implicitly.
-
 
 Preserve the value of Go's stateful fake kernel (`manager/fake_kernel_test.go`).
 An in-memory effect interpreter should track IDs, programs, links, pins, and
@@ -1082,19 +1151,39 @@ unload. The gate exercises both stores, failure compensation and explicit retry,
 cancellation, real-kernel lifecycle tests, and the unchanged single- and
 multi-program tracepoint DSL scripts. The batch implementation pins only maps
 referenced by each loaded program so unload can verify their ownership.
-XDP extension load/get/unload now provides the entry to Phase 3, using Go's
-unpinned one-slot verification dispatcher. Both stores pass unchanged XDP
-load/get and named-selection DSL scripts. XDP attachment and dispatcher
-replacement remain the next implementation slice.
+XDP extension load/get/unload provides the entry to Phase 3, using Go's unpinned
+one-slot verification dispatcher. Both stores pass unchanged XDP load/get and
+named-selection DSL scripts.
 
-### Phase 3: dispatcher proof
+### Phase 3: dispatcher proof — in progress
 
-- Implement pure dispatcher ordering and configuration.
-- Implement XDP first attach, replacement, detach, and rollback.
-- Implement TC replacement with exact filter handles and clsact ownership.
-- Add TCX native multi-program ordering.
-- Admit dispatcher lifecycle, ordering, execution, rebuild, and residue scripts
-  as each program family becomes available.
+Completed checkpoint:
+
+- Pure one-slot XDP configuration and dependency-aware cleanup policy.
+- First attach and last detach in the current namespace with driver-mode BPF links.
+- Atomic dispatcher/member publication and conditional deletion on both stores.
+- Cancellation before commit, retained compensation receipts, and explicit retry.
+- Unchanged XDP link round-trip and last-detach dispatcher scripts on both stores.
+- Real-kernel refusal of foreign attachments and mismatched pins, synchronous detach
+  with a retained descriptor, failed commit/deletion, and reattachment without residue.
+- Store contracts for stale/foreign receipts, plus SQLite rollback, ignored-deletion,
+  malformed-snapshot, and JSON format-compatibility checks.
+
+Next implementation slice:
+
+1. Derive ordering, bounded slots, and the next revision from the complete member set.
+2. Add a second member by staging a revision and updating the durable outer link.
+3. Restore the old attachment if atomic snapshot publication fails; remove the old
+   revision only after successful publication.
+4. Remove one member while retaining survivors, then integrate attached XDP unload.
+5. Admit the unchanged priority-ordering, slot-reuse, configuration-after-detach,
+   survivor-rebuild, and chain-execution scripts as their required surfaces become
+   executable. Run traffic/proceed-on acceptance before claiming execution parity.
+
+Explicit namespace helpers, additional XDP modes, capacity/fill-drain coverage,
+TC replacement with exact filter handles and clsact ownership, and TCX ordering
+remain later work in this phase. The existing single-member slice continues to
+reject unsupported operations rather than approximating them.
 
 This phase validates the architecture. If the effect or state-machine model is
 wrong, change it here before broadening feature coverage.

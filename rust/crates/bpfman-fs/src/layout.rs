@@ -83,3 +83,42 @@ impl RuntimeLayout {
             .join("bytecode.o")
     }
 }
+
+impl RuntimeLayout {
+    /// Go-compatible XDP revision directory, for persistence and presentation.
+    pub fn xdp_revision_path(
+        &self,
+        key: bpfman_model::XdpKey,
+        revision: std::num::NonZeroU32,
+    ) -> PathBuf {
+        self.root.join("fs/xdp").join(format!(
+            "dispatcher_{}_{}_{}",
+            key.nsid, key.ifindex, revision
+        ))
+    }
+
+    /// XDP dispatcher program pin path.
+    pub fn xdp_program_path(
+        &self,
+        key: bpfman_model::XdpKey,
+        revision: std::num::NonZeroU32,
+    ) -> PathBuf {
+        self.xdp_revision_path(key, revision).join("dispatcher")
+    }
+
+    /// First extension's canonical link pin path.
+    pub fn xdp_extension_path(
+        &self,
+        key: bpfman_model::XdpKey,
+        revision: std::num::NonZeroU32,
+    ) -> PathBuf {
+        self.xdp_revision_path(key, revision).join("link_0")
+    }
+
+    /// Stable outer interface link pin path.
+    pub fn xdp_outer_path(&self, key: bpfman_model::XdpKey) -> PathBuf {
+        self.root
+            .join("fs/xdp")
+            .join(format!("dispatcher_{}_{}_link", key.nsid, key.ifindex))
+    }
+}

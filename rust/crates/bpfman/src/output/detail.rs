@@ -173,12 +173,12 @@ pub(super) fn program(out: &mut impl Write, p: &ObservedProgram) -> io::Result<(
             p.links
                 .iter()
                 .map(|link| {
-                    let bpfman_model::LinkDetails::Tracepoint(target) = &link.record.details;
+                    let (kind, target) = super::link::attachment(&link.record.details);
                     section(
                         link.record.id.to_string(),
                         vec![
                             field("Attach", target),
-                            field("Kind", "tracepoint"),
+                            field("Kind", kind),
                             field(
                                 "Pin",
                                 format!(

@@ -71,6 +71,12 @@ where
         let mut links = Vec::new();
 
         for record in records {
+            if matches!(record.details, bpfman_model::LinkDetails::Xdp(_)) {
+                return Err(Cause::Invalid(
+                    "detach the XDP dispatcher member before unloading its program",
+                )
+                .into());
+            }
             let (current, receipt) = self
                 .0
                 .observe_link(writer, record.id)?

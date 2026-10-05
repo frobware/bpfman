@@ -150,3 +150,21 @@ pub(super) fn link(id: u32) -> io::Result<bpf_link_info> {
 
     Ok(result)
 }
+
+pub(super) fn extension(id: u32) -> io::Result<(u32, u32, u32, u32)> {
+    let info = link(id)?;
+    if info.type_ != aya_obj::generated::bpf_link_type::BPF_LINK_TYPE_TRACING as u32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "expected tracing link",
+        ));
+    }
+    // SAFETY: the kernel-reported type selects this fixed tracing union member.
+    let target = unsafe { info.__bindgen_anon_1.tracing };
+    Ok((
+        info.prog_id,
+        target.attach_type,
+        target.target_obj_id,
+        target.target_btf_id,
+    ))
+}

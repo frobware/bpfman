@@ -239,7 +239,32 @@ pub fn observe_tracepoint_link(id: NonZeroU32) -> Result<bpfman_model::KernelLin
             )
         })?;
 
-    Ok(bpfman_model::KernelLink { id, program_id })
+    Ok(bpfman_model::KernelLink {
+        details: bpfman_model::KernelLinkDetails::PerfEvent,
+        id,
+        program_id,
+    })
+}
+
+/// Observe a dispatcher extension's actual tracing link identity and BTF target.
+pub fn observe_extension_link(id: NonZeroU32) -> Result<bpfman_model::KernelLink, Error> {
+    let (program, attach_type, target_obj_id, target_btf_id) =
+        syscall::extension(id.get()).map_err(|e| failure("observe extension link", e))?;
+    let program_id = NonZeroU32::new(program).ok_or_else(|| {
+        failure(
+            "observe extension link",
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "zero program ID"),
+        )
+    })?;
+    Ok(bpfman_model::KernelLink {
+        id,
+        program_id,
+        details: bpfman_model::KernelLinkDetails::Tracing {
+            attach_type,
+            target_obj_id,
+            target_btf_id,
+        },
+    })
 }
 
 #[cfg(test)]

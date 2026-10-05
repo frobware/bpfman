@@ -195,11 +195,7 @@ impl UnloadStore for Backend {
                 return Err(Failure::Invalid("store identity changed"));
             }
 
-            if state
-                .links
-                .iter()
-                .any(|link| link.program_id == receipt.row.id)
-            {
+            if !state.link_ids(receipt.row.id).is_empty() {
                 return Err(Failure::Unsupported(
                     "detach links before deleting their program",
                 ));

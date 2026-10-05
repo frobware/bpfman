@@ -1,3 +1,5 @@
+mod dispatcher;
+pub(crate) use dispatcher::dispatcher;
 use std::io::{self, Write};
 
 use bpfman_model::StoredProgramSummary;

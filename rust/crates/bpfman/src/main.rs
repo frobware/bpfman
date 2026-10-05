@@ -62,8 +62,9 @@ where
         + bpfman_store::CommitLoad
         + bpfman_store::UnloadStore
         + bpfman_store::LinkStore
+        + bpfman_store::XdpStore
         + 'static,
-    S::Reader: bpfman_store::LinkReader,
+    S::Reader: bpfman_store::LinkReader + bpfman_store::XdpReader,
 {
     let command = cli.command.prepare(&cli.layout, cancellation)?;
     let store = bpfman_runtime::ActiveStore::open_with_cancellation(
@@ -111,6 +112,7 @@ where
         }
 
         cli::PreparedCommand::Load(request) => request.execute(&bpfman, cancellation)?,
+        cli::PreparedCommand::Dispatcher(command) => command.execute(&bpfman)?,
         cli::PreparedCommand::Link(command) => command.execute(&bpfman, cancellation)?,
     }
 

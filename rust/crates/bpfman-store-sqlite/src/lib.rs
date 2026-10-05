@@ -15,6 +15,7 @@ mod reader;
 mod records;
 mod unload;
 mod write;
+mod xdp;
 
 pub use bpfman_store::LoadRecord;
 pub use unload::{delete_unloaded_program, delete_unused_map_set, observe_unload};
@@ -64,4 +65,11 @@ pub struct PrivateMapSet {
 /// Non-cloneable evidence for conditional mutation of one standalone link.
 pub struct LinkReceipt {
     evidence: Box<link::Evidence>,
+}
+
+/// Non-cloneable conditional evidence for one complete XDP dispatcher snapshot.
+pub struct XdpReceipt {
+    root: bpfman_fs::RuntimeIdentity,
+    database: (u64, u64),
+    row: queries::xdp::Row,
 }

@@ -48,7 +48,7 @@ pub(super) fn open_owned(entry: &Entry) -> Result<OwnedFd, Error> {
     Ok(fd)
 }
 
-fn remove(writer: &RuntimeWriter<'_>, entry: &Entry) -> Result<(), Error> {
+pub(super) fn remove(writer: &RuntimeWriter<'_>, entry: &Entry) -> Result<(), Error> {
     entry.check_writer(writer)?;
     let _owned = open_owned(entry)?;
     let flags = if entry.directory {

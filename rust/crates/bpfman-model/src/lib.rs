@@ -8,6 +8,9 @@ extern crate alloc;
 
 use alloc::string::String;
 
+mod xdp;
+pub use xdp::{InterfaceName, InvalidXdp, XdpKey, XdpLink, XdpProceedOn, XdpSnapshot, xdp_config};
+
 mod link;
 mod load;
 mod observation;
@@ -20,7 +23,8 @@ pub use observation::{
 };
 
 pub use link::{
-    InvalidTracepoint, KernelLink, LinkDetails, LinkState, ObservedLink, StoredLink, Tracepoint,
+    InvalidTracepoint, KernelLink, KernelLinkDetails, LinkDetails, LinkState, ObservedLink,
+    StoredLink, Tracepoint,
 };
 pub use program_type::{ParseProgramTypeError, ProgramType};
 pub use summary::StoredProgramSummary;

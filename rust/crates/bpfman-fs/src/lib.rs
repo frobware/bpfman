@@ -5,6 +5,9 @@
 
 use std::{os::fd::OwnedFd, path::PathBuf};
 
+mod xdp;
+pub use xdp::{PreparedXdp, XdpArtifacts, XdpExtensionPin, XdpOuter, XdpProgramPin, XdpRevision};
+
 mod artifacts;
 mod directory;
 mod error;

@@ -2,6 +2,9 @@
 //! Backends own compatibility checks, atomic publication, and opaque teardown evidence.
 //! No connections, transaction callbacks, schema versions, or serialized data escape.
 
+mod xdp;
+pub use xdp::{XdpCommit, XdpReader, XdpStore};
+
 mod error;
 mod link;
 
