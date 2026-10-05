@@ -75,6 +75,10 @@ impl LoadEffects for StoreEffects<'_> {
         LoadCause::Cancelled.into()
     }
 
+    fn batch_aborted(&self) -> Error {
+        LoadCause::BatchAborted.into()
+    }
+
     fn open_store(&mut self, w: &RuntimeWriter<'_>) -> Result<Memory, Error> {
         real::Effects(self.store).open_store(w).map_err(Into::into)
     }
@@ -82,11 +86,10 @@ impl LoadEffects for StoreEffects<'_> {
     fn persist(
         &mut self,
         w: &RuntimeWriter<'_>,
-        id: NonZeroU32,
-        input: &Inputs<'_>,
-    ) -> Result<StoredProgramSummary, Error> {
+        records: &[(NonZeroU32, &Inputs<'_>)],
+    ) -> Result<(), Error> {
         real::Effects(self.store)
-            .persist(w, id, input)
+            .persist(w, records)
             .map_err(Into::into)
     }
 
@@ -110,6 +113,10 @@ impl LoadEffects for StoreEffects<'_> {
 
     fn program_id(p: &Program) -> NonZeroU32 {
         Fake::program_id(p)
+    }
+
+    fn map_names(kernel: &Kernel) -> &[String] {
+        Fake::map_names(kernel)
     }
 
     fn create_map_directory(

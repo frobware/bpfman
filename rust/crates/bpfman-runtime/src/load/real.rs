@@ -4,7 +4,7 @@ use super::{LoadEffects, effects::Inputs};
 use crate::{LoadCleanup, load_error::LoadCause};
 use bpfman_core::EffectFailure;
 use bpfman_fs::{Bytecode, MapDirectory, MapPin, PreparedLoad, ProgramPin, RuntimeWriter};
-use bpfman_model::{StoredProgramSummary, Symbol};
+use bpfman_model::Symbol;
 use std::num::NonZeroU32;
 
 fn map_failure<T>(failure: EffectFailure<T, bpfman_fs::Error>) -> EffectFailure<T, LoadCause> {
@@ -49,10 +49,14 @@ impl<S> LoadCleanup for Effects<'_, S> {
 impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effects<'_, S> {
     type Store = S::Reader;
     type Prepared = PreparedLoad;
-    type Kernel = aya::Ebpf;
+    type Kernel = crate::kernel::LoadedObject;
 
     fn cancelled(&self) -> LoadCause {
         LoadCause::Cancelled
+    }
+
+    fn batch_aborted(&self) -> LoadCause {
+        LoadCause::BatchAborted
     }
 
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, LoadCause> {
@@ -75,10 +79,11 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
         &mut self,
         writer: &RuntimeWriter<'_>,
         prepared: &PreparedLoad,
-        kernel: &mut aya::Ebpf,
+        kernel: &mut Self::Kernel,
         name: &Symbol,
     ) -> Result<ProgramPin, EffectFailure<Option<ProgramPin>, LoadCause>> {
         let program = kernel
+            .bpf
             .program_mut(name.as_str())
             .ok_or_else(|| EffectFailure {
                 cause: LoadCause::Invalid("missing loaded program".into()),
@@ -89,6 +94,10 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
 
     fn program_id(pin: &ProgramPin) -> NonZeroU32 {
         pin.id()
+    }
+
+    fn map_names(kernel: &Self::Kernel) -> &[String] {
+        &kernel.maps
     }
 
     fn create_map_directory(
@@ -105,11 +114,11 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     fn pin_map(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        kernel: &aya::Ebpf,
+        kernel: &Self::Kernel,
         directory: &MapDirectory,
         name: &str,
     ) -> Result<MapPin, EffectFailure<Option<MapPin>, LoadCause>> {
-        let map = kernel.map(name).ok_or_else(|| EffectFailure {
+        let map = kernel.bpf.map(name).ok_or_else(|| EffectFailure {
             cause: LoadCause::Invalid(format!("missing loaded map {name}")),
             remaining: None,
         })?;
@@ -138,22 +147,22 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     fn persist(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        id: NonZeroU32,
-        input: &Inputs<'_>,
-    ) -> Result<StoredProgramSummary, LoadCause> {
+        inputs: &[(NonZeroU32, &Inputs<'_>)],
+    ) -> Result<(), LoadCause> {
+        let records: Vec<_> = inputs
+            .iter()
+            .map(|(id, input)| bpfman_store::TracepointRecord {
+                id: *id,
+                name: input.name,
+                source: input.source,
+                license: &input.object.license,
+                created_at: input.created_at,
+                metadata: input.metadata,
+                globals: &input.object.globals,
+            })
+            .collect();
         self.0
-            .commit_tracepoint(
-                writer,
-                bpfman_store::TracepointRecord {
-                    id,
-                    name: input.name,
-                    source: input.source,
-                    license: &input.object.license,
-                    created_at: input.created_at,
-                    metadata: input.metadata,
-                    globals: &input.object.globals,
-                },
-            )
+            .commit_tracepoints(writer, &records)
             .map_err(LoadCause::from)
     }
 }

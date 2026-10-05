@@ -125,9 +125,10 @@ impl LoadRequest {
         };
 
         // Reject the complete unsupported request before touching even the source.
-        let reason = if !remaining.is_empty() {
-            Some("multiple programs")
-        } else if !matches!(first, bpfman_model::ProgramSpec::Tracepoint(_)) {
+        let reason = if !std::iter::once(&first)
+            .chain(&remaining)
+            .all(|spec| matches!(spec, bpfman_model::ProgramSpec::Tracepoint(_)))
+        {
             Some("program types other than tracepoint")
         } else if map_owner_id.is_some() {
             Some("map-owner sharing")
@@ -155,7 +156,13 @@ impl LoadRequest {
                 metadata,
                 cancellation,
             )?
-            .with_globals(globals)?,
+            .with_globals(globals)?
+            .with_additional_programs(
+                remaining
+                    .into_iter()
+                    .map(|spec| spec.name().clone())
+                    .collect(),
+            )?,
             output,
         })
     }
@@ -167,18 +174,17 @@ impl PreparedLoad {
         bpfman: &bpfman_runtime::Bpfman<S>,
         cancellation: &bpfman_runtime::Cancellation,
     ) -> Result<(), crate::error::Error> {
-        let stored = bpfman.load_with_cancellation(self.request, cancellation)?;
+        let stored = bpfman.load_batch_with_cancellation(self.request, cancellation)?;
 
         // Output is deliberately outside the operation: delivery failure must
         // never compensate a committed program.
-        crate::output::program(
+        crate::output::loaded_programs(
             &mut std::io::stdout().lock(),
             &stored,
             match self.output {
                 super::LoadOutput::Text => crate::cli::OutputFormat::Text,
                 super::LoadOutput::Json => crate::cli::OutputFormat::Json,
             },
-            true,
         )?;
 
         Ok(())

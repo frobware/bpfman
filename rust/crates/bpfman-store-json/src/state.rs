@@ -192,7 +192,7 @@ impl State {
 
     pub(super) fn insert(
         &mut self,
-        record: TracepointRecord<'_>,
+        record: &TracepointRecord<'_>,
     ) -> Result<StoredProgramSummary, Failure> {
         if self.map_sets.iter().any(|m| m.id == record.id)
             || self.programs.iter().any(|p| p.id == record.id)

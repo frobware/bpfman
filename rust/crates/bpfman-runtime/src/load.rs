@@ -1,5 +1,5 @@
 use crate::{
-    Bpfman, LoadError, PreparedTracepoint,
+    Bpfman, LoadError, PreparedTracepoint, PreparedTracepoints,
     kernel::LocalObject,
     load_error::{Failure, LoadCause, finish},
 };
@@ -19,6 +19,49 @@ pub(super) use effects::{CleanupEffects, FailureFor, LoadEffects};
 pub(super) use real::Effects;
 
 impl PreparedTracepoint {
+    /// Add distinct tracepoint selections from the same captured ELF. Validate
+    /// every selection before opening runtime state; preserve input order.
+    pub fn with_additional_programs(
+        self,
+        names: Vec<Symbol>,
+    ) -> Result<PreparedTracepoints, LoadError> {
+        if names.is_empty() {
+            return Ok(PreparedTracepoints {
+                first: self,
+                remaining: names,
+            });
+        }
+
+        let object = aya_obj::Object::parse(&self.object.bytes)
+            .map_err(|e| LoadCause::Parse(Box::new(e)))?;
+        let mut seen = std::collections::BTreeSet::from([self.name.clone()]);
+        let mut remaining = Vec::new();
+
+        for name in names {
+            if !seen.insert(name.clone()) {
+                return Err(LoadCause::Invalid(
+                    "each ELF program must be selected only once".into(),
+                )
+                .into());
+            }
+            let program = object.programs.get(name.as_str()).ok_or_else(|| {
+                LoadCause::Invalid(format!("ELF program {:?} does not exist", name.as_str()))
+            })?;
+            if !matches!(program.section, aya_obj::ProgramSection::TracePoint) {
+                return Err(
+                    LoadCause::Invalid("selected ELF program is not a tracepoint".into()).into(),
+                );
+            }
+
+            remaining.push(name);
+        }
+
+        Ok(PreparedTracepoints {
+            first: self,
+            remaining,
+        })
+    }
+
     /// Validate global names and byte lengths against the captured ELF before
     /// runtime creation. Values are applied when loading and retained in the store.
     pub fn with_globals(mut self, globals: BTreeMap<String, Vec<u8>>) -> Result<Self, LoadError> {
@@ -90,6 +133,37 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
         request: PreparedTracepoint,
         cancellation: &crate::Cancellation,
     ) -> Result<ObservedProgram, LoadError> {
+        self.load_prepared(request, Vec::new(), cancellation)
+            .map(|(first, _)| first)
+    }
+
+    /// Load a nonempty batch with private maps and a single atomic store commit.
+    pub fn load_batch(
+        &self,
+        request: PreparedTracepoints,
+    ) -> Result<Vec<ObservedProgram>, LoadError> {
+        self.load_batch_with_cancellation(request, &crate::Cancellation::new())
+    }
+
+    /// Cancellation before commit compensates all members under the same writer
+    /// lock. Failures retain every unresolved receipt for explicit cleanup retry.
+    #[tracing::instrument(name = "program.load_batch", level = "debug", skip_all, err)]
+    pub fn load_batch_with_cancellation(
+        &self,
+        request: PreparedTracepoints,
+        cancellation: &crate::Cancellation,
+    ) -> Result<Vec<ObservedProgram>, LoadError> {
+        let (first, remaining) =
+            self.load_prepared(request.first, request.remaining, cancellation)?;
+        Ok(std::iter::once(first).chain(remaining).collect())
+    }
+
+    fn load_prepared(
+        &self,
+        request: PreparedTracepoint,
+        remaining: Vec<Symbol>,
+        cancellation: &crate::Cancellation,
+    ) -> Result<(ObservedProgram, Vec<ObservedProgram>), LoadError> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         let PreparedTracepoint {
             object,
@@ -115,7 +189,18 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
                     cancelled: Some(cancellation.flag()),
                 },
                 |writer| {
-                    run(
+                    let remaining: Vec<_> = remaining
+                        .iter()
+                        .map(|name| Inputs {
+                            cancellation,
+                            object: &object,
+                            source: &source,
+                            name,
+                            metadata: &metadata,
+                            created_at: &created_at,
+                        })
+                        .collect();
+                    run_batch(
                         &writer,
                         &mut Effects(store),
                         &Inputs {
@@ -126,25 +211,39 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
                             metadata: &metadata,
                             created_at: &created_at,
                         },
+                        &remaining,
                     )
                     .map_err(|failure| LoadError {
                         failure: Box::new(failure),
                         retry_lock_error: None,
                     })
-                    .and_then(|stored| {
-                        crate::observation::observe(
-                            store,
-                            writer.directory(),
-                            stored.id(),
-                            crate::observation::View::Load,
-                        )
-                        .map_err(|source| {
-                            LoadCause::Observation {
-                                id: stored.id(),
-                                source,
-                            }
-                            .into()
-                        })
+                    .and_then(|(first, remaining)| {
+                        let committed: Vec<_> = std::iter::once(&first)
+                            .chain(&remaining)
+                            .map(|p| p.id())
+                            .collect();
+                        let observe = |stored: StoredProgramSummary| {
+                            crate::observation::observe(
+                                store,
+                                writer.directory(),
+                                stored.id(),
+                                crate::observation::View::Load,
+                            )
+                            .map_err(|source| {
+                                LoadError::from(LoadCause::Observation {
+                                    id: stored.id(),
+                                    committed: committed.clone(),
+                                    source,
+                                })
+                            })
+                        };
+                        Ok((
+                            observe(first)?,
+                            remaining
+                                .into_iter()
+                                .map(observe)
+                                .collect::<Result<_, _>>()?,
+                        ))
                     })
                 },
             )
@@ -152,20 +251,133 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
     }
 }
 
-// This is the only forward interpreter, used by the CLI and fault-injection
-// tests alike. The policy continuations and compensation driver are unchanged.
+// Both single loads and batches use this forward interpreter and finaliser.
+#[cfg(test)]
 fn run<F: LoadEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
     input: &Inputs<'_>,
 ) -> Result<StoredProgramSummary, FailureFor<F>> {
-    check_cancelled(effects, input)?;
+    run_batch(writer, effects, input, &[]).map(|(first, _)| first)
+}
+
+type Acquired<F> = (
+    bpfman_core::PersistProgram<
+        <F as crate::LoadCleanup>::ProgramPin,
+        <F as crate::LoadCleanup>::MapPin,
+        <F as crate::LoadCleanup>::Bytecode,
+    >,
+    <F as CleanupEffects>::MapDirectory,
+);
+
+fn run_batch<F: LoadEffects>(
+    writer: &RuntimeWriter<'_>,
+    effects: &mut F,
+    first: &Inputs<'_>,
+    remaining: &[Inputs<'_>],
+) -> Result<(StoredProgramSummary, Vec<StoredProgramSummary>), FailureFor<F>> {
+    check_cancelled(effects, first)?;
     let _store = effects
         .open_store(writer)
         .map_err(Failure::NoOwnedArtifacts)?;
-
-    check_cancelled(effects, input)?;
+    check_cancelled(effects, first)?;
     let filesystem = effects.prepare(writer).map_err(Failure::NoOwnedArtifacts)?;
+    let mut acquired = Vec::new();
+    let mut records = Vec::new();
+
+    for input in std::iter::once(first).chain(remaining) {
+        match acquire(writer, effects, &filesystem, input) {
+            Ok(item) => {
+                records.push((F::program_id(item.0.inputs().1), input));
+                acquired.push(item);
+            }
+            Err(primary) => return Err(abort_batch(writer, effects, primary, acquired)),
+        }
+    }
+
+    // Construct results before the sole commit. Input order is preserved.
+    let summaries: Vec<_> = records
+        .iter()
+        .map(|(id, input)| {
+            StoredProgramSummary::new(
+                *id,
+                input.name.as_str().into(),
+                bpfman_model::ProgramType::Tracepoint,
+                input.metadata.clone(),
+                Vec::new(),
+            )
+        })
+        .collect();
+    let mut summaries = summaries.into_iter();
+    let Some(first_summary) = summaries.next() else {
+        let cause = effects.batch_aborted();
+        return Err(abort_batch(
+            writer,
+            effects,
+            Failure::NoOwnedArtifacts(cause),
+            acquired,
+        ));
+    };
+    let remaining_summaries = summaries.collect();
+
+    if let Err(cause) =
+        cancellation_cause(effects, first).and_then(|()| effects.persist(writer, &records))
+    {
+        let primary = match acquired.pop() {
+            Some((persist, directory)) => finish(
+                writer,
+                effects,
+                persist.failed(cause),
+                Some(directory),
+                vec![],
+            ),
+            None => Failure::NoOwnedArtifacts(cause),
+        };
+        return Err(abort_batch(writer, effects, primary, acquired));
+    }
+
+    for (persist, _directory) in acquired {
+        let _committed = persist.committed(());
+    }
+
+    Ok((first_summary, remaining_summaries))
+}
+
+fn abort_batch<F: LoadEffects>(
+    writer: &RuntimeWriter<'_>,
+    effects: &mut F,
+    primary: FailureFor<F>,
+    acquired: Vec<Acquired<F>>,
+) -> FailureFor<F> {
+    if acquired.is_empty() {
+        return primary;
+    }
+
+    let mut previous = Vec::new();
+    for (persist, directory) in acquired.into_iter().rev() {
+        let cause = effects.batch_aborted();
+        previous.push(finish(
+            writer,
+            effects,
+            persist.failed(cause),
+            Some(directory),
+            vec![],
+        ));
+    }
+
+    Failure::Batch {
+        primary: Box::new(primary),
+        previous,
+    }
+}
+
+fn acquire<F: LoadEffects>(
+    writer: &RuntimeWriter<'_>,
+    effects: &mut F,
+    filesystem: &F::Prepared,
+    input: &Inputs<'_>,
+) -> Result<Acquired<F>, FailureFor<F>> {
+    check_cancelled(effects, input)?;
     let operation = LoadProgram::new(ProgramSpec::Tracepoint(input.name.clone()));
 
     check_cancelled(effects, input)?;
@@ -173,7 +385,7 @@ fn run<F: LoadEffects>(
         .load_kernel(writer, input)
         .map_err(Failure::NoOwnedArtifacts)?;
     let program_pin = match admission(effects, input, None)
-        .and_then(|()| effects.pin_program(writer, &filesystem, &mut kernel, input.name))
+        .and_then(|()| effects.pin_program(writer, filesystem, &mut kernel, input.name))
     {
         Ok(pin) => pin,
         Err(failure) => {
@@ -194,7 +406,7 @@ fn run<F: LoadEffects>(
     };
     let id = F::program_id(&program_pin);
     let directory = match admission(effects, input, None)
-        .and_then(|()| effects.create_map_directory(writer, &filesystem, id))
+        .and_then(|()| effects.create_map_directory(writer, filesystem, id))
     {
         Ok(directory) => directory,
         Err(failure) => {
@@ -215,7 +427,7 @@ fn run<F: LoadEffects>(
     };
     let mut pins = Vec::new();
 
-    for name in &input.object.maps {
+    for name in F::map_names(&kernel) {
         match admission(effects, input, None)
             .and_then(|()| effects.pin_map(writer, &kernel, &directory, name))
         {
@@ -254,18 +466,7 @@ fn run<F: LoadEffects>(
                 ));
             }
         };
-    let persist = publish.published(bytecode);
-
-    match cancellation_cause(effects, input).and_then(|()| effects.persist(writer, id, input)) {
-        Ok(stored) => Ok(persist.committed(stored).stored),
-        Err(cause) => Err(finish(
-            writer,
-            effects,
-            persist.failed(cause),
-            Some(directory),
-            vec![],
-        )),
-    }
+    Ok((publish.published(bytecode), directory))
 }
 
 // Checks live in the interpreter so fake and real adapters follow identical policy.

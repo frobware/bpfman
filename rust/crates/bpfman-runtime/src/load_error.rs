@@ -11,9 +11,14 @@ use std::fmt;
 pub(super) enum LoadCause {
     #[error("load cancelled before commit")]
     Cancelled,
-    #[error("program {id} was committed but its result could not be observed; it remains loaded")]
+    #[error("batch aborted before commit")]
+    BatchAborted,
+    #[error(
+        "program {id} was committed but its result could not be observed; batch programs {committed:?} remain loaded"
+    )]
     Observation {
         id: std::num::NonZeroU32,
+        committed: Vec<std::num::NonZeroU32>,
         #[source]
         source: crate::ObservationError,
     },
@@ -23,6 +28,8 @@ pub(super) enum LoadCause {
     Parse(#[source] Box<aya_obj::ParseError>),
     #[error("load ELF maps and relocations")]
     Kernel(#[source] Box<aya::EbpfError>),
+    #[error("observe loaded map identity")]
+    Map(#[source] Box<aya::maps::MapError>),
     #[error("load tracepoint program")]
     Program(#[source] Box<aya::programs::ProgramError>),
     #[error("{0}")]
@@ -41,6 +48,10 @@ pub(super) enum LoadCause {
 
 pub(super) enum Failure<P = ProgramPin, M = MapPin, B = Bytecode, D = MapDirectory, E = LoadCause> {
     NoOwnedArtifacts(E),
+    Batch {
+        primary: Box<Self>,
+        previous: Vec<Self>,
+    },
     Compensated {
         report: Box<LoadFailure<P, M, B, E>>,
         directory: Option<D>,
@@ -60,10 +71,7 @@ impl From<LoadCause> for LoadError {
 impl LoadError {
     /// Application failure category; backend errors are available only as causes.
     pub fn kind(&self) -> LoadErrorKind {
-        let cause = match self.failure.as_ref() {
-            Failure::NoOwnedArtifacts(c) => c,
-            Failure::Compensated { report, .. } => report.primary(),
-        };
+        let cause = self.failure.primary();
 
         match cause {
             LoadCause::Cancelled => LoadErrorKind::Cancelled,
@@ -81,12 +89,7 @@ impl LoadError {
 
     /// Number of owned resources still requiring cleanup (including a blocked map directory).
     pub fn unresolved(&self) -> usize {
-        match self.failure.as_ref() {
-            Failure::NoOwnedArtifacts(_) => 0,
-            Failure::Compensated {
-                report, directory, ..
-            } => report.remaining().len() + usize::from(directory.is_some()),
-        }
+        self.failure.unresolved()
     }
 
     /// Failure to acquire writer authority for the most recent explicit cleanup pass.
@@ -157,6 +160,13 @@ pub(super) fn retry<F: CleanupEffects>(
 ) -> FailureFor<F> {
     match failure {
         Failure::NoOwnedArtifacts(_) => failure,
+        Failure::Batch { primary, previous } => Failure::Batch {
+            primary: Box::new(retry(writer, effects, *primary)),
+            previous: previous
+                .into_iter()
+                .map(|f| retry(writer, effects, f))
+                .collect(),
+        },
         Failure::Compensated {
             report,
             directory,
@@ -223,11 +233,65 @@ impl fmt::Display for LoadError {
             write_chain(f, error)?;
         }
 
-        if let Failure::Compensated {
+        self.failure.fmt_cleanup(f)?;
+
+        Ok(())
+    }
+}
+
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.failure.primary())
+    }
+}
+
+fn write_chain(f: &mut fmt::Formatter<'_>, cause: &dyn std::error::Error) -> fmt::Result {
+    write!(f, "{cause}")?;
+    let mut source = cause.source();
+
+    while let Some(error) = source {
+        write!(f, ": {error}")?;
+        source = error.source();
+    }
+
+    Ok(())
+}
+
+impl<P, M, B, D, E> Failure<P, M, B, D, E> {
+    pub(super) fn primary(&self) -> &E {
+        match self {
+            Self::NoOwnedArtifacts(cause) => cause,
+            Self::Compensated { report, .. } => report.primary(),
+            Self::Batch { primary, .. } => primary.primary(),
+        }
+    }
+
+    fn unresolved(&self) -> usize {
+        match self {
+            Self::NoOwnedArtifacts(_) => 0,
+            Self::Compensated {
+                report, directory, ..
+            } => report.remaining().len() + usize::from(directory.is_some()),
+            Self::Batch { primary, previous } => {
+                primary.unresolved() + previous.iter().map(Self::unresolved).sum::<usize>()
+            }
+        }
+    }
+}
+
+impl Failure {
+    fn fmt_cleanup(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Self::Batch { primary, previous } = self {
+            primary.fmt_cleanup(f)?;
+            for member in previous {
+                member.fmt_cleanup(f)?;
+            }
+        }
+        if let Self::Compensated {
             report,
             directory_attempts,
             ..
-        } = self.failure.as_ref()
+        } = self
         {
             write!(f, " ({} unresolved cleanup resources)", self.unresolved())?;
 
@@ -249,25 +313,4 @@ impl fmt::Display for LoadError {
 
         Ok(())
     }
-}
-
-impl std::error::Error for LoadError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(match self.failure.as_ref() {
-            Failure::NoOwnedArtifacts(c) => c,
-            Failure::Compensated { report, .. } => report.primary(),
-        })
-    }
-}
-
-fn write_chain(f: &mut fmt::Formatter<'_>, cause: &dyn std::error::Error) -> fmt::Result {
-    write!(f, "{cause}")?;
-    let mut source = cause.source();
-
-    while let Some(error) = source {
-        write!(f, ": {error}")?;
-        source = error.source();
-    }
-
-    Ok(())
 }

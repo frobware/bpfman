@@ -71,12 +71,12 @@ impl ProgramReader for Store {
 
 impl CommitLoad for Backend {
     #[tracing::instrument(name = "store.commit", level = "debug", skip_all, err)]
-    fn commit_tracepoint(
+    fn commit_tracepoints(
         &self,
         writer: &RuntimeWriter<'_>,
-        record: TracepointRecord<'_>,
-    ) -> Result<StoredProgramSummary, Error> {
-        crate::persist_tracepoint(writer, record).map_err(Into::into)
+        records: &[TracepointRecord<'_>],
+    ) -> Result<(), Error> {
+        crate::write::persist_batch(writer, records).map_err(Into::into)
     }
 }
 

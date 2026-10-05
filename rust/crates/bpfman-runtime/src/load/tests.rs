@@ -8,7 +8,6 @@ use crate::{
 };
 use bpfman_core::{CompensationKind, EffectFailure};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
-use bpfman_model::ProgramType;
 use std::time::Duration;
 use std::{
     cell::{Cell, RefCell},
@@ -48,6 +47,7 @@ enum Event {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum Fault {
     Cancelled,
+    BatchAborted,
     Before(Event),
     AfterAcquisition(Event),
     StagedPublication,
@@ -80,6 +80,7 @@ impl Drop for TestError {
 
 // Deliberately no Clone for any ownership or error type.
 struct Receipt {
+    program_id: NonZeroU32,
     resource: Resource,
     owner: Rc<()>,
     serial: usize,
@@ -96,7 +97,7 @@ struct Program(Receipt);
 struct Map(Receipt);
 struct BytecodeReceipt(Receipt);
 struct Directory(Receipt);
-struct Kernel(Rc<Counts>);
+struct Kernel(Rc<Counts>, Vec<String>);
 impl Drop for Kernel {
     fn drop(&mut self) {
         self.0.handles.set(self.0.handles.get() - 1);
@@ -104,6 +105,7 @@ impl Drop for Kernel {
 }
 
 struct Fake {
+    program_id: NonZeroU32,
     runtime: PathBuf,
     owner: Rc<()>,
     counts: Rc<Counts>,
@@ -127,6 +129,7 @@ fn id() -> NonZeroU32 {
 impl Fake {
     fn new(writer: &RuntimeWriter<'_>, faults: impl IntoIterator<Item = Fault>) -> Self {
         Self {
+            program_id: id(),
             runtime: writer.database_path(),
             owner: Rc::new(()),
             counts: Rc::default(),
@@ -180,6 +183,7 @@ impl Fake {
         let serial = self.counts.receipts.get();
         self.counts.receipts.set(serial + 1);
         Receipt {
+            program_id: self.program_id,
             resource,
             owner: self.owner.clone(),
             serial,
@@ -214,7 +218,10 @@ impl Fake {
         event: Event,
         receipt: &Receipt,
     ) -> Result<(), TestError> {
-        assert!(!self.records.contains(&42), "cleanup after commit");
+        assert!(
+            !self.records.contains(&self.program_id.get()),
+            "cleanup after commit"
+        );
         assert!(Rc::ptr_eq(&receipt.owner, &self.owner), "foreign receipt");
         self.enter(writer, event)?;
 
@@ -306,6 +313,10 @@ impl LoadEffects for Fake {
         self.error(Fault::Cancelled)
     }
 
+    fn batch_aborted(&self) -> TestError {
+        self.error(Fault::BatchAborted)
+    }
+
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<(), TestError> {
         self.enter(writer, Event::OpenStore)
     }
@@ -324,7 +335,7 @@ impl LoadEffects for Fake {
         assert_eq!(input.name.as_str(), "trace");
         self.counts.handles.set(self.counts.handles.get() + 1);
 
-        let kernel = Kernel(self.counts.clone());
+        let kernel = Kernel(self.counts.clone(), input.object.maps.clone());
         self.check(Fault::AfterAcquisition(Event::LoadKernel))?;
 
         Ok(kernel)
@@ -343,8 +354,12 @@ impl LoadEffects for Fake {
             .map_err(|f| wrap_partial(f, Program))
     }
 
-    fn program_id(_: &Program) -> NonZeroU32 {
-        id()
+    fn program_id(pin: &Program) -> NonZeroU32 {
+        pin.0.program_id
+    }
+
+    fn map_names(kernel: &Kernel) -> &[String] {
+        &kernel.1
     }
 
     fn create_map_directory(
@@ -353,7 +368,7 @@ impl LoadEffects for Fake {
         _: &(),
         program: NonZeroU32,
     ) -> Result<Directory, EffectFailure<Option<Directory>, TestError>> {
-        assert_eq!(program, id());
+        assert_eq!(program, self.program_id);
         assert!(self.resources.contains(&Resource::Program));
         self.pin(writer, Event::CreateDirectory, Resource::Directory)
             .map(Directory)
@@ -381,7 +396,7 @@ impl LoadEffects for Fake {
         program: NonZeroU32,
         input: &Inputs<'_>,
     ) -> Result<BytecodeReceipt, EffectFailure<Vec<BytecodeReceipt>, TestError>> {
-        assert_eq!(program, id());
+        assert_eq!(program, self.program_id);
         assert!(self.resources.contains(&Resource::Program));
 
         for name in &input.object.maps {
@@ -421,9 +436,11 @@ impl LoadEffects for Fake {
     fn persist(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        program: NonZeroU32,
-        input: &Inputs<'_>,
-    ) -> Result<StoredProgramSummary, TestError> {
+        records: &[(NonZeroU32, &Inputs<'_>)],
+    ) -> Result<(), TestError> {
+        let [(program, _input)] = records else {
+            unreachable!("single-program fake")
+        };
         self.enter(writer, Event::Persist)?;
 
         assert!(self.resources.contains(&Resource::Bytecode));
@@ -439,13 +456,7 @@ impl LoadEffects for Fake {
         self.map_sets = next_maps;
         self.records = next_records;
 
-        Ok(StoredProgramSummary::new(
-            program,
-            input.name.as_str().into(),
-            ProgramType::Tracepoint,
-            input.metadata.clone(),
-            vec![],
-        ))
+        Ok(())
     }
 }
 
@@ -526,6 +537,7 @@ fn failed(result: Result<StoredProgramSummary, FailureFor<Fake>>) -> FailureFor<
 
 fn primary(failure: &FailureFor<Fake>) -> &TestError {
     match failure {
+        Failure::Batch { primary, .. } => primary.primary(),
         Failure::NoOwnedArtifacts(error) => error,
         Failure::Compensated { report, .. } => report.primary(),
     }
@@ -535,6 +547,11 @@ fn unresolved(failure: &FailureFor<Fake>) -> BTreeSet<Resource> {
     use bpfman_core::LoadCompensation;
 
     match failure {
+        Failure::Batch { primary, previous } => previous
+            .iter()
+            .flat_map(unresolved)
+            .chain(unresolved(primary))
+            .collect(),
         Failure::NoOwnedArtifacts(_) => BTreeSet::new(),
         Failure::Compensated {
             report, directory, ..
@@ -560,6 +577,11 @@ fn unresolved(failure: &FailureFor<Fake>) -> BTreeSet<Resource> {
 
 fn history(failure: &FailureFor<Fake>) -> Vec<(usize, CompensationKind, Option<Fault>)> {
     match failure {
+        Failure::Batch { primary, previous } => previous
+            .iter()
+            .flat_map(history)
+            .chain(history(primary))
+            .collect(),
         Failure::NoOwnedArtifacts(_) => vec![],
         Failure::Compensated { report, .. } => report
             .attempts()
@@ -1249,3 +1271,5 @@ fn cancellation_during_compensation_does_not_truncate_the_pass() {
         }
     });
 }
+
+mod batch;

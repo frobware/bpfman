@@ -117,3 +117,23 @@ fn write_json(out: &mut impl Write, value: &serde_json::Value) -> io::Result<()>
     serde_json::to_writer_pretty(&mut *out, value).map_err(io::Error::other)?;
     writeln!(out)
 }
+
+/// Render one completed atomic load in input order.
+pub(super) fn loaded_programs(
+    out: &mut impl Write,
+    programs: &[bpfman_model::ObservedProgram],
+    format: OutputFormat,
+) -> io::Result<()> {
+    match format {
+        OutputFormat::Text => {
+            for program in programs {
+                detail::program(out, program)?;
+            }
+            Ok(())
+        }
+        OutputFormat::Json => write_json(
+            out,
+            &serde_json::json!({"programs": programs.iter().map(json::program).collect::<Vec<_>>()}),
+        ),
+    }
+}

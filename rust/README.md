@@ -122,8 +122,8 @@ crate defines small, statically dispatched interfaces:
   initialization; format checks remain inside each backend.
 - `ProgramReader` returns stored summaries or complete domain records from a
   consistent snapshot, without exposing serialized data or queries.
-- `CommitLoad` atomically publishes a tracepoint and its private map-set
-  membership. An error means no commit, so compensation remains safe.
+- `CommitLoad` atomically publishes a nonempty tracepoint batch and every
+  private map-set membership (an empty batch is a no-op). An error means no commit, so compensation remains safe.
 - `UnloadStore` validates ownership and conditionally deletes records and map
   sets using opaque, non-cloneable backend receipts. Failed deletion returns the
   receipt for an explicit later pass.
@@ -360,17 +360,18 @@ with private maps, including pending and finalised standalone links.
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. One local tracepoint with private maps and
-metadata/application labels is executable, with Go's detailed text output or
-JSON load envelope. Image loads, other program types, batches,
+exits with status 2. Local tracepoint batches with private maps and
+metadata/application labels are executable, with Go's detailed text output or
+JSON load envelope in selection order. Image loads, other program types,
 and map-owner sharing exit with status 1 before source access or runtime effects.
 ELF-level unsupported PinByName maps and section/type mismatches are rejected
 before runtime setup. Credentials are not echoed in auth diagnostics or help.
 Unlike Go, this parser requires the explicit file/image verb and rejects duplicate
 ELF selections, extraneous load-time targets, and zero map-owner IDs.
 
-Both unchanged `e2e/scripts/TestTracepoint_LoadAndGet.bpfman` and
-`TestTracepoint_LinkRoundTrip.bpfman` run against Rust through the Go shell runner,
+The unchanged `e2e/scripts/TestTracepoint_LoadAndGet.bpfman`,
+`TestTracepoint_LinkRoundTrip.bpfman`, `TestTracepoint_UnloadAttached.bpfman`,
+and `TestMultiProgTracepoint_LoadAttachDetachUnload.bpfman` run through the Go shell runner,
 once per store. The gate builds the required executables and kernel module,
 loads the module if absent, and uses temporary runtimes in a private mount
 namespace. It selects local bytecode and verifies that unload leaves no owned
@@ -532,9 +533,11 @@ and maps, then uses those same bytes for Aya loading and bytecode publication.
 It holds one Go-compatible writer scope through runtime preparation, program
 and map pinning, publication, and store commit. Pins use `/proc/self/fd` paths
 anchored at verified directory descriptors because Aya's pin API accepts a
-pathname; callers never supply a deletion path. Only the selected program is
-loaded; private maps are pinned under `fs/maps/{program_id}`. Internal data maps
-remain kernel-owned and are not pinned separately. There is no attachment.
+pathname; callers never supply a deletion path. Each selected program is loaded
+with private maps. Only non-internal maps referenced by that loaded program
+are pinned under `fs/maps/{program_id}`; kernel map IDs establish membership,
+without relying on truncated kernel names. Internal data maps remain
+kernel-owned and are not pinned separately. Loading does not attach programs.
 
 Bytecode and provenance are written into an exclusively created staging
 directory, then published to `programs/{id}` with `RENAME_NOREPLACE`. Partial
@@ -553,10 +556,31 @@ mounted bpffs may remain after a failed load. Crash recovery is separate work.
 Non-UTF-8 source/runtime paths are rejected before load effects because this
 slice persists paths as SQLite text; read-only listing still accepts native paths.
 
-The store creates the private map set and tracepoint row in one transaction,
-with Go's source path, license, metadata, UTC creation time, and null update time.
+SQLite creates every selected tracepoint and private map set in one transaction;
+JSON publishes one complete snapshot. Records retain Go's source path, license,
+metadata, UTC creation time, and null update time.
 Existing rows are not overwritten. On commit, ownership transfers to stored
 state; failed output delivery never compensates the successful load.
+
+For multiple selections, call `PreparedTracepoint::with_additional_programs`
+with the remaining symbols, then `Bpfman::load_batch`. The prepared batch keeps
+one captured ELF and validates every symbol before runtime initialization.
+Each member passes through the same forward interpreter as a single load.
+Kernel/filesystem work finishes for all members before the single store commit.
+A later failure compensates the current member and all earlier members in
+reverse order, attempting every independent cleanup even when another fails.
+The original cause, every cleanup attempt, and all unresolved receipts survive
+in `LoadError`; `retry_load_cleanup` retries only outstanding work. Cancellation
+before commit uses this same path. Post-commit observation failure names the
+committed IDs and output failure leaves the entire batch loaded.
+
+Shared store tests reject later collisions and duplicate IDs without publishing
+earlier rows or map sets. Batch fault tests cross later forward failures with
+earlier cleanup failures and cover cancellation and explicit retry. Kernel tests
+cover second-program verifier rejection, batch commit failure, retained cleanup,
+private map ownership, CLI ordering, and post-commit observation/output failure.
+The unchanged three-program tracepoint DSL tests staggered detach and counter
+execution against both SQLite and JSON.
 
 Build and run the focused real-kernel acceptance gate with:
 

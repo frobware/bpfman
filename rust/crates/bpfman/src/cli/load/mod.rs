@@ -9,7 +9,7 @@ mod parse;
 mod request;
 
 pub(crate) struct PreparedLoad {
-    request: bpfman_runtime::PreparedTracepoint,
+    request: bpfman_runtime::PreparedTracepoints,
     output: LoadOutput,
 }
 

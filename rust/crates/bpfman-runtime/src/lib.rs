@@ -92,6 +92,13 @@ pub struct PreparedTracepoint {
     metadata: std::collections::BTreeMap<String, String>,
 }
 
+/// Validated, nonempty local tracepoint batch sharing one captured ELF snapshot.
+/// Each member owns private maps; persistence publishes the entire batch atomically.
+pub struct PreparedTracepoints {
+    first: PreparedTracepoint,
+    remaining: Vec<bpfman_model::Symbol>,
+}
+
 /// Store opened at startup and bound to an adopted runtime directory.
 /// Only absent state is initialized, under the writer lock. Move this handle
 /// into `Bpfman` to use the application API without supplying runtime paths.

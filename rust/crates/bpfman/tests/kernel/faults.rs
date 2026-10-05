@@ -170,11 +170,11 @@ impl<R: ProgramReader> ProgramReader for Reader<R> {
 }
 
 impl<S: CommitLoad> CommitLoad for Faults<S> {
-    fn commit_tracepoint(
+    fn commit_tracepoints(
         &self,
         w: &RuntimeWriter<'_>,
-        record: TracepointRecord<'_>,
-    ) -> Result<StoredProgramSummary, Error> {
+        records: &[TracepointRecord<'_>],
+    ) -> Result<(), Error> {
         if self
             .state
             .lock()
@@ -184,6 +184,7 @@ impl<S: CommitLoad> CommitLoad for Faults<S> {
         {
             // Replace only this request's bytecode directory. Cleanup must refuse
             // the symlink and retain the original directory/file receipts.
+            let record = records.first().expect("nonempty fault batch");
             let bytecode = w.layout().bytecode_path(record.id);
             let directory = bytecode.parent().expect("program directory");
             let saved = w.layout().root().join("saved-bytecode");
@@ -194,10 +195,10 @@ impl<S: CommitLoad> CommitLoad for Faults<S> {
         }
 
         check(&self.state, Point::Commit)?;
-        let result = self.backend.commit_tracepoint(w, record)?;
+        self.backend.commit_tracepoints(w, records)?;
         self.state.lock().expect("fault state").committed = true;
 
-        Ok(result)
+        Ok(())
     }
 }
 

@@ -7,7 +7,6 @@ use crate::{
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
-use bpfman_model::StoredProgramSummary;
 use bpfman_store::{
     CommitLoad, OpenStore, ProgramReader, TracepointRecord, UnloadObservation, UnloadStore,
 };
@@ -130,13 +129,13 @@ impl<S: OpenStore> OpenStore for ActiveStore<S> {
 }
 
 impl<S: OpenStore + CommitLoad> CommitLoad for ActiveStore<S> {
-    fn commit_tracepoint(
+    fn commit_tracepoints(
         &self,
         writer: &RuntimeWriter<'_>,
-        record: TracepointRecord<'_>,
-    ) -> Result<StoredProgramSummary, bpfman_store::Error> {
+        records: &[TracepointRecord<'_>],
+    ) -> Result<(), bpfman_store::Error> {
         self.check_writer(writer)?;
-        self.backend.commit_tracepoint(writer, record)
+        self.backend.commit_tracepoints(writer, records)
     }
 }
 

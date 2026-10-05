@@ -131,3 +131,58 @@ fn sqlite_contract() {
 fn json_contract() {
     exercise(bpfman_store_json::Backend);
 }
+
+fn batch_contract<S: OpenStore + CommitLoad>(backend: S) {
+    let temporary = tempfile::tempdir().expect("tempdir");
+    let layout = RuntimeLayout::try_from(temporary.path().join("runtime")).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+    let store =
+        bpfman_runtime::ActiveStore::open(backend, &layout, Duration::from_secs(1)).expect("store");
+    let name = Symbol::try_from("trace").expect("symbol");
+    let metadata = BTreeMap::new();
+    let globals = BTreeMap::new();
+    let record = |id| TracepointRecord {
+        id: NonZeroU32::new(id).expect("id"),
+        name: &name,
+        source: "/source.o",
+        license: "GPL",
+        created_at: "2026-10-05T00:00:00Z",
+        metadata: &metadata,
+        globals: &globals,
+    };
+
+    with_writer(&runtime, |writer| {
+        let mut reader = store.open(writer).expect("reader");
+        store.commit_tracepoints(writer, &[]).expect("empty batch");
+        assert!(reader.read_records().expect("empty").is_empty());
+        commit(&store, writer, 7);
+        let before = reader.read_records().expect("baseline");
+
+        // A later existing ID and an intra-batch duplicate must both roll back
+        // the earlier program AND its private map set.
+        for ids in [[42, 7], [42, 42]] {
+            assert!(store.commit_tracepoints(writer, &ids.map(record)).is_err());
+            assert_eq!(reader.read_records().expect("unchanged"), before);
+        }
+
+        store
+            .commit_tracepoints(writer, &[record(42), record(43), record(44)])
+            .expect("atomic batch");
+        let records = reader.read_records().expect("fresh snapshot");
+        assert_eq!(records.len(), 4);
+        for id in [42, 43, 44] {
+            let member = records.iter().find(|r| r.id.get() == id).expect("member");
+            assert_eq!(member.map_set, member.id);
+        }
+    });
+}
+
+#[test]
+fn sqlite_atomic_batch_contract() {
+    batch_contract(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_atomic_batch_contract() {
+    batch_contract(bpfman_store_json::Backend);
+}

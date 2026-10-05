@@ -223,7 +223,7 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
     let runtime = temporary.path().join("runtime");
 
     for options in [
-        vec!["--programs", "tracepoint:a,tracepoint:b"],
+        vec!["--programs", "tracepoint:a,xdp:b"],
         vec!["--programs", "tracepoint:a", "--map-owner-id", "1"],
     ] {
         assert_failure(
@@ -312,5 +312,34 @@ fn local_tracepoint_validates_source_before_runtime_creation() -> Result {
 
     assert!(!runtime.exists());
 
+    Ok(())
+}
+
+#[test]
+fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selections() -> Result {
+    let temporary = tempfile::tempdir()?;
+    let source = temporary.path().join("source.o");
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o");
+    std::fs::copy(fixture, &source)?;
+    let prepare = || {
+        bpfman_runtime::PreparedTracepoint::new(
+            &source,
+            "tp_a".try_into().expect("symbol"),
+            Default::default(),
+        )
+    };
+
+    for extra in ["tp_a", "missing"] {
+        let result = prepare()?.with_additional_programs(vec![extra.try_into().expect("symbol")]);
+        match result {
+            Err(error) => assert_eq!(error.kind(), bpfman_runtime::LoadErrorKind::InvalidInput),
+            Ok(_) => return Err("invalid batch selection accepted".into()),
+        }
+    }
+
+    let prepared = prepare()?;
+    std::fs::write(&source, b"replaced after validation")?;
+    let _batch = prepared.with_additional_programs(vec!["tp_b".try_into().expect("symbol")])?;
     Ok(())
 }

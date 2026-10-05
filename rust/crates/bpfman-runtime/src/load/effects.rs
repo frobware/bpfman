@@ -3,7 +3,7 @@
 use crate::{LoadCleanup, kernel::LocalObject, load_error::Failure};
 use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
-use bpfman_model::{StoredProgramSummary, Symbol};
+use bpfman_model::Symbol;
 use std::{collections::BTreeMap, num::NonZeroU32};
 
 pub(crate) struct Inputs<'a> {
@@ -36,6 +36,8 @@ pub(crate) trait LoadEffects: CleanupEffects {
 
     fn cancelled(&self) -> Self::Error;
 
+    fn batch_aborted(&self) -> Self::Error;
+
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, Self::Error>;
 
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, Self::Error>;
@@ -55,6 +57,8 @@ pub(crate) trait LoadEffects: CleanupEffects {
     ) -> AcquisitionResult<Self::ProgramPin, Self::Error>;
 
     fn program_id(pin: &Self::ProgramPin) -> NonZeroU32;
+
+    fn map_names(kernel: &Self::Kernel) -> &[String];
 
     fn create_map_directory(
         &mut self,
@@ -82,9 +86,8 @@ pub(crate) trait LoadEffects: CleanupEffects {
     fn persist(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        id: NonZeroU32,
-        input: &Inputs<'_>,
-    ) -> Result<StoredProgramSummary, Self::Error>;
+        records: &[(NonZeroU32, &Inputs<'_>)],
+    ) -> Result<(), Self::Error>;
 }
 
 // Cleanup never requires a store, including explicit retries after load failure.

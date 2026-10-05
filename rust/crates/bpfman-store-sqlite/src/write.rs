@@ -25,13 +25,54 @@ pub fn persist_tracepoint(
     writer: &RuntimeWriter<'_>,
     record: TracepointRecord<'_>,
 ) -> Result<StoredProgramSummary, Error> {
-    persist(writer, record).map_err(Error::from)
+    let summary = StoredProgramSummary::new(
+        record.id,
+        record.name.as_str().into(),
+        ProgramType::Tracepoint,
+        record.metadata.clone(),
+        Vec::new(),
+    );
+    persist_batch(writer, &[record])?;
+
+    Ok(summary)
 }
 
-fn persist(
+pub(crate) fn persist_batch(
     writer: &RuntimeWriter<'_>,
-    record: TracepointRecord<'_>,
-) -> Result<StoredProgramSummary, Failure> {
+    records: &[TracepointRecord<'_>],
+) -> Result<(), Error> {
+    persist(writer, records).map_err(Error::from)
+}
+
+fn persist(writer: &RuntimeWriter<'_>, records: &[TracepointRecord<'_>]) -> Result<(), Failure> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    let mut connection =
+        Connection::open_with_flags(writer.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    connection.pragma_update(None, "foreign_keys", true)?;
+    require_supported(schema_version(&connection)?)?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    require_supported(schema_version(&tx)?)?;
+
+    for record in records {
+        insert(&tx, writer, record)?;
+    }
+
+    tx.commit()?;
+
+    Ok(())
+}
+
+fn insert(
+    tx: &rusqlite::Transaction<'_>,
+    writer: &RuntimeWriter<'_>,
+    record: &TracepointRecord<'_>,
+) -> Result<(), Failure> {
     let layout = writer.layout();
     let object_path = layout.bytecode_path(record.id);
     let pin_path = layout.program_pin_path(record.id);
@@ -53,18 +94,8 @@ fn persist(
         source,
     })?;
 
-    let mut connection =
-        Connection::open_with_flags(writer.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-    connection.busy_timeout(std::time::Duration::from_secs(5))?;
-    connection.pragma_update(None, "foreign_keys", true)?;
-    require_supported(schema_version(&connection)?)?;
-    connection.pragma_update(None, "journal_mode", "WAL")?;
-
-    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    require_supported(schema_version(&tx)?)?;
-
     queries::insert_map_set(
-        &tx,
+        tx,
         queries::MapSetIdentity {
             id: record.id,
             pin_path: map_path,
@@ -81,9 +112,9 @@ fn persist(
             | "Dual MPL/GPL"
     );
     queries::insert_tracepoint(
-        &tx,
+        tx,
         queries::TracepointInsert {
-            record: &record,
+            record,
             object_path,
             pin_path,
             metadata: &metadata,
@@ -92,17 +123,7 @@ fn persist(
         },
     )?;
 
-    // Construct output before commit. Nothing fallible follows a successful commit.
-    let summary = StoredProgramSummary::new(
-        record.id,
-        record.name.as_str().into(),
-        ProgramType::Tracepoint,
-        record.metadata.clone(),
-        Vec::new(),
-    );
-    tx.commit()?;
-
-    Ok(summary)
+    Ok(())
 }
 
 fn utf8(path: &std::path::Path, id: std::num::NonZeroU32) -> Result<&str, Failure> {

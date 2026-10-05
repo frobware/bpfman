@@ -171,6 +171,29 @@ impl ProgramReader for Memory {
 }
 
 impl CommitLoad for Memory {
+    fn commit_tracepoints(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        records: &[TracepointRecord<'_>],
+    ) -> Result<(), Error> {
+        // This fixture models one program; reject unsupported batches before mutation.
+        assert_eq!(records.len(), 1);
+        let record = &records[0];
+        self.commit_tracepoint(
+            writer,
+            TracepointRecord {
+                id: record.id,
+                name: record.name,
+                source: record.source,
+                license: record.license,
+                created_at: record.created_at,
+                metadata: record.metadata,
+                globals: record.globals,
+            },
+        )
+        .map(|_| ())
+    }
+
     fn commit_tracepoint(
         &self,
         writer: &RuntimeWriter<'_>,

@@ -151,6 +151,7 @@ dependencies = [
  "base64",
  "bpfman-core",
  "bpfman-fs",
+ "bpfman-kernel",
  "bpfman-lock",
  "bpfman-model",
  "bpfman-runtime",

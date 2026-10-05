@@ -110,14 +110,20 @@ impl ProgramReader for Reader {
 
 impl CommitLoad for Backend {
     #[tracing::instrument(name = "store.commit", level = "debug", skip_all, err)]
-    fn commit_tracepoint(
+    fn commit_tracepoints(
         &self,
         writer: &RuntimeWriter<'_>,
-        record: TracepointRecord<'_>,
-    ) -> Result<StoredProgramSummary, Error> {
+        records: &[TracepointRecord<'_>],
+    ) -> Result<(), Error> {
+        if records.is_empty() {
+            return Ok(());
+        }
+
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
         let (previous, mut state) = read(&file)?;
-        let summary = state.insert(record)?;
+        for record in records {
+            state.insert(record)?;
+        }
 
         // Ensure every record can be observed before transferring ownership.
         for row in &state.programs {
@@ -126,7 +132,7 @@ impl CommitLoad for Backend {
 
         publish(writer, &file, Some(&previous), &state)?;
 
-        Ok(summary)
+        Ok(())
     }
 }
 

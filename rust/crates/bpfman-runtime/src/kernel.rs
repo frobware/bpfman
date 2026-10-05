@@ -14,6 +14,11 @@ pub(super) struct LocalObject {
     pub(super) globals: BTreeMap<String, Vec<u8>>,
 }
 
+pub(super) struct LoadedObject {
+    pub(super) bpf: aya::Ebpf,
+    pub(super) maps: Vec<String>,
+}
+
 impl LocalObject {
     pub(super) fn read(path: &Path, name: &Symbol) -> Result<Self, LoadCause> {
         // O_NONBLOCK makes a FIFO fail regular-file validation instead of hanging.
@@ -76,7 +81,7 @@ impl LocalObject {
         })
     }
 
-    pub(super) fn load(&self, name: &Symbol) -> Result<aya::Ebpf, LoadCause> {
+    pub(super) fn load(&self, name: &Symbol) -> Result<LoadedObject, LoadCause> {
         let mut loader = aya::EbpfLoader::new();
         for (name, value) in &self.globals {
             loader.override_global(name, value.as_slice(), true);
@@ -95,6 +100,64 @@ impl LocalObject {
             .load()
             .map_err(|e| LoadCause::Program(Box::new(e)))?;
 
-        Ok(bpf)
+        let ids = tracepoint
+            .info()
+            .and_then(|info| info.map_ids())
+            .map_err(|e| LoadCause::Program(Box::new(e)))?
+            .ok_or_else(|| LoadCause::Invalid("kernel did not report program map IDs".into()))?;
+        let mut maps = Vec::new();
+
+        for name in &self.maps {
+            let map = bpf
+                .map(name)
+                .ok_or_else(|| LoadCause::Invalid(format!("missing loaded map {name}")))?;
+            if ids.contains(&map_id(map)?) {
+                maps.push(name.clone());
+            }
+        }
+
+        Ok(LoadedObject { bpf, maps })
     }
+}
+
+// Aya exposes MapData::info but has no corresponding method on its Map enum.
+// Match exhaustively so newly supported map variants require an explicit review.
+fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
+    use aya::maps::Map;
+    let data = match map {
+        Map::Array(data)
+        | Map::ArrayOfMaps(data)
+        | Map::BloomFilter(data)
+        | Map::CgroupArray(data)
+        | Map::CgroupStorage(data)
+        | Map::CgrpStorage(data)
+        | Map::CpuMap(data)
+        | Map::DevMap(data)
+        | Map::DevMapHash(data)
+        | Map::HashMap(data)
+        | Map::HashOfMaps(data)
+        | Map::InodeStorage(data)
+        | Map::LpmTrie(data)
+        | Map::LruHashMap(data)
+        | Map::PerCpuArray(data)
+        | Map::PerCpuCgroupStorage(data)
+        | Map::PerCpuHashMap(data)
+        | Map::PerCpuLruHashMap(data)
+        | Map::PerfEventArray(data)
+        | Map::ProgramArray(data)
+        | Map::Queue(data)
+        | Map::ReusePortSockArray(data)
+        | Map::RingBuf(data)
+        | Map::SockHash(data)
+        | Map::SockMap(data)
+        | Map::SkStorage(data)
+        | Map::Stack(data)
+        | Map::StackTraceMap(data)
+        | Map::Unsupported(data)
+        | Map::XskMap(data) => data,
+    };
+
+    data.info()
+        .map(|info| info.id())
+        .map_err(|e| LoadCause::Map(Box::new(e)))
 }

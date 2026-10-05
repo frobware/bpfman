@@ -47,10 +47,8 @@ fn fire() {
 }
 
 pub(super) fn assert_gone(kernel: NonZeroU32) {
-    let links = aya::programs::loaded_links()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("kernel links");
-    assert!(!links.iter().any(|info| info.id() == kernel.get()));
+    let error = bpfman_kernel::observe_tracepoint_link(kernel).expect_err("link must be gone");
+    assert_eq!(error.kind(), bpfman_kernel::ErrorKind::Missing);
 }
 
 pub(super) fn exercise<S>(backend: S)

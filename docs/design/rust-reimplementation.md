@@ -3,7 +3,8 @@
 ## Status
 
 Implementation in progress in the independent `rust/` workspace. Managed
-listing and one local-file tracepoint load (without attachment) are executable.
+observation, atomic local-file tracepoint batches, standalone attach/detach,
+and unload are executable with SQLite and JSON stores.
 See [the workspace checkpoint](../../rust/README.md) for supported options and
 the focused kernel acceptance gate; full behavioural parity remains unfinished.
 
@@ -1074,6 +1075,14 @@ The new workspace begins with these conventions:
 - Unload the program and verify residue-free cleanup.
 - Exercise every failure boundary with pure-machine and adapter tests.
 - Admit the unchanged tracepoint lifecycle scripts to the Rust parity lane.
+
+Phase 2 checkpoint: the tracepoint slice now includes batch selection and one
+atomic commit, private per-program maps, pending-link attachment, detach, and
+unload. The gate exercises both stores, failure compensation and explicit retry,
+cancellation, real-kernel lifecycle tests, and the unchanged single- and
+multi-program tracepoint DSL scripts. The batch implementation pins only maps
+referenced by each loaded program so unload can verify their ownership.
+Dispatcher work remains the next implementation phase.
 
 ### Phase 3: dispatcher proof
 

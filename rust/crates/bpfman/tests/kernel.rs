@@ -3,6 +3,8 @@
 #![allow(clippy::expect_used)]
 #[path = "kernel/attached.rs"]
 mod attached;
+#[path = "kernel/batch.rs"]
+mod batch;
 #[path = "kernel/cancellation.rs"]
 mod cancellation;
 #[path = "kernel/cli.rs"]
@@ -128,4 +130,34 @@ fn sqlite_unload_pending_intent_without_pin() {
 #[test]
 fn json_unload_pending_intent_without_pin() {
     pending::unpinned(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_batch_lifecycle() {
+    batch::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_batch_lifecycle() {
+    batch::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_unchanged_tracepoint_dsl_batch() {
+    cli::dsl("sqlite", "TestMultiProgTracepoint_LoadAttachDetachUnload");
+}
+
+#[test]
+fn json_unchanged_tracepoint_dsl_batch() {
+    cli::dsl("json", "TestMultiProgTracepoint_LoadAttachDetachUnload");
+}
+
+#[test]
+fn sqlite_batch_cli() {
+    batch::cli("sqlite");
+}
+
+#[test]
+fn json_batch_cli() {
+    batch::cli("json");
 }

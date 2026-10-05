@@ -65,7 +65,7 @@ pub struct TracepointRecord<'a> {
     pub globals: &'a BTreeMap<String, Vec<u8>>,
 }
 
-/// Atomic publication of a loaded program and its private map-set membership.
+/// Atomic publication of loaded programs and their private map-set memberships.
 ///
 /// An unlocked runtime cannot authorize a commit, regardless of backend:
 /// ```compile_fail
@@ -82,7 +82,27 @@ pub trait CommitLoad {
         &self,
         writer: &RuntimeWriter<'_>,
         record: TracepointRecord<'_>,
-    ) -> Result<StoredProgramSummary, Error>;
+    ) -> Result<StoredProgramSummary, Error> {
+        let summary = StoredProgramSummary::new(
+            record.id,
+            record.name.as_str().into(),
+            bpfman_model::ProgramType::Tracepoint,
+            record.metadata.clone(),
+            Vec::new(),
+        );
+        self.commit_tracepoints(writer, &[record])?;
+
+        Ok(summary)
+    }
+
+    /// Publish every member in one atomic operation, in input order. A failure
+    /// publishes none of the batch, including map sets. Never overwrite records.
+    /// An empty batch is a no-op. Success ends compensation authority for all members.
+    fn commit_tracepoints(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        records: &[TracepointRecord<'_>],
+    ) -> Result<(), Error>;
 }
 
 /// Conditional teardown of a tracepoint with exclusively owned maps.
