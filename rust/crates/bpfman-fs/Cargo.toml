@@ -8,23 +8,11 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-# Permit only the private XDP syscall module to opt in to unsafe. All other
-# modules retain the workspace gates (deny replaces the inherited forbid).
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "deny"
-unreachable_pub = "deny"
-[lints.clippy]
-disallowed_methods = "deny"
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
-dbg_macro = "deny"
+[lints]
+workspace = true
 
 [dependencies]
-libc.workspace = true
 tracing.workspace = true
-aya.workspace = true
 bpfman-core.workspace = true
 bpfman-model.workspace = true
 

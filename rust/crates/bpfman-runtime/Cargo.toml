@@ -16,8 +16,6 @@ tracing.workspace = true
 bpfman-store.workspace = true
 bpfman-kernel.workspace = true
 libc.workspace = true
-aya.workspace = true
-aya-obj.workspace = true
 chrono.workspace = true
 serde_json.workspace = true
 
@@ -28,7 +26,7 @@ bpfman-core.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+bpfman-kernel-aya.workspace = true
 bpfman-store-sqlite.workspace = true
 bpfman-store-json.workspace = true
-bpfman-kernel-aya.workspace = true
 tempfile.workspace = true

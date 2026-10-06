@@ -45,8 +45,8 @@ impl From<bpfman_runtime::Error> for Error {
     }
 }
 
-impl From<bpfman_runtime::LoadError> for Error {
-    fn from(cause: bpfman_runtime::LoadError) -> Self {
+impl From<bpfman_runtime::LoadError<bpfman_kernel_aya::Kernel>> for Error {
+    fn from(cause: bpfman_runtime::LoadError<bpfman_kernel_aya::Kernel>) -> Self {
         let cancelled = cause.kind() == bpfman_runtime::LoadErrorKind::Cancelled;
         Self {
             cause: cause.into(),
@@ -66,9 +66,9 @@ impl From<bpfman_runtime::ObservationError> for Error {
 }
 
 impl<S: bpfman_store::UnloadStore + bpfman_store::LinkStore + 'static>
-    From<bpfman_runtime::UnloadError<S>> for Error
+    From<bpfman_runtime::UnloadError<S, bpfman_kernel_aya::Kernel>> for Error
 {
-    fn from(cause: bpfman_runtime::UnloadError<S>) -> Self {
+    fn from(cause: bpfman_runtime::UnloadError<S, bpfman_kernel_aya::Kernel>) -> Self {
         let cancelled = cause.kind() == bpfman_runtime::UnloadErrorKind::Cancelled;
         Self {
             cause: cause.into(),
@@ -87,8 +87,10 @@ impl From<bpfman_runtime::LinkCause> for Error {
     }
 }
 
-impl<S: bpfman_store::LinkStore + 'static> From<bpfman_runtime::LinkError<S>> for Error {
-    fn from(cause: bpfman_runtime::LinkError<S>) -> Self {
+impl<S: bpfman_store::LinkStore + 'static>
+    From<bpfman_runtime::LinkError<S, bpfman_kernel_aya::Kernel>> for Error
+{
+    fn from(cause: bpfman_runtime::LinkError<S, bpfman_kernel_aya::Kernel>) -> Self {
         let cancelled = cause.kind() == bpfman_runtime::LinkErrorKind::Cancelled;
         Self {
             cause: cause.into(),
@@ -97,8 +99,10 @@ impl<S: bpfman_store::LinkStore + 'static> From<bpfman_runtime::LinkError<S>> fo
     }
 }
 
-impl<S: bpfman_store::XdpStore + 'static> From<bpfman_runtime::XdpError<S>> for Error {
-    fn from(cause: bpfman_runtime::XdpError<S>) -> Self {
+impl<S: bpfman_store::XdpStore + 'static>
+    From<bpfman_runtime::XdpError<S, bpfman_kernel_aya::Kernel>> for Error
+{
+    fn from(cause: bpfman_runtime::XdpError<S, bpfman_kernel_aya::Kernel>) -> Self {
         let cancelled = cause.kind() == bpfman_runtime::LinkErrorKind::Cancelled;
         Self {
             cause: cause.into(),

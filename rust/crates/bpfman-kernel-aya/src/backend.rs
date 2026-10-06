@@ -26,7 +26,7 @@ impl ProgramObservations for Kernel {
         runtime: &RuntimeDirectory,
         map_set: NonZeroU32,
     ) -> Result<Vec<ObservedMapPin>, Error> {
-        runtime.read_map_pins(map_set).map_err(filesystem)
+        runtime.read_map_pins(self, map_set).map_err(filesystem)
     }
 }
 
@@ -44,7 +44,7 @@ impl LinkObservations for Kernel {
         runtime: &RuntimeDirectory,
         id: NonZeroU64,
     ) -> Result<Option<KernelLink>, Error> {
-        runtime.read_link_pin(id).map_err(filesystem)
+        runtime.read_link_pin(self, id).map_err(filesystem)
     }
 
     fn extension_pin(
@@ -52,6 +52,6 @@ impl LinkObservations for Kernel {
         runtime: &RuntimeDirectory,
         link: &XdpLink,
     ) -> Result<Option<KernelLink>, Error> {
-        runtime.read_xdp_link_pin(link).map_err(filesystem)
+        runtime.read_xdp_link_pin(self, link).map_err(filesystem)
     }
 }

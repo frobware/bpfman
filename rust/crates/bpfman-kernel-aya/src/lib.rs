@@ -1,14 +1,51 @@
-//! Concrete Linux implementation of the kernel observation contracts.
+//! Concrete Linux implementation of the kernel observation and lifecycle contracts.
 //!
 //! BPF ABI types and syscalls stay private. Filesystem traversal is delegated
 //! to bpfman-fs, which verifies the adopted runtime and canonical pin locations.
 
 mod backend;
+mod failure;
+mod object;
 mod observe;
+mod pin_syscall;
+mod pinning;
+mod program;
 mod syscall;
+mod tracepoint;
+mod xdp;
 
 use bpfman_kernel::{Error, ErrorKind};
 
-/// Linux kernel observer selected by the application composition root.
+/// Linux kernel backend selected by the application composition root.
 #[derive(Debug, Default)]
 pub struct Kernel;
+
+/// Owned Aya program and maps; its representation is private to this adapter.
+///
+/// Concrete library objects cannot escape through the public handle:
+/// ```compile_fail,E0616
+/// fn expose(loaded: bpfman_kernel_aya::LoadedObject) {
+///     let _aya = loaded.bpf;
+/// }
+/// ```
+pub struct LoadedObject {
+    bpf: aya::Ebpf,
+    name: String,
+    maps: Vec<String>,
+}
+
+/// Owned, loaded dispatcher. Dropping it releases only local handles.
+pub struct Dispatcher(aya::Ebpf);
+
+/// Opaque adopted tracepoint handle.
+pub struct AyaTracepoint(aya::programs::TracePoint);
+
+/// Opaque adopted extension handle.
+pub struct AyaExtension(aya::programs::Extension);
+
+/// Opaque owned, unpinned attachment.
+#[derive(Debug)]
+pub struct AyaLink(aya::programs::links::FdLink);
+
+/// Opaque owned outer-link descriptor.
+pub struct AyaOuter(std::os::fd::OwnedFd);

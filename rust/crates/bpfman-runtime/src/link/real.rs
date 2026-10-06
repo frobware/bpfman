@@ -6,7 +6,7 @@ use bpfman_model::{LinkState, ProgramSpec, StoredLink};
 use bpfman_store::{LinkStore, OpenStore, PendingTracepoint, ProgramReader};
 use std::num::{NonZeroU32, NonZeroU64};
 
-pub(super) struct Adapter<'a, S: OpenStore>(pub(super) &'a ActiveStore<S>);
+pub(super) struct Adapter<'a, S: OpenStore, K>(pub(super) &'a ActiveStore<S>, pub(super) &'a K);
 
 fn failure<T>(error: EffectFailure<T, impl Into<LinkCause>>) -> EffectFailure<T, LinkCause> {
     EffectFailure {
@@ -15,10 +15,10 @@ fn failure<T>(error: EffectFailure<T, impl Into<LinkCause>>) -> EffectFailure<T,
     }
 }
 
-impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
-    type Prepared = bpfman_fs::PreparedTracepointAttach;
-    type Live = bpfman_fs::LiveTracepoint;
-    type Pin = bpfman_fs::LinkPin;
+impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Adapter<'_, S, K> {
+    type Prepared = K::PreparedTracepoint;
+    type Live = K::LiveTracepoint;
+    type Pin = K::LinkPin;
     type Receipt = S::LinkReceipt;
 
     fn prepare(
@@ -41,8 +41,8 @@ impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
             return Err(Cause::Invalid("program pin differs from canonical runtime layout").into());
         }
 
-        writer
-            .prepare_tracepoint_attach(program)
+        self.1
+            .prepare_tracepoint(writer, program)
             .map_err(Into::into)
     }
 
@@ -71,7 +71,9 @@ impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
         prepared: Self::Prepared,
         request: &TracepointAttach,
     ) -> Result<Self::Live, LinkCause> {
-        prepared.attach(writer, &request.target).map_err(Into::into)
+        self.1
+            .attach_tracepoint(writer, prepared, &request.target)
+            .map_err(Into::into)
     }
 
     fn pin(
@@ -80,7 +82,7 @@ impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
         live: Self::Live,
         id: NonZeroU64,
     ) -> Result<Self::Pin, EffectFailure<Option<Self::Pin>, LinkCause>> {
-        live.pin(writer, id).map_err(failure)
+        self.1.pin_tracepoint(writer, live, id).map_err(failure)
     }
 
     fn finalise(
@@ -90,7 +92,7 @@ impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
         pin: &Self::Pin,
     ) -> Result<StoredLink, EffectFailure<Self::Receipt, LinkCause>> {
         self.0
-            .finalise_link(writer, receipt, pin.kernel_id())
+            .finalise_link(writer, receipt, K::link_id(pin))
             .map_err(failure)
     }
 
@@ -118,8 +120,8 @@ impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
             LinkState::Pending => None,
             LinkState::Attached { kernel_id } => Some(kernel_id),
         };
-        writer
-            .observe_link_pin(record.id, record.program_id, kernel)
+        self.1
+            .observe_link_pin(writer, record.id, record.program_id, kernel)
             .map_err(Into::into)
     }
 
@@ -128,7 +130,7 @@ impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
         writer: &RuntimeWriter<'_>,
         receipt: Self::Live,
     ) -> Result<(), EffectFailure<Self::Live, LinkCause>> {
-        writer.release_tracepoint(receipt).map_err(failure)
+        self.1.release_tracepoint(writer, receipt).map_err(failure)
     }
 
     fn unpin(
@@ -136,7 +138,7 @@ impl<S: OpenStore + LinkStore> Effects for Adapter<'_, S> {
         writer: &RuntimeWriter<'_>,
         receipt: Self::Pin,
     ) -> Result<(), EffectFailure<Self::Pin, LinkCause>> {
-        writer.remove_link_pin(receipt).map_err(failure)
+        self.1.remove_link(writer, receipt).map_err(failure)
     }
 
     fn delete(

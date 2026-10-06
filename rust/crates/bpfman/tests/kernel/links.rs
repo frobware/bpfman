@@ -68,6 +68,7 @@ where
     let loaded = app
         .load(
             PreparedProgram::new(
+                &bpfman_kernel_aya::Kernel,
                 &fixture("tracepoint_counter.bpf.o"),
                 bpfman_model::ProgramSpec::Tracepoint(
                     bpfman_model::Symbol::try_from(NAME).expect("symbol"),
@@ -160,7 +161,7 @@ where
     swap();
     c.writer(|writer| {
         let pin = writer
-            .observe_link_pin(other.id, id, None)
+            .observe_link_pin(&bpfman_kernel_aya::Kernel, other.id, id, None)
             .expect("observe pin")
             .expect("pin");
         writer

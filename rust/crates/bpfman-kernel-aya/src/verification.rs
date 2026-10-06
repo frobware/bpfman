@@ -3,7 +3,7 @@
 //! verification target alive. Aya closes its target descriptor when the load
 //! object is released; the kernel releases the target with the extension.
 
-use crate::load_error::LoadCause;
+use crate::failure::LoadCause;
 use aya::programs::{Extension, Program, Xdp};
 
 pub(super) fn load(program: &mut Program) -> Result<(), LoadCause> {

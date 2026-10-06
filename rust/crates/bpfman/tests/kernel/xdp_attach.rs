@@ -98,6 +98,7 @@ where
     let program = app
         .load(
             PreparedProgram::new(
+                &bpfman_kernel_aya::Kernel,
                 &fixture("xdp_pass.bpf.o"),
                 ProgramSpec::Xdp("pass".try_into().expect("symbol")),
                 Default::default(),
@@ -149,6 +150,7 @@ where
     let foreign_program = foreign_app
         .load(
             PreparedProgram::new(
+                &bpfman_kernel_aya::Kernel,
                 &fixture("xdp_pass.bpf.o"),
                 ProgramSpec::Xdp("pass".try_into().expect("symbol")),
                 Default::default(),

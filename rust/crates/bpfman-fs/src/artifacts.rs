@@ -323,17 +323,14 @@ impl PreparedLoad {
     pub fn pin_program(
         &self,
         writer: &RuntimeWriter<'_>,
-        program: &mut aya::programs::Program,
+        program: &mut impl crate::ProgramPinning,
     ) -> Result<ProgramPin, EffectFailure<Option<ProgramPin>, Error>> {
         let fail = |cause| EffectFailure {
             cause,
             remaining: None,
         };
         self.check(writer).map_err(fail)?;
-        let raw = program
-            .info()
-            .map_err(|e| fail(Failure::Program(e).into()))?
-            .id();
+        let raw = program.id().map_err(|e| fail(Failure::Kernel(e).into()))?;
         let id = NonZeroU32::new(raw)
             .ok_or_else(|| fail(Failure::Unsafe("zero kernel program ID").into()))?;
         let owned = entry(
@@ -345,8 +342,8 @@ impl PreparedLoad {
         )
         .map_err(fail)?;
         program
-            .pin(proc_path(&self.bpffs).join(&owned.name))
-            .map_err(|e| fail(Failure::Pin(e).into()))?;
+            .pin(crate::PinTarget(&proc_path(&self.bpffs).join(&owned.name)))
+            .map_err(|e| fail(Failure::Kernel(e).into()))?;
         let mut receipt = ProgramPin {
             id,
             entry: Box::new(owned),
@@ -396,7 +393,7 @@ impl MapDirectory {
         &self,
         writer: &RuntimeWriter<'_>,
         name: &str,
-        map: &aya::maps::Map,
+        map: &impl crate::MapPinning,
     ) -> Result<MapPin, EffectFailure<Option<MapPin>, Error>> {
         let fail = |cause| EffectFailure {
             cause,
@@ -413,8 +410,8 @@ impl MapDirectory {
             false,
         )
         .map_err(fail)?;
-        map.pin(proc_path(&parent).join(name))
-            .map_err(|e| fail(Failure::Pin(e).into()))?;
+        map.pin(crate::PinTarget(&proc_path(&parent).join(name)))
+            .map_err(|e| fail(Failure::Kernel(e).into()))?;
         let mut receipt = MapPin {
             entry: Box::new(owned),
         };

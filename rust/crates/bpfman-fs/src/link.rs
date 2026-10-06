@@ -9,10 +9,7 @@ use crate::{
     observe::{observe, optional_dir},
     removal::open_owned,
 };
-use aya::programs::{
-    ProgramInfo, ProgramType, TracePoint,
-    links::{FdLink, LinkType, PinnedLink},
-};
+use crate::{LinkPinning, TracepointProgram};
 use bpfman_core::EffectFailure;
 use bpfman_model::Tracepoint;
 use std::num::{NonZeroU32, NonZeroU64};
@@ -20,26 +17,26 @@ use std::num::{NonZeroU32, NonZeroU64};
 impl RuntimeWriter<'_> {
     /// Adopt a managed tracepoint's canonical program pin without loading or
     /// mounting anything. Reject mismatched IDs, types, symlinks and ancestors.
-    pub fn prepare_tracepoint_attach(
+    pub fn prepare_tracepoint_attach<K: crate::TracepointKernel>(
         &self,
+        kernel: &K,
         id: NonZeroU32,
-    ) -> Result<PreparedTracepointAttach, Error> {
+    ) -> Result<PreparedTracepointAttach<K::Tracepoint>, Error> {
         let bpffs = optional_dir(&self.runtime.root, "fs", BENEATH)?
             .ok_or(Failure::Unsafe("program bpffs is missing"))?;
         verify_bpffs(&bpffs)?;
         let program_pin = observe(self, &bpffs, "fs", &format!("prog_{id}"), false)?
             .ok_or(Failure::Unsafe("program pin is missing"))?;
-        let info = ProgramInfo::from_pin(proc_path(&bpffs).join(&program_pin.name))
-            .map_err(Failure::Program)?;
+        let (info, program) = kernel
+            .tracepoint_at(crate::PinSource(&proc_path(&bpffs).join(&program_pin.name)))
+            .map_err(Failure::Kernel)?;
 
-        if info.id() != id.get() || info.program_type() != ProgramType::TracePoint.into() {
+        if info.id != id.get() || info.kind != crate::PinProgramKind::Tracepoint {
             return Err(
                 Failure::Unsafe("program pin has a different kernel identity or type").into(),
             );
         }
 
-        let program = TracePoint::from_program_info(info, "managed_tracepoint".into())
-            .map_err(Failure::Program)?;
         open_owned(&program_pin)?;
         let links = ensure_directory(&bpffs, "links", CONFINED)?;
 
@@ -55,6 +52,7 @@ impl RuntimeWriter<'_> {
     /// The caller must validate stored ownership under this same writer scope.
     pub fn observe_link_pin(
         &self,
+        backend: &impl crate::LinkInspection,
         id: NonZeroU64,
         program: NonZeroU32,
         kernel: Option<NonZeroU32>,
@@ -69,14 +67,13 @@ impl RuntimeWriter<'_> {
         let Some(entry) = observe(self, &links, "fs/links", &id.to_string(), false)? else {
             return Ok(None);
         };
-        let link: FdLink = PinnedLink::from_pin(proc_path(&links).join(&entry.name))
-            .map_err(Failure::Link)?
-            .into();
-        let info = link.info().map_err(Failure::Link)?;
+        let info = backend
+            .link_at(crate::PinSource(&proc_path(&links).join(&entry.name)))
+            .map_err(Failure::Kernel)?;
 
-        if info.program_id() != program.get()
-            || info.link_type().map_err(Failure::Link)? != LinkType::PerfEvent
-            || kernel.is_some_and(|id| id.get() != info.id())
+        if info.program_id.get() != program.get()
+            || info.details != bpfman_model::KernelLinkDetails::PerfEvent
+            || kernel.is_some_and(|id| id.get() != info.id.get())
         {
             return Err(Failure::Unsafe(
                 "link pin has a different kernel identity, program, or type",
@@ -84,7 +81,7 @@ impl RuntimeWriter<'_> {
             .into());
         }
 
-        let id = NonZeroU32::new(info.id()).ok_or(Failure::Unsafe("zero kernel link ID"))?;
+        let id = NonZeroU32::new(info.id.get()).ok_or(Failure::Unsafe("zero kernel link ID"))?;
         open_owned(&entry)?;
 
         // Closing this observation descriptor must happen before returning the
@@ -97,10 +94,10 @@ impl RuntimeWriter<'_> {
 
     /// Release an unpinned attachment acquired in this runtime. Closing its owned
     /// descriptor is infallible at this boundary; there is no persistent pin.
-    pub fn release_tracepoint(
+    pub fn release_tracepoint<L: LinkPinning>(
         &self,
-        live: LiveTracepoint,
-    ) -> Result<(), EffectFailure<LiveTracepoint, Error>> {
+        live: LiveTracepoint<L>,
+    ) -> Result<(), EffectFailure<LiveTracepoint<L>, Error>> {
         let result = identity(&self.runtime.root).and_then(|root| {
             if root != live.root {
                 return Err(Failure::Unsafe("attachment belongs to another runtime").into());
@@ -127,27 +124,18 @@ pub(super) fn verify_bpffs(fd: &std::os::fd::OwnedFd) -> Result<(), Error> {
     Ok(())
 }
 
-impl PreparedTracepointAttach {
+impl<P: TracepointProgram> PreparedTracepointAttach<P> {
     /// Attach exactly once, returning ownership of the unpinned kernel link.
     /// Failure releases any locally acquired descriptors before returning.
     pub fn attach(
         mut self,
         writer: &RuntimeWriter<'_>,
         target: &Tracepoint,
-    ) -> Result<LiveTracepoint, Error> {
+    ) -> Result<LiveTracepoint<P::Link>, Error> {
         self.program_pin.check_writer(writer)?;
         open_owned(&self.program_pin)?;
-        let id = self
-            .program
-            .attach(target.group(), target.name())
-            .map_err(Failure::Program)?;
-        let link: FdLink = self
-            .program
-            .take_link(id)
-            .map_err(Failure::Program)?
-            .try_into()
-            .map_err(Failure::Link)?;
-        let id = NonZeroU32::new(link.info().map_err(Failure::Link)?.id())
+        let link = self.program.attach(target).map_err(Failure::Kernel)?;
+        let id = NonZeroU32::new(link.id().map_err(Failure::Kernel)?)
             .ok_or(Failure::Unsafe("zero kernel link ID"))?;
 
         Ok(LiveTracepoint {
@@ -159,7 +147,7 @@ impl PreparedTracepointAttach {
     }
 }
 
-impl LiveTracepoint {
+impl<L: LinkPinning> LiveTracepoint<L> {
     /// Pin this attachment at a store-allocated managed identity. Before pinning,
     /// failure closes the live handle. After pinning, failure retains pin ownership.
     pub fn pin(
@@ -186,15 +174,13 @@ impl LiveTracepoint {
         )
         .map_err(fail)?;
         entry.check_writer(writer).map_err(fail)?;
-        let pinned = self
-            .link
-            .pin(proc_path(&self.links).join(&entry.name))
-            .map_err(|e| fail(Failure::Pin(e).into()))?;
+        self.link
+            .pin(crate::PinTarget(&proc_path(&self.links).join(&entry.name)))
+            .map_err(|e| fail(Failure::Kernel(e).into()))?;
         let mut receipt = LinkPin {
             entry: Box::new(entry),
             id: self.id,
         };
-        drop(pinned);
 
         match receipt.entry.observe() {
             Ok(()) => Ok(receipt),
@@ -216,7 +202,11 @@ impl LinkPin {
 impl crate::RuntimeDirectory {
     /// Read a canonical standalone link pin without writer authority. Traverse
     /// beneath opened descriptors and inspect the opened inode, never a stored path.
-    pub fn read_link_pin(&self, id: NonZeroU64) -> Result<Option<bpfman_model::KernelLink>, Error> {
+    pub fn read_link_pin(
+        &self,
+        backend: &impl crate::LinkInspection,
+        id: NonZeroU64,
+    ) -> Result<Option<bpfman_model::KernelLink>, Error> {
         use rustix::fs::{FileType, Mode, OFlags, fstat, openat2};
         let Some(bpffs) = optional_dir(&self.root, "fs", BENEATH)? else {
             return Ok(None);
@@ -241,16 +231,15 @@ impl crate::RuntimeDirectory {
             return Err(Failure::Unsafe("link pin has unexpected type or hard links").into());
         }
 
-        let link: FdLink = PinnedLink::from_pin(proc_path(&pin))
-            .map_err(Failure::Link)?
-            .into();
-        let info = link.info().map_err(Failure::Link)?;
-        if info.link_type().map_err(Failure::Link)? != LinkType::PerfEvent {
+        let info = backend
+            .link_at(crate::PinSource(&proc_path(&pin)))
+            .map_err(Failure::Kernel)?;
+        if info.details != bpfman_model::KernelLinkDetails::PerfEvent {
             return Err(Failure::Unsafe("link pin is not a perf-event link").into());
         }
-        let id = NonZeroU32::new(info.id()).ok_or(Failure::Unsafe("zero kernel link ID"))?;
+        let id = NonZeroU32::new(info.id.get()).ok_or(Failure::Unsafe("zero kernel link ID"))?;
         let program_id =
-            NonZeroU32::new(info.program_id()).ok_or(Failure::Unsafe("zero program ID"))?;
+            NonZeroU32::new(info.program_id.get()).ok_or(Failure::Unsafe("zero program ID"))?;
 
         Ok(Some(bpfman_model::KernelLink {
             details: bpfman_model::KernelLinkDetails::PerfEvent,

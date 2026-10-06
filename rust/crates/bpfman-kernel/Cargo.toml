@@ -1,6 +1,6 @@
 [package]
 name = "bpfman-kernel"
-description = "Backend-independent kernel observation capabilities"
+description = "Backend-independent kernel observation and lifecycle capabilities"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+bpfman-core.workspace = true
 bpfman-model.workspace = true
 bpfman-fs.workspace = true
 thiserror.workspace = true

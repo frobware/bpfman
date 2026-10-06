@@ -5,6 +5,13 @@
 
 use std::{os::fd::OwnedFd, path::PathBuf};
 
+mod kernel;
+pub use kernel::{
+    ExtensionProgram, KernelResult, LinkInspection, LinkPinning, MapPinning, OuterInfo, OuterLink,
+    PinProgramKind, PinSource, PinTarget, PinnedProgram, ProgramInspection, ProgramPinning,
+    TracepointKernel, TracepointProgram, XdpKernel,
+};
+
 mod xdp;
 pub use xdp::{PreparedXdp, XdpArtifacts, XdpExtensionPin, XdpOuter, XdpProgramPin, XdpRevision};
 
@@ -181,8 +188,8 @@ pub struct ObservedMapPin {
 }
 
 /// Validated pinned tracepoint and link collection, ready for one attachment.
-pub struct PreparedTracepointAttach {
-    program: aya::programs::TracePoint,
+pub struct PreparedTracepointAttach<P: TracepointProgram> {
+    program: P,
     program_pin: artifacts::Entry,
     links: OwnedFd,
 }
@@ -190,10 +197,10 @@ pub struct PreparedTracepointAttach {
 /// Owned, unpinned attachment. Dropping it releases the kernel link descriptor.
 /// Pinning consumes this handle and transfers ownership to a [`LinkPin`].
 #[derive(Debug)]
-pub struct LiveTracepoint {
+pub struct LiveTracepoint<L: LinkPinning> {
     root: artifacts::Identity,
     links: OwnedFd,
-    link: aya::programs::links::FdLink,
+    link: L,
     id: std::num::NonZeroU32,
 }
 

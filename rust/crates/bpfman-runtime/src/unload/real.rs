@@ -1,12 +1,12 @@
 use super::{Artifacts, UnloadEffects};
 use crate::{UnloadCause, unload_error::Cause};
 use bpfman_core::EffectFailure;
-use bpfman_fs::{Bytecode, MapDirectory, MapPin, ProgramPin, RuntimeWriter};
+use bpfman_fs::{Bytecode, RuntimeWriter};
 use bpfman_model::LinkState;
 use bpfman_store::{LinkReader, LinkStore, OpenStore, UnloadStore};
 use std::num::NonZeroU32;
 
-pub(crate) struct Effects<'a, S>(pub(crate) &'a S);
+pub(crate) struct Effects<'a, S, K>(pub(crate) &'a S, pub(crate) &'a K);
 
 fn map_failure<R, E: Into<UnloadCause>>(
     failure: EffectFailure<R, E>,
@@ -17,16 +17,19 @@ fn map_failure<R, E: Into<UnloadCause>>(
     }
 }
 
-impl<S: OpenStore + UnloadStore + LinkStore> UnloadEffects for Effects<'_, S>
+impl<
+    S: OpenStore + UnloadStore + LinkStore,
+    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+> UnloadEffects for Effects<'_, S, K>
 where
     S::Reader: LinkReader,
 {
-    type LinkPin = bpfman_fs::LinkPin;
+    type LinkPin = K::LinkPin;
     type LinkRecord = S::LinkReceipt;
-    type Pin = ProgramPin;
+    type Pin = K::ProgramPin;
     type Record = S::ProgramReceipt;
-    type Map = MapPin;
-    type Directory = MapDirectory;
+    type Map = K::MapPin;
+    type Directory = K::MapDirectory;
     type MapSet = S::MapSetReceipt;
     type Bytecode = Bytecode;
     type Error = UnloadCause;
@@ -49,8 +52,8 @@ where
         &mut self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
-    ) -> Result<Artifacts<ProgramPin, MapPin, MapDirectory, Bytecode>, UnloadCause> {
-        let found = writer.observe_unload(id)?;
+    ) -> Result<Artifacts<K::ProgramPin, K::MapPin, K::MapDirectory, Bytecode>, UnloadCause> {
+        let found = self.1.observe_unload(writer, id)?;
 
         Ok(Artifacts {
             pin: found.program,
@@ -98,7 +101,9 @@ where
                 LinkState::Pending => None,
                 LinkState::Attached { kernel_id } => Some(kernel_id),
             };
-            let pin = writer.observe_link_pin(record.id, record.program_id, kernel)?;
+            let pin = self
+                .1
+                .observe_link_pin(writer, record.id, record.program_id, kernel)?;
             links.push(bpfman_core::UnloadLink {
                 id: record.id,
                 pin,
@@ -114,7 +119,7 @@ where
         writer: &RuntimeWriter<'_>,
         receipt: Self::LinkPin,
     ) -> Result<(), EffectFailure<Self::LinkPin, UnloadCause>> {
-        writer.remove_link_pin(receipt).map_err(map_failure)
+        self.1.remove_link(writer, receipt).map_err(map_failure)
     }
 
     fn delete_link(
@@ -128,9 +133,9 @@ where
     fn unpin(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: ProgramPin,
-    ) -> Result<(), EffectFailure<ProgramPin, UnloadCause>> {
-        writer.remove_program_pin(receipt).map_err(map_failure)
+        receipt: K::ProgramPin,
+    ) -> Result<(), EffectFailure<K::ProgramPin, UnloadCause>> {
+        self.1.remove_program(writer, receipt).map_err(map_failure)
     }
 
     fn delete_record(
@@ -144,18 +149,18 @@ where
     fn remove_map(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: MapPin,
-    ) -> Result<(), EffectFailure<MapPin, UnloadCause>> {
-        writer.remove_map_pin(receipt).map_err(map_failure)
+        receipt: K::MapPin,
+    ) -> Result<(), EffectFailure<K::MapPin, UnloadCause>> {
+        self.1.remove_map(writer, receipt).map_err(map_failure)
     }
 
     fn remove_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: MapDirectory,
-    ) -> Result<(), EffectFailure<MapDirectory, UnloadCause>> {
-        writer
-            .remove_empty_map_directory(receipt)
+        receipt: K::MapDirectory,
+    ) -> Result<(), EffectFailure<K::MapDirectory, UnloadCause>> {
+        self.1
+            .remove_map_directory(writer, receipt)
             .map_err(map_failure)
     }
 

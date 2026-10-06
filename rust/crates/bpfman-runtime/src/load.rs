@@ -21,10 +21,11 @@ pub(super) use real::Effects;
 impl PreparedProgram {
     /// Add distinct program selections from the same captured ELF. Validate
     /// every selection before opening runtime state; preserve input order.
-    pub fn with_additional_programs(
+    pub fn with_additional_programs<K: bpfman_kernel::ProgramLoad>(
         self,
+        kernel: &K,
         specs: Vec<ProgramSpec>,
-    ) -> Result<PreparedPrograms, LoadError> {
+    ) -> Result<PreparedPrograms, LoadError<K>> {
         if specs.is_empty() {
             return Ok(PreparedPrograms {
                 first: self,
@@ -32,8 +33,6 @@ impl PreparedProgram {
             });
         }
 
-        let object = aya_obj::Object::parse(&self.object.bytes)
-            .map_err(|e| LoadCause::Parse(Box::new(e)))?;
         let mut seen = std::collections::BTreeSet::from([self.spec.name().clone()]);
         let mut remaining = Vec::new();
 
@@ -45,7 +44,9 @@ impl PreparedProgram {
                 )
                 .into());
             }
-            crate::kernel::validate_selection(&object, &spec)?;
+            kernel
+                .validate_object(&self.object.bytes, &spec)
+                .map_err(LoadCause::from)?;
 
             remaining.push(spec);
         }
@@ -58,22 +59,19 @@ impl PreparedProgram {
 
     /// Validate global names and byte lengths against the captured ELF before
     /// runtime creation. Values are applied when loading and retained in the store.
-    pub fn with_globals(mut self, globals: BTreeMap<String, Vec<u8>>) -> Result<Self, LoadError> {
+    pub fn with_globals<K: bpfman_kernel::ProgramLoad>(
+        mut self,
+        kernel: &K,
+        globals: BTreeMap<String, Vec<u8>>,
+    ) -> Result<Self, LoadError<K>> {
         if globals.is_empty() {
             self.object.globals.clear();
             return Ok(self);
         }
 
-        let mut object = aya_obj::Object::parse(&self.object.bytes)
-            .map_err(|e| LoadCause::Parse(Box::new(e)))?;
-        object
-            .patch_map_data(
-                globals
-                    .iter()
-                    .map(|(name, bytes)| (name.as_str(), (bytes.as_slice(), true)))
-                    .collect(),
-            )
-            .map_err(|e| LoadCause::Parse(Box::new(e)))?;
+        kernel
+            .validate_globals(&self.object.bytes, &globals)
+            .map_err(LoadCause::from)?;
         self.object.globals = globals;
 
         Ok(self)
@@ -81,21 +79,23 @@ impl PreparedProgram {
 
     /// Validate a tracepoint or XDP selection and read the ELF without creating
     /// runtime state. Other program kinds are rejected before source access.
-    pub fn new(
+    pub fn new<K: bpfman_kernel::ProgramLoad>(
+        kernel: &K,
         source: &Path,
         spec: ProgramSpec,
         metadata: BTreeMap<String, String>,
-    ) -> Result<Self, LoadError> {
-        Self::new_with_cancellation(source, spec, metadata, &crate::Cancellation::new())
+    ) -> Result<Self, LoadError<K>> {
+        Self::new_with_cancellation(kernel, source, spec, metadata, &crate::Cancellation::new())
     }
 
     /// Prepare inputs, checking cancellation before and after reading the ELF.
-    pub fn new_with_cancellation(
+    pub fn new_with_cancellation<K: bpfman_kernel::ProgramLoad>(
+        kernel: &K,
         source: &Path,
         spec: ProgramSpec,
         metadata: BTreeMap<String, String>,
         cancellation: &crate::Cancellation,
-    ) -> Result<Self, LoadError> {
+    ) -> Result<Self, LoadError<K>> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         if !matches!(spec, ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_)) {
             return Err(LoadCause::Unsupported("program type").into());
@@ -104,7 +104,7 @@ impl PreparedProgram {
             .to_str()
             .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;
 
-        let object = LocalObject::read(source, &spec)?;
+        let object = LocalObject::read(kernel, source, &spec)?;
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
 
         Ok(Self {
@@ -116,12 +116,14 @@ impl PreparedProgram {
     }
 }
 
-impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::ProgramObservations>
-    Bpfman<S, K>
+impl<
+    S: bpfman_store::OpenStore + bpfman_store::CommitLoad,
+    K: bpfman_kernel::ProgramObservations + bpfman_kernel::ProgramLoad,
+> Bpfman<S, K>
 {
     /// Load one prepared local program without attaching it. Private maps are
     /// pinned; failures retain unresolved ownership for an explicit cleanup pass.
-    pub fn load(&self, request: PreparedProgram) -> Result<ObservedProgram, LoadError> {
+    pub fn load(&self, request: PreparedProgram) -> Result<ObservedProgram, LoadError<K>> {
         self.load_with_cancellation(request, &crate::Cancellation::new())
     }
 
@@ -132,13 +134,16 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         &self,
         request: PreparedProgram,
         cancellation: &crate::Cancellation,
-    ) -> Result<ObservedProgram, LoadError> {
+    ) -> Result<ObservedProgram, LoadError<K>> {
         self.load_prepared(request, Vec::new(), cancellation)
             .map(|(first, _)| first)
     }
 
     /// Load a nonempty batch with private maps and a single atomic store commit.
-    pub fn load_batch(&self, request: PreparedPrograms) -> Result<Vec<ObservedProgram>, LoadError> {
+    pub fn load_batch(
+        &self,
+        request: PreparedPrograms,
+    ) -> Result<Vec<ObservedProgram>, LoadError<K>> {
         self.load_batch_with_cancellation(request, &crate::Cancellation::new())
     }
 
@@ -149,7 +154,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         &self,
         request: PreparedPrograms,
         cancellation: &crate::Cancellation,
-    ) -> Result<Vec<ObservedProgram>, LoadError> {
+    ) -> Result<Vec<ObservedProgram>, LoadError<K>> {
         let (first, remaining) =
             self.load_prepared(request.first, request.remaining, cancellation)?;
         Ok(std::iter::once(first).chain(remaining).collect())
@@ -160,7 +165,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         request: PreparedProgram,
         remaining: Vec<ProgramSpec>,
         cancellation: &crate::Cancellation,
-    ) -> Result<(ObservedProgram, Vec<ObservedProgram>), LoadError> {
+    ) -> Result<(ObservedProgram, Vec<ObservedProgram>), LoadError<K>> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         let PreparedProgram {
             object,
@@ -199,7 +204,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
                         .collect();
                     run_batch(
                         &writer,
-                        &mut Effects(store),
+                        &mut Effects(store, &self.kernel),
                         &Inputs {
                             cancellation,
                             object: &object,
@@ -228,7 +233,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
                                 crate::observation::View::Load,
                             )
                             .map_err(|source| {
-                                LoadError::from(LoadCause::Observation {
+                                LoadError::<K>::from(LoadCause::Observation {
                                     id: stored.id(),
                                     committed: committed.clone(),
                                     source,

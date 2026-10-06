@@ -324,6 +324,7 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
     std::fs::copy(fixture, &source)?;
     let prepare = || {
         bpfman_runtime::PreparedProgram::new(
+            &bpfman_kernel_aya::Kernel,
             &source,
             bpfman_model::ProgramSpec::Tracepoint("tp_a".try_into().expect("symbol")),
             Default::default(),
@@ -331,10 +332,12 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
     };
 
     for extra in ["tp_a", "missing"] {
-        let result =
-            prepare()?.with_additional_programs(vec![bpfman_model::ProgramSpec::Tracepoint(
+        let result = prepare()?.with_additional_programs(
+            &bpfman_kernel_aya::Kernel,
+            vec![bpfman_model::ProgramSpec::Tracepoint(
                 extra.try_into().expect("symbol"),
-            )]);
+            )],
+        );
         match result {
             Err(error) => assert_eq!(error.kind(), bpfman_runtime::LoadErrorKind::InvalidInput),
             Ok(_) => return Err("invalid batch selection accepted".into()),
@@ -343,8 +346,11 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
 
     let prepared = prepare()?;
     std::fs::write(&source, b"replaced after validation")?;
-    let _batch = prepared.with_additional_programs(vec![bpfman_model::ProgramSpec::Tracepoint(
-        "tp_b".try_into().expect("symbol"),
-    )])?;
+    let _batch = prepared.with_additional_programs(
+        &bpfman_kernel_aya::Kernel,
+        vec![bpfman_model::ProgramSpec::Tracepoint(
+            "tp_b".try_into().expect("symbol"),
+        )],
+    )?;
     Ok(())
 }

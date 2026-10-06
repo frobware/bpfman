@@ -1,6 +1,6 @@
 //! A bpfman instance, bound to its runtime and persistence backend.
 //!
-//! Open the selected store once, then inject it and a kernel observer into
+//! Open the selected store once, then inject it and a kernel backend into
 //! [`Bpfman`]. Read methods
 //! borrow the instance without acquiring the writer lock. Mutations and explicit
 //! cleanup passes acquire scoped writer authority internally. The library never
@@ -45,11 +45,11 @@ mod store;
 mod unload;
 mod unload_error;
 
-/// An instance bound to an initialized store, runtime, and kernel observer.
+/// An instance bound to an initialized store, runtime, and kernel backend.
 ///
-/// The injected backend currently governs observations, including post-load
-/// result reads. Loading, attachment, and cleanup still use concrete Linux
-/// adapters; they are not simulated by supplying a fake observer.
+/// Reads, loading, attachment, teardown, and explicit retries use the same
+/// injected backend. Each operation requires only its kernel capabilities;
+/// associated handles and receipts preserve backend-owned resource lifetimes.
 ///
 /// Construct the active store at startup, then move it into this application.
 /// Operations share the adopted runtime, not an operation-wide mutex. Reads
@@ -154,15 +154,15 @@ pub struct LinkCause {
 /// Link cleanup history and retained ownership. Failed attachment retains its
 /// original cause even after a successful explicit cleanup pass.
 #[must_use = "inspect progress and retain unresolved link cleanup"]
-pub struct LinkReport<S: bpfman_store::LinkStore> {
+pub struct LinkReport<S: bpfman_store::LinkStore, K: bpfman_kernel::TracepointLinks> {
     id: std::num::NonZeroU64,
     primary: Option<LinkCause>,
-    cleanup: link::StoreReport<S>,
+    cleanup: link::StoreReport<S, K>,
 }
 
 /// Failed link operation, retaining all progress and unresolved cleanup receipts.
-pub struct LinkError<S: bpfman_store::LinkStore> {
-    failure: link_error::Failure<S>,
+pub struct LinkError<S: bpfman_store::LinkStore, K: bpfman_kernel::TracepointLinks> {
+    failure: link_error::Failure<S, K>,
 }
 
 /// Narrow filesystem-effects boundary for failed-load cleanup.
@@ -236,8 +236,8 @@ pub struct Error {
 }
 
 /// A failed load, retaining original diagnostics and unresolved cleanup receipts.
-pub struct LoadError {
-    failure: Box<load_error::Failure>,
+pub struct LoadError<K: bpfman_kernel::ProgramResources> {
+    failure: Box<load_error::KernelFailure<K>>,
     retry_lock_error: Option<Error>,
 }
 
@@ -279,13 +279,19 @@ pub struct UnloadCause {
 /// Unload progress and residue, including successful steps and earlier failures.
 /// A successful operation may retain cleanup warnings, matching Go's contract.
 #[must_use = "inspect cleanup warnings and retain any unresolved work"]
-pub struct UnloadReport<S: bpfman_store::UnloadStore + bpfman_store::LinkStore> {
-    report: unload::StoreReport<S>,
+pub struct UnloadReport<
+    S: bpfman_store::UnloadStore + bpfman_store::LinkStore,
+    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+> {
+    report: unload::StoreReport<S, K>,
 }
 
 /// Unload failure, retaining progress and receipts if teardown began.
-pub struct UnloadError<S: bpfman_store::UnloadStore + bpfman_store::LinkStore> {
-    failure: unload_error::Failure<S>,
+pub struct UnloadError<
+    S: bpfman_store::UnloadStore + bpfman_store::LinkStore,
+    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+> {
+    failure: unload_error::Failure<S, K>,
 }
 
 /// Classification of a full program-observation failure.

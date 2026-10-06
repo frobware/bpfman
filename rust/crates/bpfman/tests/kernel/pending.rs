@@ -25,6 +25,7 @@ where
     let loaded = app
         .load(
             PreparedProgram::new(
+                &bpfman_kernel_aya::Kernel,
                 &fixture("tracepoint_counter.bpf.o"),
                 bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                 Default::default(),
@@ -67,7 +68,7 @@ where
     store.set(None);
     let kernel_id = c.writer(|writer| {
         writer
-            .observe_link_pin(pending_id, id, None)
+            .observe_link_pin(&bpfman_kernel_aya::Kernel, pending_id, id, None)
             .expect("validated pending pin")
             .expect("pin")
             .kernel_id()
@@ -191,6 +192,7 @@ where
         let loaded = app
             .load(
                 PreparedProgram::new(
+                    &bpfman_kernel_aya::Kernel,
                     &fixture("tracepoint_counter.bpf.o"),
                     bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                     Default::default(),

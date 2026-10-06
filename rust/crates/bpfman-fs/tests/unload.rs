@@ -31,7 +31,7 @@ fn adopt_existing_bytecode_and_absence_without_creating_collections() -> Result 
     let temporary = tempfile::tempdir()?;
     let root = runtime(temporary.path())?;
     root.with_writer(options(), |writer| -> Result {
-        let found = writer.observe_unload(id())?;
+        let found = writer.observe_unload(&NoKernel, id())?;
 
         assert!(found.program.is_none() && found.directory.is_none() && found.bytecode.is_none());
         assert!(!temporary.path().join("fs").exists());
@@ -41,12 +41,12 @@ fn adopt_existing_bytecode_and_absence_without_creating_collections() -> Result 
             .publish_bytecode(id(), b"bytes", b"provenance")
             .map_err(|f| f.cause)?;
         drop(created); // committed ownership survives receipt release
-        let found = writer.observe_unload(id())?;
+        let found = writer.observe_unload(&NoKernel, id())?;
         writer
             .remove_bytecode(found.bytecode.expect("existing bytecode"))
             .map_err(|f| f.cause)?;
 
-        assert!(writer.observe_unload(id())?.bytecode.is_none());
+        assert!(writer.observe_unload(&NoKernel, id())?.bytecode.is_none());
         assert!(temporary.path().join("programs").is_dir());
         assert!(temporary.path().join(".lock").is_file());
 
@@ -102,7 +102,10 @@ fn bytecode_adoption_refuses_symlink_ancestors_children_hardlinks_and_unexpected
                 }
             }
 
-            assert!(writer.observe_unload(id()).is_err(), "case {case}");
+            assert!(
+                writer.observe_unload(&NoKernel, id()).is_err(),
+                "case {case}"
+            );
             assert_eq!(std::fs::read(&sentinel)?, b"keep");
 
             Ok(())
@@ -124,7 +127,10 @@ fn observed_receipts_refuse_replacement_and_wrong_root() -> Result {
                 .publish_bytecode(id(), b"bytes", b"provenance")
                 .map_err(|f| f.cause)?,
         );
-        let receipt = writer.observe_unload(id())?.bytecode.expect("bytecode");
+        let receipt = writer
+            .observe_unload(&NoKernel, id())?
+            .bytecode
+            .expect("bytecode");
         let receipt = other_root.with_writer(options(), |other_writer| {
             other_writer
                 .remove_bytecode(receipt)
@@ -170,11 +176,28 @@ fn existing_fs_must_be_bpffs_and_not_a_symlink() -> Result {
         }
 
         root.with_writer(options(), |writer| {
-            assert!(writer.observe_unload(id()).is_err());
+            assert!(writer.observe_unload(&NoKernel, id()).is_err());
         })?;
 
         assert!(outside.path().read_dir()?.next().is_none());
     }
 
     Ok(())
+}
+
+// These cases contain no valid bpffs pins. Confinement must reject invalid
+// filesystem entries before consulting the kernel.
+struct NoKernel;
+
+impl bpfman_fs::ProgramInspection for NoKernel {
+    fn program_at(
+        &self,
+        _: bpfman_fs::PinSource<'_>,
+    ) -> bpfman_fs::KernelResult<bpfman_fs::PinnedProgram> {
+        unreachable!("filesystem validation must precede kernel observation")
+    }
+
+    fn map_at(&self, _: bpfman_fs::PinSource<'_>) -> bpfman_fs::KernelResult<u32> {
+        unreachable!("filesystem validation must precede kernel observation")
+    }
 }

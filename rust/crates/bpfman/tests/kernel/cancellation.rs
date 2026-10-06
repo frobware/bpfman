@@ -12,6 +12,7 @@ use bpfman_store::{CommitLoad, OpenStore, UnloadStore};
 
 fn request() -> PreparedProgram {
     PreparedProgram::new(
+        &bpfman_kernel_aya::Kernel,
         &fixture("tracepoint_counter.bpf.o"),
         bpfman_model::ProgramSpec::Tracepoint(
             bpfman_model::Symbol::try_from(NAME).expect("symbol"),

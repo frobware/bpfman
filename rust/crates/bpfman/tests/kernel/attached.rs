@@ -27,6 +27,7 @@ where
         let loaded = app
             .load(
                 PreparedProgram::new(
+                    &bpfman_kernel_aya::Kernel,
                     &fixture("tracepoint_counter.bpf.o"),
                     bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                     Default::default(),

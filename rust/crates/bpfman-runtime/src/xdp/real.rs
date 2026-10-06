@@ -1,9 +1,8 @@
 use super::*;
 use crate::ActiveStore;
-use aya::programs::Xdp;
 use bpfman_store::{OpenStore, ProgramReader, XdpCommit};
 
-pub(super) struct Adapter<'a, S: OpenStore>(pub(super) &'a ActiveStore<S>);
+pub(super) struct Adapter<'a, S: OpenStore, K>(pub(super) &'a ActiveStore<S>, pub(super) &'a K);
 
 fn map<R>(e: EffectFailure<R, impl Into<LinkCause>>) -> EffectFailure<R, LinkCause> {
     EffectFailure {
@@ -12,17 +11,13 @@ fn map<R>(e: EffectFailure<R, impl Into<LinkCause>>) -> EffectFailure<R, LinkCau
     }
 }
 
-fn kernel(e: impl std::error::Error + Send + Sync + 'static) -> LinkCause {
-    Cause::Xdp(Box::new(e)).into()
-}
-
-impl<S: XdpStore> Effects for Adapter<'_, S> {
-    type Prepared = bpfman_fs::PreparedXdp;
-    type Kernel = aya::Ebpf;
-    type Outer = bpfman_fs::XdpOuter;
-    type Extension = bpfman_fs::XdpExtensionPin;
-    type Program = bpfman_fs::XdpProgramPin;
-    type Directory = bpfman_fs::XdpRevision;
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Effects for Adapter<'_, S, K> {
+    type Prepared = K::PreparedXdp;
+    type Kernel = K::Dispatcher;
+    type Outer = K::Outer;
+    type Extension = K::Extension;
+    type Program = K::DispatcherPin;
+    type Directory = K::Revision;
     type Record = S::XdpReceipt;
 
     fn prepare(
@@ -42,27 +37,13 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         if w.layout().program_pin_path(program.id).to_str() != Some(program.pin_path.as_str()) {
             return Err(Cause::Invalid("noncanonical managed program pin").into());
         }
-        let prepared = w.prepare_xdp(r.program_id, &r.interface)?;
-        self.0.preflight_xdp(w, prepared.key(), r.program_id)?;
-        Ok((prepared.key(), prepared))
+        let (key, prepared) = self.1.prepare_xdp(w, r.program_id, &r.interface)?;
+        self.0.preflight_xdp(w, key, r.program_id)?;
+        Ok((key, prepared))
     }
 
-    fn load(&mut self, r: &XdpAttach) -> Result<aya::Ebpf, LinkCause> {
-        let config = bpfman_model::xdp_config(r.proceed_on);
-        let mut bpf = aya::EbpfLoader::new()
-            .override_global("conf", config.as_slice(), true)
-            .load(aya::include_bytes_aligned!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../dispatcher/xdp_dispatcher_v2.bpf.o"
-            )))
-            .map_err(kernel)?;
-        let program: &mut Xdp = bpf
-            .program_mut("xdp_dispatcher")
-            .ok_or(Cause::Invalid("embedded XDP dispatcher missing"))?
-            .try_into()
-            .map_err(kernel)?;
-        program.load().map_err(kernel)?;
-        Ok(bpf)
+    fn load(&mut self, r: &XdpAttach) -> Result<K::Dispatcher, LinkCause> {
+        self.1.load_dispatcher(r.proceed_on).map_err(Into::into)
     }
 
     fn directory(
@@ -70,27 +51,16 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         w: &RuntimeWriter<'_>,
         p: &Self::Prepared,
     ) -> Result<Self::Directory, EffectFailure<Option<Self::Directory>, LinkCause>> {
-        p.create_revision(w, NonZeroU32::MIN).map_err(map)
+        self.1.create_revision(w, p).map_err(map)
     }
 
     fn program(
         &mut self,
         w: &RuntimeWriter<'_>,
         d: &Self::Directory,
-        k: &mut aya::Ebpf,
+        k: &mut K::Dispatcher,
     ) -> Result<Self::Program, EffectFailure<Option<Self::Program>, LinkCause>> {
-        let program: &mut Xdp = k
-            .program_mut("xdp_dispatcher")
-            .ok_or_else(|| EffectFailure {
-                cause: Cause::Invalid("dispatcher missing").into(),
-                remaining: None,
-            })?
-            .try_into()
-            .map_err(|e| EffectFailure {
-                cause: kernel(e),
-                remaining: None,
-            })?;
-        d.pin_program(w, program).map_err(map)
+        self.1.pin_dispatcher(w, d, k).map_err(map)
     }
 
     fn extension(
@@ -98,33 +68,18 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         w: &RuntimeWriter<'_>,
         p: &mut Self::Prepared,
         d: &Self::Directory,
-        k: &aya::Ebpf,
+        k: &K::Dispatcher,
     ) -> Result<Self::Extension, EffectFailure<Option<Self::Extension>, LinkCause>> {
-        p.pin_extension(
-            w,
-            d,
-            target(k).map_err(|cause| EffectFailure {
-                cause,
-                remaining: None,
-            })?,
-        )
-        .map_err(map)
+        self.1.pin_extension(w, p, d, k).map_err(map)
     }
 
     fn outer(
         &mut self,
         w: &RuntimeWriter<'_>,
         p: &Self::Prepared,
-        k: &aya::Ebpf,
+        k: &K::Dispatcher,
     ) -> Result<Self::Outer, EffectFailure<Option<Self::Outer>, LinkCause>> {
-        p.pin_outer(
-            w,
-            target(k).map_err(|cause| EffectFailure {
-                cause,
-                remaining: None,
-            })?,
-        )
-        .map_err(map)
+        self.1.pin_outer(w, p, k).map_err(map)
     }
 
     fn commit(
@@ -141,7 +96,7 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
             interface: r.interface.clone(),
             priority: r.priority,
             proceed_on: r.proceed_on,
-            dispatcher_id: p.id(),
+            dispatcher_id: K::dispatcher_id(p),
             revision: NonZeroU32::MIN,
         };
         self.0
@@ -150,8 +105,8 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
                 XdpCommit {
                     program_id: r.program_id,
                     details: &details,
-                    extension_link_id: e.id(),
-                    outer_link_id: o.id()?,
+                    extension_link_id: K::extension_id(e),
+                    outer_link_id: K::outer_id(o)?,
                     metadata: &r.metadata,
                     created_at: &chrono::Utc::now()
                         .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
@@ -173,7 +128,7 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         {
             return Err(Cause::Invalid("noncanonical extension path").into());
         }
-        let artifacts = w.observe_xdp(&snapshot)?;
+        let artifacts = self.1.observe_xdp(w, &snapshot)?;
         let mut resources = vec![Resource::Record(receipt)];
         resources.extend(artifacts.outer.map(Resource::Outer));
         resources.extend(artifacts.extension.map(Resource::Extension));
@@ -187,7 +142,7 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         w: &RuntimeWriter<'_>,
         r: Self::Outer,
     ) -> Result<(), EffectFailure<Self::Outer, LinkCause>> {
-        w.remove_xdp_outer(r).map_err(map)
+        self.1.remove_outer(w, r).map_err(map)
     }
 
     fn remove_extension(
@@ -195,7 +150,7 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         w: &RuntimeWriter<'_>,
         r: Self::Extension,
     ) -> Result<(), EffectFailure<Self::Extension, LinkCause>> {
-        w.remove_xdp_extension(r).map_err(map)
+        self.1.remove_extension(w, r).map_err(map)
     }
 
     fn remove_program(
@@ -203,7 +158,7 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         w: &RuntimeWriter<'_>,
         r: Self::Program,
     ) -> Result<(), EffectFailure<Self::Program, LinkCause>> {
-        w.remove_xdp_program(r).map_err(map)
+        self.1.remove_dispatcher(w, r).map_err(map)
     }
 
     fn remove_directory(
@@ -211,7 +166,7 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
         w: &RuntimeWriter<'_>,
         r: Self::Directory,
     ) -> Result<(), EffectFailure<Self::Directory, LinkCause>> {
-        w.remove_xdp_revision(r).map_err(map)
+        self.1.remove_revision(w, r).map_err(map)
     }
 
     fn remove_record(
@@ -221,11 +176,4 @@ impl<S: XdpStore> Effects for Adapter<'_, S> {
     ) -> Result<(), EffectFailure<Self::Record, LinkCause>> {
         self.0.delete_xdp(w, r).map_err(map)
     }
-}
-
-fn target(bpf: &aya::Ebpf) -> Result<&Xdp, LinkCause> {
-    bpf.program("xdp_dispatcher")
-        .ok_or(Cause::Invalid("dispatcher missing"))?
-        .try_into()
-        .map_err(kernel)
 }

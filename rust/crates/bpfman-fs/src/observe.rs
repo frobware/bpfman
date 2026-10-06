@@ -68,7 +68,11 @@ impl RuntimeWriter<'_> {
     /// Refuse symlinks, foreign mounts/types, mismatched program/map identities,
     /// hard links and unknown bytecode children before returning any receipts.
     /// Missing artifacts permit retry after an earlier partial unload.
-    pub fn observe_unload(&self, id: NonZeroU32) -> Result<UnloadArtifacts, Error> {
+    pub fn observe_unload(
+        &self,
+        kernel: &impl crate::ProgramInspection,
+        id: NonZeroU32,
+    ) -> Result<UnloadArtifacts, Error> {
         let mut result = UnloadArtifacts {
             program: None,
             maps: Vec::new(),
@@ -88,14 +92,14 @@ impl RuntimeWriter<'_> {
             let mut map_ids = None;
 
             if let Some(receipt) = observe(self, &bpffs, "fs", &format!("prog_{id}"), false)? {
-                let info =
-                    aya::programs::ProgramInfo::from_pin(proc_path(&bpffs).join(&receipt.name))
-                        .map_err(Failure::Program)?;
+                let info = kernel
+                    .program_at(crate::PinSource(&proc_path(&bpffs).join(&receipt.name)))
+                    .map_err(Failure::Kernel)?;
 
-                if info.id() != id.get()
-                    || !matches!(info.program_type(),
-                        kind if kind == aya::programs::ProgramType::TracePoint.into()
-                            || kind == aya::programs::ProgramType::Extension.into())
+                if info.id != id.get()
+                    || !matches!(info.kind,
+                        kind if kind == crate::PinProgramKind::Tracepoint
+                            || kind == crate::PinProgramKind::Extension)
                 {
                     return Err(Failure::Unsafe(
                         "program pin has a different kernel identity or type",
@@ -103,9 +107,9 @@ impl RuntimeWriter<'_> {
                     .into());
                 }
 
-                map_ids = Some(info.map_ids().map_err(Failure::Program)?.ok_or(
-                    Failure::Unsafe("kernel does not report program map identities"),
-                )?);
+                map_ids = Some(info.map_ids.ok_or(Failure::Unsafe(
+                    "kernel does not report program map identities",
+                ))?);
                 open_owned(&receipt)?;
                 result.program = Some(ProgramPin {
                     id,
@@ -121,13 +125,11 @@ impl RuntimeWriter<'_> {
                         validate_map_name(&name)?;
                         let receipt = observe(self, &dir, &format!("fs/maps/{id}"), &name, false)?
                             .ok_or(Failure::Unsafe("map pin disappeared during observation"))?;
-                        let info = aya::maps::MapInfo::from_pin(proc_path(&dir).join(&name))
-                            .map_err(Failure::Map)?;
+                        let info = kernel
+                            .map_at(crate::PinSource(&proc_path(&dir).join(&name)))
+                            .map_err(Failure::Kernel)?;
 
-                        if map_ids
-                            .as_ref()
-                            .is_some_and(|ids| !ids.contains(&info.id()))
-                        {
+                        if map_ids.as_ref().is_some_and(|ids| !ids.contains(&info)) {
                             return Err(
                                 Failure::Unsafe("map pin does not belong to this program").into()
                             );
@@ -151,7 +153,9 @@ impl RuntimeWriter<'_> {
         Ok(result)
     }
 
-    fn observe_bytecode(&self, id: NonZeroU32) -> Result<Option<Bytecode>, Error> {
+    /// Adopt canonical bytecode artifacts for teardown, independently of kernel pins.
+    /// Stored ownership must already have been validated under this writer.
+    pub fn observe_bytecode(&self, id: NonZeroU32) -> Result<Option<Bytecode>, Error> {
         let Some(programs) = optional_dir(&self.runtime.root, "programs", CONFINED)? else {
             return Ok(None);
         };
@@ -185,7 +189,11 @@ impl RuntimeDirectory {
     /// Missing collections are empty; unsafe traversal and inspection failures
     /// are errors. Pins removed during enumeration are omitted. Each opened pin
     /// is inspected by descriptor, without granting any removal authority.
-    pub fn read_map_pins(&self, map_set: NonZeroU32) -> Result<Vec<crate::ObservedMapPin>, Error> {
+    pub fn read_map_pins(
+        &self,
+        kernel: &impl crate::ProgramInspection,
+        map_set: NonZeroU32,
+    ) -> Result<Vec<crate::ObservedMapPin>, Error> {
         let Some(bpffs) = optional_dir(&self.root, "fs", BENEATH)? else {
             return Ok(Vec::new());
         };
@@ -226,11 +234,10 @@ impl RuntimeDirectory {
                 return Err(Failure::Unsafe("map pin has unexpected type or hard links").into());
             }
 
-            let info = aya::maps::MapInfo::from_pin(proc_path(&pin)).map_err(Failure::Map)?;
-            result.push(crate::ObservedMapPin {
-                name,
-                id: info.id(),
-            });
+            let info = kernel
+                .map_at(crate::PinSource(&proc_path(&pin)))
+                .map_err(Failure::Kernel)?;
+            result.push(crate::ObservedMapPin { name, id: info });
         }
 
         Ok(result)

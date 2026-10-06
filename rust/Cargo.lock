@@ -182,11 +182,9 @@ dependencies = [
 name = "bpfman-fs"
 version = "0.1.0"
 dependencies = [
- "aya",
  "bpfman-core",
  "bpfman-lock",
  "bpfman-model",
- "libc",
  "rustix",
  "tempfile",
  "thiserror",
@@ -197,6 +195,7 @@ dependencies = [
 name = "bpfman-kernel"
 version = "0.1.0"
 dependencies = [
+ "bpfman-core",
  "bpfman-fs",
  "bpfman-model",
  "thiserror",
@@ -206,7 +205,9 @@ dependencies = [
 name = "bpfman-kernel-aya"
 version = "0.1.0"
 dependencies = [
+ "aya",
  "aya-obj",
+ "bpfman-core",
  "bpfman-fs",
  "bpfman-kernel",
  "bpfman-model",
@@ -233,8 +234,6 @@ version = "0.1.0"
 name = "bpfman-runtime"
 version = "0.1.0"
 dependencies = [
- "aya",
- "aya-obj",
  "bpfman-core",
  "bpfman-fs",
  "bpfman-kernel",

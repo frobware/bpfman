@@ -3,21 +3,21 @@
 use super::{LoadEffects, effects::Inputs};
 use crate::{LoadCleanup, load_error::LoadCause};
 use bpfman_core::EffectFailure;
-use bpfman_fs::{Bytecode, MapDirectory, MapPin, PreparedLoad, ProgramPin, RuntimeWriter};
+use bpfman_fs::{Bytecode, RuntimeWriter};
 use bpfman_model::Symbol;
 use std::num::NonZeroU32;
 
-fn map_failure<T>(failure: EffectFailure<T, bpfman_fs::Error>) -> EffectFailure<T, LoadCause> {
+fn map_failure<T, E: Into<LoadCause>>(failure: EffectFailure<T, E>) -> EffectFailure<T, LoadCause> {
     EffectFailure {
         cause: failure.cause.into(),
         remaining: failure.remaining,
     }
 }
 
-pub(crate) struct Effects<'a, S>(pub(crate) &'a S);
-impl<S> LoadCleanup for Effects<'_, S> {
-    type ProgramPin = ProgramPin;
-    type MapPin = MapPin;
+pub(crate) struct Effects<'a, S, K>(pub(crate) &'a S, pub(crate) &'a K);
+impl<S, K: bpfman_kernel::ProgramResources> LoadCleanup for Effects<'_, S, K> {
+    type ProgramPin = K::ProgramPin;
+    type MapPin = K::MapPin;
     type Bytecode = Bytecode;
     type Error = LoadCause;
 
@@ -32,24 +32,26 @@ impl<S> LoadCleanup for Effects<'_, S> {
     fn remove_program_pin(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: ProgramPin,
-    ) -> Result<(), EffectFailure<ProgramPin, LoadCause>> {
-        writer.remove_program_pin(receipt).map_err(map_failure)
+        receipt: K::ProgramPin,
+    ) -> Result<(), EffectFailure<K::ProgramPin, LoadCause>> {
+        self.1.remove_program(writer, receipt).map_err(map_failure)
     }
 
     fn remove_map_pin(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: MapPin,
-    ) -> Result<(), EffectFailure<MapPin, LoadCause>> {
-        writer.remove_map_pin(receipt).map_err(map_failure)
+        receipt: K::MapPin,
+    ) -> Result<(), EffectFailure<K::MapPin, LoadCause>> {
+        self.1.remove_map(writer, receipt).map_err(map_failure)
     }
 }
 
-impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effects<'_, S> {
+impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::ProgramLoad>
+    LoadEffects for Effects<'_, S, K>
+{
     type Store = S::Reader;
-    type Prepared = PreparedLoad;
-    type Kernel = crate::kernel::LoadedObject;
+    type Prepared = K::Prepared;
+    type Kernel = K::Loaded;
 
     fn cancelled(&self) -> LoadCause {
         LoadCause::Cancelled
@@ -64,50 +66,53 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     }
 
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, LoadCause> {
-        writer.prepare_load().map_err(LoadCause::from)
+        self.1.prepare_load(writer).map_err(LoadCause::from)
     }
 
     fn load_kernel(
         &mut self,
-        _writer: &RuntimeWriter<'_>,
+        writer: &RuntimeWriter<'_>,
         input: &Inputs<'_>,
     ) -> Result<Self::Kernel, LoadCause> {
-        input.object.load(input.spec)
+        self.1
+            .load_program(
+                writer,
+                &input.object.bytes,
+                &input.object.maps,
+                &input.object.globals,
+                input.spec,
+            )
+            .map_err(Into::into)
     }
 
     fn pin_program(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        prepared: &PreparedLoad,
+        prepared: &K::Prepared,
         kernel: &mut Self::Kernel,
         name: &Symbol,
-    ) -> Result<ProgramPin, EffectFailure<Option<ProgramPin>, LoadCause>> {
-        let program = kernel
-            .bpf
-            .program_mut(name.as_str())
-            .ok_or_else(|| EffectFailure {
-                cause: LoadCause::Invalid("missing loaded program".into()),
-                remaining: None,
-            })?;
-        prepared.pin_program(writer, program).map_err(map_failure)
+    ) -> Result<K::ProgramPin, EffectFailure<Option<K::ProgramPin>, LoadCause>> {
+        self.1
+            .pin_program(writer, prepared, kernel, name)
+            .map_err(map_failure)
     }
 
-    fn program_id(pin: &ProgramPin) -> NonZeroU32 {
-        pin.id()
+    fn program_id(pin: &K::ProgramPin) -> NonZeroU32 {
+        K::program_id(pin)
     }
 
     fn map_names(kernel: &Self::Kernel) -> &[String] {
-        &kernel.maps
+        K::map_names(kernel)
     }
 
     fn create_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        prepared: &PreparedLoad,
+        prepared: &K::Prepared,
         id: NonZeroU32,
-    ) -> Result<MapDirectory, EffectFailure<Option<MapDirectory>, LoadCause>> {
-        prepared
-            .create_map_directory(writer, id)
+    ) -> Result<K::MapDirectory, EffectFailure<Option<K::MapDirectory>, LoadCause>> {
+        self.1
+            .create_map_directory(writer, prepared, id)
             .map_err(map_failure)
     }
 
@@ -115,14 +120,12 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
         &mut self,
         writer: &RuntimeWriter<'_>,
         kernel: &Self::Kernel,
-        directory: &MapDirectory,
+        directory: &K::MapDirectory,
         name: &str,
-    ) -> Result<MapPin, EffectFailure<Option<MapPin>, LoadCause>> {
-        let map = kernel.bpf.map(name).ok_or_else(|| EffectFailure {
-            cause: LoadCause::Invalid(format!("missing loaded map {name}")),
-            remaining: None,
-        })?;
-        directory.pin_map(writer, name, map).map_err(map_failure)
+    ) -> Result<K::MapPin, EffectFailure<Option<K::MapPin>, LoadCause>> {
+        self.1
+            .pin_map(writer, kernel, directory, name)
+            .map_err(map_failure)
     }
 
     fn publish(
@@ -167,16 +170,16 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Effe
     }
 }
 
-impl<S> super::CleanupEffects for Effects<'_, S> {
-    type MapDirectory = MapDirectory;
+impl<S, K: bpfman_kernel::ProgramResources> super::CleanupEffects for Effects<'_, S, K> {
+    type MapDirectory = K::MapDirectory;
 
     fn remove_map_directory(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: MapDirectory,
-    ) -> Result<(), EffectFailure<MapDirectory, LoadCause>> {
-        writer
-            .remove_empty_map_directory(receipt)
+        receipt: K::MapDirectory,
+    ) -> Result<(), EffectFailure<K::MapDirectory, LoadCause>> {
+        self.1
+            .remove_map_directory(writer, receipt)
             .map_err(map_failure)
     }
 }

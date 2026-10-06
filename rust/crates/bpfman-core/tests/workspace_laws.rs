@@ -210,10 +210,10 @@ fn runtime_and_store_contract_cannot_reach_a_persistence_backend() {
 }
 
 #[test]
-fn runtime_and_kernel_contract_cannot_select_the_linux_observer() {
+fn runtime_filesystem_and_kernel_contract_cannot_reach_aya() {
     let meta = metadata();
 
-    for name in ["bpfman-runtime", "bpfman-kernel"] {
+    for name in ["bpfman-runtime", "bpfman-kernel", "bpfman-fs"] {
         let start = array(&meta["workspace_members"])
             .iter()
             .find(|id| package(meta, id)["name"] == name)
@@ -225,10 +225,10 @@ fn runtime_and_kernel_contract_cannot_select_the_linux_observer() {
             if !seen.insert(string(id)) {
                 continue;
             }
-            assert_ne!(
-                package(meta, id)["name"],
-                "bpfman-kernel-aya",
-                "{name} must receive the observer from the composition root"
+            let dependency = string(&package(meta, id)["name"]);
+            assert!(
+                !matches!(dependency, "bpfman-kernel-aya" | "aya" | "aya-obj"),
+                "{name} must receive the kernel from the composition root; reaches {dependency}"
             );
             pending.extend(normal_dependencies(meta, id));
         }
@@ -250,13 +250,9 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                     matches!(name, "bpfman-lock" | "bpfman-fs"),
                     "filesystem and lock syscalls belong in their adapters"
                 ),
-                "aya" => assert!(
-                    matches!(name, "bpfman-fs" | "bpfman-runtime"),
-                    "Aya is confined to pin I/O and the private kernel adapter"
-                ),
-                "aya-obj" => assert!(
-                    matches!(name, "bpfman-runtime" | "bpfman-kernel-aya"),
-                    "ELF parsing and generated BPF ABI layouts belong in kernel adapters"
+                "aya" | "aya-obj" => assert_eq!(
+                    name, "bpfman-kernel-aya",
+                    "Aya, ELF parsing, and BPF ABI layouts belong in the concrete kernel adapter"
                 ),
                 "rusqlite" | "libsqlite3-sys" => assert_eq!(
                     name, "bpfman-store-sqlite",
@@ -348,7 +344,8 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
 
     let filesystem = std::fs::read_to_string(root.join("crates/bpfman-fs/Cargo.toml"))
         .expect("filesystem manifest");
-    for manifest in [&kernel, &filesystem] {
+    assert_eq!(section(&filesystem, "[lints]"), ["workspace = true"]);
+    for manifest in [&kernel] {
         for category in ["rust", "clippy"] {
             let expected = section(&workspace, &format!("[workspace.lints.{category}]"));
             let actual = section(manifest, &format!("[lints.{category}]"));
@@ -370,38 +367,28 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
         }
     }
 
-    let syscall = std::fs::read_to_string(root.join("crates/bpfman-kernel-aya/src/syscall.rs"))
-        .expect("syscall boundary");
-
-    assert!(syscall.contains("#![allow(unsafe_code)]"));
-
-    for module in ["lib.rs", "observe.rs"] {
+    for module in ["syscall.rs", "pin_syscall.rs"] {
         let source =
             std::fs::read_to_string(root.join("crates/bpfman-kernel-aya/src").join(module))
-                .expect("safe observation module");
-
-        assert!(!source.contains("allow(unsafe_code)"));
+                .expect("syscall boundary");
+        assert!(source.contains("#![allow(unsafe_code)]"));
     }
 }
 
 #[test]
-fn filesystem_unsafe_is_confined_to_xdp_syscall_boundary() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bpfman-fs/src");
-    let boundary = std::fs::read_to_string(root.join("xdp/syscall.rs")).expect("syscalls");
-    assert!(boundary.contains("#![allow(unsafe_code)]"));
-    for file in [
-        "lib.rs",
-        "artifacts.rs",
-        "directory.rs",
-        "error.rs",
-        "layout.rs",
-        "link.rs",
-        "observe.rs",
-        "removal.rs",
-        "snapshot.rs",
-        "xdp.rs",
-    ] {
-        let source = std::fs::read_to_string(root.join(file)).expect("safe filesystem module");
-        assert!(!source.contains("allow(unsafe_code)"), "{file}");
+fn kernel_unsafe_is_confined_to_syscall_boundaries() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../bpfman-kernel-aya/src");
+    for entry in std::fs::read_dir(root).expect("kernel adapter sources") {
+        let entry = entry.expect("source entry");
+        let path = entry.path();
+        if path.extension().is_some_and(|extension| extension == "rs")
+            && !matches!(
+                path.file_name().and_then(|s| s.to_str()),
+                Some("syscall.rs" | "pin_syscall.rs")
+            )
+        {
+            let source = std::fs::read_to_string(&path).expect("safe adapter module");
+            assert!(!source.contains("allow(unsafe_code)"), "{}", path.display());
+        }
     }
 }

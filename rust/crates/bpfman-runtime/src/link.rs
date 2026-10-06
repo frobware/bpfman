@@ -91,9 +91,9 @@ type ReportFor<F> = LinkCleanupReport<
     <F as Effects>::Receipt,
     LinkCause,
 >;
-pub(super) type StoreReport<S> = LinkCleanupReport<
-    bpfman_fs::LiveTracepoint,
-    bpfman_fs::LinkPin,
+pub(super) type StoreReport<S, K> = LinkCleanupReport<
+    <K as bpfman_kernel::TracepointLinks>::LiveTracepoint,
+    <K as bpfman_kernel::TracepointLinks>::LinkPin,
     <S as LinkStore>::LinkReceipt,
     LinkCause,
 >;
@@ -243,9 +243,12 @@ fn detach<F: Effects>(
     ))
 }
 
-impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
+impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Bpfman<S, K> {
     /// Attach a managed tracepoint, preserving pending intent if cleanup fails.
-    pub fn attach_tracepoint(&self, request: TracepointAttach) -> Result<StoredLink, LinkError<S>> {
+    pub fn attach_tracepoint(
+        &self,
+        request: TracepointAttach,
+    ) -> Result<StoredLink, LinkError<S, K>> {
         self.attach_tracepoint_with_cancellation(request, &Cancellation::new())
     }
 
@@ -256,7 +259,7 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
         &self,
         request: TracepointAttach,
         cancellation: &Cancellation,
-    ) -> Result<StoredLink, LinkError<S>> {
+    ) -> Result<StoredLink, LinkError<S, K>> {
         let created = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
         self.store
             .runtime()
@@ -268,7 +271,7 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
                 |writer| {
                     attach(
                         &writer,
-                        &mut real::Adapter(&self.store),
+                        &mut real::Adapter(&self.store, &self.kernel),
                         &request,
                         &created,
                         cancellation,
@@ -293,7 +296,7 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
     }
 
     /// Detach a stored standalone link, keeping the program loaded.
-    pub fn detach(&self, id: NonZeroU64) -> Result<LinkReport<S>, LinkError<S>> {
+    pub fn detach(&self, id: NonZeroU64) -> Result<LinkReport<S, K>, LinkError<S, K>> {
         self.detach_with_cancellation(id, &Cancellation::new())
     }
 
@@ -303,7 +306,7 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
         &self,
         id: NonZeroU64,
         cancellation: &Cancellation,
-    ) -> Result<LinkReport<S>, LinkError<S>> {
+    ) -> Result<LinkReport<S, K>, LinkError<S, K>> {
         self.store
             .runtime()
             .with_writer(
@@ -312,8 +315,12 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
                     cancelled: Some(cancellation.flag()),
                 },
                 |writer| {
-                    let cleanup =
-                        detach(&writer, &mut real::Adapter(&self.store), id, cancellation)?;
+                    let cleanup = detach(
+                        &writer,
+                        &mut real::Adapter(&self.store, &self.kernel),
+                        id,
+                        cancellation,
+                    )?;
                     finish(LinkReport {
                         id,
                         primary: None,
@@ -325,7 +332,10 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
     }
 
     /// Attempt only unresolved cleanup once. A preflight error has no owned work.
-    pub fn retry_link_cleanup(&self, error: LinkError<S>) -> Result<LinkReport<S>, LinkError<S>> {
+    pub fn retry_link_cleanup(
+        &self,
+        error: LinkError<S, K>,
+    ) -> Result<LinkReport<S, K>, LinkError<S, K>> {
         self.retry_link_cleanup_with_cancellation(error, &Cancellation::new())
     }
 
@@ -334,9 +344,9 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
     #[tracing::instrument(name = "link.retry_cleanup", level = "debug", skip_all, err)]
     pub fn retry_link_cleanup_with_cancellation(
         &self,
-        error: LinkError<S>,
+        error: LinkError<S, K>,
         cancellation: &Cancellation,
-    ) -> Result<LinkReport<S>, LinkError<S>> {
+    ) -> Result<LinkReport<S, K>, LinkError<S, K>> {
         use super::link_error::Failure;
         let report = match error.failure {
             Failure::Before(_) => return Err(error),
@@ -352,7 +362,7 @@ impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
                 pending.take().map(|mut report| {
                     report.cleanup = cleanup(
                         &writer,
-                        &mut real::Adapter(&self.store),
+                        &mut real::Adapter(&self.store, &self.kernel),
                         report.cleanup.retry(),
                     );
                     finish(report)
@@ -407,7 +417,9 @@ where
     }
 }
 
-fn finish<S: LinkStore>(report: LinkReport<S>) -> Result<LinkReport<S>, LinkError<S>> {
+fn finish<S: LinkStore, K: bpfman_kernel::TracepointLinks>(
+    report: LinkReport<S, K>,
+) -> Result<LinkReport<S, K>, LinkError<S, K>> {
     if report.unresolved() == 0 {
         Ok(report)
     } else {

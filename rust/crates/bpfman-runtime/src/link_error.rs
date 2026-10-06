@@ -10,8 +10,6 @@ pub(super) enum Cause {
     NotFound,
     #[error("attachment is outside the supported slice")]
     Unsupported,
-    #[error("XDP kernel operation")]
-    Xdp(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("invalid attachment state: {0}")]
     Invalid(&'static str),
     #[error(transparent)]
@@ -22,12 +20,12 @@ pub(super) enum Cause {
     Kernel(#[from] bpfman_kernel::Error),
 }
 
-pub(super) enum Failure<S: LinkStore> {
+pub(super) enum Failure<S: LinkStore, K: bpfman_kernel::TracepointLinks> {
     Before(LinkCause),
-    After(Box<LinkReport<S>>),
+    After(Box<LinkReport<S, K>>),
     Admission {
         cause: LinkCause,
-        report: Box<LinkReport<S>>,
+        report: Box<LinkReport<S, K>>,
     },
 }
 
@@ -55,7 +53,7 @@ impl From<bpfman_kernel::Error> for LinkCause {
     }
 }
 
-impl<S: LinkStore> From<LinkCause> for LinkError<S> {
+impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> From<LinkCause> for LinkError<S, K> {
     fn from(cause: LinkCause) -> Self {
         Self {
             failure: Failure::Before(cause),
@@ -70,10 +68,12 @@ impl LinkCause {
             Cause::Cancelled => LinkErrorKind::Cancelled,
             Cause::NotFound => LinkErrorKind::NotFound,
             Cause::Unsupported => LinkErrorKind::Unsupported,
-            Cause::Xdp(_) => LinkErrorKind::Unavailable,
             Cause::Invalid(_) => LinkErrorKind::InvalidState,
             Cause::Kernel(cause) => match cause.kind() {
-                bpfman_kernel::ErrorKind::InvalidData => LinkErrorKind::InvalidState,
+                bpfman_kernel::ErrorKind::Unsupported => LinkErrorKind::Unsupported,
+                bpfman_kernel::ErrorKind::InvalidInput | bpfman_kernel::ErrorKind::InvalidData => {
+                    LinkErrorKind::InvalidState
+                }
                 _ => LinkErrorKind::Unavailable,
             },
             Cause::Filesystem(cause) => match cause.kind() {
@@ -92,7 +92,7 @@ impl LinkCause {
     }
 }
 
-impl<S: LinkStore> LinkReport<S> {
+impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> LinkReport<S, K> {
     /// Managed handle identifying the record associated with this cleanup.
     pub fn link_id(&self) -> std::num::NonZeroU64 {
         self.id
@@ -122,7 +122,7 @@ impl<S: LinkStore> LinkReport<S> {
     }
 }
 
-impl<S: LinkStore> LinkError<S> {
+impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> LinkError<S, K> {
     /// Application failure category, including a cancelled explicit retry admission.
     pub fn kind(&self) -> LinkErrorKind {
         self.cause()
@@ -130,7 +130,7 @@ impl<S: LinkStore> LinkError<S> {
     }
 
     /// Cleanup progress; absent when the operation failed before owning intent.
-    pub fn report(&self) -> Option<&LinkReport<S>> {
+    pub fn report(&self) -> Option<&LinkReport<S, K>> {
         match &self.failure {
             Failure::Before(_) => None,
             Failure::After(report) | Failure::Admission { report, .. } => Some(report),
@@ -145,7 +145,7 @@ impl<S: LinkStore> LinkError<S> {
     }
 }
 
-impl<S: LinkStore> fmt::Debug for LinkReport<S> {
+impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> fmt::Debug for LinkReport<S, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LinkReport")
             .field("link_id", &self.id)
@@ -156,7 +156,7 @@ impl<S: LinkStore> fmt::Debug for LinkReport<S> {
     }
 }
 
-impl<S: LinkStore> fmt::Debug for LinkError<S> {
+impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> fmt::Debug for LinkError<S, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("LinkError")
             .field("cause", &self.cause())
@@ -165,7 +165,7 @@ impl<S: LinkStore> fmt::Debug for LinkError<S> {
     }
 }
 
-impl<S: LinkStore> fmt::Display for LinkError<S> {
+impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> fmt::Display for LinkError<S, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -175,7 +175,7 @@ impl<S: LinkStore> fmt::Display for LinkError<S> {
     }
 }
 
-impl<S: LinkStore> std::error::Error for LinkError<S> {
+impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> std::error::Error for LinkError<S, K> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.cause().map(|cause| cause as _)
     }

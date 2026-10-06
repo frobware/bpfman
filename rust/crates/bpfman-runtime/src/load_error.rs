@@ -4,7 +4,7 @@ use crate::{
     load::{CleanupEffects, Effects, FailureFor},
 };
 use bpfman_core::{CompensationKind, LoadFailure, LoadRollback};
-use bpfman_fs::{Bytecode, MapDirectory, MapPin, ProgramPin, RuntimeWriter};
+use bpfman_fs::{Bytecode, RuntimeWriter};
 use std::fmt;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,14 +24,8 @@ pub(super) enum LoadCause {
     },
     #[error("read local ELF")]
     Read(#[source] std::io::Error),
-    #[error("parse local ELF")]
-    Parse(#[source] Box<aya_obj::ParseError>),
-    #[error("load ELF maps and relocations")]
-    Kernel(#[source] Box<aya::EbpfError>),
-    #[error("observe loaded map identity")]
-    Map(#[source] Box<aya::maps::MapError>),
-    #[error("load tracepoint program")]
-    Program(#[source] Box<aya::programs::ProgramError>),
+    #[error(transparent)]
+    Kernel(#[from] bpfman_kernel::Error),
     #[error("{0}")]
     Invalid(String),
     #[error("{0} execution is not implemented in this Rust load slice")]
@@ -46,7 +40,7 @@ pub(super) enum LoadCause {
     Json(#[source] serde_json::Error),
 }
 
-pub(super) enum Failure<P = ProgramPin, M = MapPin, B = Bytecode, D = MapDirectory, E = LoadCause> {
+pub(super) enum Failure<P, M, B, D, E> {
     NoOwnedArtifacts(E),
     Batch {
         primary: Box<Self>,
@@ -59,7 +53,15 @@ pub(super) enum Failure<P = ProgramPin, M = MapPin, B = Bytecode, D = MapDirecto
     },
 }
 
-impl From<LoadCause> for LoadError {
+pub(super) type KernelFailure<K> = Failure<
+    <K as bpfman_kernel::ProgramResources>::ProgramPin,
+    <K as bpfman_kernel::ProgramResources>::MapPin,
+    Bytecode,
+    <K as bpfman_kernel::ProgramResources>::MapDirectory,
+    LoadCause,
+>;
+
+impl<K: bpfman_kernel::ProgramResources> From<LoadCause> for LoadError<K> {
     fn from(cause: LoadCause) -> Self {
         Self {
             failure: Box::new(Failure::NoOwnedArtifacts(cause)),
@@ -68,7 +70,7 @@ impl From<LoadCause> for LoadError {
     }
 }
 
-impl LoadError {
+impl<K: bpfman_kernel::ProgramResources> LoadError<K> {
     /// Application failure category; backend errors are available only as causes.
     pub fn kind(&self) -> LoadErrorKind {
         let cause = self.failure.primary();
@@ -81,8 +83,13 @@ impl LoadError {
             LoadCause::Filesystem(e) if e.kind() == bpfman_fs::ErrorKind::Cancelled => {
                 LoadErrorKind::Cancelled
             }
-            LoadCause::Invalid(_) | LoadCause::Parse(_) => LoadErrorKind::InvalidInput,
+            LoadCause::Invalid(_) => LoadErrorKind::InvalidInput,
             LoadCause::Unsupported(_) => LoadErrorKind::Unsupported,
+            LoadCause::Kernel(e) => match e.kind() {
+                bpfman_kernel::ErrorKind::InvalidInput => LoadErrorKind::InvalidInput,
+                bpfman_kernel::ErrorKind::Unsupported => LoadErrorKind::Unsupported,
+                _ => LoadErrorKind::Unavailable,
+            },
             _ => LoadErrorKind::Unavailable,
         }
     }
@@ -100,19 +107,19 @@ impl LoadError {
 
     /// Explicitly retry unresolved cleanup once, retaining the original error
     /// and all prior attempts. The supplied writer must belong to the same root.
-    fn retry_cleanup(self, writer: &RuntimeWriter<'_>) -> Self {
+    fn retry_cleanup(self, writer: &RuntimeWriter<'_>, kernel: &K) -> Self {
         Self {
-            failure: Box::new(retry(writer, &mut Effects(&()), *self.failure)),
+            failure: Box::new(retry(writer, &mut Effects(&(), kernel), *self.failure)),
             retry_lock_error: None,
         }
     }
 }
 
-impl<S: bpfman_store::OpenStore, K> Bpfman<S, K> {
+impl<S: bpfman_store::OpenStore, K: bpfman_kernel::ProgramResources> Bpfman<S, K> {
     /// Retry unresolved load cleanup once under this instance's writer lock.
     /// The original failure remains the result, including after complete cleanup.
     /// Acquisition failure retains all receipts and is exposed by `retry_lock_error`.
-    pub fn retry_load_cleanup(&self, error: LoadError) -> LoadError {
+    pub fn retry_load_cleanup(&self, error: LoadError<K>) -> LoadError<K> {
         self.retry_load_cleanup_with_cancellation(error, &crate::Cancellation::new())
     }
 
@@ -121,9 +128,9 @@ impl<S: bpfman_store::OpenStore, K> Bpfman<S, K> {
     #[tracing::instrument(name = "program.retry_load_cleanup", level = "debug", skip_all)]
     pub fn retry_load_cleanup_with_cancellation(
         &self,
-        error: LoadError,
+        error: LoadError<K>,
         cancellation: &crate::Cancellation,
-    ) -> LoadError {
+    ) -> LoadError<K> {
         if error.unresolved() == 0 {
             return error;
         }
@@ -136,7 +143,7 @@ impl<S: bpfman_store::OpenStore, K> Bpfman<S, K> {
             },
             |writer| {
                 if let Some(error) = pending.take() {
-                    pending = Some(error.retry_cleanup(&writer));
+                    pending = Some(error.retry_cleanup(&writer, &self.kernel));
                 }
             },
         );
@@ -218,13 +225,13 @@ pub(super) fn finish<F: CleanupEffects>(
     }
 }
 
-impl fmt::Debug for LoadError {
+impl<K: bpfman_kernel::ProgramResources> fmt::Debug for LoadError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Display::fmt(self, f)
     }
 }
 
-impl fmt::Display for LoadError {
+impl<K: bpfman_kernel::ProgramResources> fmt::Display for LoadError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "load local tracepoint")?;
 
@@ -239,7 +246,7 @@ impl fmt::Display for LoadError {
     }
 }
 
-impl std::error::Error for LoadError {
+impl<K: bpfman_kernel::ProgramResources> std::error::Error for LoadError<K> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(self.failure.primary())
     }
@@ -279,7 +286,7 @@ impl<P, M, B, D, E> Failure<P, M, B, D, E> {
     }
 }
 
-impl Failure {
+impl<P, M, B, D> Failure<P, M, B, D, LoadCause> {
     fn fmt_cleanup(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Self::Batch { primary, previous } = self {
             primary.fmt_cleanup(f)?;

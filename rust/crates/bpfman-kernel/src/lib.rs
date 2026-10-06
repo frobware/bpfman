@@ -1,9 +1,14 @@
-//! Backend-independent kernel observation capabilities.
+//! Backend-independent kernel observation and lifecycle capabilities.
 //!
 //! Reads borrow one backend supplied at application construction. Implementations
 //! own resource reuse and synchronization; observations confer no removal authority.
 
 mod error;
+mod lifecycle;
+pub use lifecycle::{
+    Acquisition, ObjectInfo, ObjectLoader, ProgramLoad, ProgramResources, Removal, TracepointLinks,
+    UnloadArtifacts, XdpArtifacts, XdpLifecycle,
+};
 
 use bpfman_fs::{ObservedMapPin, RuntimeDirectory};
 use bpfman_model::{KernelLink, KernelMap, KernelProgram, ProgramStats, XdpLink};
@@ -49,9 +54,13 @@ pub trait LinkObservations {
     ) -> Result<Option<KernelLink>, Error>;
 }
 
-/// Portable classification of a kernel observation failure.
+/// Portable classification of a kernel operation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
+    /// Invalid input before kernel acquisition.
+    InvalidInput,
+    /// Capability outside the implemented slice.
+    Unsupported,
     /// The requested kernel ID no longer exists.
     Missing,
     /// Observation was denied or failed at an OS boundary.

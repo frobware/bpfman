@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 
 fn request(object: &str, name: &str) -> PreparedProgram {
     PreparedProgram::new(
+        &bpfman_kernel_aya::Kernel,
         &fixture(object),
         ProgramSpec::Xdp(name.try_into().expect("symbol")),
         Default::default(),
@@ -90,7 +91,10 @@ where
 
     // Failure of a later selected member compensates the earlier extension.
     let bad = request("multi_prog_one_bad.bpf.o", "good")
-        .with_additional_programs(vec![ProgramSpec::Xdp("bad".try_into().expect("symbol"))])
+        .with_additional_programs(
+            &bpfman_kernel_aya::Kernel,
+            vec![ProgramSpec::Xdp("bad".try_into().expect("symbol"))],
+        )
         .expect("batch");
     assert_eq!(
         app.load_batch(bad)

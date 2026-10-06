@@ -114,6 +114,7 @@ fn cancelled_preparation_does_not_read_the_source() {
     cancellation.cancel();
 
     let error = bpfman_runtime::PreparedProgram::new_with_cancellation(
+        &bpfman_kernel_aya::Kernel,
         &missing,
         bpfman_model::ProgramSpec::Tracepoint(
             bpfman_model::Symbol::try_from("trace").expect("symbol"),

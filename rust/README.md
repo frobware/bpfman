@@ -34,13 +34,13 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-model` | 0 | Pure program specifications, stored records, and kernel observations |
 | `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, and forward unload continuations |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
-| `bpfman-kernel` | 3 | Backend-independent program, map, link and pin observation contracts |
-| `bpfman-kernel-aya` | 4 | Linux observations and private BPF syscall boundary |
+| `bpfman-kernel` | 3 | Backend-independent observation and lifecycle capabilities with opaque ownership |
+| `bpfman-kernel-aya` | 4 | Aya loading, Linux observations, attachment handles, and private BPF syscall boundaries |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Local tracepoint/XDP load/unload and tracepoint and first-member XDP attach/detach, private Aya adapter, compensation, and observations |
+| `bpfman-runtime` | 4 | Generic tracepoint/XDP lifecycle interpreters, compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -802,18 +802,39 @@ unload. Additional members, dispatcher replacement, explicit `--netns`, selectab
 XDP modes, and traffic/proceed-on execution acceptance remain unfinished. Loading
 an `xdp.frags` section does not establish fragmented-packet execution support.
 
-### Injectable kernel observations
+### Injectable kernel lifecycle
 
-`Bpfman<S, K>::new(store, kernel, timeout)` accepts one observer alongside its
-active real store. Program/map reads require `ProgramObservations`; standalone
-and extension-link reads require `LinkObservations`. These capabilities include
-pin observations so a fake read does not accidentally access a real BPF object.
-The CLI selects `bpfman_kernel_aya::Kernel`. Observation errors retain classified
-failures and private source chains.
+`Bpfman<S, K>::new(store, kernel, timeout)` accepts one kernel backend alongside
+its real store. Reads, loading, tracepoint attachment, XDP first attach/last detach,
+unload, and explicit cleanup retries use that same instance. Operations require
+only the capabilities they use: `ProgramObservations`, `LinkObservations`,
+`ObjectLoader`, `ProgramResources`, `ProgramLoad`, `TracepointLinks`, or
+`XdpLifecycle`. Associated types keep live handles and cleanup receipts opaque;
+failed acquisitions and removals return unresolved ownership.
 
-Public application tests use a stateful fake observer with both SQLite and JSON.
-They cover missing and denied observations, identity mismatches, cancellation,
-and reads under writer contention without bpffs or privileges. This is the first
-part of the kernel refactor: mutation, owned handles, and Aya containment in
-loading/filesystem code remain to be converted before a complete lifecycle can
-run with a fake kernel.
+The CLI selects `bpfman_kernel_aya::Kernel`. `PreparedProgram::new(&kernel, ...)`
+validates captured ELF input before runtime initialization. Aya, aya-obj, concrete
+program/map/link handles, and BPF syscalls stay inside `bpfman-kernel-aya`.
+`bpfman-fs` retains descriptor-relative path authority and removal. Its pinning
+bridge lends non-forgeable `PinTarget` and `PinSource` values to opaque kernel
+handles for individual syscalls. Kernel errors expose portable categories and
+retain concrete diagnostic causes through source chains.
+
+`tests/kernel_lifecycle.rs` runs the public application with a shared stateful
+fake kernel and each real store. It covers load and batch commit, tracepoint and
+XDP lifecycles, partial acquisitions, blocked cleanup, cancellation, post-commit
+observation errors, retained link handles, and retries through foreign kernel
+instances. Bytecode publication, runtime locking, and persistence remain real;
+no bpffs mount or kernel privileges are needed for these tests. Store fault
+injection uses the existing forwarding `Faults<S>` decorator.
+
+Run this focused suite with:
+
+```sh
+direnv exec . make rust-test-kernel-fake
+```
+
+It also runs in `rust-check`, alongside operation-level fault tests, filesystem
+confinement tests, all 36 real-kernel tests, and the unchanged admitted DSL corpus
+on both stores. The fake checks orchestration and simulated ownership; the real
+kernel tests establish verifier, syscall, and kernel lifetime behaviour.

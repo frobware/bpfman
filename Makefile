@@ -1036,7 +1036,7 @@ test-e2e-selection:
 rust-check: rust-fmt rust-lint rust-test rust-doc
 
 RUST_DISPATCHER = dispatcher/xdp_dispatcher_v2.bpf.o
-rust-build rust-lint rust-doc rust-test-load-compensation rust-test-unload test-e2e-selection: $(RUST_DISPATCHER)
+rust-build rust-lint rust-doc rust-test-load-compensation rust-test-kernel-fake rust-test-unload test-e2e-selection: $(RUST_DISPATCHER)
 
 rust-build:
 	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked
@@ -1049,6 +1049,11 @@ RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh",
 
 rust-test: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) --workspace --locked $(RUST_TEST_RUNNER)
+
+# Public lifecycle with the stateful fake kernel and both concrete stores.
+.PHONY: rust-test-kernel-fake
+rust-test-kernel-fake:
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --locked --test kernel_lifecycle
 
 # Exercise the same load interpreter used by the CLI, with injected effects.
 .PHONY: rust-test-load-compensation

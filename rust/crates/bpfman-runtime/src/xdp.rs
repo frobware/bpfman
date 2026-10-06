@@ -48,27 +48,27 @@ impl<O, E, P, D, R> XdpResource for Resource<O, E, P, D, R> {
     }
 }
 
-type Owned<S> = Resource<
-    bpfman_fs::XdpOuter,
-    bpfman_fs::XdpExtensionPin,
-    bpfman_fs::XdpProgramPin,
-    bpfman_fs::XdpRevision,
+type Owned<S, K> = Resource<
+    <K as bpfman_kernel::XdpLifecycle>::Outer,
+    <K as bpfman_kernel::XdpLifecycle>::Extension,
+    <K as bpfman_kernel::XdpLifecycle>::DispatcherPin,
+    <K as bpfman_kernel::XdpLifecycle>::Revision,
     <S as XdpStore>::XdpReceipt,
 >;
 
 /// Failure retaining original cause, all cleanup attempts, and unresolved ownership.
-pub struct XdpError<S: XdpStore> {
+pub struct XdpError<S: XdpStore, K: bpfman_kernel::XdpLifecycle> {
     primary: Option<LinkCause>,
-    report: Option<XdpCleanupReport<Owned<S>, LinkCause>>,
+    report: Option<XdpCleanupReport<Owned<S, K>, LinkCause>>,
     admission: Option<LinkCause>,
 }
 
 /// Completed teardown report, including all actual cleanup attempts.
-pub struct XdpReport<S: XdpStore> {
-    report: XdpCleanupReport<Owned<S>, LinkCause>,
+pub struct XdpReport<S: XdpStore, K: bpfman_kernel::XdpLifecycle> {
+    report: XdpCleanupReport<Owned<S, K>, LinkCause>,
 }
 
-impl<S: XdpStore> XdpError<S> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> XdpError<S, K> {
     fn cause(&self) -> Option<&LinkCause> {
         self.admission
             .as_ref()
@@ -97,7 +97,7 @@ impl<S: XdpStore> XdpError<S> {
     }
 }
 
-impl<S: XdpStore> XdpReport<S> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> XdpReport<S, K> {
     /// Every cleanup attempt.
     pub fn attempts(&self) -> &[bpfman_core::XdpAttempt<LinkCause>] {
         self.report.attempts()
@@ -109,7 +109,7 @@ impl<S: XdpStore> XdpReport<S> {
     }
 }
 
-impl<S: XdpStore> std::fmt::Debug for XdpError<S> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::fmt::Debug for XdpError<S, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("XdpError")
             .field("primary", &self.primary)
@@ -119,7 +119,7 @@ impl<S: XdpStore> std::fmt::Debug for XdpError<S> {
     }
 }
 
-impl<S: XdpStore> std::fmt::Display for XdpError<S> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::fmt::Display for XdpError<S, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -129,13 +129,13 @@ impl<S: XdpStore> std::fmt::Display for XdpError<S> {
     }
 }
 
-impl<S: XdpStore> std::error::Error for XdpError<S> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::error::Error for XdpError<S, K> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.cause().map(|c| c as _)
     }
 }
 
-impl<S: XdpStore> From<LinkCause> for XdpError<S> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> From<LinkCause> for XdpError<S, K> {
     fn from(primary: LinkCause) -> Self {
         Self {
             primary: Some(primary),
@@ -145,7 +145,7 @@ impl<S: XdpStore> From<LinkCause> for XdpError<S> {
     }
 }
 
-impl<S: XdpStore> std::fmt::Debug for XdpReport<S> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::fmt::Debug for XdpReport<S, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("XdpReport")
             .field("attempts", &self.attempts())
@@ -362,9 +362,9 @@ fn attach<F: Effects>(
     result.map_err(|cause| (cause, cleanup(w, f, XdpCleanup::new(resources))))
 }
 
-impl<S: XdpStore, K> Bpfman<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Bpfman<S, K> {
     /// Attach the first extension to an unoccupied interface in this namespace.
-    pub fn attach_xdp(&self, request: XdpAttach) -> Result<StoredLink, XdpError<S>> {
+    pub fn attach_xdp(&self, request: XdpAttach) -> Result<StoredLink, XdpError<S, K>> {
         self.attach_xdp_with_cancellation(request, &Cancellation::new())
     }
 
@@ -373,7 +373,7 @@ impl<S: XdpStore, K> Bpfman<S, K> {
         &self,
         request: XdpAttach,
         c: &Cancellation,
-    ) -> Result<StoredLink, XdpError<S>> {
+    ) -> Result<StoredLink, XdpError<S, K>> {
         self.store
             .runtime()
             .with_writer(
@@ -382,20 +382,24 @@ impl<S: XdpStore, K> Bpfman<S, K> {
                     cancelled: Some(c.flag()),
                 },
                 |w| {
-                    attach(&w, &mut real::Adapter(&self.store), &request, c).map_err(
-                        |(primary, report)| XdpError {
-                            primary: Some(primary),
-                            report: Some(report),
-                            admission: None,
-                        },
+                    attach(
+                        &w,
+                        &mut real::Adapter(&self.store, &self.kernel),
+                        &request,
+                        c,
                     )
+                    .map_err(|(primary, report)| XdpError {
+                        primary: Some(primary),
+                        report: Some(report),
+                        admission: None,
+                    })
                 },
             )
             .map_err(|e| XdpError::from(LinkCause::from(e)))?
     }
 
     /// Detach the sole member and remove the dispatcher, preserving failed receipts.
-    pub fn detach_xdp(&self, id: NonZeroU64) -> Result<XdpReport<S>, XdpError<S>> {
+    pub fn detach_xdp(&self, id: NonZeroU64) -> Result<XdpReport<S, K>, XdpError<S, K>> {
         self.detach_xdp_with_cancellation(id, &Cancellation::new())
     }
 
@@ -404,7 +408,7 @@ impl<S: XdpStore, K> Bpfman<S, K> {
         &self,
         id: NonZeroU64,
         c: &Cancellation,
-    ) -> Result<XdpReport<S>, XdpError<S>> {
+    ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
         self.store
             .runtime()
             .with_writer(
@@ -414,7 +418,7 @@ impl<S: XdpStore, K> Bpfman<S, K> {
                 },
                 |w| {
                     check(c)?;
-                    let mut f = real::Adapter(&self.store);
+                    let mut f = real::Adapter(&self.store, &self.kernel);
                     let resources = f.observe(&w, id)?;
                     check(c)?;
                     finish(cleanup(&w, &mut f, XdpCleanup::new(resources)))
@@ -424,16 +428,19 @@ impl<S: XdpStore, K> Bpfman<S, K> {
     }
 
     /// Retry unresolved cleanup once, retaining history and original failure.
-    pub fn retry_xdp_cleanup(&self, error: XdpError<S>) -> Result<XdpReport<S>, XdpError<S>> {
+    pub fn retry_xdp_cleanup(
+        &self,
+        error: XdpError<S, K>,
+    ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
         self.retry_xdp_cleanup_with_cancellation(error, &Cancellation::new())
     }
 
     /// A failed admission retains all resources; an admitted pass ignores cancellation.
     pub fn retry_xdp_cleanup_with_cancellation(
         &self,
-        error: XdpError<S>,
+        error: XdpError<S, K>,
         c: &Cancellation,
-    ) -> Result<XdpReport<S>, XdpError<S>> {
+    ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
         if error.report.is_none() {
             return Err(error);
         }
@@ -452,7 +459,11 @@ impl<S: XdpStore, K> Bpfman<S, K> {
                 let Some(report) = error.report.take() else {
                     return Err(error);
                 };
-                let report = cleanup(&w, &mut real::Adapter(&self.store), report.retry());
+                let report = cleanup(
+                    &w,
+                    &mut real::Adapter(&self.store, &self.kernel),
+                    report.retry(),
+                );
                 if report.unresolved() == 0 {
                     Ok(XdpReport { report })
                 } else {
@@ -478,9 +489,9 @@ impl<S: XdpStore, K> Bpfman<S, K> {
     }
 }
 
-fn finish<S: XdpStore>(
-    report: XdpCleanupReport<Owned<S>, LinkCause>,
-) -> Result<XdpReport<S>, XdpError<S>> {
+fn finish<S: XdpStore, K: bpfman_kernel::XdpLifecycle>(
+    report: XdpCleanupReport<Owned<S, K>, LinkCause>,
+) -> Result<XdpReport<S, K>, XdpError<S, K>> {
     if report.unresolved() == 0 {
         Ok(XdpReport { report })
     } else {

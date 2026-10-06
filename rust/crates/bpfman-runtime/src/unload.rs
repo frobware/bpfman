@@ -129,19 +129,22 @@ pub(super) type ReportFor<F> = bpfman_core::UnloadReport<
     <F as UnloadEffects>::LinkRecord,
 >;
 
-pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
-    bpfman_fs::ProgramPin,
+pub(super) type StoreReport<S, K> = bpfman_core::UnloadReport<
+    <K as bpfman_kernel::ProgramResources>::ProgramPin,
     <S as UnloadStore>::ProgramReceipt,
-    bpfman_fs::MapPin,
-    bpfman_fs::MapDirectory,
+    <K as bpfman_kernel::ProgramResources>::MapPin,
+    <K as bpfman_kernel::ProgramResources>::MapDirectory,
     <S as UnloadStore>::MapSetReceipt,
     bpfman_fs::Bytecode,
     crate::UnloadCause,
-    bpfman_fs::LinkPin,
+    <K as bpfman_kernel::TracepointLinks>::LinkPin,
     <S as LinkStore>::LinkReceipt,
 >;
 
-impl<S: bpfman_store::OpenStore + UnloadStore + LinkStore, K> Bpfman<S, K>
+impl<
+    S: bpfman_store::OpenStore + UnloadStore + LinkStore,
+    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+> Bpfman<S, K>
 where
     S::Reader: LinkReader,
 {
@@ -150,7 +153,7 @@ where
     /// Observations and teardown share one writer scope. Independent cleanup
     /// continues after record failure; post-record cleanup may return warnings.
     /// Retained receipts support explicit retry even after the row is gone.
-    pub fn unload(&self, id: NonZeroU32) -> Result<UnloadReport<S>, UnloadError<S>> {
+    pub fn unload(&self, id: NonZeroU32) -> Result<UnloadReport<S, K>, UnloadError<S, K>> {
         self.unload_with_cancellation(id, &crate::Cancellation::new())
     }
 
@@ -161,7 +164,7 @@ where
         &self,
         id: NonZeroU32,
         cancellation: &crate::Cancellation,
-    ) -> Result<UnloadReport<S>, UnloadError<S>> {
+    ) -> Result<UnloadReport<S, K>, UnloadError<S, K>> {
         self.store
             .runtime()
             .with_writer(
@@ -170,8 +173,13 @@ where
                     cancelled: Some(cancellation.flag()),
                 },
                 |writer| {
-                    let report = run(&writer, &mut real::Effects(&self.store), id, cancellation)?;
-                    finish::<S>(report)
+                    let report = run(
+                        &writer,
+                        &mut real::Effects(&self.store, &self.kernel),
+                        id,
+                        cancellation,
+                    )?;
+                    finish::<S, K>(report)
                 },
             )
             .map_err(crate::UnloadCause::from)?
@@ -274,9 +282,12 @@ pub(super) fn drain<F: UnloadEffects>(
     }
 }
 
-pub(super) fn finish<S: UnloadStore + LinkStore>(
-    report: StoreReport<S>,
-) -> Result<UnloadReport<S>, UnloadError<S>> {
+pub(super) fn finish<
+    S: UnloadStore + LinkStore,
+    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+>(
+    report: StoreReport<S, K>,
+) -> Result<UnloadReport<S, K>, UnloadError<S, K>> {
     let failed = report.failed();
     let report = UnloadReport { report };
 

@@ -8,21 +8,14 @@ use crate::{
     observe::{observe, optional_dir},
     removal::open_owned,
 };
-use aya::programs::{Extension, ProgramInfo, ProgramType, Xdp, links::FdLink};
+use crate::{ExtensionProgram, LinkPinning, OuterLink, ProgramPinning};
 use bpfman_core::EffectFailure;
 use bpfman_model::{InterfaceName, XdpKey, XdpLink, XdpSnapshot};
-use std::{
-    num::{NonZeroU32, NonZeroU64},
-    os::{
-        fd::{AsFd, OwnedFd},
-        unix::fs::MetadataExt,
-    },
-};
-mod syscall;
+use std::{num::NonZeroU32, os::fd::OwnedFd};
 
 /// Adopted extension and attach point; no managed attachment has been created.
-pub struct PreparedXdp {
-    extension: Extension,
+pub struct PreparedXdp<E: ExtensionProgram> {
+    extension: E,
     extension_entry: Entry,
     collection: OwnedFd,
     key: XdpKey,
@@ -47,20 +40,20 @@ pub struct XdpExtensionPin {
 
 /// Outer link ownership. A live fd survives failed pinning; pinned evidence does
 /// not retain a link fd, so observations cannot prolong a detached attachment.
-pub struct XdpOuter {
+pub struct XdpOuter<L: OuterLink> {
     root: Identity,
-    state: OuterState,
+    state: OuterState<L>,
 }
 
-enum OuterState {
-    Live(OwnedFd),
+enum OuterState<L: OuterLink> {
+    Live(L),
     Pinned { entry: Box<Entry>, id: NonZeroU32 },
 }
 
 /// Complete preflight observations for last-detach; missing artifacts allow retry.
-pub struct XdpArtifacts {
+pub struct XdpArtifacts<L: OuterLink> {
     /// Outer interface link.
-    pub outer: Option<XdpOuter>,
+    pub outer: Option<XdpOuter<L>>,
     /// Extension link.
     pub extension: Option<XdpExtensionPin>,
     /// Dispatcher program pin.
@@ -68,6 +61,8 @@ pub struct XdpArtifacts {
     /// Revision directory.
     pub directory: Option<XdpRevision>,
 }
+
+type OuterAcquisition<L> = Result<XdpOuter<L>, EffectFailure<Option<XdpOuter<L>>, Error>>;
 
 fn nz(value: u32) -> Result<NonZeroU32, Error> {
     NonZeroU32::new(value).ok_or_else(|| Failure::Unsafe("zero kernel identity").into())
@@ -91,65 +86,62 @@ fn fail<R>(cause: Error) -> EffectFailure<Option<R>, Error> {
 // A missing pin does not prove the interface link is detached: another process
 // may still hold its descriptor. Refuse teardown until that live link is restored
 // to its owned pin or detached. Never adopt removal authority from an ID alone.
-fn require_detached(snapshot: &XdpSnapshot) -> Result<(), Error> {
-    let fd = match syscall::by_id(snapshot.outer_link_id.get()) {
-        Ok(fd) => fd,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(io("inspect missing outer XDP pin", e)),
+fn require_detached(kernel: &impl crate::XdpKernel, snapshot: &XdpSnapshot) -> Result<(), Error> {
+    let Some(fd) = kernel
+        .outer_by_id(snapshot.outer_link_id)
+        .map_err(Failure::Kernel)?
+    else {
+        return Ok(());
     };
-    let info = syscall::info(fd.as_fd()).map_err(|e| io("inspect unpinned XDP link", e))?;
-    if info.kind != 6
-        || info.id != snapshot.outer_link_id.get()
+    let info = fd.info().map_err(Failure::Kernel)?;
+    if info.id != snapshot.outer_link_id.get()
         || info.program != snapshot.details.dispatcher_id.get()
-        || info.data[0] != 0
+        || info.ifindex != 0
     {
         return Err(
             Failure::Unsafe("outer pin is missing but its link is not proven detached").into(),
         );
     }
-
     Ok(())
 }
 
 impl RuntimeWriter<'_> {
     /// Resolve an interface in this process's network namespace and adopt a
     /// canonical EXT program pin. Explicit namespace switching is not performed.
-    pub fn prepare_xdp(
+    pub fn prepare_xdp<K: crate::XdpKernel>(
         &self,
+        kernel: &K,
         program: NonZeroU32,
         interface: &InterfaceName,
-    ) -> Result<PreparedXdp, Error> {
-        let nsid = NonZeroU64::new(
-            std::fs::metadata("/proc/self/ns/net")
-                .map_err(|e| io("inspect network namespace", e))?
-                .ino(),
-        )
-        .ok_or(Failure::Unsafe("zero namespace inode"))?;
-        let ifindex =
-            nz(syscall::interface(interface.as_str())
-                .map_err(|e| io("resolve XDP interface", e))?)?;
+    ) -> Result<PreparedXdp<K::Extension>, Error> {
+        let key = kernel.interface(interface).map_err(Failure::Kernel)?;
         let bpffs = optional_dir(&self.runtime.root, "fs", BENEATH)?
             .ok_or(Failure::Unsafe("program bpffs is missing"))?;
         crate::link::verify_bpffs(&bpffs)?;
         let pin = observe(self, &bpffs, "fs", &format!("prog_{program}"), false)?
             .ok_or(Failure::Unsafe("program pin is missing"))?;
         let owned = open_owned(&pin)?;
-        let info = ProgramInfo::from_pin(proc_path(&owned)).map_err(Failure::Program)?;
-        if info.id() != program.get() || info.program_type() != ProgramType::Extension.into() {
+        let (info, extension) = kernel
+            .extension_at(crate::PinSource(&proc_path(&owned)))
+            .map_err(Failure::Kernel)?;
+        if info.id != program.get() || info.kind != crate::PinProgramKind::Extension {
             return Err(Failure::Unsafe("expected the managed extension program").into());
         }
-        let extension = Extension::from_pin(proc_path(&owned)).map_err(Failure::Program)?;
         let collection = ensure_directory(&bpffs, "xdp", CONFINED)?;
         Ok(PreparedXdp {
             extension,
             extension_entry: pin,
             collection,
-            key: XdpKey { nsid, ifindex },
+            key,
         })
     }
 
     /// Observe every artifact and validate kernel identities before teardown.
-    pub fn observe_xdp(&self, snapshot: &XdpSnapshot) -> Result<XdpArtifacts, Error> {
+    pub fn observe_xdp<K: crate::XdpKernel>(
+        &self,
+        kernel: &K,
+        snapshot: &XdpSnapshot,
+    ) -> Result<XdpArtifacts<K::Outer>, Error> {
         let details = &snapshot.details;
         let mut found = XdpArtifacts {
             outer: None,
@@ -158,22 +150,23 @@ impl RuntimeWriter<'_> {
             directory: None,
         };
         let Some(bpffs) = optional_dir(&self.runtime.root, "fs", BENEATH)? else {
-            require_detached(snapshot)?;
+            require_detached(kernel, snapshot)?;
             return Ok(found);
         };
         crate::link::verify_bpffs(&bpffs)?;
         let Some(collection) = optional_dir(&bpffs, "xdp", CONFINED)? else {
-            require_detached(snapshot)?;
+            require_detached(kernel, snapshot)?;
             return Ok(found);
         };
         if let Some(pin) = observe(self, &collection, "fs/xdp", &outer_name(details.key), false)? {
             let owned = open_owned(&pin)?;
-            let fd = syscall::open(&proc_path(&owned)).map_err(|e| io("open outer XDP link", e))?;
-            let info = syscall::info(fd.as_fd()).map_err(|e| io("inspect outer XDP link", e))?;
-            if info.kind != 6
-                || info.id != snapshot.outer_link_id.get()
+            let fd = kernel
+                .outer_at(crate::PinSource(&proc_path(&owned)))
+                .map_err(Failure::Kernel)?;
+            let info = fd.info().map_err(Failure::Kernel)?;
+            if info.id != snapshot.outer_link_id.get()
                 || info.program != details.dispatcher_id.get()
-                || (info.data[0] != 0 && info.data[0] != details.key.ifindex.get())
+                || (info.ifindex != 0 && info.ifindex != details.key.ifindex.get())
             {
                 return Err(Failure::Unsafe("outer link identity differs from snapshot").into());
             }
@@ -185,7 +178,7 @@ impl RuntimeWriter<'_> {
                 },
             });
         } else {
-            require_detached(snapshot)?;
+            require_detached(kernel, snapshot)?;
         }
         let rev = revision_name(details.key, details.revision);
         if let Some(directory) = observe(self, &collection, "fs/xdp", &rev, true)? {
@@ -201,9 +194,10 @@ impl RuntimeWriter<'_> {
             let parent = format!("fs/xdp/{rev}");
             if let Some(pin) = observe(self, &fd, &parent, "dispatcher", false)? {
                 let owned = open_owned(&pin)?;
-                let info = ProgramInfo::from_pin(proc_path(&owned)).map_err(Failure::Program)?;
-                if info.id() != details.dispatcher_id.get()
-                    || info.program_type() != ProgramType::Xdp.into()
+                let info = kernel
+                    .program_at(crate::PinSource(&proc_path(&owned)))
+                    .map_err(Failure::Kernel)?;
+                if info.id != details.dispatcher_id.get() || info.kind != crate::PinProgramKind::Xdp
                 {
                     return Err(Failure::Unsafe("dispatcher program differs from snapshot").into());
                 }
@@ -214,17 +208,15 @@ impl RuntimeWriter<'_> {
             }
             if let Some(pin) = observe(self, &fd, &parent, "link_0", false)? {
                 let owned = open_owned(&pin)?;
-                let link =
-                    syscall::open(&proc_path(&owned)).map_err(|e| io("open extension link", e))?;
-                let info =
-                    syscall::info(link.as_fd()).map_err(|e| io("inspect extension link", e))?;
+                let info = kernel
+                    .link_at(crate::PinSource(&proc_path(&owned)))
+                    .map_err(Failure::Kernel)?;
                 let bpfman_model::LinkState::Attached { kernel_id } = snapshot.member.state else {
                     return Err(Failure::Unsafe("XDP link is not committed").into());
                 };
-                if info.kind != 2
-                    || info.id != kernel_id.get()
-                    || info.program != snapshot.member.program_id.get()
-                    || info.data[1] != details.dispatcher_id.get()
+                if info.id != kernel_id
+                    || info.program_id != snapshot.member.program_id
+                    || !matches!(info.details, bpfman_model::KernelLinkDetails::Tracing { target_obj_id, .. } if target_obj_id == details.dispatcher_id.get())
                 {
                     return Err(Failure::Unsafe("extension link differs from snapshot").into());
                 }
@@ -239,29 +231,28 @@ impl RuntimeWriter<'_> {
     }
 
     /// Stop traffic synchronously, then remove only the owned outer pin.
-    pub fn remove_xdp_outer(
+    pub fn remove_xdp_outer<K: crate::XdpKernel>(
         &self,
-        receipt: XdpOuter,
-    ) -> Result<(), EffectFailure<XdpOuter, Error>> {
+        kernel: &K,
+        receipt: XdpOuter<K::Outer>,
+    ) -> Result<(), EffectFailure<XdpOuter<K::Outer>, Error>> {
         let result = (|| {
             if identity(&self.runtime.root)? != receipt.root {
                 return Err(Failure::Unsafe("XDP link belongs to another runtime").into());
             }
             match &receipt.state {
-                OuterState::Live(fd) => {
-                    syscall::detach(fd.as_fd()).map_err(|e| io("detach live XDP link", e))
-                }
+                OuterState::Live(fd) => fd.detach().map_err(|e| Failure::Kernel(e).into()),
                 OuterState::Pinned { entry: pin, id } => {
                     pin.check_writer(self)?;
                     let owned = open_owned(pin)?;
-                    let fd = syscall::open(&proc_path(&owned))
-                        .map_err(|e| io("reopen outer XDP link", e))?;
-                    let info =
-                        syscall::info(fd.as_fd()).map_err(|e| io("inspect outer XDP link", e))?;
-                    if info.id != id.get() || info.kind != 6 {
+                    let fd = kernel
+                        .outer_at(crate::PinSource(&proc_path(&owned)))
+                        .map_err(Failure::Kernel)?;
+                    let info = fd.info().map_err(Failure::Kernel)?;
+                    if info.id != id.get() {
                         return Err(Failure::Unsafe("outer XDP identity changed").into());
                     }
-                    syscall::detach(fd.as_fd()).map_err(|e| io("detach outer XDP link", e))?;
+                    fd.detach().map_err(Failure::Kernel)?;
                     crate::removal::remove(self, pin)
                 }
             }
@@ -306,7 +297,7 @@ impl RuntimeWriter<'_> {
     }
 }
 
-impl PreparedXdp {
+impl<E: ExtensionProgram> PreparedXdp<E> {
     /// Observed namespace and interface identity.
     pub fn key(&self) -> XdpKey {
         self.key
@@ -350,7 +341,7 @@ impl PreparedXdp {
         &mut self,
         writer: &RuntimeWriter<'_>,
         directory: &XdpRevision,
-        dispatcher: &Xdp,
+        dispatcher: &E::Dispatcher,
     ) -> Result<XdpExtensionPin, EffectFailure<Option<XdpExtensionPin>, Error>> {
         self.extension_entry.check_writer(writer).map_err(fail)?;
         open_owned(&self.extension_entry).map_err(fail)?;
@@ -364,25 +355,13 @@ impl PreparedXdp {
             false,
         )
         .map_err(fail)?;
-        let link_id = self
+        let link = self
             .extension
-            .attach_to_program(
-                dispatcher
-                    .fd()
-                    .map_err(|e| fail(Failure::Program(e).into()))?,
-                "prog0",
-            )
-            .map_err(|e| fail(Failure::Program(e).into()))?;
-        let link: FdLink = self
-            .extension
-            .take_link(link_id)
-            .map_err(|e| fail(Failure::Program(e).into()))?
-            .into();
-        let id = nz(link.info().map_err(|e| fail(Failure::Link(e).into()))?.id()).map_err(fail)?;
-        let pinned = link
-            .pin(proc_path(&dir).join("link_0"))
-            .map_err(|e| fail(Failure::Pin(e).into()))?;
-        drop(pinned);
+            .attach(dispatcher)
+            .map_err(|e| fail(Failure::Kernel(e).into()))?;
+        let id = nz(link.id().map_err(|e| fail(Failure::Kernel(e).into()))?).map_err(fail)?;
+        link.pin(crate::PinTarget(&proc_path(&dir).join("link_0")))
+            .map_err(|e| fail(Failure::Kernel(e).into()))?;
         match pin.observe() {
             Ok(()) => Ok(XdpExtensionPin { entry: pin, id }),
             Err(cause) => Err(EffectFailure {
@@ -394,11 +373,12 @@ impl PreparedXdp {
 
     /// Attach without replacing an existing interface program. A pin failure
     /// retains the live fd so compensation can synchronously detach it.
-    pub fn pin_outer(
+    pub fn pin_outer<K: crate::XdpKernel<Extension = E>>(
         &self,
+        kernel: &K,
         writer: &RuntimeWriter<'_>,
-        dispatcher: &Xdp,
-    ) -> Result<XdpOuter, EffectFailure<Option<XdpOuter>, Error>> {
+        dispatcher: &E::Dispatcher,
+    ) -> OuterAcquisition<K::Outer> {
         let mut pin = entry(
             writer,
             &self.collection,
@@ -408,21 +388,16 @@ impl PreparedXdp {
         )
         .map_err(fail)?;
         pin.check_writer(writer).map_err(fail)?;
-        let fd = syscall::outer(
-            dispatcher
-                .fd()
-                .map_err(|e| fail(Failure::Program(e).into()))?
-                .as_fd(),
-            self.key.ifindex.get(),
-        )
-        .map_err(|e| fail(io("attach outer XDP link", e)))?;
+        let fd = kernel
+            .attach_outer(dispatcher, self.key)
+            .map_err(|e| fail(Failure::Kernel(e).into()))?;
         // Keep ownership even if info fails. ID is only needed after pinning;
         // the live receipt authorizes detach through its owned descriptor.
-        let info = match syscall::info(fd.as_fd()) {
+        let info = match fd.info() {
             Ok(info) => info,
             Err(e) => {
                 return Err(EffectFailure {
-                    cause: io("inspect acquired XDP link", e),
+                    cause: Failure::Kernel(e).into(),
                     remaining: Some(XdpOuter {
                         root: pin.root,
                         state: OuterState::Live(fd),
@@ -442,9 +417,11 @@ impl PreparedXdp {
                 });
             }
         };
-        if let Err(e) = syscall::pin(fd.as_fd(), &proc_path(&self.collection).join(&pin.name)) {
+        if let Err(e) = fd.pin(crate::PinTarget(
+            &proc_path(&self.collection).join(&pin.name),
+        )) {
             return Err(EffectFailure {
-                cause: io("pin outer XDP link", e),
+                cause: Failure::Kernel(e).into(),
                 remaining: Some(XdpOuter {
                     root: pin.root,
                     state: OuterState::Live(fd),
@@ -475,15 +452,11 @@ impl XdpRevision {
     pub fn pin_program(
         &self,
         writer: &RuntimeWriter<'_>,
-        program: &mut Xdp,
+        program: &mut impl ProgramPinning,
     ) -> Result<XdpProgramPin, EffectFailure<Option<XdpProgramPin>, Error>> {
         self.entry.check_writer(writer).map_err(fail)?;
         let directory = open_owned(&self.entry).map_err(fail)?;
-        let id = nz(program
-            .info()
-            .map_err(|e| fail(Failure::Program(e).into()))?
-            .id())
-        .map_err(fail)?;
+        let id = nz(program.id().map_err(|e| fail(Failure::Kernel(e).into()))?).map_err(fail)?;
         let mut pin = entry(
             writer,
             &directory,
@@ -493,8 +466,8 @@ impl XdpRevision {
         )
         .map_err(fail)?;
         program
-            .pin(proc_path(&directory).join("dispatcher"))
-            .map_err(|e| fail(Failure::Pin(e).into()))?;
+            .pin(crate::PinTarget(&proc_path(&directory).join("dispatcher")))
+            .map_err(|e| fail(Failure::Kernel(e).into()))?;
         let result = pin.observe();
         let receipt = XdpProgramPin { entry: pin, id };
         match result {
@@ -521,7 +494,7 @@ impl XdpExtensionPin {
     }
 }
 
-impl XdpOuter {
+impl<L: OuterLink> XdpOuter<L> {
     /// Kernel identity only after pinning succeeded. Unpinned partial ownership
     /// cannot be committed as a persistent attachment.
     pub fn id(&self) -> Result<NonZeroU32, Error> {
@@ -536,6 +509,7 @@ impl RuntimeDirectory {
     /// Inspect a canonical first-slot link pin without acquiring writer authority.
     pub fn read_xdp_link_pin(
         &self,
+        kernel: &impl crate::LinkInspection,
         details: &XdpLink,
     ) -> Result<Option<bpfman_model::KernelLink>, Error> {
         let Some(bpffs) = optional_dir(&self.root, "fs", BENEATH)? else {
@@ -571,21 +545,13 @@ impl RuntimeDirectory {
         {
             return Err(Failure::Unsafe("invalid XDP pin inode").into());
         }
-        let fd =
-            syscall::open(&proc_path(&pin)).map_err(|e| io("open pinned XDP extension link", e))?;
-        let info =
-            syscall::info(fd.as_fd()).map_err(|e| io("inspect pinned XDP extension link", e))?;
-        if info.kind != 2 || info.data[1] != details.dispatcher_id.get() {
+        let info = kernel
+            .link_at(crate::PinSource(&proc_path(&pin)))
+            .map_err(Failure::Kernel)?;
+        if !matches!(info.details, bpfman_model::KernelLinkDetails::Tracing { target_obj_id, .. } if target_obj_id == details.dispatcher_id.get())
+        {
             return Err(Failure::Unsafe("unexpected extension link target or type").into());
         }
-        Ok(Some(bpfman_model::KernelLink {
-            details: bpfman_model::KernelLinkDetails::Tracing {
-                attach_type: info.data[0],
-                target_obj_id: info.data[1],
-                target_btf_id: info.data[2],
-            },
-            id: nz(info.id)?,
-            program_id: nz(info.program)?,
-        }))
+        Ok(Some(info))
     }
 }

@@ -150,13 +150,14 @@ impl LoadRequest {
 
         Ok(PreparedLoad {
             request: bpfman_runtime::PreparedProgram::new_with_cancellation(
+                &bpfman_kernel_aya::Kernel,
                 &path,
                 first,
                 metadata,
                 cancellation,
             )?
-            .with_globals(globals)?
-            .with_additional_programs(remaining)?,
+            .with_globals(&bpfman_kernel_aya::Kernel, globals)?
+            .with_additional_programs(&bpfman_kernel_aya::Kernel, remaining)?,
             output,
         })
     }
