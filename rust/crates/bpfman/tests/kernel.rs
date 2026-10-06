@@ -211,3 +211,16 @@ fn sqlite_xdp_attachment_failures() {
 fn json_xdp_attachment_failures() {
     xdp_attach::exercise(bpfman_store_json::Backend);
 }
+
+#[path = "kernel/xdp_switch.rs"]
+mod xdp_switch;
+
+#[test]
+fn sqlite_xdp_switch_and_restoration() {
+    xdp_switch::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_xdp_switch_and_restoration() {
+    xdp_switch::exercise(bpfman_store_json::Backend);
+}

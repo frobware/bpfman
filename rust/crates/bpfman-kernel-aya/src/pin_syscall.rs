@@ -53,6 +53,28 @@ pub(super) fn detach(fd: BorrowedFd<'_>) -> io::Result<()> {
     Ok(())
 }
 
+pub(super) fn replace(
+    link: BorrowedFd<'_>,
+    old: BorrowedFd<'_>,
+    new: BorrowedFd<'_>,
+) -> io::Result<()> {
+    let attr = [
+        link.as_raw_fd() as u32,
+        new.as_raw_fd() as u32,
+        4u32,
+        old.as_raw_fd() as u32,
+    ];
+    // SAFETY: BPF_LINK_UPDATE reads four initialized u32 fields: link_fd,
+    // new_prog_fd, BPF_F_REPLACE, old_prog_fd. All descriptors stay borrowed.
+    // The expected-old check and update occur atomically in the kernel.
+    let rc = unsafe { libc::syscall(libc::SYS_bpf, 29u32, attr.as_ptr(), size_of::<[u32; 4]>()) };
+    if rc < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
 #[repr(C)]
 struct ObjectAttr {
     path: u64,

@@ -9,11 +9,14 @@ mod kernel;
 pub use kernel::{
     ExtensionProgram, KernelResult, LinkInspection, LinkPinning, MapPinning, OuterInfo, OuterLink,
     PinProgramKind, PinSource, PinTarget, PinnedProgram, ProgramInspection, ProgramPinning,
-    TracepointKernel, TracepointProgram, XdpKernel,
+    TracepointKernel, TracepointProgram, XdpKernel, XdpSwitchKernel,
 };
 
 mod xdp;
-pub use xdp::{PreparedXdp, XdpArtifacts, XdpExtensionPin, XdpOuter, XdpProgramPin, XdpRevision};
+pub use xdp::{
+    PreparedXdp, XdpArtifacts, XdpDispatcherArtifacts, XdpExtensionPin, XdpOuter, XdpProgramPin,
+    XdpRevision, XdpSwitch,
+};
 
 mod artifacts;
 mod directory;

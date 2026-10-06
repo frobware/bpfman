@@ -23,12 +23,16 @@ pub struct PreparedXdp<E: ExtensionProgram> {
 
 /// Owned revision directory; never a recursive removal capability.
 pub struct XdpRevision {
-    entry: Entry,
+    entry: Box<Entry>,
+    key: XdpKey,
+    revision: NonZeroU32,
 }
 
 /// Owned dispatcher program pin.
 pub struct XdpProgramPin {
-    entry: Entry,
+    entry: Box<Entry>,
+    key: XdpKey,
+    revision: NonZeroU32,
     id: NonZeroU32,
 }
 
@@ -59,6 +63,21 @@ pub struct XdpArtifacts<L: OuterLink> {
     /// Dispatcher program pin.
     pub program: Option<XdpProgramPin>,
     /// Revision directory.
+    pub directory: Option<XdpRevision>,
+}
+
+mod replacement;
+pub use replacement::XdpSwitch;
+
+/// Complete revision observations for replacement or final teardown.
+pub struct XdpDispatcherArtifacts<L: OuterLink> {
+    /// Durable outer interface link.
+    pub outer: Option<XdpOuter<L>>,
+    /// All observed extension pins, in slot order.
+    pub extensions: Vec<XdpExtensionPin>,
+    /// Dispatcher program pin.
+    pub program: Option<XdpProgramPin>,
+    /// Dependent revision container.
     pub directory: Option<XdpRevision>,
 }
 
@@ -142,20 +161,41 @@ impl RuntimeWriter<'_> {
         kernel: &K,
         snapshot: &XdpSnapshot,
     ) -> Result<XdpArtifacts<K::Outer>, Error> {
-        let details = &snapshot.details;
-        let mut found = XdpArtifacts {
+        let complete = bpfman_model::XdpDispatcherSnapshot::new(vec![snapshot.clone()])
+            .map_err(|_| Failure::Unsafe("invalid singleton snapshot"))?;
+        let mut all = self.observe_xdp_dispatcher(kernel, &complete)?;
+        Ok(XdpArtifacts {
+            outer: all.outer,
+            extension: all.extensions.pop(),
+            program: all.program,
+            directory: all.directory,
+        })
+    }
+
+    /// Observe all members and reject unknown revision children before mutation.
+    pub fn observe_xdp_dispatcher<K: crate::XdpKernel>(
+        &self,
+        kernel: &K,
+        snapshot: &bpfman_model::XdpDispatcherSnapshot,
+    ) -> Result<XdpDispatcherArtifacts<K::Outer>, Error> {
+        let members = snapshot.members();
+        let first = members
+            .first()
+            .ok_or(Failure::Unsafe("empty dispatcher snapshot"))?;
+        let details = &first.details;
+        let mut found = XdpDispatcherArtifacts {
             outer: None,
-            extension: None,
+            extensions: Vec::new(),
             program: None,
             directory: None,
         };
         let Some(bpffs) = optional_dir(&self.runtime.root, "fs", BENEATH)? else {
-            require_detached(kernel, snapshot)?;
+            require_detached(kernel, first)?;
             return Ok(found);
         };
         crate::link::verify_bpffs(&bpffs)?;
         let Some(collection) = optional_dir(&bpffs, "xdp", CONFINED)? else {
-            require_detached(kernel, snapshot)?;
+            require_detached(kernel, first)?;
             return Ok(found);
         };
         if let Some(pin) = observe(self, &collection, "fs/xdp", &outer_name(details.key), false)? {
@@ -164,7 +204,7 @@ impl RuntimeWriter<'_> {
                 .outer_at(crate::PinSource(&proc_path(&owned)))
                 .map_err(Failure::Kernel)?;
             let info = fd.info().map_err(Failure::Kernel)?;
-            if info.id != snapshot.outer_link_id.get()
+            if info.id != first.outer_link_id.get()
                 || info.program != details.dispatcher_id.get()
                 || (info.ifindex != 0 && info.ifindex != details.key.ifindex.get())
             {
@@ -174,11 +214,11 @@ impl RuntimeWriter<'_> {
                 root: pin.root,
                 state: OuterState::Pinned {
                     entry: Box::new(pin),
-                    id: snapshot.outer_link_id,
+                    id: first.outer_link_id,
                 },
             });
         } else {
-            require_detached(kernel, snapshot)?;
+            require_detached(kernel, first)?;
         }
         let rev = revision_name(details.key, details.revision);
         if let Some(directory) = observe(self, &collection, "fs/xdp", &rev, true)? {
@@ -187,7 +227,11 @@ impl RuntimeWriter<'_> {
                 .map_err(|e| io("enumerate dispatcher revision", e))?
             {
                 let child = child.map_err(|e| io("read dispatcher child", e))?;
-                if child.file_name() != "dispatcher" && child.file_name() != "link_0" {
+                if child.file_name() != "dispatcher"
+                    && !members.iter().any(|m| {
+                        child.file_name() == format!("link_{}", m.details.slot.index()).as_str()
+                    })
+                {
                     return Err(Failure::Unsafe("unknown dispatcher revision child").into());
                 }
             }
@@ -202,30 +246,45 @@ impl RuntimeWriter<'_> {
                     return Err(Failure::Unsafe("dispatcher program differs from snapshot").into());
                 }
                 found.program = Some(XdpProgramPin {
-                    entry: pin,
+                    entry: Box::new(pin),
+                    key: details.key,
+                    revision: details.revision,
                     id: details.dispatcher_id,
                 });
             }
-            if let Some(pin) = observe(self, &fd, &parent, "link_0", false)? {
-                let owned = open_owned(&pin)?;
-                let info = kernel
-                    .link_at(crate::PinSource(&proc_path(&owned)))
-                    .map_err(Failure::Kernel)?;
-                let bpfman_model::LinkState::Attached { kernel_id } = snapshot.member.state else {
-                    return Err(Failure::Unsafe("XDP link is not committed").into());
-                };
-                if info.id != kernel_id
-                    || info.program_id != snapshot.member.program_id
-                    || !matches!(info.details, bpfman_model::KernelLinkDetails::Tracing { target_obj_id, .. } if target_obj_id == details.dispatcher_id.get())
-                {
-                    return Err(Failure::Unsafe("extension link differs from snapshot").into());
+            for member in members {
+                if let Some(pin) = observe(
+                    self,
+                    &fd,
+                    &parent,
+                    &format!("link_{}", member.details.slot.index()),
+                    false,
+                )? {
+                    let owned = open_owned(&pin)?;
+                    let info = kernel
+                        .link_at(crate::PinSource(&proc_path(&owned)))
+                        .map_err(Failure::Kernel)?;
+                    let bpfman_model::LinkState::Attached { kernel_id } = member.member.state
+                    else {
+                        return Err(Failure::Unsafe("XDP link is not committed").into());
+                    };
+                    if info.id != kernel_id
+                        || info.program_id != member.member.program_id
+                        || !matches!(info.details, bpfman_model::KernelLinkDetails::Tracing { target_obj_id, .. } if target_obj_id == details.dispatcher_id.get())
+                    {
+                        return Err(Failure::Unsafe("extension link differs from snapshot").into());
+                    }
+                    found.extensions.push(XdpExtensionPin {
+                        entry: pin,
+                        id: kernel_id,
+                    });
                 }
-                found.extension = Some(XdpExtensionPin {
-                    entry: pin,
-                    id: kernel_id,
-                });
             }
-            found.directory = Some(XdpRevision { entry: directory });
+            found.directory = Some(XdpRevision {
+                entry: Box::new(directory),
+                key: details.key,
+                revision: details.revision,
+            });
         }
         Ok(found)
     }
@@ -311,14 +370,18 @@ impl<E: ExtensionProgram> PreparedXdp<E> {
     ) -> Result<XdpRevision, EffectFailure<Option<XdpRevision>, Error>> {
         self.extension_entry.check_writer(writer).map_err(fail)?;
         let mut receipt = XdpRevision {
-            entry: entry(
-                writer,
-                &self.collection,
-                "fs/xdp".into(),
-                revision_name(self.key, revision),
-                true,
-            )
-            .map_err(fail)?,
+            key: self.key,
+            revision,
+            entry: Box::new(
+                entry(
+                    writer,
+                    &self.collection,
+                    "fs/xdp".into(),
+                    revision_name(self.key, revision),
+                    true,
+                )
+                .map_err(fail)?,
+            ),
         };
         receipt.entry.check_writer(writer).map_err(fail)?;
         rustix::fs::mkdirat(
@@ -343,6 +406,23 @@ impl<E: ExtensionProgram> PreparedXdp<E> {
         directory: &XdpRevision,
         dispatcher: &E::Dispatcher,
     ) -> Result<XdpExtensionPin, EffectFailure<Option<XdpExtensionPin>, Error>> {
+        self.pin_extension_slot(writer, directory, dispatcher, bpfman_model::XdpSlot::FIRST)
+    }
+
+    /// Attach and pin a validated slot in this owned dispatcher revision.
+    pub fn pin_extension_slot(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        directory: &XdpRevision,
+        dispatcher: &E::Dispatcher,
+        slot: bpfman_model::XdpSlot,
+    ) -> Result<XdpExtensionPin, EffectFailure<Option<XdpExtensionPin>, Error>> {
+        if directory.key != self.key {
+            return Err(fail(
+                Failure::Unsafe("revision belongs to another attach point").into(),
+            ));
+        }
+        let name = format!("link_{}", slot.index());
         self.extension_entry.check_writer(writer).map_err(fail)?;
         open_owned(&self.extension_entry).map_err(fail)?;
         directory.entry.check_writer(writer).map_err(fail)?;
@@ -351,16 +431,16 @@ impl<E: ExtensionProgram> PreparedXdp<E> {
             writer,
             &dir,
             format!("fs/xdp/{}", directory.entry.name),
-            "link_0".into(),
+            name.clone(),
             false,
         )
         .map_err(fail)?;
         let link = self
             .extension
-            .attach(dispatcher)
+            .attach(dispatcher, slot)
             .map_err(|e| fail(Failure::Kernel(e).into()))?;
         let id = nz(link.id().map_err(|e| fail(Failure::Kernel(e).into()))?).map_err(fail)?;
-        link.pin(crate::PinTarget(&proc_path(&dir).join("link_0")))
+        link.pin(crate::PinTarget(&proc_path(&dir).join(&name)))
             .map_err(|e| fail(Failure::Kernel(e).into()))?;
         match pin.observe() {
             Ok(()) => Ok(XdpExtensionPin { entry: pin, id }),
@@ -469,7 +549,12 @@ impl XdpRevision {
             .pin(crate::PinTarget(&proc_path(&directory).join("dispatcher")))
             .map_err(|e| fail(Failure::Kernel(e).into()))?;
         let result = pin.observe();
-        let receipt = XdpProgramPin { entry: pin, id };
+        let receipt = XdpProgramPin {
+            entry: Box::new(pin),
+            id,
+            key: self.key,
+            revision: self.revision,
+        };
         match result {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -506,7 +591,7 @@ impl<L: OuterLink> XdpOuter<L> {
 }
 
 impl RuntimeDirectory {
-    /// Inspect a canonical first-slot link pin without acquiring writer authority.
+    /// Inspect a canonical recorded-slot link pin without acquiring writer authority.
     pub fn read_xdp_link_pin(
         &self,
         kernel: &impl crate::LinkInspection,

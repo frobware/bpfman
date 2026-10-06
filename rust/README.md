@@ -846,12 +846,33 @@ writes, JSON publication obstruction, malformed membership, and format-4 refusal
 The single-member store entry points used by the runtime continue to reject
 multi-member dispatchers. No multi-member kernel lifecycle is admitted yet.
 
-Next: owned link switching/restoration in the kernel boundary, followed by runtime
-integration and the shared fake-kernel and real-traffic acceptance suites.
+The kernel boundary now supplies `bpfman_kernel::XdpReplacement`: complete
+configuration loading, selected revision creation, arbitrary validated slots,
+complete artifact adoption, and owned switching/restoration. The Linux adapter
+uses `BPF_LINK_UPDATE` with `BPF_F_REPLACE` to atomically check the expected old
+program. The outer link and pin retain their identities. Filesystem operations
+remain beneath validated runtime descriptors; moved pins and revision parents
+are refused. A failed post-switch observation returns restoration evidence,
+including owned descriptors for both targets. Failed restoration retains that
+evidence. Explicit retry can recognize a completed restoration without updating
+an unrelated target.
+
+Run `direnv exec . make rust-test-xdp-switch` for two real-kernel adapter suites,
+one per store. They stage and publish 1 → 2 → 1 → 0 revisions, remove either
+member, inspect real packet counters, and prove that the first slot's proceed-on
+mask controls the second slot's execution. They also cover rejected updates,
+post-update observation failures, failed restoration, explicit retry, foreign
+runtime writers, moved pins/parents, undeclared slots, and residue-free cleanup.
+These are direct adapter contracts; the public runtime still admits only the
+single-member lifecycle.
+
+Next: connect these store/kernel capabilities to the pure replacement protocol
+in the runtime, extend the shared stateful fake's fault matrix, and admit the
+unchanged multi-member Go DSL scripts with runtime-driven traffic acceptance.
 
 Checkpoint validation passed through the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-16 fake-kernel lifecycle tests, and all 36 real-kernel tests on the supported
+16 fake-kernel lifecycle tests, and all 38 real-kernel tests on the supported
 surface. The new pure suites include nine replacement-policy tests and three
 configuration tests. NixOS kernel-build discovery and the optional `KERNEL_DEV`
 override are documented in [AGENTS.md](AGENTS.md).
@@ -889,6 +910,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 36 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 38 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

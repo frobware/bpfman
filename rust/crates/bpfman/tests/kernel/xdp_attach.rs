@@ -12,10 +12,10 @@ use bpfman_store::{
 };
 use std::{fs, num::NonZeroU32, process::Command};
 
-struct Interface(String);
+pub(super) struct Interface(String);
 
 impl Interface {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let name = format!("bxa{}", std::process::id());
         let peer = format!("bxb{}", std::process::id());
         let out = Command::new("ip")
@@ -40,7 +40,7 @@ impl Interface {
         lease
     }
 
-    fn name(&self) -> InterfaceName {
+    pub(super) fn name(&self) -> InterfaceName {
         self.0.parse().expect("interface")
     }
 }

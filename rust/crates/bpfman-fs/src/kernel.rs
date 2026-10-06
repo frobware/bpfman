@@ -84,8 +84,12 @@ pub trait ExtensionProgram {
     type Dispatcher: ProgramPinning;
     /// Owned unpinned extension link.
     type Link: LinkPinning;
-    /// Attach to slot zero; local failures release all temporary acquisitions.
-    fn attach(&mut self, dispatcher: &Self::Dispatcher) -> KernelResult<Self::Link>;
+    /// Attach to a validated slot; local failures release temporary acquisitions.
+    fn attach(
+        &mut self,
+        dispatcher: &Self::Dispatcher,
+        slot: bpfman_model::XdpSlot,
+    ) -> KernelResult<Self::Link>;
 }
 
 /// An owned outer-link descriptor, retained across failed pin acquisition.
@@ -144,6 +148,21 @@ pub trait XdpKernel: ProgramInspection + LinkInspection {
         dispatcher: &<Self::Extension as ExtensionProgram>::Dispatcher,
         key: XdpKey,
     ) -> KernelResult<Self::Outer>;
+}
+
+/// Conditional live-link updates using retained kernel program descriptors.
+pub trait XdpSwitchKernel: XdpKernel {
+    /// Opaque program handle retaining a target across failed restoration.
+    type Target: Send + Sync + 'static;
+    /// Adopt an XDP target through a filesystem-confined pin source.
+    fn target_at(&self, source: PinSource<'_>) -> KernelResult<(PinnedProgram, Self::Target)>;
+    /// Atomically replace only the expected target. Err guarantees no mutation.
+    fn replace_outer(
+        &self,
+        outer: &Self::Outer,
+        expected: &Self::Target,
+        new: &Self::Target,
+    ) -> KernelResult<()>;
 }
 
 impl PinTarget<'_> {

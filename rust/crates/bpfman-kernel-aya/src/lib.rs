@@ -49,3 +49,6 @@ pub struct AyaLink(aya::programs::links::FdLink);
 
 /// Opaque owned outer-link descriptor.
 pub struct AyaOuter(std::os::fd::OwnedFd);
+
+/// Opaque retained dispatcher target for conditional switching and restoration.
+pub struct AyaXdpTarget(aya::programs::ProgramFd);

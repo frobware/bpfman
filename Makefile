@@ -1854,6 +1854,10 @@ ci: ci-check-vendor ci-check-fmt ci-check-goimports ci-check-vet ci-check-gofix 
 rust-test-kernel-load: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- --skip unchanged_tracepoint_dsl --nocapture
 
+.PHONY: rust-test-xdp-switch
+rust-test-xdp-switch: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_switch_and_restoration --nocapture
+
 # Run the unchanged Go DSL script against Rust; observations use only public CLI
 # output and runtime artifacts. No storage queries or format assumptions here.
 .PHONY: rust-test-observation

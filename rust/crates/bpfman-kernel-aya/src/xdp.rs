@@ -43,21 +43,10 @@ impl XdpLifecycle for Kernel {
     }
 
     fn load_dispatcher(&self, proceed_on: XdpProceedOn) -> Result<Dispatcher, Error> {
-        let config = bpfman_model::xdp_config(proceed_on);
-        let mut bpf = aya::EbpfLoader::new()
-            .override_global("conf", config.as_slice(), true)
-            .load(aya::include_bytes_aligned!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../dispatcher/xdp_dispatcher_v2.bpf.o"
-            )))
-            .map_err(kernel)?;
-        let program: &mut Xdp = bpf
-            .program_mut("xdp_dispatcher")
-            .ok_or_else(missing)?
-            .try_into()
-            .map_err(kernel)?;
-        program.load().map_err(kernel)?;
-        Ok(Dispatcher(bpf))
+        bpfman_kernel::XdpReplacement::load_revision(
+            self,
+            &bpfman_model::XdpConfig::single(proceed_on),
+        )
     }
 
     fn create_revision(
@@ -144,5 +133,80 @@ impl XdpLifecycle for Kernel {
 
     fn remove_revision(&self, w: &RuntimeWriter<'_>, r: XdpRevision) -> Removal<XdpRevision> {
         w.remove_xdp_revision(r).map_err(map)
+    }
+}
+
+impl bpfman_kernel::XdpReplacement for Kernel {
+    type Switch = bpfman_fs::XdpSwitch<Self>;
+
+    fn load_revision(&self, config: &bpfman_model::XdpConfig) -> Result<Dispatcher, Error> {
+        let mut bpf = aya::EbpfLoader::new()
+            .override_global("conf", config.bytes().as_slice(), true)
+            .load(aya::include_bytes_aligned!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../../dispatcher/xdp_dispatcher_v2.bpf.o"
+            )))
+            .map_err(kernel)?;
+        let program: &mut Xdp = bpf
+            .program_mut("xdp_dispatcher")
+            .ok_or_else(missing)?
+            .try_into()
+            .map_err(kernel)?;
+        program.load().map_err(kernel)?;
+        Ok(Dispatcher(bpf))
+    }
+
+    fn create_revision_at(
+        &self,
+        w: &RuntimeWriter<'_>,
+        p: &Self::PreparedXdp,
+        revision: NonZeroU32,
+    ) -> Acquisition<XdpRevision> {
+        p.create_revision(w, revision).map_err(map)
+    }
+
+    fn pin_extension_at(
+        &self,
+        w: &RuntimeWriter<'_>,
+        p: &mut Self::PreparedXdp,
+        r: &XdpRevision,
+        d: &Dispatcher,
+        slot: bpfman_model::XdpSlot,
+    ) -> Acquisition<XdpExtensionPin> {
+        p.pin_extension_slot(w, r, d, slot).map_err(map)
+    }
+
+    fn observe_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &bpfman_model::XdpDispatcherSnapshot,
+    ) -> Result<bpfman_kernel::XdpDispatcherArtifacts<Self>, Error> {
+        let a = w
+            .observe_xdp_dispatcher(self, snapshot)
+            .map_err(filesystem)?;
+        Ok(bpfman_kernel::XdpDispatcherArtifacts {
+            outer: a.outer,
+            extensions: a.extensions,
+            program: a.program,
+            directory: a.directory,
+        })
+    }
+
+    fn switch_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        outer: &Self::Outer,
+        old: &XdpProgramPin,
+        new: &XdpProgramPin,
+    ) -> Acquisition<Self::Switch> {
+        w.switch_xdp(self, outer, old, new).map_err(map)
+    }
+
+    fn restore_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::Switch,
+    ) -> Removal<Self::Switch> {
+        w.restore_xdp(self, receipt).map_err(map)
     }
 }

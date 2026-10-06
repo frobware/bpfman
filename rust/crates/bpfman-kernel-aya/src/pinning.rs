@@ -145,14 +145,39 @@ impl ExtensionProgram for AyaExtension {
     type Dispatcher = Dispatcher;
     type Link = AyaLink;
 
-    fn attach(&mut self, dispatcher: &Dispatcher) -> KernelResult<AyaLink> {
+    fn attach(
+        &mut self,
+        dispatcher: &Dispatcher,
+        slot: bpfman_model::XdpSlot,
+    ) -> KernelResult<AyaLink> {
         let program: &Xdp = dispatcher
             .0
             .program("xdp_dispatcher")
             .ok_or_else(|| invalid("dispatcher missing"))?
             .try_into()?;
-        let id = self.0.attach_to_program(program.fd()?, "prog0")?;
+        let id = self
+            .0
+            .attach_to_program(program.fd()?, &format!("prog{}", slot.index()))?;
         Ok(AyaLink(self.0.take_link(id)?.into()))
+    }
+}
+
+impl bpfman_fs::XdpSwitchKernel for Kernel {
+    type Target = crate::AyaXdpTarget;
+
+    fn target_at(&self, source: PinSource<'_>) -> KernelResult<(PinnedProgram, Self::Target)> {
+        let info = ProgramInfo::from_pin(source.path())?;
+        let observation = program(&info)?;
+        Ok((observation, crate::AyaXdpTarget(info.fd()?)))
+    }
+
+    fn replace_outer(
+        &self,
+        outer: &AyaOuter,
+        expected: &Self::Target,
+        new: &Self::Target,
+    ) -> KernelResult<()> {
+        pin_syscall::replace(outer.0.as_fd(), expected.0.as_fd(), new.0.as_fd()).map_err(Into::into)
     }
 }
 
