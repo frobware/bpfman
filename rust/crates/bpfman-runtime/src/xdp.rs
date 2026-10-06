@@ -1,4 +1,4 @@
-//! First-attach/last-detach interpreter. No dispatcher replacement is hidden here.
+//! XDP lifecycle and explicit replacement recovery under one writer scope.
 
 use crate::{Bpfman, Cancellation, LinkCause, link_error::Cause};
 use bpfman_core::{
@@ -6,15 +6,18 @@ use bpfman_core::{
 };
 use bpfman_fs::RuntimeWriter;
 use bpfman_lock::AcquireOptions;
-use bpfman_model::{InterfaceName, StoredLink, XdpKey, XdpLink, XdpProceedOn, XdpSnapshot};
-use bpfman_store::{XdpReader, XdpStore};
+use bpfman_model::{
+    InterfaceName, StoredLink, XdpDispatcherSnapshot, XdpKey, XdpLink, XdpProceedOn,
+};
+use bpfman_store::{XdpDispatcherReader, XdpStore};
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64},
 };
 mod real;
+mod replacement;
 
-/// First XDP attachment in the current network namespace.
+/// XDP attachment in the current network namespace.
 pub struct XdpAttach {
     /// Managed extension program.
     pub program_id: NonZeroU32,
@@ -56,28 +59,65 @@ type Owned<S, K> = Resource<
     <S as XdpStore>::XdpReceipt,
 >;
 
-/// Failure retaining original cause, all cleanup attempts, and unresolved ownership.
-pub struct XdpError<S: XdpStore, K: bpfman_kernel::XdpLifecycle> {
+type Restore<S, K> = bpfman_core::XdpRestoreFailure<
+    Vec<Owned<S, K>>,
+    Vec<Owned<S, K>>,
+    <K as bpfman_kernel::XdpReplacement>::Switch,
+    LinkCause,
+>;
+
+enum Recovery<S: XdpStore, K: bpfman_kernel::XdpReplacement> {
+    Cleanup(Box<XdpCleanupReport<Owned<S, K>, LinkCause>>),
+    Restore {
+        failure: Box<Restore<S, K>>,
+        blocked: usize,
+    },
+}
+
+/// Failure retaining original cause, restoration evidence, and unresolved cleanup.
+pub struct XdpError<S: XdpStore, K: bpfman_kernel::XdpReplacement> {
     primary: Option<LinkCause>,
-    report: Option<XdpCleanupReport<Owned<S, K>, LinkCause>>,
+    recovery: Option<Recovery<S, K>>,
     admission: Option<LinkCause>,
+    restorations: Vec<Result<(), LinkCause>>,
+    committed: Option<bpfman_model::XdpDispatcherSnapshot>,
 }
 
-/// Completed teardown report, including all actual cleanup attempts.
-pub struct XdpReport<S: XdpStore, K: bpfman_kernel::XdpLifecycle> {
+/// Completed teardown or recovery, including previous failures and publication.
+pub struct XdpReport<S: XdpStore, K: bpfman_kernel::XdpReplacement> {
     report: XdpCleanupReport<Owned<S, K>, LinkCause>,
+    primary: Option<LinkCause>,
+    restorations: Vec<Result<(), LinkCause>>,
+    committed: Option<bpfman_model::XdpDispatcherSnapshot>,
 }
 
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> XdpError<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> XdpError<S, K> {
     fn cause(&self) -> Option<&LinkCause> {
         self.admission
             .as_ref()
             .or(self.primary.as_ref())
-            .or_else(|| {
-                self.attempts()
+            .or_else(|| match &self.recovery {
+                Some(Recovery::Restore { failure, .. }) => Some(failure.primary()),
+                _ => self
+                    .attempts()
                     .iter()
-                    .find_map(|a| a.outcome.as_ref().err())
+                    .find_map(|a| a.outcome.as_ref().err()),
             })
+    }
+
+    fn cleaned(
+        primary: Option<LinkCause>,
+        report: XdpCleanupReport<Owned<S, K>, LinkCause>,
+        restorations: Vec<Result<(), LinkCause>>,
+        committed: Option<bpfman_model::XdpDispatcherSnapshot>,
+    ) -> Self {
+        Self {
+            primary,
+            recovery: Some(Recovery::Cleanup(Box::new(report))),
+            admission: None,
+            restorations,
+            committed,
+        }
     }
 
     /// Backend-independent failure classification.
@@ -86,69 +126,111 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> XdpError<S, K> {
             .map_or(crate::LinkErrorKind::Unavailable, LinkCause::kind)
     }
 
-    /// Number of unresolved effects including blocked dependents.
+    /// Unresolved removals plus any restoration blocking staged cleanup.
     pub fn unresolved(&self) -> usize {
-        self.report.as_ref().map_or(0, |r| r.unresolved())
+        match &self.recovery {
+            Some(Recovery::Cleanup(r)) => r.unresolved(),
+            Some(Recovery::Restore { blocked, .. }) => *blocked + 1,
+            None => 0,
+        }
     }
 
-    /// Every attempted cleanup, including previous passes.
+    /// Every actual cleanup attempt across passes; blocked removals are absent.
     pub fn attempts(&self) -> &[bpfman_core::XdpAttempt<LinkCause>] {
-        self.report.as_ref().map_or(&[], |r| r.attempts())
+        match &self.recovery {
+            Some(Recovery::Cleanup(r)) => r.attempts(),
+            _ => &[],
+        }
+    }
+
+    /// Every actual restoration attempt, including earlier failed passes.
+    pub fn restoration_attempts(&self) -> &[Result<(), LinkCause>] {
+        match &self.recovery {
+            Some(Recovery::Restore { failure, .. }) => failure.attempts(),
+            _ => &self.restorations,
+        }
+    }
+
+    /// Successful publication when only retirement failed. Never restore this revision.
+    pub fn committed_snapshot(&self) -> Option<&bpfman_model::XdpDispatcherSnapshot> {
+        self.committed.as_ref()
     }
 }
 
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> XdpReport<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> XdpReport<S, K> {
     /// Every cleanup attempt.
     pub fn attempts(&self) -> &[bpfman_core::XdpAttempt<LinkCause>] {
         self.report.attempts()
     }
-
     /// Remaining ownership after this successful pass.
     pub fn unresolved(&self) -> usize {
         self.report.unresolved()
     }
+    /// Original forward failure, retained after successful recovery.
+    pub fn primary_failure(&self) -> Option<&LinkCause> {
+        self.primary.as_ref()
+    }
+    /// All restoration attempts, including previous failed passes.
+    pub fn restoration_attempts(&self) -> &[Result<(), LinkCause>] {
+        &self.restorations
+    }
+    /// Successful publication retained across retirement retries.
+    pub fn committed_snapshot(&self) -> Option<&bpfman_model::XdpDispatcherSnapshot> {
+        self.committed.as_ref()
+    }
 }
 
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::fmt::Debug for XdpError<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> std::fmt::Debug for XdpError<S, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("XdpError")
-            .field("primary", &self.primary)
+            .field("cause", &self.cause())
+            .field("restorations", &self.restoration_attempts())
             .field("attempts", &self.attempts())
+            .field("committed", &self.committed)
             .field("unresolved", &self.unresolved())
             .finish()
     }
 }
-
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::fmt::Display for XdpError<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> std::fmt::Display for XdpError<S, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "XDP operation failed; {} unresolved cleanup effects",
-            self.unresolved()
-        )
+        if self.committed.is_some() {
+            write!(
+                f,
+                "XDP replacement committed; {} unresolved retirement effects",
+                self.unresolved()
+            )
+        } else {
+            write!(
+                f,
+                "XDP operation failed; {} unresolved recovery effects",
+                self.unresolved()
+            )
+        }
     }
 }
-
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::error::Error for XdpError<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> std::error::Error for XdpError<S, K> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.cause().map(|c| c as _)
     }
 }
-
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> From<LinkCause> for XdpError<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> From<LinkCause> for XdpError<S, K> {
     fn from(primary: LinkCause) -> Self {
         Self {
             primary: Some(primary),
-            report: None,
+            recovery: None,
             admission: None,
+            restorations: Vec::new(),
+            committed: None,
         }
     }
 }
-
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> std::fmt::Debug for XdpReport<S, K> {
+impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> std::fmt::Debug for XdpReport<S, K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("XdpReport")
+            .field("primary", &self.primary)
+            .field("restorations", &self.restorations)
             .field("attempts", &self.attempts())
+            .field("committed", &self.committed)
             .finish()
     }
 }
@@ -362,8 +444,11 @@ fn attach<F: Effects>(
     result.map_err(|cause| (cause, cleanup(w, f, XdpCleanup::new(resources))))
 }
 
-impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Bpfman<S, K> {
-    /// Attach the first extension to an unoccupied interface in this namespace.
+impl<S: bpfman_store::XdpReplacementStore, K: bpfman_kernel::XdpReplacement> Bpfman<S, K>
+where
+    S::Reader: bpfman_store::LinkReader,
+{
+    /// Attach an extension, replacing a managed dispatcher when already occupied.
     pub fn attach_xdp(&self, request: XdpAttach) -> Result<StoredLink, XdpError<S, K>> {
         self.attach_xdp_with_cancellation(request, &Cancellation::new())
     }
@@ -381,24 +466,12 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Bpfman<S, K> {
                     timeout: self.lock_timeout,
                     cancelled: Some(c.flag()),
                 },
-                |w| {
-                    attach(
-                        &w,
-                        &mut real::Adapter(&self.store, &self.kernel),
-                        &request,
-                        c,
-                    )
-                    .map_err(|(primary, report)| XdpError {
-                        primary: Some(primary),
-                        report: Some(report),
-                        admission: None,
-                    })
-                },
+                |w| replacement::attach(self, &w, &request, c),
             )
             .map_err(|e| XdpError::from(LinkCause::from(e)))?
     }
 
-    /// Detach the sole member and remove the dispatcher, preserving failed receipts.
+    /// Detach a member; replace the revision or remove the final dispatcher.
     pub fn detach_xdp(&self, id: NonZeroU64) -> Result<XdpReport<S, K>, XdpError<S, K>> {
         self.detach_xdp_with_cancellation(id, &Cancellation::new())
     }
@@ -416,13 +489,7 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Bpfman<S, K> {
                     timeout: self.lock_timeout,
                     cancelled: Some(c.flag()),
                 },
-                |w| {
-                    check(c)?;
-                    let mut f = real::Adapter(&self.store, &self.kernel);
-                    let resources = f.observe(&w, id)?;
-                    check(c)?;
-                    finish(cleanup(&w, &mut f, XdpCleanup::new(resources)))
-                },
+                |w| replacement::detach(self, &w, id, c),
             )
             .map_err(|e| XdpError::from(LinkCause::from(e)))?
     }
@@ -441,7 +508,7 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Bpfman<S, K> {
         error: XdpError<S, K>,
         c: &Cancellation,
     ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
-        if error.report.is_none() {
+        if error.recovery.is_none() {
             return Err(error);
         }
         let mut pending = Some(error);
@@ -456,18 +523,35 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Bpfman<S, K> {
                         "missing retry ownership",
                     ))));
                 };
-                let Some(report) = error.report.take() else {
+                let Some(recovery) = error.recovery.take() else {
                     return Err(error);
                 };
-                let report = cleanup(
-                    &w,
-                    &mut real::Adapter(&self.store, &self.kernel),
-                    report.retry(),
-                );
+                let report = match recovery {
+                    Recovery::Cleanup(report) => cleanup(
+                        &w,
+                        &mut real::Adapter(&self.store, &self.kernel),
+                        report.retry(),
+                    ),
+                    Recovery::Restore { failure, blocked } => {
+                        error = replacement::restore(self, &w, failure.retry(), blocked);
+                        match error.recovery.take() {
+                            Some(Recovery::Cleanup(report)) => *report,
+                            other => {
+                                error.recovery = other;
+                                return Err(error);
+                            }
+                        }
+                    }
+                };
                 if report.unresolved() == 0 {
-                    Ok(XdpReport { report })
+                    Ok(XdpReport {
+                        report,
+                        primary: error.primary,
+                        restorations: error.restorations,
+                        committed: error.committed,
+                    })
                 } else {
-                    error.report = Some(report);
+                    error.recovery = Some(Recovery::Cleanup(Box::new(report)));
                     error.admission = None;
                     Err(error)
                 }
@@ -489,29 +573,30 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Bpfman<S, K> {
     }
 }
 
-fn finish<S: XdpStore, K: bpfman_kernel::XdpLifecycle>(
+fn finish<S: XdpStore, K: bpfman_kernel::XdpReplacement>(
     report: XdpCleanupReport<Owned<S, K>, LinkCause>,
 ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
     if report.unresolved() == 0 {
-        Ok(XdpReport { report })
-    } else {
-        Err(XdpError {
+        Ok(XdpReport {
+            report,
             primary: None,
-            report: Some(report),
-            admission: None,
+            restorations: Vec::new(),
+            committed: None,
         })
+    } else {
+        Err(XdpError::cleaned(None, report, Vec::new(), None))
     }
 }
 
 impl<S: bpfman_store::OpenStore, K> Bpfman<S, K>
 where
-    S::Reader: XdpReader,
+    S::Reader: XdpDispatcherReader,
 {
     /// Read a complete dispatcher snapshot without acquiring the writer lock.
-    pub fn get_xdp_dispatcher(&self, key: XdpKey) -> Result<XdpSnapshot, LinkCause> {
+    pub fn get_xdp_dispatcher(&self, key: XdpKey) -> Result<XdpDispatcherSnapshot, LinkCause> {
         self.store
             .reader()
-            .read_xdp(key)?
+            .read_xdp_dispatcher(key)?
             .ok_or_else(|| Cause::NotFound.into())
     }
 }

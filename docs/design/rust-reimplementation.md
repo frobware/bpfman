@@ -3,69 +3,60 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds owned XDP kernel switching/restoration, atomic multi-member
-persistence, and pure replacement policy on top of the injectable tracepoint
-and single-member XDP lifecycles, using both SQLite and JSON stores.
-The next milestone remains an XDP **one → two → one → zero member lifecycle**
-using dispatcher replacement. Full behavioural parity remains unfinished.
+checkpoint integrates XDP dispatcher replacement into runtime attach/detach with
+both SQLite and JSON stores. The **one → two → one → zero member lifecycle** now
+runs through the public API and CLI, with real packet execution and explicit
+failure recovery. Full behavioural parity remains unfinished.
 
-The first dispatcher-replacement step now has pure membership planning, bounded
-slot/priority values, complete multi-member ABI encoding, and consuming
-switch/publication/restoration transitions. Failed restoration retains both
-revisions; cleanup attempts retain stable identities across retries. These
-policies are tested independently of I/O. Both stores now observe and conditionally
-replace complete multi-member snapshots, preserving surviving managed link IDs.
-The kernel boundary now stages complete revisions, switches the expected live
-target, and retains both target handles for restoration and explicit retry.
-Runtime integration remains to be implemented; the supported CLI still admits
-only one member per interface.
+The runtime uses pure membership planning and consuming ownership transitions to
+stage a complete revision, conditionally switch the durable outer link, and
+atomically publish every member. Failed publication restores the previous target
+before staged cleanup. Failed restoration retains both revisions and evidence
+for an explicit retry. Successful publication permits only old-revision
+retirement; retirement errors expose the committed snapshot and retain cleanup
+ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
-| XDP links | One member per interface, current network namespace, driver-mode BPF link, last detach | Additional members, replacement, explicit namespaces, selectable modes |
-| XDP replacement | Pure ordering, bounded slots/priorities, multi-member ABI, ownership transitions, stable cleanup IDs; atomic conditional snapshots in both stores; owned kernel switching/restoration | Runtime integration, shared fault-injected lifecycle, multi-member CLI acceptance |
-| XDP observations | Program/link get and list; complete dispatcher snapshot as JSON | Broader dispatcher CLI and traffic acceptance |
+| XDP links | One to ten members per interface, current namespace, driver-mode BPF links, replacement and last detach | Attached-program unload, explicit namespaces, selectable modes |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries | Broader fill/drain and chain-execution corpus |
+| XDP observations | Program/link get and list; complete dispatcher snapshot as JSON | Broader dispatcher CLI |
 | Persistence | Go-compatible SQLite schema 2; JSON format 5 for multi-member XDP snapshots | No implicit upgrade or conversion of existing state |
-| Kernel boundary | One injected backend for reads, load, attach, detach, unload, and retries; Aya confined to its adapter; complete revision staging and conditional switching/restoration | Runtime orchestration of replacement |
+| Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
-XDP programs must be explicitly detached before unload. Occupied attach points are
-refused; unsupported commands and flags fail clearly. See
-[the workspace checkpoint](../../rust/README.md#xdp-first-attach-and-last-detach)
+XDP programs must still be explicitly detached before unload. Foreign occupied
+attach points and unsupported commands/flags fail clearly. See
+[the workspace checkpoint](../../rust/README.md#xdp-attachment-and-replacement)
 for the supported command surface.
 
-Validation for this checkpoint passed through `direnv exec . make rust-check`,
-including formatting, Clippy, workspace tests, documentation, nine replacement
-policy tests, three configuration tests, five replacement compile-fail contracts,
-six shared XDP store contracts, SQLite replacement DML fault tests, JSON
-replacement publication/format tests, 16 fake-kernel lifecycle tests, and 38
-real-kernel tests. Both backends run the unchanged
-`TestXDP_LinkRoundTrip.bpfman` and
-`TestDispatcher_LifecycleAfterLastDetachXDP.bpfman` scripts. This establishes the
-first-member lifecycle, pure replacement policy, and multi-member persistence;
-it does not establish multi-member runtime or CLI parity. Two adapter suites
-also exercise real-packet
-execution through 1 → 2 → 1 → 0, removal of either member, continuation masks,
-outer-link identity, rejected switches, failed restoration, moved-pin refusal,
-and explicit recovery after an update succeeded but its observation failed.
-The full gate used the shared Go/Rust kernel-build helper outside the sandbox,
-allowing Nix to discover and realize
-the matching development output; see the NixOS guidance in `rust/AGENTS.md`.
+Validation uses `direnv exec . make rust-check`: formatting, Clippy, workspace
+tests, compile-fail contracts, documentation, 24 shared fake-kernel lifecycle
+tests, and 42 real-kernel tests. The replacement fault matrix covers attach and
+non-last detach, partial acquisition at either extension slot, rejected and
+post-mutation switch failures, publication, restoration, cleanup, cancellation,
+foreign-runtime retries, and post-commit retirement. Real packet tests prove
+both-member execution, proceed-on stopping the second slot, either survivor,
+stable outer identity, and restoration after failed attach/detach publication.
 
-The kernel boundary is now replaceable across the supported lifecycle. One
-`Bpfman<S, K>` instance uses the same backend for observations, load, attach,
-detach, unload, and cleanup retries. Aya and BPF syscalls are confined to
-`bpfman-kernel-aya`; filesystem authority stays in `bpfman-fs`. A stateful fake
-exercises the public lifecycle with both real stores. Dispatcher replacement is
-the next implementation slice. Go remains the behavioural authority throughout.
+Both stores run unchanged Go DSL scripts for XDP link round-trip, last detach,
+priority ordering, ten-slot capacity refusal, slot reuse, configuration after
+detach, and default proceed-on rebuilding. Direct adapter tests additionally
+cover moved pins/parents, undeclared slots, and recovery after successful updates
+whose observations fail. These tests establish the supported replacement slice,
+not parity for all XDP commands or the full traffic corpus.
 
-The observation boundary was committed in `3a5f6e675`; the remaining lifecycle
-work was committed in `7ae389c67`. That work preserves opaque ownership receipts,
-partial-acquisition failures, cancellation, dependency-aware compensation, and
-explicit retry history. Tests exercise batch rollback, foreign-kernel retries,
-and synchronous outer-link detach while another handle retains the object.
-Persistence and bytecode publication remain real in the fake-kernel suite.
+The full gate uses the shared Go/Rust kernel-build helper outside the sandbox,
+allowing Nix to discover and realize the matching development output; see the
+`KERNEL_DEV` and NixOS guidance in `rust/AGENTS.md`.
+
+`Bpfman<S, K>` uses one kernel backend throughout. Aya and BPF syscalls remain in
+`bpfman-kernel-aya`; descriptor-confined filesystem authority stays in
+`bpfman-fs`. Persistence, bytecode publication, and runtime locking remain real
+in fake-kernel tests. The next bounded slice is attached XDP program unload,
+using the same replacement/recovery protocol for surviving members. Go remains
+the behavioural authority.
 
 ## Summary
 
@@ -676,16 +667,16 @@ contain the narrowly reviewed unsafe boundary for observation, link creation,
 fd-preserving pinning, and synchronous detach. Workspace-law tests preserve all
 other lint gates; the filesystem crate inherits the workspace unsafe prohibition.
 
-### Next milestone: XDP dispatcher replacement
+### XDP dispatcher replacement checkpoint
 
-The first milestone is attaching a second program to an existing managed XDP
-dispatcher, removing either member while the survivor remains active, and finally
-detaching the last member. Each nonempty membership change stages a complete new
+The implemented milestone attaches a second program to an existing managed XDP
+dispatcher, removes either member while the survivor remains active, and finally
+detaches the last member. Each nonempty membership change stages a complete new
 revision and updates the existing durable outer link. Foreign attachments remain
 refused. Keep this milestone within the current network namespace and driver mode;
 attached-program unload and broader attachment surfaces follow it.
 
-Dispatcher replacement provides the next proof of the architecture. The core owns:
+Dispatcher replacement exercises the architecture across three adapters. The core owns:
 
 - the attach-point key;
 - ordering by priority and deterministic tie-breaker;
@@ -728,7 +719,7 @@ restoration after a successful switch. An in-flight store commit determines its
 own outcome. Cleanup and restoration must finish their admitted pass even when
 the forward token is cancelled; retries remain explicit and caller-budgeted.
 
-Implement and validate this milestone in the following order:
+Implementation and validation checkpoints:
 
 1. Implemented: pure planning and transition tests for deterministic ordering,
    bounded slots, proceed-on configuration, revision selection, and rollback
@@ -753,21 +744,21 @@ Implement and validate this milestone in the following order:
    live target, accepts already-restored state on explicit retry, and refuses
    unrelated targets. Run `direnv exec . make rust-test-xdp-switch` for the real
    adapter contracts on both stores. These tests call the adapters directly;
-   they are not evidence that the runtime replacement interpreter exists.
-3. Run the public one → two → one → zero lifecycle with the shared stateful fake
-   kernel and both real stores. Inject failures during staging, switching,
-   publication, restoration, and cleanup. Assert the live target, stored snapshot,
-   retained receipts, blocked dependents, and retry history after each pass.
-4. Adapter traffic coverage is implemented for both-member execution, continuation
-   masks, either survivor, stable outer identity, and residue-free final detach.
-   Still required: runtime-driven real-kernel traffic tests proving that both
-   members execute in the expected order, proceed-on controls continuation, and
-   removing either member leaves the
-   survivor active. Check durable outer-link identity across replacement and
-   residue-free last detach.
-5. Admit the unchanged Go priority-ordering, slot-reuse, configuration-after-detach,
-   survivor-rebuild, and chain-execution scripts as their required surfaces become
-   executable, and run the full `rust-check` gate on both stores before claiming the milestone complete.
+   runtime coverage is listed separately below.
+3. Implemented: the public one → two → one → zero lifecycle uses the shared
+   stateful fake and both real stores. The fault matrix crosses staging failures
+   with cleanup failures for attach and non-last detach, including partial
+   acquisitions at either staged extension slot. It checks restoration before
+   cleanup, repeated and foreign-runtime retries, cancelled admission, original
+   causes and attempt history, and commit winning late cancellation.
+4. Implemented: runtime-driven real-kernel traffic tests prove both-member
+   execution, proceed-on stopping the second slot, either survivor, durable
+   outer identity, and failed attach/detach publication restoring the old chain.
+   Direct adapter traffic and identity/failure tests remain separate coverage.
+5. Implemented: unchanged Go priority-ordering, slot-reuse, ten-slot capacity,
+   configuration-after-detach, and default-proceed-on rebuild scripts run on
+   both stores in `rust-check`. Broader fill/drain and chain-execution scripts
+   remain to be admitted as their required surfaces become executable.
 
 Use the forwarding store fault decorator for publication and deletion failures;
 no fake store is needed. SQLite `:memory:` remains suitable for adapter tests;
@@ -1353,6 +1344,9 @@ named-selection DSL scripts.
 
 Completed checkpoint:
 
+- Runtime multi-member attach/detach, restoration-aware error/retry ownership,
+  committed-snapshot reporting after retirement failures, and shared fault tests.
+- Real runtime packet acceptance and unchanged multi-member CLI scripts on both stores.
 - Complete kernel revision staging, conditional outer-link switching, retained
   restoration evidence, and real adapter traffic/failure tests on both stores.
 - Atomic conditional multi-member snapshot replacement in both stores, bounded
@@ -1371,16 +1365,14 @@ Completed checkpoint:
 
 The kernel-boundary refactor is complete for this supported surface; see
 [Kernel and bpffs adapter](#injectable-kernel-boundary).
-The next implementation slice is the
-[one → two → one → zero XDP milestone](#next-milestone-xdp-dispatcher-replacement),
-including failed publication, failed restoration, and explicit cleanup retries.
-Complete that lifecycle and its real-traffic acceptance before integrating
-attached XDP program unload.
+The [one → two → one → zero milestone](#xdp-dispatcher-replacement-checkpoint)
+is implemented, including failed publication, failed restoration, explicit
+retries, and runtime traffic acceptance. Next, integrate attached XDP program
+unload and admit the unchanged survivor-rebuild script.
 
-Explicit namespace helpers, additional XDP modes, capacity/fill-drain coverage,
+Explicit namespace helpers, additional XDP modes, broader fill/drain coverage,
 TC replacement with exact filter handles and clsact ownership, and TCX ordering
-remain later work in this phase. The existing single-member slice continues to
-reject unsupported operations rather than approximating them.
+remain later work in this phase. Unsupported operations continue to fail clearly.
 
 This phase validates the architecture. If the effect or state-machine model is
 wrong, change it here before broadening feature coverage.

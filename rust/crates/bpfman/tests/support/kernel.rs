@@ -33,6 +33,8 @@ pub(super) enum Point {
     Extension,
     Outer,
     ObserveXdp,
+    Switch,
+    Restore,
     RemoveOuter,
     RemoveExtension,
     RemoveDispatcher,
@@ -51,7 +53,7 @@ enum Resource {
     Map(u32),
     Directory(NonZeroU32),
     Link(NonZeroU32),
-    Revision(XdpKey),
+    Revision(XdpKey, NonZeroU32),
     Dispatcher(NonZeroU32),
     Extension(NonZeroU32),
     Outer(NonZeroU32),
@@ -78,9 +80,11 @@ struct State {
     resources: BTreeMap<Resource, u64>,
     map_names: BTreeMap<(NonZeroU32, String), u32>,
     tracepoint_pins: BTreeMap<NonZeroU64, NonZeroU32>,
-    extensions: BTreeMap<XdpKey, NonZeroU32>,
+    extensions: BTreeMap<(XdpKey, NonZeroU32, XdpSlot), NonZeroU32>,
+    dispatchers: BTreeMap<(XdpKey, NonZeroU32), NonZeroU32>,
     outers: BTreeMap<XdpKey, NonZeroU32>,
     fault: BTreeMap<Point, Phase>,
+    fault_at: BTreeMap<Point, usize>,
     cancellation: Option<(Point, bpfman_runtime::Cancellation)>,
     events: Vec<Point>,
 }
@@ -145,6 +149,8 @@ impl State {
             .retain(|_, id| self.resources.contains_key(&Resource::Link(*id)));
         self.extensions
             .retain(|_, id| self.resources.contains_key(&Resource::Extension(*id)));
+        self.dispatchers
+            .retain(|_, id| self.resources.contains_key(&Resource::Dispatcher(*id)));
         self.outers
             .retain(|_, id| self.links.get(id).is_some_and(|l| l.attached));
     }
@@ -220,8 +226,10 @@ impl FakeKernel {
                 map_names: BTreeMap::new(),
                 tracepoint_pins: BTreeMap::new(),
                 extensions: BTreeMap::new(),
+                dispatchers: BTreeMap::new(),
                 outers: BTreeMap::new(),
                 fault: BTreeMap::new(),
+                fault_at: BTreeMap::new(),
                 cancellation: None,
                 events: Vec::new(),
             })),
@@ -232,9 +240,17 @@ impl FakeKernel {
         self.state.lock().expect("state").fault.insert(point, phase);
     }
 
+    pub(super) fn fail_after(&self, point: Point, phase: Phase, successes: usize) {
+        let mut s = self.state.lock().expect("state");
+        let target = s.events.iter().filter(|p| **p == point).count() + successes + 1;
+        s.fault.insert(point, phase);
+        s.fault_at.insert(point, target);
+    }
+
     pub(super) fn clear(&self) {
         let mut s = self.state.lock().expect("state");
         s.fault.clear();
+        s.fault_at.clear();
         s.cancellation = None;
     }
 
@@ -283,7 +299,10 @@ impl FakeKernel {
                 token.cancel();
             }
         }
-        if s.fault.get(&p) == Some(&Phase::Before) {
+        if s.fault.get(&p) == Some(&Phase::Before)
+            && s.events.iter().filter(|point| **point == p).count()
+                >= *s.fault_at.get(&p).unwrap_or(&0)
+        {
             return Err(error(
                 ErrorKind::Unavailable,
                 "injected before kernel effect",
@@ -293,7 +312,12 @@ impl FakeKernel {
     }
 
     fn after<T>(&self, p: Point, receipt: T) -> Acquisition<T> {
-        if self.state.lock().expect("state").fault.get(&p) == Some(&Phase::After) {
+        let s = self.state.lock().expect("state");
+        let failed = s.fault.get(&p) == Some(&Phase::After)
+            && s.events.iter().filter(|point| **point == p).count()
+                >= *s.fault_at.get(&p).unwrap_or(&0);
+        drop(s);
+        if failed {
             Err(EffectFailure {
                 cause: error(ErrorKind::Unavailable, "injected after kernel acquisition"),
                 remaining: Some(receipt),
@@ -379,11 +403,11 @@ impl FakeKernel {
                 {
                     return Err(error(ErrorKind::InvalidData, "map directory is not empty"));
                 }
-                Resource::Revision(key)
-                    if s.extensions.contains_key(&key)
-                        || s.resources
-                            .keys()
-                            .any(|r| matches!(r, Resource::Dispatcher(_))) =>
+                Resource::Revision(key, revision)
+                    if s.extensions
+                        .keys()
+                        .any(|(k, r, _)| *k == key && *r == revision)
+                        || s.dispatchers.contains_key(&(key, revision)) =>
                 {
                     return Err(error(ErrorKind::InvalidData, "revision is not empty"));
                 }
@@ -822,7 +846,7 @@ impl LinkObservations for FakeKernel {
         self.check_root(runtime.identity().expect("root"))?;
         let s = self.state.lock().expect("state");
         Ok(s.extensions
-            .get(&link.key)
+            .get(&(link.key, link.revision, link.slot))
             .map(|id| s.links[id].observation.clone()))
     }
 }
@@ -859,12 +883,7 @@ impl XdpLifecycle for FakeKernel {
     }
 
     fn create_revision(&self, w: &RuntimeWriter<'_>, p: &PreparedXdp) -> Acquisition<Receipt> {
-        self.loaded(w, &p.extension)
-            .map_err(|cause| EffectFailure {
-                cause,
-                remaining: None,
-            })?;
-        self.acquire(w, Point::Revision, Resource::Revision(p.key))
+        self.create_revision_at(w, p, NonZeroU32::MIN)
     }
 
     fn pin_dispatcher(
@@ -879,7 +898,18 @@ impl XdpLifecycle for FakeKernel {
                 cause,
                 remaining: None,
             })?;
-        self.acquire(w, Point::PinDispatcher, Resource::Dispatcher(d.id))
+        let Resource::Revision(key, revision) = r.resource else {
+            unreachable!("revision");
+        };
+        let result = self.acquire(w, Point::PinDispatcher, Resource::Dispatcher(d.id));
+        if result.is_ok() || result.as_ref().is_err_and(|f| f.remaining.is_some()) {
+            self.state
+                .lock()
+                .expect("state")
+                .dispatchers
+                .insert((key, revision), d.id);
+        }
+        result
     }
 
     fn pin_extension(
@@ -889,37 +919,7 @@ impl XdpLifecycle for FakeKernel {
         r: &Receipt,
         d: &Loaded,
     ) -> Acquisition<Receipt> {
-        let fail = |cause| EffectFailure {
-            cause,
-            remaining: None,
-        };
-        self.loaded(w, &p.extension)
-            .and_then(|()| self.loaded(w, d))
-            .and_then(|()| self.validate(w, r))
-            .map_err(fail)?;
-        self.enter(Point::Extension).map_err(fail)?;
-        let mut s = self.state.lock().expect("state");
-        let id = s.id();
-        s.links.insert(
-            id,
-            Link {
-                observation: KernelLink {
-                    id,
-                    program_id: p.extension.id,
-                    details: KernelLinkDetails::Tracing {
-                        attach_type: 0,
-                        target_obj_id: d.id.get(),
-                        target_btf_id: 1,
-                    },
-                },
-                handles: 0,
-                attached: true,
-            },
-        );
-        s.extensions.insert(p.key, id);
-        drop(s);
-        let receipt = self.insert(Resource::Extension(id)).map_err(fail)?;
-        self.after(Point::Extension, receipt)
+        self.pin_extension_at(w, p, r, d, XdpSlot::FIRST)
     }
 
     fn pin_outer(
@@ -1021,7 +1021,10 @@ impl XdpLifecycle for FakeKernel {
             outer: self.observed(Resource::Outer(snapshot.outer_link_id)),
             extension: self.observed(Resource::Extension(kernel_id)),
             program: self.observed(Resource::Dispatcher(snapshot.details.dispatcher_id)),
-            directory: self.observed(Resource::Revision(snapshot.details.key)),
+            directory: self.observed(Resource::Revision(
+                snapshot.details.key,
+                snapshot.details.revision,
+            )),
         })
     }
 
@@ -1039,5 +1042,183 @@ impl XdpLifecycle for FakeKernel {
 
     fn remove_revision(&self, w: &RuntimeWriter<'_>, r: Receipt) -> Removal<Receipt> {
         self.remove(w, Point::RemoveRevision, r)
+    }
+}
+
+pub(super) struct Switch {
+    root: RuntimeIdentity,
+    state: Arc<Mutex<State>>,
+    outer: NonZeroU32,
+    generation: u64,
+    old: Loaded,
+    new: Loaded,
+}
+
+impl XdpReplacement for FakeKernel {
+    type Switch = Switch;
+
+    fn load_revision(&self, _config: &XdpConfig) -> Result<Loaded, Error> {
+        self.load_dispatcher(XdpProceedOn::default())
+    }
+
+    fn create_revision_at(
+        &self,
+        w: &RuntimeWriter<'_>,
+        p: &PreparedXdp,
+        revision: NonZeroU32,
+    ) -> Acquisition<Receipt> {
+        self.loaded(w, &p.extension)
+            .map_err(|cause| EffectFailure {
+                cause,
+                remaining: None,
+            })?;
+        self.acquire(w, Point::Revision, Resource::Revision(p.key, revision))
+    }
+
+    fn pin_extension_at(
+        &self,
+        w: &RuntimeWriter<'_>,
+        p: &mut PreparedXdp,
+        r: &Receipt,
+        d: &Loaded,
+        slot: XdpSlot,
+    ) -> Acquisition<Receipt> {
+        let fail = |cause| EffectFailure {
+            cause,
+            remaining: None,
+        };
+        self.loaded(w, &p.extension)
+            .and_then(|()| self.loaded(w, d))
+            .and_then(|()| self.validate(w, r))
+            .map_err(fail)?;
+        self.enter(Point::Extension).map_err(fail)?;
+        let mut s = self.state.lock().expect("state");
+        let id = s.id();
+        s.links.insert(
+            id,
+            Link {
+                observation: KernelLink {
+                    id,
+                    program_id: p.extension.id,
+                    details: KernelLinkDetails::Tracing {
+                        attach_type: 0,
+                        target_obj_id: d.id.get(),
+                        target_btf_id: slot.index() as u32 + 1,
+                    },
+                },
+                handles: 0,
+                attached: true,
+            },
+        );
+        let Resource::Revision(key, revision) = r.resource else {
+            unreachable!("revision");
+        };
+        if key != p.key || s.extensions.contains_key(&(key, revision, slot)) {
+            return Err(fail(error(
+                ErrorKind::InvalidData,
+                "occupied extension slot",
+            )));
+        }
+        s.extensions.insert((key, revision, slot), id);
+        drop(s);
+        let receipt = self.insert(Resource::Extension(id)).map_err(fail)?;
+        self.after(Point::Extension, receipt)
+    }
+
+    fn observe_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &XdpDispatcherSnapshot,
+    ) -> Result<XdpDispatcherArtifacts<Self>, Error> {
+        let mut members = snapshot.members().iter();
+        let first = self.observe_xdp(w, members.next().expect("nonempty snapshot"))?;
+        let mut extensions: Vec<_> = first.extension.into_iter().collect();
+        for member in members {
+            extensions.extend(self.observe_xdp(w, member)?.extension);
+        }
+        Ok(XdpDispatcherArtifacts {
+            outer: first.outer,
+            extensions,
+            program: first.program,
+            directory: first.directory,
+        })
+    }
+
+    fn switch_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        outer: &Receipt,
+        old: &Receipt,
+        new: &Receipt,
+    ) -> Acquisition<Switch> {
+        let fail = |cause| EffectFailure {
+            cause,
+            remaining: None,
+        };
+        self.validate(w, outer)
+            .and_then(|()| self.validate(w, old))
+            .and_then(|()| self.validate(w, new))
+            .map_err(fail)?;
+        self.enter(Point::Switch).map_err(fail)?;
+        let id = Self::outer_id(outer).map_err(fail)?;
+        let old_id = Self::dispatcher_id(old);
+        let new_id = Self::dispatcher_id(new);
+        let mut s = self.state.lock().expect("state");
+        let link = s.links.get_mut(&id).expect("outer");
+        if !link.attached || link.observation.program_id != old_id {
+            return Err(fail(error(
+                ErrorKind::InvalidData,
+                "unexpected live target",
+            )));
+        }
+        link.observation.program_id = new_id;
+        for id in [old_id, new_id] {
+            s.programs.get_mut(&id).expect("target").handles += 1;
+        }
+        drop(s);
+        let loaded = |id| Loaded {
+            root: self.root,
+            state: self.state.clone(),
+            id,
+            maps: Vec::new(),
+        };
+        self.after(
+            Point::Switch,
+            Switch {
+                root: self.root,
+                state: self.state.clone(),
+                outer: id,
+                generation: outer.generation,
+                old: loaded(old_id),
+                new: loaded(new_id),
+            },
+        )
+    }
+
+    fn restore_dispatcher(&self, w: &RuntimeWriter<'_>, r: Switch) -> Removal<Switch> {
+        let result = (|| {
+            self.writer(w)?;
+            self.enter(Point::Restore)?;
+            let mut s = self.state.lock().expect("state");
+            if r.root != self.root
+                || !Arc::ptr_eq(&r.state, &self.state)
+                || s.resources.get(&Resource::Outer(r.outer)) != Some(&r.generation)
+            {
+                return Err(error(ErrorKind::InvalidData, "foreign switch evidence"));
+            }
+            let link = s.links.get_mut(&r.outer).expect("outer");
+            if !link.attached || ![r.old.id, r.new.id].contains(&link.observation.program_id) {
+                return Err(error(ErrorKind::InvalidData, "unexpected live target"));
+            }
+            link.observation.program_id = r.old.id;
+            if s.fault.get(&Point::Restore) == Some(&Phase::After) {
+                return Err(error(ErrorKind::Unavailable, "post-restore observation"));
+            }
+            Ok(())
+        })();
+        result.map_err(|cause| EffectFailure {
+            cause,
+            remaining: r,
+        })
     }
 }

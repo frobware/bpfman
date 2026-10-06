@@ -8,7 +8,8 @@ use super::{
 use bpfman_model::{InterfaceName, LinkDetails, LinkState, ProgramSpec};
 use bpfman_runtime::{ActiveStore, Bpfman, Cancellation, PreparedProgram, XdpAttach};
 use bpfman_store::{
-    CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore, XdpReader, XdpStore,
+    CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore, XdpDispatcherReader,
+    XdpReplacementStore,
 };
 use std::{fs, num::NonZeroU32, process::Command};
 
@@ -84,8 +85,8 @@ fn gone(id: NonZeroU32) {
 
 pub(super) fn exercise<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpStore + Clone,
-    S::Reader: LinkReader + XdpReader,
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
 {
     let c = Context::new();
     let interface = Interface::new();
@@ -133,7 +134,9 @@ where
         );
         assert!(app.get_link(first.id).expect("link read").pin_present);
     });
-    assert!(app.attach_xdp(request(program, &interface)).is_err());
+    let mut invalid = request(program, &interface);
+    invalid.priority = u32::MAX;
+    assert!(app.attach_xdp(invalid).is_err());
     assert_eq!(
         app.get_xdp_dispatcher(details.key).expect("unchanged"),
         snapshot

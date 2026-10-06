@@ -224,3 +224,38 @@ fn sqlite_xdp_switch_and_restoration() {
 fn json_xdp_switch_and_restoration() {
     xdp_switch::exercise(bpfman_store_json::Backend);
 }
+
+#[path = "kernel/xdp_runtime.rs"]
+mod xdp_runtime;
+
+#[test]
+fn sqlite_xdp_runtime_replacement() {
+    xdp_runtime::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_xdp_runtime_replacement() {
+    xdp_runtime::exercise(bpfman_store_json::Backend);
+}
+
+fn xdp_replacement_dsl(store: &'static str) {
+    for script in [
+        "TestDispatcher_PriorityOrderingXDP",
+        "TestDispatcher_SlotReusedAfterDetachXDP",
+        "TestDispatcher_AttachExceedsMaxProgramsXDP",
+        "TestXDP_DefaultProceedOnRebuild",
+        "TestXDP_DispatcherConfigAfterDetach",
+    ] {
+        cli::dsl(store, script);
+    }
+}
+
+#[test]
+fn sqlite_unchanged_xdp_replacement_dsl() {
+    xdp_replacement_dsl("sqlite");
+}
+
+#[test]
+fn json_unchanged_xdp_replacement_dsl() {
+    xdp_replacement_dsl("json");
+}

@@ -483,7 +483,7 @@ where
     assert!(names(&c.layout.root().join("fs/xdp")).is_empty());
 }
 
-fn traffic(c: &Context, active: &[NonZeroU32], inactive: &[NonZeroU32]) {
+pub(super) fn traffic(c: &Context, active: &[NonZeroU32], inactive: &[NonZeroU32]) {
     fn count(c: &Context, id: NonZeroU32) -> u64 {
         let map =
             aya::maps::MapData::from_pin(c.layout.map_directory_path(id).join("xdp_stats_map"))

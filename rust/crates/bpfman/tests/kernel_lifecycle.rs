@@ -13,28 +13,29 @@ use bpfman_runtime::{
     ActiveStore, Bpfman, Cancellation, PreparedProgram, TracepointAttach, XdpAttach,
 };
 use bpfman_store::{
-    CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore, XdpReader, XdpStore,
+    CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore, XdpDispatcherReader,
+    XdpReplacementStore,
 };
 use faults::{Faults, Point as StorePoint};
 use kernel::{FakeKernel, Phase, Point};
 use std::time::Duration;
 
 trait Store:
-    OpenStore<Reader: LinkReader + XdpReader>
+    OpenStore<Reader: LinkReader + XdpDispatcherReader>
     + CommitLoad
     + UnloadStore
     + LinkStore
-    + XdpStore
+    + XdpReplacementStore
     + Copy
     + 'static
 {
 }
 impl<S> Store for S where
-    S: OpenStore<Reader: LinkReader + XdpReader>
+    S: OpenStore<Reader: LinkReader + XdpDispatcherReader>
         + CommitLoad
         + UnloadStore
         + LinkStore
-        + XdpStore
+        + XdpReplacementStore
         + Copy
         + 'static
 {
@@ -462,9 +463,335 @@ fn post_commit_and_teardown<S: Store>(backend: S) {
     f.clean();
 }
 
+fn xdp_key(link: &bpfman_model::StoredLink) -> bpfman_model::XdpKey {
+    let bpfman_model::LinkDetails::Xdp(details) = &link.details else {
+        panic!("XDP link");
+    };
+    details.key
+}
+
+fn xdp_replacement_lifecycle<S: Store>(backend: S) {
+    for keep_first in [false, true] {
+        let f = Fixture::new(backend);
+        let a = f.app.load(f.request(true)).expect("load").record.id;
+        let b = f.app.load(f.request(true)).expect("load").record.id;
+        let first = f.app.attach_xdp(xdp(a)).expect("first");
+        let key = xdp_key(&first);
+        let initial = f.app.get_xdp_dispatcher(key).expect("initial");
+        let mut r = xdp(b);
+        r.metadata.insert("member".into(), "second".into());
+        let second = f.app.attach_xdp(r).expect("second");
+        let chain = f.app.get_xdp_dispatcher(key).expect("chain");
+        // Go sorts newly attached members before existing ones on exact priority ties.
+        assert_eq!(
+            chain
+                .members()
+                .iter()
+                .map(|m| m.member.id)
+                .collect::<Vec<_>>(),
+            [second.id, first.id]
+        );
+        assert_eq!(
+            chain.members()[0].outer_link_id,
+            initial.members()[0].outer_link_id
+        );
+        for (slot, m) in chain.members().iter().enumerate() {
+            assert_eq!(m.details.slot.index(), slot);
+            assert_eq!(m.details.revision.get(), 2);
+            assert!(
+                f.app
+                    .get_link(m.member.id)
+                    .expect("slot-aware observation")
+                    .pin_present
+            );
+        }
+        assert_eq!(chain.members()[1].member.created_at, first.created_at);
+        let (removed, survivor) = if keep_first {
+            (second.id, first.id)
+        } else {
+            (first.id, second.id)
+        };
+        f.app.detach_xdp(removed).expect("remove member");
+        let remaining = f.app.get_xdp_dispatcher(key).expect("survivor");
+        assert_eq!(remaining.members().len(), 1);
+        assert_eq!(remaining.members()[0].member.id, survivor);
+        assert_eq!(remaining.members()[0].details.slot.index(), 0);
+        assert_eq!(remaining.members()[0].details.revision.get(), 3);
+        assert_eq!(
+            remaining.members()[0].outer_link_id,
+            initial.members()[0].outer_link_id
+        );
+        f.app.detach_xdp(survivor).expect("last detach");
+        assert_eq!(f.app.unload(a).expect("unload").unresolved(), 0);
+        assert_eq!(f.app.unload(b).expect("unload").unresolved(), 0);
+        f.clean();
+    }
+}
+
+fn xdp_replacement_failures<S: Store>(backend: S) {
+    for detach in [false, true] {
+        for (forward, successes) in [
+            (Point::PrepareXdp, 0),
+            (Point::LoadDispatcher, 0),
+            (Point::Revision, 0),
+            (Point::PinDispatcher, 0),
+            (Point::Extension, 0),
+            (Point::Extension, 1),
+            (Point::Switch, 0),
+        ] {
+            if detach && successes > 0 {
+                continue;
+            }
+            for phase in [Phase::Before, Phase::After] {
+                if phase == Phase::After
+                    && matches!(forward, Point::PrepareXdp | Point::LoadDispatcher)
+                {
+                    continue;
+                }
+                for cleanup in [
+                    None,
+                    Some(Point::RemoveExtension),
+                    Some(Point::RemoveDispatcher),
+                    Some(Point::RemoveRevision),
+                ] {
+                    let f = Fixture::new(backend);
+                    let a = f.app.load(f.request(true)).expect("load").record.id;
+                    let b = f.app.load(f.request(true)).expect("load").record.id;
+                    let first = f.app.attach_xdp(xdp(a)).expect("first");
+                    let second = if detach {
+                        Some(f.app.attach_xdp(xdp(b)).expect("second"))
+                    } else {
+                        None
+                    };
+                    let old = f.app.get_xdp_dispatcher(xdp_key(&first)).expect("old");
+                    f.kernel.fail_after(forward, phase, successes);
+                    if let Some(point) = cleanup {
+                        f.kernel.fail(point, Phase::Before);
+                    }
+                    let error = if detach {
+                        f.app.detach_xdp(first.id).expect_err("injected failure")
+                    } else {
+                        f.app.attach_xdp(xdp(b)).expect_err("injected failure")
+                    };
+                    assert!(error.committed_snapshot().is_none());
+                    assert_eq!(
+                        f.app
+                            .get_xdp_dispatcher(xdp_key(&first))
+                            .expect("old retained"),
+                        old
+                    );
+                    assert!(
+                        f.app
+                            .get_link(first.id)
+                            .expect("old still active")
+                            .pin_present
+                    );
+                    let attempts = error.attempts().len();
+                    let unresolved = error.unresolved();
+                    f.kernel.clear();
+                    if unresolved != 0 {
+                        let report = f
+                            .app
+                            .retry_xdp_cleanup(error)
+                            .expect("retry unresolved only");
+                        assert_eq!(report.attempts().len(), attempts + unresolved);
+                        assert!(report.primary_failure().is_some());
+                    }
+                    if let Some(second) = second {
+                        f.app.detach_xdp(second.id).expect("detach");
+                    }
+                    f.app.detach_xdp(first.id).expect("last");
+                    assert_eq!(f.app.unload(a).expect("unload").unresolved(), 0);
+                    assert_eq!(f.app.unload(b).expect("unload").unresolved(), 0);
+                    f.clean();
+                }
+            }
+        }
+    }
+}
+
+fn xdp_restoration_retries<S: Store>(backend: S) {
+    for phase in [Phase::Before, Phase::After] {
+        let f = Fixture::new(backend);
+        let a = f.app.load(f.request(true)).expect("load").record.id;
+        let b = f.app.load(f.request(true)).expect("load").record.id;
+        let first = f.app.attach_xdp(xdp(a)).expect("first");
+        let old = f.app.get_xdp_dispatcher(xdp_key(&first)).expect("old");
+        f.store.set(Some(StorePoint::XdpReplace));
+        f.kernel.fail(Point::Restore, phase);
+        let mut error = f
+            .app
+            .attach_xdp(xdp(b))
+            .expect_err("publication and restoration");
+        assert_eq!(error.restoration_attempts().len(), 1);
+        assert_eq!(error.unresolved(), 5); // restoration + two links, programme, directory
+        assert!(
+            error.attempts().is_empty(),
+            "restoration blocks all cleanup"
+        );
+        let cancelled = Cancellation::new();
+        cancelled.cancel();
+        error = f
+            .app
+            .retry_xdp_cleanup_with_cancellation(error, &cancelled)
+            .expect_err("cancelled admission");
+        assert_eq!(error.kind(), bpfman_runtime::LinkErrorKind::Cancelled);
+        assert_eq!(error.restoration_attempts().len(), 1);
+        let foreign = Fixture::new(backend);
+        error = foreign
+            .app
+            .retry_xdp_cleanup(error)
+            .expect_err("wrong runtime");
+        assert_eq!(error.restoration_attempts().len(), 2);
+        assert!(error.attempts().is_empty());
+        error = f
+            .app
+            .retry_xdp_cleanup(error)
+            .expect_err("one more failed attempt");
+        assert_eq!(error.restoration_attempts().len(), 3);
+        f.kernel.clear();
+        f.kernel.fail(Point::RemoveExtension, Phase::Before);
+        error = f
+            .app
+            .retry_xdp_cleanup(error)
+            .expect_err("restored but cleanup incomplete");
+        assert_eq!(error.restoration_attempts().len(), 4);
+        assert!(error.restoration_attempts()[3].is_ok());
+        assert_eq!(error.unresolved(), 3); // both extensions + blocked directory
+        assert!(
+            error
+                .attempts()
+                .iter()
+                .any(|a| a.kind == bpfman_core::XdpCleanupKind::Program && a.outcome.is_ok())
+        );
+        f.kernel.clear();
+        f.store.set(None);
+        let report = f.app.retry_xdp_cleanup(error).expect("cleanup retry");
+        assert_eq!(report.restoration_attempts().len(), 4);
+        assert!(report.primary_failure().is_some());
+        assert_eq!(f.app.get_xdp_dispatcher(xdp_key(&first)).expect("old"), old);
+        let second = f
+            .app
+            .attach_xdp(xdp(b))
+            .expect("reattach after complete compensation");
+        f.app.detach_xdp(second.id).expect("detach");
+        f.app.detach_xdp(first.id).expect("last");
+        assert_eq!(f.app.unload(a).expect("unload").unresolved(), 0);
+        assert_eq!(f.app.unload(b).expect("unload").unresolved(), 0);
+        f.clean();
+        foreign.clean();
+    }
+}
+
+fn xdp_replacement_cancellation<S: Store>(backend: S) {
+    for boundary in [
+        Point::PrepareXdp,
+        Point::LoadDispatcher,
+        Point::Revision,
+        Point::PinDispatcher,
+        Point::Extension,
+        Point::Switch,
+    ] {
+        let f = Fixture::new(backend);
+        let a = f.app.load(f.request(true)).expect("load").record.id;
+        let b = f.app.load(f.request(true)).expect("load").record.id;
+        let first = f.app.attach_xdp(xdp(a)).expect("first");
+        let token = Cancellation::new();
+        f.kernel.cancel_at(boundary, &token);
+        let error = f
+            .app
+            .attach_xdp_with_cancellation(xdp(b), &token)
+            .expect_err("cancelled");
+        assert_eq!(error.kind(), bpfman_runtime::LinkErrorKind::Cancelled);
+        assert_eq!(error.unresolved(), 0);
+        if boundary == Point::Switch {
+            assert_eq!(error.restoration_attempts().len(), 1);
+        }
+        f.kernel.clear();
+        assert_eq!(
+            f.app
+                .get_xdp_dispatcher(xdp_key(&first))
+                .expect("old")
+                .members()
+                .len(),
+            1
+        );
+        f.app.detach_xdp(first.id).expect("last");
+        assert_eq!(f.app.unload(a).expect("unload").unresolved(), 0);
+        assert_eq!(f.app.unload(b).expect("unload").unresolved(), 0);
+        f.clean();
+    }
+    for detach in [false, true] {
+        let f = Fixture::new(backend);
+        let a = f.app.load(f.request(true)).expect("load").record.id;
+        let b = f.app.load(f.request(true)).expect("load").record.id;
+        let first = f.app.attach_xdp(xdp(a)).expect("first");
+        let second = if detach {
+            Some(f.app.attach_xdp(xdp(b)).expect("second"))
+        } else {
+            None
+        };
+        let token = Cancellation::new();
+        f.store.cancel_at(StorePoint::XdpReplace, &token);
+        f.kernel.fail(Point::RemoveExtension, Phase::Before);
+        let error = if detach {
+            f.app
+                .detach_xdp_with_cancellation(first.id, &token)
+                .expect_err("retirement")
+        } else {
+            f.app
+                .attach_xdp_with_cancellation(xdp(b), &token)
+                .expect_err("retirement")
+        };
+        assert!(token.is_cancelled());
+        let committed = error.committed_snapshot().expect("publication won").clone();
+        assert_eq!(committed.members().len(), if detach { 1 } else { 2 });
+        assert!(error.restoration_attempts().is_empty());
+        assert_eq!(
+            f.app
+                .get_xdp_dispatcher(xdp_key(&first))
+                .expect("committed"),
+            committed
+        );
+        f.kernel.clear();
+        let report = f.app.retry_xdp_cleanup(error).expect("retire only");
+        assert_eq!(report.committed_snapshot(), Some(&committed));
+        assert!(report.primary_failure().is_none());
+        if let Some(second) = second {
+            assert_eq!(committed.members()[0].member.id, second.id);
+        }
+        for m in committed.members() {
+            f.app.detach_xdp(m.member.id).expect("detach");
+        }
+        assert_eq!(f.app.unload(a).expect("unload").unresolved(), 0);
+        assert_eq!(f.app.unload(b).expect("unload").unresolved(), 0);
+        f.clean();
+    }
+}
+
 macro_rules! backend_tests {
     ($module:ident,$backend:expr) => {
         mod $module {
+            #[test]
+            fn xdp_replacement_lifecycle() {
+                super::xdp_replacement_lifecycle($backend);
+            }
+
+            #[test]
+            fn xdp_replacement_failures() {
+                super::xdp_replacement_failures($backend);
+            }
+
+            #[test]
+            fn xdp_restoration_retries() {
+                super::xdp_restoration_retries($backend);
+            }
+
+            #[test]
+            fn xdp_replacement_cancellation() {
+                super::xdp_replacement_cancellation($backend);
+            }
+
             #[test]
             fn lifecycle() {
                 super::lifecycle($backend);

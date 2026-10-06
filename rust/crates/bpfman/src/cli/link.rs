@@ -31,7 +31,7 @@ pub(crate) enum LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
-    /// Attach the first XDP extension to an interface in the current namespace.
+    /// Attach an XDP extension to an interface in the current namespace.
     Xdp {
         program_id: NonZeroU32,
         interface: bpfman_model::InterfaceName,
@@ -74,7 +74,10 @@ impl LinkCommand {
         cancellation: &bpfman_runtime::Cancellation,
     ) -> Result<(), crate::error::Error>
     where
-        S: bpfman_store::OpenStore + bpfman_store::LinkStore + bpfman_store::XdpStore + 'static,
+        S: bpfman_store::OpenStore
+            + bpfman_store::LinkStore
+            + bpfman_store::XdpReplacementStore
+            + 'static,
         S::Reader: bpfman_store::LinkReader,
     {
         match self {

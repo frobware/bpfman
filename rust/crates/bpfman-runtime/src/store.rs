@@ -290,3 +290,33 @@ impl<S: bpfman_store::XdpStore> bpfman_store::XdpStore for ActiveStore<S> {
 pub(crate) mod testing;
 #[cfg(test)]
 mod tests;
+
+impl<S: bpfman_store::XdpReplacementStore> bpfman_store::XdpReplacementStore for ActiveStore<S> {
+    fn observe_xdp_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<(bpfman_model::XdpDispatcherSnapshot, Self::XdpReceipt)>, bpfman_store::Error>
+    {
+        self.check_writer(w)?;
+        self.backend.observe_xdp_dispatcher(w, key)
+    }
+
+    fn replace_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::XdpReceipt,
+        request: bpfman_store::XdpReplace<'_>,
+    ) -> Result<
+        bpfman_model::XdpDispatcherSnapshot,
+        EffectFailure<Self::XdpReceipt, bpfman_store::Error>,
+    > {
+        if let Err(cause) = self.check_writer(w) {
+            return Err(EffectFailure {
+                cause,
+                remaining: receipt,
+            });
+        }
+        self.backend.replace_xdp(w, receipt, request)
+    }
+}

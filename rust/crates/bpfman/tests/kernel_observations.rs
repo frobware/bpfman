@@ -345,9 +345,10 @@ fn json_uses_injected_kernel_observations() {
     exercise(bpfman_store_json::Backend);
 }
 
-fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpStore + Copy>(backend: S)
-where
-    S::Reader: LinkReader + bpfman_store::XdpReader,
+fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpReplacementStore + Copy>(
+    backend: S,
+) where
+    S::Reader: LinkReader + bpfman_store::XdpDispatcherReader,
 {
     let temp = tempfile::tempdir().expect("runtime");
     let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
@@ -433,6 +434,7 @@ where
     assert_eq!(
         app.get_xdp_dispatcher(details.key)
             .expect("snapshot")
+            .members()[0]
             .details,
         details
     );

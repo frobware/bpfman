@@ -3,7 +3,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 
 #[derive(Subcommand)]
 pub(crate) enum DispatcherCommand {
-    /// Read the committed single-member XDP dispatcher snapshot.
+    /// Read the committed complete XDP dispatcher snapshot.
     Get {
         #[command(subcommand)]
         target: DispatcherTarget,
@@ -28,7 +28,7 @@ impl DispatcherCommand {
     ) -> Result<(), crate::error::Error>
     where
         S: bpfman_store::OpenStore,
-        S::Reader: bpfman_store::XdpReader + bpfman_store::LinkReader,
+        S::Reader: bpfman_store::XdpDispatcherReader + bpfman_store::LinkReader,
     {
         let Self::Get {
             target:

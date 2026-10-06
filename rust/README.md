@@ -757,10 +757,11 @@ failure, commit failure, unload retry, and refusal of tracepoint attachment to
 an XDP program. SQLite interchange tests load with either Go or Rust, compare
 get/list observations, and unload with the other implementation.
 
-## XDP first attach and last detach
+## XDP attachment and replacement
 
 `link attach xdp PROGRAM_ID INTERFACE --priority N [-m KEY=VALUE]` attaches the
-first member of a dispatcher in the current network namespace. `--proceed-on`
+a member of a dispatcher in the current network namespace. Up to ten links may
+share an interface, including multiple links for one program. `--proceed-on`
 accepts comma-separated or repeated `aborted`, `drop`, `pass`, `tx`, `redirect`,
 and `dispatcher_return`; the default is `pass,dispatcher_return`. The command
 supports text and JSON output. `link get`, `link list`, and `program get` expose
@@ -770,13 +771,14 @@ NSID IFINDEX -o json` reads the complete stored snapshot without a writer lock.
 The runtime resolves the interface, validates the managed EXT program, loads a
 one-slot dispatcher, and pins its program, extension link, and outer interface
 link using Go's path layout. Only driver mode and BPF links are supported. An
-occupied attach point is refused; there is no replacement or netlink fallback.
+foreign occupied attach point is refused. Managed membership changes use complete
+revision replacement; there is no netlink fallback.
 SQLite atomically publishes the dispatcher header, managed link, and member
 using Go schema version 2. JSON supports that snapshot from version 4; newly
 created JSON stores use version 5.
 A successful commit ends compensation, including when cancellation arrives late.
 
-`link detach LINK_ID` synchronously detaches the outer link before releasing
+Last-member `link detach LINK_ID` synchronously detaches the outer link before releasing
 its pin. This stops the interface attachment even if another observer holds a
 link descriptor. Extension and dispatcher pins are then removed independently;
 the empty revision directory and unchanged store snapshot follow only after
@@ -800,14 +802,14 @@ residue-free teardown. Shared store tests cover atomic snapshots, stale receipts
 and foreign runtime authority; production-interpreter fakes cross acquisition,
 cancellation, and individual cleanup failures.
 
-This is a single-member checkpoint. Detach an XDP link explicitly before program
-unload. Additional members, dispatcher replacement, explicit `--netns`, selectable
-XDP modes, and traffic/proceed-on execution acceptance remain unfinished. Loading
+Detach all XDP links explicitly before program unload. Attached-program unload,
+explicit `--netns`, selectable XDP modes, and the broader traffic corpus remain
+unfinished. Loading
 an `xdp.frags` section does not establish fragmented-packet execution support.
 
 ### Dispatcher replacement policy
 
-The first replacement implementation step is available in the pure crates.
+The runtime uses the pure replacement policy for every nonempty membership change.
 `plan_xdp_membership` assigns contiguous slots using Go's stable ordering:
 priority, new before existing at equal priority, then program name. Exact ties
 retain input order. It validates capacity and duplicate link identities, checks
@@ -824,7 +826,7 @@ ownership separately. `XdpCleanup` records stable instruction IDs so multiple
 extension failures remain distinguishable across retries.
 
 Run `direnv exec . make rust-test-xdp-core` for the policy, ABI, and compile-fail
-tests. This does not establish multi-member kernel or traffic support.
+tests; runtime and real-kernel acceptance are described below.
 
 The persistence portion is also implemented. `XdpDispatcherReader` returns a
 validated `XdpDispatcherSnapshot` containing one to ten members in contiguous
@@ -843,8 +845,8 @@ and backend-specific tests. Coverage includes 1 → 2 → 1 → 0 persistence wi
 removal of either member, growth to ten slots, capacity refusal, stable IDs,
 reopening, stale/foreign receipts, invalid requests, SQLite DML aborts and ignored
 writes, JSON publication obstruction, malformed membership, and format-4 refusal.
-The single-member store entry points used by the runtime continue to reject
-multi-member dispatchers. No multi-member kernel lifecycle is admitted yet.
+The runtime uses complete-snapshot operations for replacement. Singleton store
+entry points remain restricted to first attach and last detach.
 
 The kernel boundary now supplies `bpfman_kernel::XdpReplacement`: complete
 configuration loading, selected revision creation, arbitrary validated slots,
@@ -863,16 +865,36 @@ member, inspect real packet counters, and prove that the first slot's proceed-on
 mask controls the second slot's execution. They also cover rejected updates,
 post-update observation failures, failed restoration, explicit retry, foreign
 runtime writers, moved pins/parents, undeclared slots, and residue-free cleanup.
-These are direct adapter contracts; the public runtime still admits only the
-single-member lifecycle.
+These are direct adapter contracts, separate from runtime acceptance.
 
-Next: connect these store/kernel capabilities to the pure replacement protocol
-in the runtime, extend the shared stateful fake's fault matrix, and admit the
-unchanged multi-member Go DSL scripts with runtime-driven traffic acceptance.
+The public runtime now observes the complete snapshot under one writer lock,
+plans the desired membership, stages every member, switches the outer link,
+and publishes atomically. Failed publication or cancellation after switching
+requires restoration before staged cleanup. `XdpError::restoration_attempts`
+retains every restoration outcome. Failed restoration blocks all revision cleanup;
+`retry_xdp_cleanup` admits one explicit restoration/cleanup pass. Successful
+recovery reports retain the original failure and prior attempts.
+
+After successful publication, only the old revision can be retired. A retirement
+failure exposes `committed_snapshot()` on the error and any later successful retry
+report; CLI diagnostics explicitly say the replacement committed. Cancellation
+during publication cannot turn committed state into compensation authority.
+`get_xdp_dispatcher` and `dispatcher get xdp` return all members in slot order.
+
+Shared fake-kernel tests exercise attach and non-last detach across staging,
+switch, publication, restoration, cleanup, cancellation, and foreign-runtime retry.
+Real runtime tests use packet counters to verify both members, proceed-on masks,
+either survivor, and restoration after failed attach/detach publication. Both
+stores also run the unchanged Go priority-ordering, slot-reuse, ten-slot capacity,
+configuration-after-detach, and default-proceed-on rebuild scripts.
+
+Next: integrate attached XDP program unload with the same replacement protocol
+and admit the unchanged survivor-rebuild script. Broader fill/drain and
+chain-execution acceptance remains subsequent work.
 
 Checkpoint validation passed through the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-16 fake-kernel lifecycle tests, and all 38 real-kernel tests on the supported
+24 fake-kernel lifecycle tests, and all 42 real-kernel tests on the supported
 surface. The new pure suites include nine replacement-policy tests and three
 configuration tests. NixOS kernel-build discovery and the optional `KERNEL_DEV`
 override are documented in [AGENTS.md](AGENTS.md).
@@ -880,7 +902,7 @@ override are documented in [AGENTS.md](AGENTS.md).
 ### Injectable kernel lifecycle
 
 `Bpfman<S, K>::new(store, kernel, timeout)` accepts one kernel backend alongside
-its real store. Reads, loading, tracepoint attachment, XDP first attach/last detach,
+its real store. Reads, loading, tracepoint attachment, XDP attachment/replacement/detach,
 unload, and explicit cleanup retries use that same instance. Operations require
 only the capabilities they use: `ProgramObservations`, `LinkObservations`,
 `ObjectLoader`, `ProgramResources`, `ProgramLoad`, `TracepointLinks`, or
@@ -910,6 +932,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 38 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 42 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

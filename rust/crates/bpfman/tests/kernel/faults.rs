@@ -30,6 +30,7 @@ pub(super) enum Point {
     ObserveLink,
     DeleteLink,
     XdpCommit,
+    XdpReplace,
     XdpDelete,
 }
 
@@ -393,5 +394,39 @@ impl<R: bpfman_store::XdpReader> bpfman_store::XdpReader for Reader<R> {
         key: bpfman_model::XdpKey,
     ) -> Result<Option<bpfman_model::XdpSnapshot>, Error> {
         self.reader.read_xdp(key)
+    }
+}
+
+impl<S: bpfman_store::XdpReplacementStore> bpfman_store::XdpReplacementStore for Faults<S> {
+    fn observe_xdp_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<(bpfman_model::XdpDispatcherSnapshot, Self::XdpReceipt)>, Error> {
+        self.backend.observe_xdp_dispatcher(w, key)
+    }
+
+    fn replace_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::XdpReceipt,
+        request: bpfman_store::XdpReplace<'_>,
+    ) -> Result<bpfman_model::XdpDispatcherSnapshot, EffectFailure<Self::XdpReceipt, Error>> {
+        if let Err(cause) = check(&self.state, Point::XdpReplace) {
+            return Err(EffectFailure {
+                cause,
+                remaining: receipt,
+            });
+        }
+        self.backend.replace_xdp(w, receipt, request)
+    }
+}
+
+impl<R: bpfman_store::XdpDispatcherReader> bpfman_store::XdpDispatcherReader for Reader<R> {
+    fn read_xdp_dispatcher(
+        &mut self,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<bpfman_model::XdpDispatcherSnapshot>, Error> {
+        self.reader.read_xdp_dispatcher(key)
     }
 }

@@ -98,7 +98,7 @@ pub enum XdpPlanError {
 impl fmt::Display for XdpPlanError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Capacity => "no free XDP dispatcher slots (all ten occupied)",
+            Self::Capacity => "no free dispatcher slots (all ten XDP slots occupied)",
             Self::DuplicateLink => "duplicate managed link in XDP membership",
             Self::Membership => "invalid desired XDP membership",
             Self::RevisionExhausted => "XDP dispatcher revision exhausted",

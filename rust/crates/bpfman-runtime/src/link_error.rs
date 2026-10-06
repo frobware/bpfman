@@ -13,6 +13,8 @@ pub(super) enum Cause {
     #[error("invalid attachment state: {0}")]
     Invalid(&'static str),
     #[error(transparent)]
+    XdpPlan(bpfman_core::XdpPlanError),
+    #[error(transparent)]
     Store(#[from] bpfman_store::Error),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
@@ -68,7 +70,7 @@ impl LinkCause {
             Cause::Cancelled => LinkErrorKind::Cancelled,
             Cause::NotFound => LinkErrorKind::NotFound,
             Cause::Unsupported => LinkErrorKind::Unsupported,
-            Cause::Invalid(_) => LinkErrorKind::InvalidState,
+            Cause::Invalid(_) | Cause::XdpPlan(_) => LinkErrorKind::InvalidState,
             Cause::Kernel(cause) => match cause.kind() {
                 bpfman_kernel::ErrorKind::Unsupported => LinkErrorKind::Unsupported,
                 bpfman_kernel::ErrorKind::InvalidInput | bpfman_kernel::ErrorKind::InvalidData => {
