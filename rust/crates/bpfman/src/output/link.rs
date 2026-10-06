@@ -19,7 +19,7 @@ fn record(link: &StoredLink) -> Value {
                 "proceed_on": (0..32)
                     .filter(|code| d.proceed_on.mask() & (1 << code) != 0)
                     .collect::<Vec<_>>(),
-                "netns": "",
+                "netns": d.netns.as_str(),
                 "nsid": d.key.nsid.get(),
                 "dispatcher_id": d.dispatcher_id.get(),
                 "revision": d.revision.get(),

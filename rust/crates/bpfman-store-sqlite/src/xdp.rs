@@ -31,14 +31,13 @@ fn id64(raw: i64) -> Result<NonZeroU64, Failure> {
 
 pub(super) fn decode(row: &queries::Row) -> Result<XdpSnapshot, Failure> {
     if row.program_kind != "xdp"
-        || !row.netns.is_empty()
-        || !row.dispatcher_netns.is_empty()
+        || row.netns != row.dispatcher_netns
         || row.kernel == row.outer
         || row.priority < 0
         || row.priority > i32::MAX as i64
     {
         return Err(Failure::Unsupported(
-            "only XDP dispatchers in the current namespace are implemented",
+            "unsupported XDP snapshot or mismatched namespace paths",
         ));
     }
     let actions: Vec<u32> = serde_json::from_str(&row.proceed_on).map_err(Failure::LinkMetadata)?;
@@ -50,6 +49,7 @@ pub(super) fn decode(row: &queries::Row) -> Result<XdpSnapshot, Failure> {
         mask |= 1 << code;
     }
     let details = XdpLink {
+        netns: row.netns.parse().map_err(|_| invalid())?,
         slot: usize::try_from(row.position)
             .ok()
             .and_then(|p| p.try_into().ok())

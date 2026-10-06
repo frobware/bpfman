@@ -8,6 +8,9 @@ extern crate alloc;
 
 use alloc::string::String;
 
+mod netns;
+pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
+
 mod xdp;
 pub use xdp::{
     InterfaceName, InvalidXdp, InvalidXdpSnapshot, XdpDispatcherSnapshot, XdpKey, XdpLink,

@@ -3,10 +3,11 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint extends real-kernel XDP acceptance on both SQLite and JSON stores:
-ten-slot traffic, repeated fill/drain/refill, exact weighted counters, default
-and custom proceed-on chains, ordering, and independent interfaces. Attached
-program unload preserves surviving members and retains explicit recovery.
+checkpoint adds explicit XDP network namespaces on both SQLite and JSON stores.
+Namespace descriptors bind interface lookup and first attach to the admitted
+namespace; disposable worker threads keep the caller's namespace unchanged.
+Rebuild, detach, and attached unload preserve dispatcher ownership and explicit
+recovery. Ten-slot, fill/drain, and chain-execution acceptance remain in the gate.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -21,10 +22,10 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
-| XDP links | One to ten members per interface, current namespace, driver-mode BPF links, replacement, last detach, attached-program unload | Explicit namespaces, selectable modes |
-| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain and chain-execution acceptance | Namespace-specific lifecycle and additional modes |
+| XDP links | One to ten members per interface, current or explicit namespace, driver-mode BPF links, replacement, last detach, attached-program unload | Selectable modes, fragmented-packet execution |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain and chain-execution acceptance | Additional modes and fragmented-packet execution |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
-| Persistence | Go-compatible SQLite schema 2; JSON format 5 for multi-member XDP snapshots | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; JSON format 6 for namespace-aware XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached unload holds one writer scope and defers program teardown until every
@@ -36,8 +37,8 @@ clearly. See
 for the supported command surface.
 
 Validation uses `direnv exec . make rust-check`: formatting, Clippy, workspace
-tests, compile-fail contracts, documentation, 36 shared fake-kernel lifecycle
-tests, and 68 real-kernel tests. The replacement fault matrix covers attach and
+tests, compile-fail contracts, documentation, 38 shared fake-kernel lifecycle
+tests, and 74 real-kernel tests. The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
 foreign-runtime retries, and post-commit retirement. Real packet tests prove
@@ -69,9 +70,11 @@ allowing Nix to discover and realize the matching development output; see the
 `Bpfman<S, K>` uses one kernel backend throughout. Aya and BPF syscalls remain in
 `bpfman-kernel-aya`; descriptor-confined filesystem authority stays in
 `bpfman-fs`. Persistence, bytecode publication, and runtime locking remain real
-in fake-kernel tests. The next bounded slice is explicit network-namespace
-support, beginning with the unchanged namespace link round-trip and dispatcher
-rebuild scripts. Go remains the behavioural authority.
+in fake-kernel tests. Namespace acceptance includes the unchanged namespace
+round-trip/rebuild scripts, path replacement and disappearance, identical
+interface indices across namespaces, publication failure and retained unload,
+and caller-namespace isolation. The next bounded slice is selectable XDP
+attachment modes. Go remains the behavioural authority.
 
 ## Summary
 
@@ -623,10 +626,10 @@ SQLite retains Go schema version 2 and its migration history. JSON format 4 adds
 complete single-member XDP dispatcher snapshots. Older JSON formats retain their
 existing operations: tracepoint programs from version 1, tracepoint links from
 version 2, and XDP loads from version 3. XDP attachment requires a separately
-initialized version 4 or newer runtime. Format 5 adds multi-member replacement
-and is used for newly created JSON stores. Format 4 retains single-member
-operations and refuses replacement. Neither backend implicitly migrates or repairs
-existing state. The implementation does not use sled.
+initialized version 4 or newer runtime. Format 5 adds multi-member replacement;
+new stores use format 6 for explicit network-namespace paths. Formats 4 and 5
+refuse namespaced attachments; format 4 also refuses replacement. Neither backend
+implicitly migrates or repairs existing state. The implementation does not use sled.
 
 The store has two classes of operation:
 
@@ -651,7 +654,7 @@ key, and one-slot dispatcher configuration. A private runtime interpreter perfor
 forward acquisitions; the pure core owns cleanup ordering and consuming
 continuations. Aya objects and filesystem/store receipts remain outside the model.
 
-First attach resolves the interface in the current network namespace and adopts
+First attach resolves the interface in the selected network namespace and adopts
 the managed EXT program. Under one writer lock it checks that the attach point is
 vacant, loads a configured revision, pins the dispatcher and extension link, and
 creates and pins the outer interface link. It then publishes the complete snapshot
@@ -688,9 +691,8 @@ The implemented milestone attaches a second program to an existing managed XDP
 dispatcher, removes either member while the survivor remains active, and finally
 detaches the last member. Each nonempty membership change stages a complete new
 revision and updates the existing durable outer link. Foreign attachments remain
-refused. Keep this milestone within the current network namespace and driver mode;
-attached-program unload uses the same protocol. Broader attachment surfaces
-follow it.
+refused. Current and explicitly selected network namespaces use driver mode;
+attached-program unload uses the same protocol. Additional modes follow it.
 
 Dispatcher replacement exercises the architecture across three adapters. The core owns:
 
@@ -750,7 +752,8 @@ Implementation and validation checkpoints:
    failure. Surviving links preserve managed IDs, programs, metadata, timestamps,
    priorities, and proceed-on masks; their slots, kernel extension links, and
    revision change together. SQLite uses schema 2 transactions; new JSON stores
-   use format 5, with no implicit upgrade of older stores. Run
+   use format 6; format 5 retains current-namespace replacement support, with no
+   implicit upgrade of older stores. Run
    `direnv exec . make rust-test-xdp-store` for shared contracts and backend faults.
    Kernel portion implemented: `bpfman_kernel::XdpReplacement` loads the complete
    configuration, stages any validated slot/revision, adopts all declared members,
@@ -876,9 +879,17 @@ All read-only commands, including combined store/kernel observations, bypass
 the writer lock. The store snapshot and subsequent kernel/filesystem reads are
 not one atomic observation: concurrent unload may remove an object between
 them. Report that absence without diagnosing inconsistency from it alone.
-Namespace-helper launching is not implemented in this slice.
+For XDP network namespaces, the kernel adapter opens a validated namespace fd
+and performs interface lookup and outer-link creation on disposable threads.
+Each thread enters once and exits; the calling thread never changes namespace.
+The synchronous join keeps the writer lock in scope, while acquired link fds
+return to the caller for pinning and publication. Retained unload evidence
+revalidates namespace-path identity before further effects. Go's XDP path also
+uses scoped OS-thread namespace switching; its subprocess helper serves a
+different purpose, described below. See the
+[implemented namespace contract](../../rust/README.md#explicit-xdp-network-namespaces).
 
-### Planned namespace helper
+### Planned mount-namespace helper for uprobes
 
 Use a hidden subcommand of the same `bpfman` executable, provisionally
 `bpfman __ns-helper open-uprobe-target ...`. This is a separate child process,
@@ -1361,6 +1372,9 @@ named-selection DSL scripts.
 
 Completed checkpoint:
 
+- Explicit XDP namespaces with retained descriptors, isolated worker threads,
+  persisted paths, namespace identity refusal/retry, and unchanged namespace DSL
+  scripts on both stores. Namespace-aware JSON snapshots use format 6.
 - Eleven additional unchanged XDP scripts per backend covering ten-slot and
   fill/drain traffic, exact counters, proceed-on chains, ordering, and independent
   interfaces; shared DSL assertions also require empty inventories and XDP pins.
@@ -1378,7 +1392,7 @@ Completed checkpoint:
 - Pure replacement planning, multi-member ABI encoding, consuming switch/publication/
   restoration transitions, and stable per-instruction cleanup retry history.
 - Pure one-slot XDP configuration and dependency-aware cleanup policy.
-- First attach and last detach in the current namespace with driver-mode BPF links.
+- First attach and last detach in current or explicit namespaces with driver-mode BPF links.
 - Atomic dispatcher/member publication and conditional deletion on both stores.
 - Cancellation before commit, retained compensation receipts, and explicit retry.
 - Unchanged XDP link round-trip and last-detach dispatcher scripts on both stores.
@@ -1392,10 +1406,11 @@ The kernel-boundary refactor is complete for this supported surface; see
 The [one → two → one → zero milestone](#xdp-dispatcher-replacement-checkpoint)
 is implemented, including failed publication, failed restoration, explicit
 retries, runtime traffic acceptance, attached XDP program unload, and broader
-fill/drain and chain-execution acceptance using unchanged Go scripts. Next,
-implement explicit namespaces and admit their round-trip/rebuild scripts.
+fill/drain and chain-execution acceptance using unchanged Go scripts. Explicit
+namespaces and their round-trip/rebuild scripts are also implemented. Next,
+add selectable XDP attachment modes.
 
-Explicit namespace helpers, additional XDP modes, TC replacement with exact
+The uprobe mount-namespace helper, additional XDP modes, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this
 phase. Unsupported operations continue to fail clearly.
 

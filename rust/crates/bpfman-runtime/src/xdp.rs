@@ -17,8 +17,10 @@ use std::{
 mod real;
 mod replacement;
 
-/// XDP attachment in the current network namespace.
+/// XDP attachment in the selected network namespace.
 pub struct XdpAttach {
+    /// Namespace selection; default selects the caller's namespace.
+    pub netns: bpfman_model::NetworkNamespace,
     /// Managed extension program.
     pub program_id: NonZeroU32,
     /// Validated interface name.
@@ -389,6 +391,7 @@ fn attach<F: Effects>(
     f: &mut F,
     r: &XdpAttach,
     c: &Cancellation,
+    prepared: Option<(XdpKey, F::Prepared)>,
 ) -> Result<StoredLink, (LinkCause, ReportFor<F>)> {
     let mut resources = Vec::new();
     let result = (|| -> Result<StoredLink, LinkCause> {
@@ -396,7 +399,10 @@ fn attach<F: Effects>(
         if r.priority > i32::MAX as u32 {
             return Err(Cause::Invalid("priority exceeds i32::MAX").into());
         }
-        let (key, mut prepared) = f.prepare(w, r)?;
+        let (key, mut prepared) = match prepared {
+            Some(prepared) => prepared,
+            None => f.prepare(w, r)?,
+        };
         check(c)?;
         let mut kernel = f.load(r)?;
         macro_rules! acquire {

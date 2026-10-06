@@ -41,6 +41,7 @@ where
         let a = load();
         let b = load();
         let request = |id| XdpAttach {
+            netns: Default::default(),
             program_id: id,
             interface: interface.name(),
             priority: 50,

@@ -119,7 +119,7 @@ pub(crate) fn insert(
     tx.prepare_cached(
         "INSERT INTO dispatchers(type,nsid,ifindex,revision,program_id,kernel_link_id,
             netns,created_at,updated_at)
-         VALUES('xdp',:nsid,:ifindex,:revision,:program,:outer,'',:created,:created)",
+         VALUES('xdp',:nsid,:ifindex,:revision,:program,:outer,:netns,:created,:created)",
     )?
     .execute(named_params! {
         ":nsid": d.key.nsid.get(),
@@ -127,6 +127,7 @@ pub(crate) fn insert(
         ":revision": d.revision.get(),
         ":program": d.dispatcher_id.get(),
         ":outer": request.outer_link_id.get(),
+        ":netns": d.netns.as_str(),
         ":created": request.created_at,
     })?;
     tx.prepare_cached(
@@ -145,7 +146,7 @@ pub(crate) fn insert(
     tx.prepare_cached(
         "INSERT INTO link_xdp_details(id,interface,ifindex,priority,position,proceed_on,
             netns,nsid,dispatcher_program_id)
-         VALUES(:id,:interface,:ifindex,:priority,0,:actions,'',:nsid,:dispatcher)",
+         VALUES(:id,:interface,:ifindex,:priority,0,:actions,:netns,:nsid,:dispatcher)",
     )?
     .execute(named_params! {
         ":id": id,
@@ -153,6 +154,7 @@ pub(crate) fn insert(
         ":ifindex": d.key.ifindex.get(),
         ":priority": d.priority,
         ":actions": actions,
+        ":netns": d.netns.as_str(),
         ":nsid": d.key.nsid.get(),
         ":dispatcher": d.dispatcher_id.get(),
     })?;
@@ -240,7 +242,7 @@ pub(crate) fn insert_member(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result
         .prepare_cached(
             "INSERT INTO link_xdp_details(id,interface,ifindex,priority,position,proceed_on,
             netns,nsid,dispatcher_program_id)
-         VALUES(:id,:interface,:ifindex,:priority,:position,:actions,'',:nsid,:dispatcher)",
+         VALUES(:id,:interface,:ifindex,:priority,:position,:actions,:netns,:nsid,:dispatcher)",
         )?
         .execute(named_params! {
             ":id": id,
@@ -249,6 +251,7 @@ pub(crate) fn insert_member(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result
             ":priority": row.priority,
             ":position": row.position,
             ":actions": row.proceed_on,
+            ":netns": row.netns,
             ":nsid": row.nsid,
             ":dispatcher": row.dispatcher,
         })?;

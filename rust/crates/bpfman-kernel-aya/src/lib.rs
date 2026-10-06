@@ -5,6 +5,7 @@
 
 mod backend;
 mod failure;
+mod netns;
 mod object;
 mod observe;
 mod pin_syscall;
@@ -13,6 +14,8 @@ mod program;
 mod syscall;
 mod tracepoint;
 mod xdp;
+
+pub use netns::XdpNamespace;
 
 use bpfman_kernel::{Error, ErrorKind};
 

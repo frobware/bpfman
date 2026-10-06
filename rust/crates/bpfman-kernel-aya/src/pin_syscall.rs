@@ -1,4 +1,4 @@
-//! Narrow Linux BPF boundary for fd-preserving pinning and synchronous XDP detach.
+//! Narrow Linux BPF and namespace boundary for XDP attachment and owned pinning.
 #![allow(unsafe_code)]
 
 use std::{
@@ -146,5 +146,30 @@ pub(super) fn info(fd: BorrowedFd<'_>) -> io::Result<LinkInfo> {
         Err(io::Error::last_os_error())
     } else {
         Ok(info)
+    }
+}
+
+pub(super) fn require_netns(fd: BorrowedFd<'_>) -> io::Result<()> {
+    // SAFETY: NS_GET_NSTYPE takes no pointer arguments and borrows a live fd.
+    let kind = unsafe { libc::ioctl(fd.as_raw_fd(), libc::NS_GET_NSTYPE) };
+    if kind == libc::CLONE_NEWNET {
+        Ok(())
+    } else if kind < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected a network namespace descriptor",
+        ))
+    }
+}
+
+pub(super) fn enter_netns(fd: BorrowedFd<'_>) -> io::Result<()> {
+    // SAFETY: called only on a newly spawned disposable thread, with a live
+    // validated network namespace fd; mount/user namespaces are never changed.
+    if unsafe { libc::setns(fd.as_raw_fd(), libc::CLONE_NEWNET) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }

@@ -23,7 +23,7 @@ fn missing() -> Error {
 }
 
 impl XdpLifecycle for Kernel {
-    type PreparedXdp = PreparedXdp<crate::AyaExtension>;
+    type PreparedXdp = PreparedXdp<crate::AyaExtension, crate::XdpNamespace>;
     type Dispatcher = Dispatcher;
     type Outer = XdpOuter<crate::AyaOuter>;
     type Extension = XdpExtensionPin;
@@ -35,9 +35,16 @@ impl XdpLifecycle for Kernel {
         w: &RuntimeWriter<'_>,
         program: NonZeroU32,
         interface: &InterfaceName,
-    ) -> Result<(XdpKey, PreparedXdp<crate::AyaExtension>), Error> {
+        netns: &bpfman_model::NetworkNamespace,
+    ) -> Result<
+        (
+            XdpKey,
+            PreparedXdp<crate::AyaExtension, crate::XdpNamespace>,
+        ),
+        Error,
+    > {
         let p = w
-            .prepare_xdp(self, program, interface)
+            .prepare_xdp(self, program, interface, netns)
             .map_err(filesystem)?;
         Ok((p.key(), p))
     }
@@ -52,7 +59,7 @@ impl XdpLifecycle for Kernel {
     fn create_revision(
         &self,
         w: &RuntimeWriter<'_>,
-        p: &PreparedXdp<crate::AyaExtension>,
+        p: &PreparedXdp<crate::AyaExtension, crate::XdpNamespace>,
     ) -> Acquisition<XdpRevision> {
         p.create_revision(w, NonZeroU32::MIN).map_err(map)
     }
@@ -69,7 +76,7 @@ impl XdpLifecycle for Kernel {
     fn pin_extension(
         &self,
         w: &RuntimeWriter<'_>,
-        p: &mut PreparedXdp<crate::AyaExtension>,
+        p: &mut PreparedXdp<crate::AyaExtension, crate::XdpNamespace>,
         r: &XdpRevision,
         k: &Dispatcher,
     ) -> Acquisition<XdpExtensionPin> {
@@ -79,7 +86,7 @@ impl XdpLifecycle for Kernel {
     fn pin_outer(
         &self,
         w: &RuntimeWriter<'_>,
-        p: &PreparedXdp<crate::AyaExtension>,
+        p: &PreparedXdp<crate::AyaExtension, crate::XdpNamespace>,
         k: &Dispatcher,
     ) -> Acquisition<XdpOuter<crate::AyaOuter>> {
         p.pin_outer(self, w, k).map_err(map)
@@ -144,7 +151,7 @@ impl bpfman_kernel::XdpReplacement for Kernel {
         w: &RuntimeWriter<'_>,
         p: &Self::PreparedXdp,
     ) -> Result<(), Error> {
-        p.validate(w).map_err(filesystem)
+        p.validate(self, w).map_err(filesystem)
     }
 
     fn load_revision(&self, config: &bpfman_model::XdpConfig) -> Result<Dispatcher, Error> {

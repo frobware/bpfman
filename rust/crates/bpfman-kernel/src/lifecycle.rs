@@ -191,12 +191,13 @@ pub trait XdpLifecycle {
     /// Owned revision container.
     type Revision: Send + Sync + 'static;
 
-    /// Resolve the current-namespace interface and adopt the managed extension.
+    /// Resolve the selected-namespace interface and adopt the managed extension.
     fn prepare_xdp(
         &self,
         writer: &RuntimeWriter<'_>,
         program: NonZeroU32,
         interface: &InterfaceName,
+        netns: &bpfman_model::NetworkNamespace,
     ) -> Result<(XdpKey, Self::PreparedXdp), Error>;
     /// Load the configured one-member dispatcher.
     fn load_dispatcher(&self, proceed_on: XdpProceedOn) -> Result<Self::Dispatcher, Error>;

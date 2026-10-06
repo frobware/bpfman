@@ -39,6 +39,7 @@ fn key() -> XdpKey {
 
 fn request() -> XdpAttach {
     XdpAttach {
+        netns: Default::default(),
         program_id: NonZeroU32::MIN,
         interface: "eth0".parse().expect("interface"),
         priority: 50,
@@ -175,6 +176,7 @@ impl Effects for Fake {
             id: NonZeroU64::MIN,
             program_id: r.program_id,
             details: bpfman_model::LinkDetails::Xdp(XdpLink {
+                netns: Default::default(),
                 slot: bpfman_model::XdpSlot::FIRST,
                 key,
                 interface: r.interface.clone(),
@@ -281,7 +283,8 @@ fn every_forward_failure_crosses_cleanup_failures_and_explicit_retry() {
                 f.forward = Some(stage);
                 f.fail = failures.into_iter().collect();
                 let c = f.cancellation.clone();
-                let (_, report) = attach(w, &mut f, &request(), &c).expect_err("forward failure");
+                let (_, report) =
+                    attach(w, &mut f, &request(), &c, None).expect_err("forward failure");
                 assert!(!f.committed);
                 assert_eq!(report.unresolved(), f.owned.len());
                 assert_eq!(
@@ -329,7 +332,7 @@ fn cancellation_uses_compensation_until_commit_wins() {
             let mut f = Fake::new();
             f.cancel_at = Some(stage);
             let c = f.cancellation.clone();
-            let result = attach(w, &mut f, &request(), &c);
+            let result = attach(w, &mut f, &request(), &c, None);
             if stage == Stage::Commit {
                 assert!(result.is_ok());
                 assert!(f.committed);

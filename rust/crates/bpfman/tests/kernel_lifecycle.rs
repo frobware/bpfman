@@ -116,6 +116,7 @@ fn tracepoint(id: std::num::NonZeroU32) -> TracepointAttach {
 
 fn xdp(id: std::num::NonZeroU32) -> XdpAttach {
     XdpAttach {
+        netns: Default::default(),
         program_id: id,
         interface: "fake0".parse().expect("interface"),
         priority: 50,
@@ -768,9 +769,56 @@ fn xdp_replacement_cancellation<S: Store>(backend: S) {
     }
 }
 
+fn xdp_namespace_isolation<S: Store>(backend: S) {
+    let f = Fixture::new(backend);
+    let a = f.app.load(f.request(true)).expect("load").record.id;
+    let b = f.app.load(f.request(true)).expect("load").record.id;
+    let mut links = Vec::new();
+    for path in ["", "/fake/netns/a", "/fake/netns/b"] {
+        let mut r = xdp(a);
+        r.netns = path.parse().expect("namespace");
+        links.push(
+            f.app
+                .attach_xdp(r)
+                .expect("attach same interface in namespace"),
+        );
+    }
+    let mut r = xdp(b);
+    r.netns = "/fake/netns/a".parse().expect("namespace");
+    let survivor = f.app.attach_xdp(r).expect("survivor");
+    assert_eq!(f.app.list_xdp_dispatchers().expect("dispatchers").len(), 3);
+    let keys: std::collections::BTreeSet<_> = links.iter().map(xdp_key).collect();
+    assert_eq!(keys.len(), 3);
+
+    assert_eq!(
+        f.app
+            .unload(a)
+            .expect("all namespace memberships")
+            .unresolved(),
+        0
+    );
+    let snapshots = f.app.list_xdp_dispatchers().expect("survivor");
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(snapshots[0].members()[0].member.id, survivor.id);
+    assert_eq!(
+        snapshots[0].members()[0].details.netns.as_str(),
+        "/fake/netns/a"
+    );
+    assert_eq!(
+        f.app.unload(b).expect("last namespace member").unresolved(),
+        0
+    );
+    f.clean();
+}
+
 macro_rules! backend_tests {
     ($module:ident,$backend:expr) => {
         mod $module {
+            #[test]
+            fn xdp_namespace_isolation() {
+                super::xdp_namespace_isolation($backend);
+            }
+
             #[test]
             fn xdp_unload_post_detach() {
                 super::xdp_unload::post_detach($backend);

@@ -360,6 +360,7 @@ fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpReplacementStor
     let app = Bpfman::new(active, fake.clone(), BUDGET);
     let id = NonZeroU32::new(42).expect("program");
     let details = XdpLink {
+        netns: Default::default(),
         slot: bpfman_model::XdpSlot::FIRST,
         key: bpfman_model::XdpKey {
             nsid: NonZeroU64::new(99).expect("namespace"),

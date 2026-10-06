@@ -864,18 +864,22 @@ impl XdpLifecycle for FakeKernel {
         w: &RuntimeWriter<'_>,
         program: NonZeroU32,
         interface: &InterfaceName,
+        netns: &bpfman_model::NetworkNamespace,
     ) -> Result<(XdpKey, PreparedXdp), Error> {
         self.enter(Point::PrepareXdp)?;
+        let nsid = match netns.as_str() {
+            "" => NonZeroU64::MIN,
+            "/fake/netns/a" => NonZeroU64::new(2).expect("namespace"),
+            "/fake/netns/b" => NonZeroU64::new(3).expect("namespace"),
+            _ => return Err(error(ErrorKind::Missing, "missing namespace")),
+        };
         let ifindex = match interface.as_str() {
             "fake0" => NonZeroU32::MIN,
             "fake1" => NonZeroU32::new(2).expect("interface index"),
             _ => return Err(error(ErrorKind::Missing, "missing interface")),
         };
         let extension = self.adopt(w, program, "extension")?;
-        let key = XdpKey {
-            nsid: NonZeroU64::MIN,
-            ifindex,
-        };
+        let key = XdpKey { nsid, ifindex };
         Ok((key, PreparedXdp { extension, key }))
     }
 

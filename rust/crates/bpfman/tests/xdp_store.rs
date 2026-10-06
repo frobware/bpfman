@@ -44,6 +44,7 @@ where
         ifindex: n(7),
     };
     let details = XdpLink {
+        netns: Default::default(),
         slot: bpfman_model::XdpSlot::FIRST,
         key,
         interface: "veth0".parse::<InterfaceName>().expect("name"),
@@ -188,7 +189,12 @@ fn replacement_contract<S: OpenStore + CommitLoad + XdpReplacementStore + Clone>
 where
     S::Reader: LinkReader + XdpReader + XdpDispatcherReader,
 {
-    for survivor in [0, 1] {
+    for (survivor, netns) in [
+        (0, ""),
+        (1, ""),
+        (0, "/run/netns/example"),
+        (1, "/run/netns/example"),
+    ] {
         let temp = tempfile::tempdir().expect("tempdir");
         let layout = RuntimeLayout::try_from(temp.path().join("one")).expect("layout");
         let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
@@ -211,6 +217,7 @@ where
         let metadata = BTreeMap::from([("owner".into(), "replacement".into())]);
         let timestamp = "2026-10-05T00:00:00Z";
         let initial = XdpLink {
+            netns: netns.parse().expect("namespace"),
             slot: bpfman_model::XdpSlot::FIRST,
             key,
             interface: "veth0".parse().expect("interface"),
@@ -322,7 +329,7 @@ where
                 Some(old)
             );
             let mut receipt = error.remaining;
-            for case in 0..15 {
+            for case in 0..16 {
                 let mut bad_details = second.clone();
                 let mut old_details = existing.clone();
                 let bad_metadata = BTreeMap::new();
@@ -333,6 +340,7 @@ where
                     3 => bad_details.interface = "veth1".parse().expect("interface"),
                     4 => bad_details.priority = i32::MAX as u32 + 1,
                     5 => old_details.priority = 99,
+                    15 => bad_details.netns = "/run/netns/other".parse().expect("namespace"),
                     _ => {}
                 }
                 let mut bad = vec![
@@ -534,6 +542,7 @@ where
         let timestamp = "2026-10-05T00:00:00Z";
         let metadata = BTreeMap::new();
         let initial = XdpLink {
+            netns: Default::default(),
             slot: bpfman_model::XdpSlot::FIRST,
             key: XdpKey {
                 nsid: NonZeroU64::MIN,

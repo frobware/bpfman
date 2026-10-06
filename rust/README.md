@@ -164,9 +164,10 @@ JSON version 4 adds complete single-member XDP dispatcher snapshots to private
 tracepoint/XDP programs and standalone tracepoint links. Versions 1–3 retain
 their existing operations: tracepoint programs from version 1, tracepoint links
 from version 2, and XDP loads from version 3. XDP attachment requires a separately
-initialized version 4 or newer runtime. New stores use version 5, which adds
-multi-member XDP replacement. Version 4 retains its single-member operations
-and rejects replacement. Existing stores never upgrade implicitly.
+initialized version 4 or newer runtime. Version 5 adds multi-member XDP
+replacement. New stores use version 6, which also persists explicit network
+namespace paths. Versions 4 and 5 reject namespaced attachments without upgrading;
+version 4 also rejects replacement. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
 descriptor and atomically renames it into place under the runtime writer lock.
 Failed publication leaves the old state intact; interrupted staging files are
@@ -350,10 +351,10 @@ object cleanup must never manipulate SQLite's journal, WAL, or shared-memory fil
 `--lock-timeout` / `BPFMAN_LOCK_TIMEOUT` accepts durations such as `30s` or
 `500ms`; the default is 30 seconds and `0` waits indefinitely. It bounds only
 acquisition, never work under the lock. The lock adapter supports cooperative
-cancellation and owned inherited descriptors; CLI signal cancellation and
-namespace-helper process launching are not yet wired. No privileges are needed
-for text/quiet listing in a writable temporary runtime. Loading requires BPF and mount
-privileges; `/run/bpfman` will normally require sudo.
+cancellation and owned inherited descriptors. CLI signal cancellation is wired;
+the planned uprobe mount-namespace subprocess helper is not yet implemented.
+No privileges are needed for text/quiet listing in a writable temporary runtime.
+Loading requires BPF and mount privileges; `/run/bpfman` will normally require sudo.
 
 Listing supports managed table, quiet-ID and JSON output. Text and quiet output
 use stored summaries without kernel privileges; JSON adds full records and live
@@ -778,8 +779,9 @@ get/list observations, and unload with the other implementation.
 ## XDP attachment and replacement
 
 `link attach xdp PROGRAM_ID INTERFACE --priority N [-m KEY=VALUE]` attaches
-a member of a dispatcher in the current network namespace. Up to ten links may
-share an interface, including multiple links for one program. `--proceed-on`
+a member of a dispatcher in the current network namespace, or in the namespace
+selected by `--netns /absolute/path`. Up to ten links may share an interface,
+including multiple links for one program. `--proceed-on`
 accepts comma-separated or repeated `aborted`, `drop`, `pass`, `tx`, `redirect`,
 and `dispatcher_return`; the default is `pass,dispatcher_return`. The command
 supports text and JSON output. `link get`, `link list`, and `program get` expose
@@ -796,7 +798,7 @@ foreign occupied attach point is refused. Managed membership changes use complet
 revision replacement; there is no netlink fallback.
 SQLite atomically publishes the dispatcher header, managed link, and member
 using Go schema version 2. JSON supports that snapshot from version 4; newly
-created JSON stores use version 5.
+created JSON stores use version 6. Explicit namespaces require format 6.
 A successful commit ends compensation, including when cancellation arrives late.
 
 Last-member `link detach LINK_ID` synchronously detaches the outer link before releasing
@@ -824,8 +826,8 @@ and foreign runtime authority; production-interpreter fakes cross acquisition,
 cancellation, and individual cleanup failures.
 
 Attached-program unload removes all XDP links through the same protocol.
-Explicit `--netns` and selectable XDP modes remain unfinished. Loading an
-`xdp.frags` section does not establish fragmented-packet execution support.
+Selectable XDP modes remain unfinished. Loading an `xdp.frags` section does not
+establish fragmented-packet execution support.
 
 ### Dispatcher replacement policy
 
@@ -858,7 +860,8 @@ and proceed-on masks are preserved. Revision, dispatcher ID, slots, extension
 kernel links, and membership change atomically; the durable outer link stays
 unchanged. Failures return the receipt for an explicit retry and commit nothing.
 SQLite rechecks and publishes within one transaction using Go schema 2. JSON
-publishes a complete format-5 file and never implicitly upgrades format 4.
+publishes a complete file in its existing format (5 or 6 for replacement), and
+never implicitly upgrades older state.
 
 Run `direnv exec . make rust-test-xdp-store` for the six shared store contracts
 and backend-specific tests. Coverage includes 1 → 2 → 1 → 0 persistence with
@@ -936,13 +939,51 @@ link, and dispatcher inventories and no owned program, map, link, bytecode,
 staging, or XDP revision artifacts. No script changes or new production behavior
 were needed for this corpus.
 
-Next: explicit network-namespace support, starting with the unchanged namespace
-link round-trip and dispatcher-rebuild scripts. Selectable modes and fragmented
-packet execution remain separate boundaries.
+### Explicit XDP network namespaces
+
+`link attach xdp ... --netns PATH` accepts an absolute network-namespace path;
+omitting it selects the calling thread's namespace. The kernel adapter opens
+and validates the namespace descriptor, resolves the interface there, and retains
+its device/inode identity. First attach uses that same retained descriptor, so
+it cannot silently re-resolve a changed namespace path between admission and
+outer-link creation. Identical interface names/indices in different namespaces
+remain independent attach points.
+
+Like Go's XDP implementation, only namespace-sensitive operations switch
+namespaces. Rust runs interface lookup and first outer-link creation on dedicated
+worker threads that enter once and exit. The caller never switches or restores
+its namespace; synchronous joins keep the existing writer lock held. The worker
+returns an owned link descriptor. Pinning, persistence, conditional dispatcher
+switching, restoration, and removal stay with the caller under the same runtime
+authority. Entry/spawn failures return errors before attachment, and no worker
+or descriptor remains detached from its owning operation. This does not implement
+the separate planned mount-namespace subprocess helper for uprobes.
+
+Namespace paths are persisted in Go-compatible SQLite columns and JSON format 6,
+and appear in link details and dispatcher runtime JSON. Rebuilds retain the
+established path even when a new attach uses an alias of the same namespace.
+Missing or replaced paths refuse new preparation and retained unload retries.
+Restoring the original path permits explicit retry with its ownership intact.
+Final detach uses owned kernel/pin identities and can clean up after a named
+namespace path is removed; non-last detach and attached unload need the stored
+namespace path to prepare surviving members or retained program evidence.
+
+Run `direnv exec . make rust-test-xdp-netns` for six real-kernel tests on both
+stores. The unchanged `TestXDP_NetnsVethPairLinkRoundTrip` and
+`TestXDP_NetnsDispatcherRebuild` scripts verify traffic, rebuilding, observations,
+and counter quiescence. Shared recovery tests cover identical interface indices
+in independent namespaces, alias paths, invalid namespace objects, missing/replaced
+paths, publication failure, retained unload, removed namespace paths, caller
+isolation, and residue-free teardown. Store contracts exercise namespace
+persistence and reject changing a committed namespace during replacement. A
+worker-entry failure test verifies that no effect runs or caller namespace changes.
+
+Next: selectable XDP attachment modes. Fragmented-packet execution and the
+uprobe mount-namespace helper remain separate boundaries.
 
 Checkpoint validation passed through the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-36 fake-kernel lifecycle tests, and all 68 real-kernel tests on the supported
+38 fake-kernel lifecycle tests, and all 74 real-kernel tests on the supported
 surface. The new pure suites include nine replacement-policy tests and three
 configuration tests. NixOS kernel-build discovery and the optional `KERNEL_DEV`
 override are documented in [AGENTS.md](AGENTS.md).
@@ -980,6 +1021,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 68 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 74 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

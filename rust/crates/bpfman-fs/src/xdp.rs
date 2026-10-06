@@ -14,7 +14,8 @@ use bpfman_model::{InterfaceName, XdpKey, XdpLink, XdpSnapshot};
 use std::{num::NonZeroU32, os::fd::OwnedFd};
 
 /// Adopted extension and attach point; no managed attachment has been created.
-pub struct PreparedXdp<E: ExtensionProgram> {
+pub struct PreparedXdp<E: ExtensionProgram, N> {
+    namespace: N,
     extension: E,
     extension_entry: Entry,
     collection: OwnedFd,
@@ -125,15 +126,17 @@ fn require_detached(kernel: &impl crate::XdpKernel, snapshot: &XdpSnapshot) -> R
 }
 
 impl RuntimeWriter<'_> {
-    /// Resolve an interface in this process's network namespace and adopt a
-    /// canonical EXT program pin. Explicit namespace switching is not performed.
+    /// Resolve a selected namespace/interface and adopt a canonical EXT program pin.
     pub fn prepare_xdp<K: crate::XdpKernel>(
         &self,
         kernel: &K,
         program: NonZeroU32,
         interface: &InterfaceName,
-    ) -> Result<PreparedXdp<K::Extension>, Error> {
-        let key = kernel.interface(interface).map_err(Failure::Kernel)?;
+        netns: &bpfman_model::NetworkNamespace,
+    ) -> Result<PreparedXdp<K::Extension, K::Namespace>, Error> {
+        let (key, namespace) = kernel
+            .interface(interface, netns)
+            .map_err(Failure::Kernel)?;
         let bpffs = optional_dir(&self.runtime.root, "fs", BENEATH)?
             .ok_or(Failure::Unsafe("program bpffs is missing"))?;
         crate::link::verify_bpffs(&bpffs)?;
@@ -148,6 +151,7 @@ impl RuntimeWriter<'_> {
         }
         let collection = ensure_directory(&bpffs, "xdp", CONFINED)?;
         Ok(PreparedXdp {
+            namespace,
             extension,
             extension_entry: pin,
             collection,
@@ -356,14 +360,21 @@ impl RuntimeWriter<'_> {
     }
 }
 
-impl<E: ExtensionProgram> PreparedXdp<E> {
+impl<E: ExtensionProgram, N> PreparedXdp<E, N> {
     /// Observed namespace and interface identity.
     pub fn key(&self) -> XdpKey {
         self.key
     }
 
-    /// Revalidate retained managed-program identity under its original writer.
-    pub fn validate(&self, writer: &RuntimeWriter<'_>) -> Result<(), Error> {
+    /// Revalidate the retained namespace and managed program under their original writer.
+    pub fn validate<K: crate::XdpKernel<Extension = E, Namespace = N>>(
+        &self,
+        kernel: &K,
+        writer: &RuntimeWriter<'_>,
+    ) -> Result<(), Error> {
+        kernel
+            .validate_namespace(&self.namespace)
+            .map_err(Failure::Kernel)?;
         self.extension_entry.check_writer(writer)?;
         open_owned(&self.extension_entry)?;
         Ok(())
@@ -460,7 +471,7 @@ impl<E: ExtensionProgram> PreparedXdp<E> {
 
     /// Attach without replacing an existing interface program. A pin failure
     /// retains the live fd so compensation can synchronously detach it.
-    pub fn pin_outer<K: crate::XdpKernel<Extension = E>>(
+    pub fn pin_outer<K: crate::XdpKernel<Extension = E, Namespace = N>>(
         &self,
         kernel: &K,
         writer: &RuntimeWriter<'_>,
@@ -476,7 +487,7 @@ impl<E: ExtensionProgram> PreparedXdp<E> {
         .map_err(fail)?;
         pin.check_writer(writer).map_err(fail)?;
         let fd = kernel
-            .attach_outer(dispatcher, self.key)
+            .attach_outer(dispatcher, self.key, &self.namespace)
             .map_err(|e| fail(Failure::Kernel(e).into()))?;
         // Keep ownership even if info fails. ID is only needed after pinning;
         // the live receipt authorizes detach through its owned descriptor.

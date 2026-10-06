@@ -44,7 +44,7 @@ pub(crate) fn dispatcher(out: &mut impl Write, snapshot: &XdpDispatcherSnapshot)
             "runtime": {
                 "program_id": d.dispatcher_id.get(),
                 "kernel_link_id": first.outer_link_id.get(),
-                "netns_path": "",
+                "netns_path": d.netns.as_str(),
             },
             "members": members,
         }),
@@ -73,7 +73,7 @@ pub(crate) fn dispatchers(
                 "runtime": {
                     "program_id": d.dispatcher_id.get(),
                     "kernel_link_id": first.outer_link_id.get(),
-                    "netns_path": "",
+                    "netns_path": d.netns.as_str(),
                 },
                 "member_count": s.members().len(),
             }))

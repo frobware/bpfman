@@ -37,7 +37,9 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Effects for Adapter<'_, S, K> 
         if w.layout().program_pin_path(program.id).to_str() != Some(program.pin_path.as_str()) {
             return Err(Cause::Invalid("noncanonical managed program pin").into());
         }
-        let (key, prepared) = self.1.prepare_xdp(w, r.program_id, &r.interface)?;
+        let (key, prepared) = self
+            .1
+            .prepare_xdp(w, r.program_id, &r.interface, &r.netns)?;
         self.0.preflight_xdp(w, key, r.program_id)?;
         Ok((key, prepared))
     }
@@ -92,6 +94,7 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Effects for Adapter<'_, S, K> 
         o: &Self::Outer,
     ) -> Result<StoredLink, LinkCause> {
         let details = XdpLink {
+            netns: r.netns.clone(),
             slot: bpfman_model::XdpSlot::FIRST,
             key,
             interface: r.interface.clone(),

@@ -30,6 +30,7 @@ fn members(snapshot: &XdpDispatcherSnapshot) -> Vec<Member> {
             identity: XdpMemberIdentity::Existing(s.member.id),
             name: s.program_name.clone(),
             request: XdpAttach {
+                netns: s.details.netns.clone(),
                 program_id: s.member.program_id,
                 interface: s.details.interface.clone(),
                 priority: s.details.priority,
@@ -69,24 +70,43 @@ where
     if w.layout().program_pin_path(program.id).to_str() != Some(program.pin_path.as_str()) {
         return Err(invalid("noncanonical managed program pin").into());
     }
-    let (key, _prepared) = app
+    let (key, prepared) = app
         .kernel
-        .prepare_xdp(w, request.program_id, &request.interface)
+        .prepare_xdp(w, request.program_id, &request.interface, &request.netns)
         .map_err(LinkCause::from)?;
     let Some((snapshot, receipt)) = app
         .store
         .observe_xdp_dispatcher(w, key)
         .map_err(LinkCause::from)?
     else {
-        return super::attach(w, &mut real::Adapter(&app.store, &app.kernel), request, c)
-            .map_err(|(cause, report)| XdpError::cleaned(Some(cause), report, Vec::new(), None));
+        app.store
+            .preflight_xdp(w, key, request.program_id)
+            .map_err(LinkCause::from)?;
+        return super::attach(
+            w,
+            &mut real::Adapter(&app.store, &app.kernel),
+            request,
+            c,
+            Some((key, prepared)),
+        )
+        .map_err(|(cause, report)| XdpError::cleaned(Some(cause), report, Vec::new(), None));
     };
     let existing: Vec<_> = snapshot.members().iter().map(|m| m.member.id).collect();
     let mut desired = members(&snapshot);
+    // Attach-point identity is inode/index based. Preserve the established
+    // namespace path when another spelling resolves to that same attach point.
+    let netns = snapshot
+        .members()
+        .first()
+        .ok_or_else(|| invalid("empty dispatcher"))?
+        .details
+        .netns
+        .clone();
     desired.push(Member {
         identity: XdpMemberIdentity::New,
         name: program.spec.name().clone(),
         request: XdpAttach {
+            netns,
             program_id: request.program_id,
             interface: request.interface.clone(),
             priority: request.priority,
@@ -182,9 +202,12 @@ fn stage<S: XdpReplacementStore, K: Kernel>(
     for placement in plan.placements() {
         check(c)?;
         let member = &desired[placement.source()];
-        let (observed, p) =
-            app.kernel
-                .prepare_xdp(w, member.request.program_id, &member.request.interface)?;
+        let (observed, p) = app.kernel.prepare_xdp(
+            w,
+            member.request.program_id,
+            &member.request.interface,
+            &member.request.netns,
+        )?;
         if observed != key {
             return Err(invalid("interface identity changed"));
         }
@@ -370,6 +393,7 @@ fn replace<S: XdpReplacementStore, K: Kernel>(
             .map(|p| {
                 let r = &desired[p.source()].request;
                 XdpLink {
+                    netns: r.netns.clone(),
                     slot: p.slot(),
                     key: first.details.key,
                     interface: r.interface.clone(),

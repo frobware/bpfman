@@ -1,4 +1,5 @@
-//! Version 5 adds multi-member XDP replacement; version 4 adds first attachment.
+//! Version 6 adds explicit XDP namespace paths. Version 5 adds multi-member XDP
+//! replacement; version 4 adds first attachment.
 //! Version 3 adds XDP extension loads; version 2 adds standalone tracepoint links.
 //! Version 1 retains its existing program operations; link creation requires a
 //! separately initialized version 2 or newer store. Never upgrade a snapshot implicitly.
@@ -89,7 +90,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 5,
+            version: 6,
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
             next_generation: 1,
@@ -109,7 +110,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=5) {
+        if !matches!(header.version, 1..=6) {
             return Err(Failure::Version(header.version));
         }
 
@@ -205,6 +206,11 @@ impl State {
         let mut keys = BTreeSet::new();
         let mut dispatchers = BTreeSet::new();
         for row in &self.xdp {
+            if self.version < 6 && !row.netns.is_empty() {
+                return Err(Failure::Unsupported(
+                    "XDP namespaces require JSON format 6; no implicit upgrade",
+                ));
+            }
             if !link_ids.insert(row.link_id)
                 || row.link_id.get() >= self.next_link_id
                 || !kernel_ids.insert(row.extension_link_id)
@@ -242,6 +248,7 @@ impl State {
                 if row.position != position
                     || row.outer_link_id != first.outer_link_id
                     || details.interface != header.interface
+                    || details.netns != header.netns
                     || details.revision != header.revision
                     || details.dispatcher_id != header.dispatcher_id
                 {

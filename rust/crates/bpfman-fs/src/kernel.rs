@@ -133,8 +133,16 @@ pub trait XdpKernel: ProgramInspection + LinkInspection {
     type Extension: ExtensionProgram;
     /// Opaque owned outer link.
     type Outer: OuterLink;
-    /// Resolve the current network namespace and requested interface.
-    fn interface(&self, interface: &InterfaceName) -> KernelResult<XdpKey>;
+    /// Retained namespace identity and interface evidence.
+    type Namespace: Send + Sync;
+    /// Resolve and retain the selected namespace and interface.
+    fn interface(
+        &self,
+        interface: &InterfaceName,
+        netns: &bpfman_model::NetworkNamespace,
+    ) -> KernelResult<(XdpKey, Self::Namespace)>;
+    /// Refuse changed namespace selectors before further effects.
+    fn validate_namespace(&self, namespace: &Self::Namespace) -> KernelResult<()>;
     /// Open extension identity and handle together.
     fn extension_at(&self, source: PinSource<'_>)
     -> KernelResult<(PinnedProgram, Self::Extension)>;
@@ -147,6 +155,7 @@ pub trait XdpKernel: ProgramInspection + LinkInspection {
         &self,
         dispatcher: &<Self::Extension as ExtensionProgram>::Dispatcher,
         key: XdpKey,
+        namespace: &Self::Namespace,
     ) -> KernelResult<Self::Outer>;
 }
 

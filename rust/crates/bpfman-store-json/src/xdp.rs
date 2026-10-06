@@ -28,6 +28,8 @@ pub(super) struct Row {
     pub(super) nsid: NonZeroU64,
     pub(super) ifindex: NonZeroU32,
     interface: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub(super) netns: String,
     priority: u32,
     proceed_on: u32,
     dispatcher_id: NonZeroU32,
@@ -94,6 +96,10 @@ impl Row {
             return Err(Failure::Invalid("invalid XDP priority"));
         }
         let details = XdpLink {
+            netns: self
+                .netns
+                .parse()
+                .map_err(|_| Failure::Invalid("invalid namespace path"))?,
             slot: self
                 .position
                 .try_into()
@@ -192,6 +198,7 @@ impl XdpStore for Backend {
             nsid: request.details.key.nsid,
             ifindex: request.details.key.ifindex,
             interface: request.details.interface.as_str().into(),
+            netns: request.details.netns.as_str().into(),
             priority: request.details.priority,
             proceed_on: request.details.proceed_on.mask(),
             dispatcher_id: request.details.dispatcher_id,
@@ -409,6 +416,7 @@ impl bpfman_store::XdpReplacementStore for Backend {
                     nsid: key.nsid,
                     ifindex: key.ifindex,
                     interface: a.details.interface.as_str().into(),
+                    netns: a.details.netns.as_str().into(),
                     priority: a.details.priority,
                     proceed_on: a.details.proceed_on.mask(),
                     dispatcher_id: a.details.dispatcher_id,

@@ -57,6 +57,7 @@ impl Drop for Interface {
 
 fn request(program_id: NonZeroU32, interface: &Interface) -> XdpAttach {
     XdpAttach {
+        netns: Default::default(),
         program_id,
         interface: interface.name(),
         priority: 50,

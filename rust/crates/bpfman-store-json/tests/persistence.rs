@@ -55,7 +55,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":6}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":7}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -388,7 +388,7 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
         });
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
-        assert_eq!(state["version"], 5);
+        assert_eq!(state["version"], 6);
         state["version"] = version.into();
         fs::write(
             layout.database_path(),
@@ -505,6 +505,7 @@ fn older_formats_refuse_dispatcher_publication_without_migration() {
                 ErrorKind::IncompatibleState
             );
             let details = XdpLink {
+                netns: Default::default(),
                 slot: bpfman_model::XdpSlot::FIRST,
                 key,
                 interface: "eth0".parse().expect("interface"),

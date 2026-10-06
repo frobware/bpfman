@@ -31,10 +31,12 @@ pub(crate) enum LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
-    /// Attach an XDP extension to an interface in the current namespace.
+    /// Attach an XDP extension to an interface in a selected network namespace.
     Xdp {
         program_id: NonZeroU32,
         interface: bpfman_model::InterfaceName,
+        #[arg(long, default_value = "")]
+        netns: bpfman_model::NetworkNamespace,
         #[arg(short = 'p', long, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
         priority: u32,
         #[arg(long, value_delimiter = ',', default_value = "pass,dispatcher_return", value_parser = action)]
@@ -86,6 +88,7 @@ impl LinkCommand {
                     AttachCommand::Xdp {
                         program_id,
                         interface,
+                        netns,
                         priority,
                         proceed_on,
                         metadata,
@@ -98,6 +101,7 @@ impl LinkCommand {
                 let proceed_on = mask.try_into().map_err(anyhow::Error::from)?;
                 let record = app.attach_xdp_with_cancellation(
                     bpfman_runtime::XdpAttach {
+                        netns,
                         program_id,
                         interface,
                         priority,

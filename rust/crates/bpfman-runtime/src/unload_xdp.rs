@@ -98,7 +98,9 @@ where
         }
         // Preflight every involved dispatcher before admitting destructive teardown.
         app.kernel.observe_dispatcher(w, &snapshot)?;
-        let (key, prepared) = app.kernel.prepare_xdp(w, id, &details.interface)?;
+        let (key, prepared) = app
+            .kernel
+            .prepare_xdp(w, id, &details.interface, &details.netns)?;
         if key != details.key {
             return Err(Cause::Invalid("XDP interface changed during unload preflight").into());
         }
@@ -125,6 +127,7 @@ fn same_member(a: &StoredLink, b: &StoredLink) -> bool {
         && a.created_at == b.created_at
         && a_details.key == b_details.key
         && a_details.interface == b_details.interface
+        && a_details.netns == b_details.netns
         && a_details.priority == b_details.priority
         && a_details.proceed_on == b_details.proceed_on
 }

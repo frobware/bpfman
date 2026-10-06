@@ -5,10 +5,7 @@ use crate::{
 use aya::programs::{Extension, ProgramInfo, ProgramType, TracePoint, Xdp, links::FdLink};
 use bpfman_fs::*;
 use bpfman_model::{InterfaceName, KernelLink, KernelLinkDetails, Tracepoint, XdpKey};
-use std::{
-    num::{NonZeroU32, NonZeroU64},
-    os::{fd::AsFd, unix::fs::MetadataExt},
-};
+use std::{num::NonZeroU32, os::fd::AsFd};
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error + Send + Sync> {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message).into()
@@ -207,13 +204,19 @@ impl XdpKernel for Kernel {
     type Extension = AyaExtension;
     type Outer = AyaOuter;
 
-    fn interface(&self, name: &InterfaceName) -> KernelResult<XdpKey> {
-        let nsid = NonZeroU64::new(std::fs::metadata("/proc/self/ns/net")?.ino())
-            .ok_or_else(|| invalid("zero namespace identity"))?;
-        Ok(XdpKey {
-            nsid,
-            ifindex: nz(pin_syscall::interface(name.as_str())?)?,
-        })
+    type Namespace = crate::XdpNamespace;
+
+    fn interface(
+        &self,
+        name: &InterfaceName,
+        netns: &bpfman_model::NetworkNamespace,
+    ) -> KernelResult<(XdpKey, Self::Namespace)> {
+        let namespace = crate::XdpNamespace::open(name, netns)?;
+        Ok((namespace.key(), namespace))
+    }
+
+    fn validate_namespace(&self, namespace: &Self::Namespace) -> KernelResult<()> {
+        namespace.validate().map_err(Into::into)
     }
 
     fn extension_at(&self, source: PinSource<'_>) -> KernelResult<(PinnedProgram, AyaExtension)> {
@@ -233,15 +236,17 @@ impl XdpKernel for Kernel {
         }
     }
 
-    fn attach_outer(&self, dispatcher: &Dispatcher, key: XdpKey) -> KernelResult<AyaOuter> {
+    fn attach_outer(
+        &self,
+        dispatcher: &Dispatcher,
+        key: XdpKey,
+        namespace: &Self::Namespace,
+    ) -> KernelResult<AyaOuter> {
         let program: &Xdp = dispatcher
             .0
             .program("xdp_dispatcher")
             .ok_or_else(|| invalid("dispatcher missing"))?
             .try_into()?;
-        Ok(AyaOuter(pin_syscall::outer(
-            program.fd()?.as_fd(),
-            key.ifindex.get(),
-        )?))
+        Ok(AyaOuter(namespace.attach(program.fd()?.as_fd(), key)?))
     }
 }

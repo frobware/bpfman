@@ -46,6 +46,7 @@ fn scope(test: impl FnOnce(&RuntimeWriter<'_>, &mut Reader, &XdpCommit<'_>) -> R
                 },
             )?;
             let details = XdpLink {
+                netns: Default::default(),
                 slot: bpfman_model::XdpSlot::FIRST,
                 key: XdpKey {
                     nsid: NonZeroU64::MIN,
@@ -270,4 +271,33 @@ fn malformed_members_and_changed_complete_evidence_are_refused() -> Result {
         assert!(reader.read_xdp_dispatcher(request.details.key)?.is_none());
         Ok(())
     })
+}
+
+#[test]
+fn old_formats_refuse_namespaces_without_publication_or_upgrade() -> Result {
+    for version in [4, 5] {
+        scope(|w, reader, request| {
+            let mut state: serde_json::Value =
+                serde_json::from_slice(&fs::read(w.database_path())?)?;
+            state["version"] = version.into();
+            fs::write(w.database_path(), serde_json::to_vec(&state)?)?;
+            let before = fs::read(w.database_path())?;
+            let mut details = request.details.clone();
+            details.netns = "/run/netns/example".parse()?;
+            let error = Backend
+                .commit_xdp(
+                    w,
+                    XdpCommit {
+                        details: &details,
+                        ..*request
+                    },
+                )
+                .expect_err("no implicit namespace upgrade");
+            assert_eq!(error.kind(), bpfman_store::ErrorKind::Unsupported);
+            assert_eq!(fs::read(w.database_path())?, before);
+            assert!(reader.read_xdp_dispatchers()?.is_empty());
+            Ok(())
+        })?;
+    }
+    Ok(())
 }

@@ -58,6 +58,7 @@ impl XdpReplace<'_> {
             if a.details.slot.index() != position
                 || a.details.key != old.details.key
                 || a.details.interface != old.details.interface
+                || a.details.netns != old.details.netns
                 || a.outer_link_id != old.outer_link_id
                 || a.details.revision.get() != next
                 || a.details.dispatcher_id == old.details.dispatcher_id

@@ -285,3 +285,36 @@ fn json_unchanged_xdp_unload_dsl() {
 
 #[path = "kernel/xdp_corpus.rs"]
 mod xdp_corpus;
+
+#[test]
+fn sqlite_xdp_netns_round_trip() {
+    cli::dsl("sqlite", "TestXDP_NetnsVethPairLinkRoundTrip");
+}
+
+#[test]
+fn json_xdp_netns_round_trip() {
+    cli::dsl("json", "TestXDP_NetnsVethPairLinkRoundTrip");
+}
+
+#[test]
+fn sqlite_xdp_netns_rebuild() {
+    cli::dsl("sqlite", "TestXDP_NetnsDispatcherRebuild");
+}
+
+#[test]
+fn json_xdp_netns_rebuild() {
+    cli::dsl("json", "TestXDP_NetnsDispatcherRebuild");
+}
+
+#[path = "kernel/xdp_netns.rs"]
+mod xdp_netns;
+
+#[test]
+fn sqlite_xdp_netns_recovery() {
+    xdp_netns::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_xdp_netns_recovery() {
+    xdp_netns::exercise(bpfman_store_json::Backend);
+}

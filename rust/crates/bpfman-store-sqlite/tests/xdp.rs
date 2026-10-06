@@ -44,6 +44,7 @@ fn scope(
                 },
             )?;
             let details = XdpLink {
+                netns: Default::default(),
                 slot: bpfman_model::XdpSlot::FIRST,
                 key: XdpKey {
                     nsid: NonZeroU64::MIN,

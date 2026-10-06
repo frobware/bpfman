@@ -86,6 +86,8 @@ impl XdpProceedOn {
 /// One extension's attachment to a dispatcher revision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XdpLink {
+    /// Namespace path used to resolve this attach point.
+    pub netns: crate::NetworkNamespace,
     /// Validated position in the dispatcher chain.
     pub slot: crate::XdpSlot,
     /// Owning attach point.
@@ -147,6 +149,7 @@ impl XdpDispatcherSnapshot {
             if member.details.slot.index() != index
                 || member.details.key != first.details.key
                 || member.details.interface != first.details.interface
+                || member.details.netns != first.details.netns
                 || member.details.dispatcher_id != first.details.dispatcher_id
                 || member.details.revision != first.details.revision
                 || member.outer_link_id != first.outer_link_id

@@ -67,8 +67,18 @@ impl XdpKernel for Probe {
     type Extension = bpfman_kernel_aya::AyaExtension;
     type Outer = Outer;
 
-    fn interface(&self, interface: &InterfaceName) -> KernelResult<XdpKey> {
-        bpfman_kernel_aya::Kernel.interface(interface)
+    type Namespace = bpfman_kernel_aya::XdpNamespace;
+
+    fn interface(
+        &self,
+        interface: &InterfaceName,
+        netns: &bpfman_model::NetworkNamespace,
+    ) -> KernelResult<(XdpKey, Self::Namespace)> {
+        bpfman_kernel_aya::Kernel.interface(interface, netns)
+    }
+
+    fn validate_namespace(&self, namespace: &Self::Namespace) -> KernelResult<()> {
+        bpfman_kernel_aya::Kernel.validate_namespace(namespace)
     }
 
     fn extension_at(
@@ -96,9 +106,10 @@ impl XdpKernel for Probe {
         &self,
         dispatcher: &bpfman_kernel_aya::Dispatcher,
         key: XdpKey,
+        namespace: &Self::Namespace,
     ) -> KernelResult<Outer> {
         Ok(Outer {
-            fd: bpfman_kernel_aya::Kernel.attach_outer(dispatcher, key)?,
+            fd: bpfman_kernel_aya::Kernel.attach_outer(dispatcher, key, namespace)?,
             faults: self.0.clone(),
         })
     }
@@ -172,7 +183,7 @@ fn stage_config(
         .iter()
         .map(|p| {
             let (key, prepared) = kernel
-                .prepare_xdp(w, *p, &first.details.interface)
+                .prepare_xdp(w, *p, &first.details.interface, &first.details.netns)
                 .expect("prepare member");
             assert_eq!(key, first.details.key);
             prepared
@@ -272,6 +283,7 @@ where
     let second = load();
     let link = app
         .attach_xdp(XdpAttach {
+            netns: Default::default(),
             program_id: first,
             interface: interface.name(),
             priority: 50,
