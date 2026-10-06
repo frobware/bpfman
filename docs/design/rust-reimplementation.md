@@ -8,6 +8,8 @@ Namespace descriptors bind interface lookup and first attach to the admitted
 namespace; disposable worker threads keep the caller's namespace unchanged.
 Rebuild, detach, and attached unload preserve dispatcher ownership and explicit
 recovery. Ten-slot, fill/drain, and chain-execution acceptance remain in the gate.
+This checkpoint is committed and pushed as `e5810ccef`. The next implementation
+slice is selectable XDP attachment modes, followed by fragmented-packet execution.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -1408,7 +1410,10 @@ is implemented, including failed publication, failed restoration, explicit
 retries, runtime traffic acceptance, attached XDP program unload, and broader
 fill/drain and chain-execution acceptance using unchanged Go scripts. Explicit
 namespaces and their round-trip/rebuild scripts are also implemented. Next,
-add selectable XDP attachment modes.
+add selectable XDP attachment modes. Start by mapping the Go mode-selection and
+fallback behavior, then carry the selected mode through attach preparation,
+replacement, persistence where required by the Go schema, and kernel acceptance
+tests for both stores. Keep `xdp.frags` execution as a separate follow-up.
 
 The uprobe mount-namespace helper, additional XDP modes, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this
