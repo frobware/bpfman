@@ -6,6 +6,54 @@ use core::{
     str::FromStr,
 };
 
+/// Kernel mode used to create the XDP dispatcher link.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum XdpMode {
+    /// Generic/SKB processing; available on interfaces without native XDP.
+    Skb,
+    /// Native driver mode; the default and preferred mode.
+    #[default]
+    Drv,
+    /// Hardware-offloaded XDP.
+    Hw,
+}
+
+impl XdpMode {
+    /// Mode spelling used by bpfman TOML configuration.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Skb => "skb",
+            Self::Drv => "drv",
+            Self::Hw => "hw",
+        }
+    }
+}
+
+impl FromStr for XdpMode {
+    type Err = InvalidXdpMode;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "skb" => Ok(Self::Skb),
+            "drv" => Ok(Self::Drv),
+            "hw" => Ok(Self::Hw),
+            _ => Err(InvalidXdpMode),
+        }
+    }
+}
+
+/// Invalid XDP mode spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidXdpMode;
+
+impl fmt::Display for InvalidXdpMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("expected XDP mode skb, drv, or hw")
+    }
+}
+
+impl core::error::Error for InvalidXdpMode {}
+
 /// Network-namespace inode and interface index identifying an XDP attach point.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct XdpKey {

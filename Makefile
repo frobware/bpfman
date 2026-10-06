@@ -1876,3 +1876,8 @@ rust-test-xdp-netns: rust-build $(RUST_TEST_INPUTS)
 .PHONY: rust-test-observation
 rust-test-observation: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- unchanged_tracepoint_dsl --nocapture
+
+# Configured driver/SKB modes and hardware-to-SKB fallback, with real traffic.
+.PHONY: rust-test-xdp-modes
+rust-test-xdp-modes: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_runtime_replacement --nocapture

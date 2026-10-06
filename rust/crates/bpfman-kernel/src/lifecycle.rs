@@ -228,6 +228,7 @@ pub trait XdpLifecycle {
         writer: &RuntimeWriter<'_>,
         prepared: &Self::PreparedXdp,
         dispatcher: &Self::Dispatcher,
+        mode: bpfman_model::XdpMode,
     ) -> Acquisition<Self::Outer>;
     /// Dispatcher identity for atomic store publication.
     fn dispatcher_id(pin: &Self::DispatcherPin) -> NonZeroU32;

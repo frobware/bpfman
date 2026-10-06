@@ -117,6 +117,7 @@ fn tracepoint(id: std::num::NonZeroU32) -> TracepointAttach {
 fn xdp(id: std::num::NonZeroU32) -> XdpAttach {
     XdpAttach {
         netns: Default::default(),
+        mode: Default::default(),
         program_id: id,
         interface: "fake0".parse().expect("interface"),
         priority: 50,

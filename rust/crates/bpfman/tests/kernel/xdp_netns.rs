@@ -115,6 +115,7 @@ where
         program_id: id,
         interface: "same0".parse().expect("interface"),
         netns,
+        mode: Default::default(),
         priority: 50,
         proceed_on: Default::default(),
         metadata: Default::default(),
@@ -151,12 +152,12 @@ where
             .load_dispatcher(Default::default())
             .expect("dispatcher");
         fs::rename(&alias, &saved).expect("hide namespace after preparation");
-        let Err(missing) = kernel.pin_outer(w, &prepared, &dispatcher) else {
+        let Err(missing) = kernel.pin_outer(w, &prepared, &dispatcher, Default::default()) else {
             panic!("missing path must not attach");
         };
         assert!(missing.remaining.is_none());
         symlink(second_ns.path(), &alias).expect("replace namespace after preparation");
-        let Err(replaced) = kernel.pin_outer(w, &prepared, &dispatcher) else {
+        let Err(replaced) = kernel.pin_outer(w, &prepared, &dispatcher, Default::default()) else {
             panic!("replaced path must not attach");
         };
         assert!(replaced.remaining.is_none());

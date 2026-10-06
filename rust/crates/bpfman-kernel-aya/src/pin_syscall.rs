@@ -12,6 +12,10 @@ use std::{
     path::Path,
 };
 
+const XDP_FLAGS_SKB_MODE: u32 = 2;
+const XDP_FLAGS_DRV_MODE: u32 = 4;
+const XDP_FLAGS_HW_MODE: u32 = 8;
+
 fn fd_result(rc: libc::c_long) -> io::Result<OwnedFd> {
     if rc < 0 {
         return Err(io::Error::last_os_error());
@@ -31,9 +35,18 @@ pub(super) fn interface(name: &str) -> io::Result<u32> {
     }
 }
 
-pub(super) fn outer(program: BorrowedFd<'_>, ifindex: u32) -> io::Result<OwnedFd> {
-    let attr = [program.as_raw_fd() as u32, ifindex, 37, 4];
-    // SAFETY: BPF_LINK_CREATE's fixed prefix: program, ifindex, BPF_XDP, DRV_MODE.
+pub(super) fn outer(
+    program: BorrowedFd<'_>,
+    ifindex: u32,
+    mode: bpfman_model::XdpMode,
+) -> io::Result<OwnedFd> {
+    let flags = match mode {
+        bpfman_model::XdpMode::Skb => XDP_FLAGS_SKB_MODE,
+        bpfman_model::XdpMode::Drv => XDP_FLAGS_DRV_MODE,
+        bpfman_model::XdpMode::Hw => XDP_FLAGS_HW_MODE,
+    };
+    let attr = [program.as_raw_fd() as u32, ifindex, 37, flags];
+    // SAFETY: BPF_LINK_CREATE's fixed prefix: program, ifindex, BPF_XDP, mode.
     // No netlink fallback or replacement of a foreign attachment is attempted.
     fd_result(unsafe { libc::syscall(libc::SYS_bpf, 28u32, attr.as_ptr(), size_of::<[u32; 4]>()) })
 }

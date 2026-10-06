@@ -150,12 +150,13 @@ pub trait XdpKernel: ProgramInspection + LinkInspection {
     fn outer_at(&self, source: PinSource<'_>) -> KernelResult<Self::Outer>;
     /// Inspect absence without granting filesystem removal authority.
     fn outer_by_id(&self, id: NonZeroU32) -> KernelResult<Option<Self::Outer>>;
-    /// Attach in driver mode without replacing an existing interface attachment.
+    /// Attach in the requested mode without replacing an existing attachment.
     fn attach_outer(
         &self,
         dispatcher: &<Self::Extension as ExtensionProgram>::Dispatcher,
         key: XdpKey,
         namespace: &Self::Namespace,
+        mode: bpfman_model::XdpMode,
     ) -> KernelResult<Self::Outer>;
 }
 

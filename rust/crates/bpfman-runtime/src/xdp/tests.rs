@@ -40,6 +40,7 @@ fn key() -> XdpKey {
 fn request() -> XdpAttach {
     XdpAttach {
         netns: Default::default(),
+        mode: Default::default(),
         program_id: NonZeroU32::MIN,
         interface: "eth0".parse().expect("interface"),
         priority: 50,
@@ -157,6 +158,7 @@ impl Effects for Fake {
         _: &RuntimeWriter<'_>,
         _: &(),
         _: &(),
+        _: bpfman_model::XdpMode,
     ) -> Result<Receipt, EffectFailure<Option<Receipt>, LinkCause>> {
         self.acquire(Stage::Outer, XdpCleanupKind::Outer)
     }

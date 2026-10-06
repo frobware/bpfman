@@ -31,6 +31,7 @@ fn members(snapshot: &XdpDispatcherSnapshot) -> Vec<Member> {
             name: s.program_name.clone(),
             request: XdpAttach {
                 netns: s.details.netns.clone(),
+                mode: Default::default(),
                 program_id: s.member.program_id,
                 interface: s.details.interface.clone(),
                 priority: s.details.priority,
@@ -107,6 +108,7 @@ where
         name: program.spec.name().clone(),
         request: XdpAttach {
             netns,
+            mode: request.mode,
             program_id: request.program_id,
             interface: request.interface.clone(),
             priority: request.priority,

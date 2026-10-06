@@ -29,6 +29,17 @@ pub(crate) enum LinkCommand {
     },
 }
 
+impl LinkCommand {
+    pub(super) fn xdp_interface(&self) -> Option<&bpfman_model::InterfaceName> {
+        match self {
+            Self::Attach {
+                target: AttachCommand::Xdp { interface, .. },
+            } => Some(interface),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
     /// Attach an XDP extension to an interface in a selected network namespace.
@@ -74,6 +85,7 @@ impl LinkCommand {
         self,
         app: &bpfman_runtime::Bpfman<S, bpfman_kernel_aya::Kernel>,
         cancellation: &bpfman_runtime::Cancellation,
+        mode: bpfman_model::XdpMode,
     ) -> Result<(), crate::error::Error>
     where
         S: bpfman_store::OpenStore
@@ -102,6 +114,7 @@ impl LinkCommand {
                 let record = app.attach_xdp_with_cancellation(
                     bpfman_runtime::XdpAttach {
                         netns,
+                        mode,
                         program_id,
                         interface,
                         priority,

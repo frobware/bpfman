@@ -230,12 +230,12 @@ mod xdp_runtime;
 
 #[test]
 fn sqlite_xdp_runtime_replacement() {
-    xdp_runtime::exercise(bpfman_store_sqlite::Backend);
+    xdp_runtime::exercise(bpfman_store_sqlite::Backend, "sqlite");
 }
 
 #[test]
 fn json_xdp_runtime_replacement() {
-    xdp_runtime::exercise(bpfman_store_json::Backend);
+    xdp_runtime::exercise(bpfman_store_json::Backend, "json");
 }
 
 fn xdp_replacement_dsl(store: &'static str) {

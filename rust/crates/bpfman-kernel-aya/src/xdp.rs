@@ -88,8 +88,9 @@ impl XdpLifecycle for Kernel {
         w: &RuntimeWriter<'_>,
         p: &PreparedXdp<crate::AyaExtension, crate::XdpNamespace>,
         k: &Dispatcher,
+        mode: bpfman_model::XdpMode,
     ) -> Acquisition<XdpOuter<crate::AyaOuter>> {
-        p.pin_outer(self, w, k).map_err(map)
+        p.pin_outer(self, w, k, mode).map_err(map)
     }
 
     fn dispatcher_id(p: &XdpProgramPin) -> NonZeroU32 {

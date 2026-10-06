@@ -107,9 +107,10 @@ impl XdpKernel for Probe {
         dispatcher: &bpfman_kernel_aya::Dispatcher,
         key: XdpKey,
         namespace: &Self::Namespace,
+        mode: bpfman_model::XdpMode,
     ) -> KernelResult<Outer> {
         Ok(Outer {
-            fd: bpfman_kernel_aya::Kernel.attach_outer(dispatcher, key, namespace)?,
+            fd: bpfman_kernel_aya::Kernel.attach_outer(dispatcher, key, namespace, mode)?,
             faults: self.0.clone(),
         })
     }
@@ -284,6 +285,7 @@ where
     let link = app
         .attach_xdp(XdpAttach {
             netns: Default::default(),
+            mode: Default::default(),
             program_id: first,
             interface: interface.name(),
             priority: 50,

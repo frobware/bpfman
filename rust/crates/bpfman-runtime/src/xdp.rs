@@ -21,6 +21,8 @@ mod replacement;
 pub struct XdpAttach {
     /// Namespace selection; default selects the caller's namespace.
     pub netns: bpfman_model::NetworkNamespace,
+    /// Requested mode for creating a new outer link; non-SKB modes fall back to SKB.
+    pub mode: bpfman_model::XdpMode,
     /// Managed extension program.
     pub program_id: NonZeroU32,
     /// Validated interface name.
@@ -286,6 +288,7 @@ trait Effects: Sized {
         w: &RuntimeWriter<'_>,
         p: &Self::Prepared,
         k: &Self::Kernel,
+        mode: bpfman_model::XdpMode,
     ) -> Result<Self::Outer, EffectFailure<Option<Self::Outer>, LinkCause>>;
 
     fn commit(
@@ -432,7 +435,7 @@ fn attach<F: Effects>(
         let extension = acquire!(f.extension(w, &mut prepared, directory, &kernel), Extension);
         resources.push(Resource::Extension(extension));
         check(c)?;
-        let outer = acquire!(f.outer(w, &prepared, &kernel), Outer);
+        let outer = acquire!(f.outer(w, &prepared, &kernel, r.mode), Outer);
         resources.push(Resource::Outer(outer));
         check(c)?;
         let [

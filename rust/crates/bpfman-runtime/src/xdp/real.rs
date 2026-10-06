@@ -80,8 +80,9 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Effects for Adapter<'_, S, K> 
         w: &RuntimeWriter<'_>,
         p: &Self::Prepared,
         k: &K::Dispatcher,
+        mode: bpfman_model::XdpMode,
     ) -> Result<Self::Outer, EffectFailure<Option<Self::Outer>, LinkCause>> {
-        self.1.pin_outer(w, p, k).map_err(map)
+        self.1.pin_outer(w, p, k, mode).map_err(map)
     }
 
     fn commit(

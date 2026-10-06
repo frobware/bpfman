@@ -7,6 +7,7 @@ fn run(args: &[&str]) -> std::io::Result<Output> {
         .env_remove("BPFMAN_RUNTIME_DIR")
         .env_remove("BPFMAN_LOCK_TIMEOUT")
         .env_remove("BPFMAN_STORE")
+        .env_remove("BPFMAN_CONFIG")
         .args(args)
         .output()
 }
@@ -42,6 +43,9 @@ fn selected_store_reopens_and_refuses_a_different_format() -> Result<(), Box<dyn
                 .arg("--runtime-dir")
                 .arg(directory.path())
                 .env("BPFMAN_STORE", selected)
+                // Read-only operations do not need the XDP attach config.
+                .arg("--config")
+                .arg(directory.path().join("missing.toml"))
                 .args(["program", "list", "-o", "json"]);
             command
         };
@@ -206,6 +210,41 @@ fn invalid_link_requests_fail_before_runtime_creation() -> Result<(), Box<dyn st
             .output()?;
         assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
+        assert!(!runtime.exists());
+    }
+
+    Ok(())
+}
+
+#[test]
+fn invalid_xdp_config_fails_before_runtime_creation() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let runtime = directory.path().join("absent");
+    let config = directory.path().join("bpfman.toml");
+
+    for (contents, diagnostic) in [
+        (None, "read bpfman config"),
+        (Some("[interfaces"), "parse bpfman config"),
+        (
+            Some("[interfaces.lo]\nxdp_mode = \"bogus\"\n"),
+            "invalid xdp_mode",
+        ),
+    ] {
+        if let Some(contents) = contents {
+            std::fs::write(&config, contents)?;
+        }
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env("BPFMAN_RUNTIME_DIR", &runtime)
+            .env_remove("BPFMAN_STORE")
+            .env_remove("BPFMAN_LOCK_TIMEOUT")
+            .arg("--config")
+            .arg(&config)
+            .args(["link", "attach", "xdp", "42", "lo", "--priority", "50"])
+            .output()?;
+
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8(output.stderr)?.contains(diagnostic));
         assert!(!runtime.exists());
     }
 

@@ -241,12 +241,17 @@ impl XdpKernel for Kernel {
         dispatcher: &Dispatcher,
         key: XdpKey,
         namespace: &Self::Namespace,
+        mode: bpfman_model::XdpMode,
     ) -> KernelResult<AyaOuter> {
         let program: &Xdp = dispatcher
             .0
             .program("xdp_dispatcher")
             .ok_or_else(|| invalid("dispatcher missing"))?
             .try_into()?;
-        Ok(AyaOuter(namespace.attach(program.fd()?.as_fd(), key)?))
+        Ok(AyaOuter(namespace.attach(
+            program.fd()?.as_fd(),
+            key,
+            mode,
+        )?))
     }
 }

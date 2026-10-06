@@ -7,6 +7,7 @@ use clap::{
     builder::{PathBufValueParser, PossibleValuesParser, TypedValueParser},
 };
 
+mod config;
 mod dispatcher;
 mod link;
 mod load;
@@ -14,6 +15,9 @@ mod load;
 #[derive(Parser)]
 #[command(name = "bpfman", version, about, max_term_width = 80)]
 pub(super) struct Cli {
+    /// bpfman TOML configuration file (defaults to /etc/bpfman/bpfman.toml).
+    #[arg(long, global = true, env = "BPFMAN_CONFIG", value_name = "FILE")]
+    pub(super) config: Option<std::path::PathBuf>,
     /// Root directory for runtime files (must be absolute).
     #[arg(long = "runtime-dir", value_name = "RUNTIME_DIR", global = true, env = "BPFMAN_RUNTIME_DIR", default_value = DEFAULT_RUNTIME_ROOT, value_parser = PathBufValueParser::new().try_map(RuntimeLayout::try_from))]
     pub(super) layout: RuntimeLayout,
@@ -46,7 +50,7 @@ pub(super) enum PreparedCommand {
     },
     List(ListArgs),
     Load(load::PreparedLoad),
-    Link(link::LinkCommand),
+    Link(link::LinkCommand, bpfman_model::XdpMode),
     Dispatcher(dispatcher::DispatcherCommand),
 }
 
@@ -55,11 +59,18 @@ impl Command {
         self,
         layout: &RuntimeLayout,
         cancellation: &bpfman_runtime::Cancellation,
+        config: Option<&std::path::Path>,
     ) -> Result<PreparedCommand, crate::error::Error> {
         let command = match self {
             Self::Program { command } => command,
             Self::Dispatcher { command } => return Ok(PreparedCommand::Dispatcher(command)),
-            Self::Link { command } => return Ok(PreparedCommand::Link(command)),
+            Self::Link { command } => {
+                let mode = match command.xdp_interface() {
+                    Some(interface) => config::Config::load(config)?.xdp_mode(interface)?,
+                    None => Default::default(),
+                };
+                return Ok(PreparedCommand::Link(command, mode));
+            }
         };
 
         Ok(match command {

@@ -3,13 +3,14 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds explicit XDP network namespaces on both SQLite and JSON stores.
-Namespace descriptors bind interface lookup and first attach to the admitted
-namespace; disposable worker threads keep the caller's namespace unchanged.
-Rebuild, detach, and attached unload preserve dispatcher ownership and explicit
-recovery. Ten-slot, fill/drain, and chain-execution acceptance remain in the gate.
-This checkpoint is committed and pushed as `e5810ccef`. The next implementation
-slice is selectable XDP attachment modes, followed by fragmented-packet execution.
+checkpoint adds configurable XDP attachment modes on both SQLite and JSON stores.
+Per-interface TOML selects `drv` (default), `skb`, or `hw`; failed non-SKB first
+attachment falls back once to SKB. Replacement retains the outer link and its
+actual mode. Real traffic acceptance covers driver/SKB attachment and hardware
+request fallback on veth; actual hardware offload remains unverified.
+Explicit namespace support was committed and pushed as `e5810ccef`. Namespace
+descriptors and consuming ownership transitions remain in use for attachment,
+replacement, detach, and recovery. The next slice is fragmented-packet execution.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -24,8 +25,8 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
-| XDP links | One to ten members per interface, current or explicit namespace, driver-mode BPF links, replacement, last detach, attached-program unload | Selectable modes, fragmented-packet execution |
-| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain and chain-execution acceptance | Additional modes and fragmented-packet execution |
+| XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Fragmented-packet execution, actual hardware offload |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain and chain-execution acceptance | Fragmented-packet execution |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | Persistence | Go-compatible SQLite schema 2; JSON format 6 for namespace-aware XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
@@ -75,8 +76,10 @@ allowing Nix to discover and realize the matching development output; see the
 in fake-kernel tests. Namespace acceptance includes the unchanged namespace
 round-trip/rebuild scripts, path replacement and disappearance, identical
 interface indices across namespaces, publication failure and retained unload,
-and caller-namespace isolation. The next bounded slice is selectable XDP
-attachment modes. Go remains the behavioural authority.
+and caller-namespace isolation. Mode selection and fallback follow the legacy
+Rust implementation; current Go does not expose per-interface mode configuration.
+The next bounded slice is fragmented-packet execution. Go remains the behavioural
+authority for the existing shared surface.
 
 ## Summary
 
@@ -693,8 +696,11 @@ The implemented milestone attaches a second program to an existing managed XDP
 dispatcher, removes either member while the survivor remains active, and finally
 detaches the last member. Each nonempty membership change stages a complete new
 revision and updates the existing durable outer link. Foreign attachments remain
-refused. Current and explicitly selected network namespaces use driver mode;
-attached-program unload uses the same protocol. Additional modes follow it.
+refused. Current and explicitly selected network namespaces accept `skb`, `drv`,
+and `hw` requests. A failed non-SKB first attach retries in SKB mode;
+replacement reuses the existing pinned outer link. Driver/SKB traffic and hardware
+request fallback are verified on veth; actual offload is unverified.
+Attached-program unload uses the same protocol.
 
 Dispatcher replacement exercises the architecture across three adapters. The core owns:
 
@@ -1327,6 +1333,35 @@ The new workspace begins with these conventions:
 - formatter, linter, test, dependency-tier, and documentation gates driven by
   repository Make targets that explicitly select `rust/Cargo.toml`.
 
+## Futures
+
+Use Rust's type system to make important lifecycle mistakes harder to express,
+without adding abstractions for their own sake. As operation flows settle,
+consider typestate for transitions such as XDP staging, switching, publication,
+restoration, and retirement. A type should encode a real precondition or
+ownership change; operation-specific state machines remain clearer than a
+generic workflow framework.
+
+Represent supported choices, including XDP attachment modes and fallback
+behavior, as explicit enums. Exhaustive matches should make new modes and
+combinations visible at the points that must handle them. Parse external strings
+at the boundary and persist only fields required for Go compatibility.
+
+Prefer borrowing when an operation only needs temporary access to state or
+authority. Continue using owned, non-cloneable receipts and descriptors where
+ownership must survive an error or explicit retry. This keeps copies down while
+making resource lifetime visible in function signatures.
+
+Keep outcomes and errors structured around operation stage and recovery state.
+Callers should distinguish, for example, an operation with no acquired resource
+from a committed operation with cleanup still pending, without parsing messages.
+Use exhaustive matches to make newly introduced outcomes receive deliberate
+handling.
+
+The implementation remains synchronous. Do not introduce async/await, an async
+runtime, or synchronous wrappers around async libraries. Scoped threads are
+appropriate where required for namespace-sensitive kernel operations.
+
 ## Delivery sequence
 
 ### Phase 0: contracts and workspace
@@ -1394,7 +1429,8 @@ Completed checkpoint:
 - Pure replacement planning, multi-member ABI encoding, consuming switch/publication/
   restoration transitions, and stable per-instruction cleanup retry history.
 - Pure one-slot XDP configuration and dependency-aware cleanup policy.
-- First attach and last detach in current or explicit namespaces with driver-mode BPF links.
+- First attach and last detach in current or explicit namespaces with configurable
+  driver/SKB/hardware requests and non-SKB fallback; actual offload is unverified.
 - Atomic dispatcher/member publication and conditional deletion on both stores.
 - Cancellation before commit, retained compensation receipts, and explicit retry.
 - Unchanged XDP link round-trip and last-detach dispatcher scripts on both stores.
@@ -1409,13 +1445,15 @@ The [one → two → one → zero milestone](#xdp-dispatcher-replacement-checkpo
 is implemented, including failed publication, failed restoration, explicit
 retries, runtime traffic acceptance, attached XDP program unload, and broader
 fill/drain and chain-execution acceptance using unchanged Go scripts. Explicit
-namespaces and their round-trip/rebuild scripts are also implemented. Next,
-add selectable XDP attachment modes. Start by mapping the Go mode-selection and
-fallback behavior, then carry the selected mode through attach preparation,
-replacement, persistence where required by the Go schema, and kernel acceptance
-tests for both stores. Keep `xdp.frags` execution as a separate follow-up.
+namespaces and their round-trip/rebuild scripts are also implemented. Selectable
+XDP modes follow the legacy Rust per-interface `xdp_mode` configuration, driver
+default, and non-SKB fallback. Current Go has no interface-mode configuration;
+its existing driver-mode behavior remains the default. Modes use the existing
+consuming resource transitions; no additional typestate is needed for this
+data-free choice. Next, implement fragmented-packet execution as a separate
+kernel and packet-path boundary.
 
-The uprobe mount-namespace helper, additional XDP modes, TC replacement with exact
+The uprobe mount-namespace helper, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this
 phase. Unsupported operations continue to fail clearly.
 

@@ -933,6 +933,7 @@ impl XdpLifecycle for FakeKernel {
         w: &RuntimeWriter<'_>,
         p: &PreparedXdp,
         d: &Loaded,
+        _mode: bpfman_model::XdpMode,
     ) -> Acquisition<Receipt> {
         let fail = |cause| EffectFailure {
             cause,

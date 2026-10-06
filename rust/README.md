@@ -793,9 +793,32 @@ namespace/interface filters select all; only XDP and JSON output are supported.
 
 The runtime resolves the interface, validates the managed EXT program, loads a
 one-slot dispatcher, and pins its program, extension link, and outer interface
-link using Go's path layout. Only driver mode and BPF links are supported. A
-foreign occupied attach point is refused. Managed membership changes use complete
-revision replacement; there is no netlink fallback.
+link using Go's path layout. It selects the interface's `xdp_mode` from
+`/etc/bpfman/bpfman.toml`, or from `--config FILE` / `BPFMAN_CONFIG`; the default
+is `drv`. Supported values are `drv`, `skb`, and `hw`. A failed `drv` or `hw`
+first attach retries with `skb`; an `skb` attach is attempted once. Replacement
+reuses the existing pinned outer link, so the configured mode only affects
+creation of a new link. Configuration errors are reported before runtime state
+is opened. A foreign occupied attach point is refused. Managed membership
+changes use complete revision replacement; there is no netlink fallback.
+
+For example, configure a hardware-first attach for one interface with:
+
+```toml
+[interfaces.enp1s0]
+xdp_mode = "hw"
+```
+
+The mode choices and fallback follow the legacy Rust implementation. Current Go
+has no per-interface mode configuration. Missing default configuration uses
+`drv`; an explicitly selected missing file, an unreadable file, malformed TOML,
+or an invalid mode for the selected interface fails before store initialization.
+Only XDP attach reads this configuration; read-only commands do not need it.
+Real-kernel tests use veth to verify native driver and SKB modes, hardware-request
+fallback, packet counters, replacement/restoration, and either surviving member
+on both stores. Run `direnv exec . make rust-test-xdp-modes` for that suite.
+Actual hardware offload is unverified.
+
 SQLite atomically publishes the dispatcher header, managed link, and member
 using Go schema version 2. JSON supports that snapshot from version 4; newly
 created JSON stores use version 6. Explicit namespaces require format 6.
@@ -826,8 +849,8 @@ and foreign runtime authority; production-interpreter fakes cross acquisition,
 cancellation, and individual cleanup failures.
 
 Attached-program unload removes all XDP links through the same protocol.
-Selectable XDP modes remain unfinished. Loading an `xdp.frags` section does not
-establish fragmented-packet execution support.
+Loading an `xdp.frags` section does not establish fragmented-packet execution
+support.
 
 ### Dispatcher replacement policy
 
@@ -978,15 +1001,14 @@ isolation, and residue-free teardown. Store contracts exercise namespace
 persistence and reject changing a committed namespace during replacement. A
 worker-entry failure test verifies that no effect runs or caller namespace changes.
 
-Next: selectable XDP attachment modes. Fragmented-packet execution and the
-uprobe mount-namespace helper remain separate boundaries.
+Next: fragmented-packet execution and the uprobe mount-namespace helper remain
+separate boundaries.
 
-Checkpoint validation passed through the full `direnv exec . make rust-check`
+The selectable-mode checkpoint passed the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-38 fake-kernel lifecycle tests, and all 74 real-kernel tests on the supported
-surface. The new pure suites include nine replacement-policy tests and three
-configuration tests. NixOS kernel-build discovery and the optional `KERNEL_DEV`
-override are documented in [AGENTS.md](AGENTS.md).
+38 fake-kernel lifecycle tests, and all 74 real-kernel tests. NixOS kernel-build
+discovery and the optional `KERNEL_DEV` override are documented in
+[AGENTS.md](AGENTS.md).
 
 ### Injectable kernel lifecycle
 

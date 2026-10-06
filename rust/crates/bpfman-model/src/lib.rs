@@ -13,8 +13,8 @@ pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
 
 mod xdp;
 pub use xdp::{
-    InterfaceName, InvalidXdp, InvalidXdpSnapshot, XdpDispatcherSnapshot, XdpKey, XdpLink,
-    XdpProceedOn, XdpSnapshot, xdp_config,
+    InterfaceName, InvalidXdp, InvalidXdpMode, InvalidXdpSnapshot, XdpDispatcherSnapshot, XdpKey,
+    XdpLink, XdpMode, XdpProceedOn, XdpSnapshot, xdp_config,
 };
 mod xdp_config;
 pub use xdp_config::{InvalidXdpConfig, XDP_MAX_MEMBERS, XdpConfig, XdpPriority, XdpSlot};

@@ -1,7 +1,7 @@
 //! Namespace entry is confined to disposable worker threads. The caller retains
 //! writer authority and owns every returned descriptor; no worker pins objects.
 
-use bpfman_model::{InterfaceName, NetworkNamespace, XdpKey};
+use bpfman_model::{InterfaceName, NetworkNamespace, XdpKey, XdpMode};
 use std::{
     fs::{File, OpenOptions},
     io,
@@ -20,6 +20,30 @@ pub struct XdpNamespace {
     interface: InterfaceName,
     device: u64,
     key: XdpKey,
+}
+
+#[derive(Debug)]
+struct ModeAttachError {
+    requested: XdpMode,
+    requested_error: io::Error,
+    fallback_error: io::Error,
+}
+
+impl std::fmt::Display for ModeAttachError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "XDP {} attach failed ({}); SKB fallback failed",
+            self.requested.as_str(),
+            self.requested_error
+        )
+    }
+}
+
+impl std::error::Error for ModeAttachError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.fallback_error)
+    }
 }
 
 fn invalid(message: &'static str) -> io::Error {
@@ -93,7 +117,12 @@ impl XdpNamespace {
         Ok(())
     }
 
-    pub(super) fn attach(&self, program: BorrowedFd<'_>, key: XdpKey) -> io::Result<OwnedFd> {
+    pub(super) fn attach(
+        &self,
+        program: BorrowedFd<'_>,
+        key: XdpKey,
+        mode: XdpMode,
+    ) -> io::Result<OwnedFd> {
         self.validate()?;
         if key != self.key {
             return Err(invalid(
@@ -104,7 +133,20 @@ impl XdpNamespace {
             if crate::pin_syscall::interface(self.interface.as_str())? != key.ifindex.get() {
                 return Err(invalid("network interface changed since admission"));
             }
-            crate::pin_syscall::outer(program, key.ifindex.get())
+            match crate::pin_syscall::outer(program, key.ifindex.get(), mode) {
+                Ok(fd) => Ok(fd),
+                Err(requested_error) if mode != XdpMode::Skb => {
+                    match crate::pin_syscall::outer(program, key.ifindex.get(), XdpMode::Skb) {
+                        Ok(fd) => Ok(fd),
+                        Err(fallback_error) => Err(io::Error::other(ModeAttachError {
+                            requested: mode,
+                            requested_error,
+                            fallback_error,
+                        })),
+                    }
+                }
+                Err(error) => Err(error),
+            }
         })
     }
 }

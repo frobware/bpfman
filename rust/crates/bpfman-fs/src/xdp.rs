@@ -476,6 +476,7 @@ impl<E: ExtensionProgram, N> PreparedXdp<E, N> {
         kernel: &K,
         writer: &RuntimeWriter<'_>,
         dispatcher: &E::Dispatcher,
+        mode: bpfman_model::XdpMode,
     ) -> OuterAcquisition<K::Outer> {
         let mut pin = entry(
             writer,
@@ -487,7 +488,7 @@ impl<E: ExtensionProgram, N> PreparedXdp<E, N> {
         .map_err(fail)?;
         pin.check_writer(writer).map_err(fail)?;
         let fd = kernel
-            .attach_outer(dispatcher, self.key, &self.namespace)
+            .attach_outer(dispatcher, self.key, &self.namespace, mode)
             .map_err(|e| fail(Failure::Kernel(e).into()))?;
         // Keep ownership even if info fails. ID is only needed after pinning;
         // the live receipt authorizes detach through its owned descriptor.
