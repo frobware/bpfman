@@ -13,6 +13,8 @@ pub struct XdpSlot(u8);
 pub enum InvalidXdpConfig {
     /// A dispatcher must contain between one and ten extensions.
     Capacity,
+    /// Fragment declarations must match the active member count.
+    FragmentCount,
     /// A slot must be between zero and nine.
     Slot,
     /// Go stores priorities as nonnegative signed 32-bit integers.
@@ -23,6 +25,7 @@ impl fmt::Display for InvalidXdpConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::Capacity => "XDP dispatcher requires between one and ten members",
+            Self::FragmentCount => "XDP fragment declarations must match member count",
             Self::Slot => "XDP dispatcher slot must be between zero and nine",
             Self::Priority => "XDP priority exceeds i32::MAX",
         })
@@ -105,6 +108,25 @@ impl XdpConfig {
             priority.copy_from_slice(&50u32.to_ne_bytes());
         }
         Self(bytes)
+    }
+
+    /// Apply each member's declared multi-buffer support in slot order.
+    /// The dispatcher enables fragments only when every member opts in.
+    pub fn with_frags(mut self, members: &[bool]) -> Result<Self, InvalidXdpConfig> {
+        if members.len() != usize::from(self.0[2]) {
+            return Err(InvalidXdpConfig::FragmentCount);
+        }
+        self.0[3] = u8::from(members.iter().all(|&supported| supported));
+        for (word, &supported) in self.0[84..124].chunks_exact_mut(4).zip(members) {
+            // Linux BPF_F_XDP_HAS_FRAGS, independent of interface attach flags.
+            word.copy_from_slice(&(if supported { 1u32 << 5 } else { 0 }).to_ne_bytes());
+        }
+        Ok(self)
+    }
+
+    /// Whether every member declares support for multi-buffer XDP packets.
+    pub fn supports_frags(&self) -> bool {
+        self.0[3] != 0
     }
 
     /// Bytes to supply to the dispatcher's `conf` global.

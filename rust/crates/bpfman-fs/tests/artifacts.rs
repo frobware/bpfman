@@ -204,3 +204,68 @@ fn symlinked_staging_is_rejected_before_publication() -> Result {
 
     Ok(())
 }
+
+#[test]
+fn bytecode_reads_remain_confined_and_refuse_special_files() -> Result {
+    for kind in ["symlink", "hardlink", "fifo", "oversized", "parent"] {
+        let temp = tempfile::tempdir()?;
+        let root = runtime(temp.path())?;
+        root.with_writer(options(), |writer| -> Result {
+            let _receipt = writer
+                .publish_bytecode(id(), b"ELF", b"{}")
+                .map_err(|f| f.cause)?;
+            assert_eq!(writer.read_bytecode(id())?, b"ELF");
+            let path = temp.path().join("programs/42/bytecode.o");
+            let saved = temp.path().join("saved-elf");
+            if kind == "parent" {
+                let parent = temp.path().join("programs/42");
+                let moved = temp.path().join("moved-program");
+                std::fs::rename(&parent, &moved)?;
+                symlink(&moved, &parent)?;
+            } else {
+                std::fs::rename(&path, &saved)?;
+                match kind {
+                    "symlink" => symlink(&saved, &path)?,
+                    "hardlink" => std::fs::hard_link(&saved, &path)?,
+                    "fifo" => rustix::fs::mknodat(
+                        rustix::fs::CWD,
+                        &path,
+                        rustix::fs::FileType::Fifo,
+                        rustix::fs::Mode::RWXU,
+                        0,
+                    )?,
+                    _ => std::fs::File::create(&path)?.set_len(64 * 1024 * 1024 + 1)?,
+                }
+            }
+            assert!(writer.read_bytecode(id()).is_err(), "{kind}");
+            Ok(())
+        })??;
+    }
+    Ok(())
+}
+
+#[test]
+fn bytecode_reads_use_the_opened_root_after_path_replacement() -> Result {
+    let temp = tempfile::tempdir()?;
+    let path = temp.path().join("runtime");
+    let moved = temp.path().join("original");
+    let foreign = temp.path().join("foreign");
+    let root = runtime(&path)?;
+    root.with_writer(options(), |writer| -> Result {
+        let receipt = writer
+            .publish_bytecode(id(), b"original ELF", b"{}")
+            .map_err(|f| f.cause)?;
+        std::fs::create_dir_all(foreign.join("programs/42"))?;
+        std::fs::write(foreign.join("programs/42/bytecode.o"), b"foreign ELF")?;
+        std::fs::rename(&path, &moved)?;
+        symlink(&foreign, &path)?;
+        assert_eq!(writer.read_bytecode(id())?, b"original ELF");
+        writer.remove_bytecode(receipt).map_err(|f| f.cause)?;
+        assert_eq!(
+            std::fs::read(foreign.join("programs/42/bytecode.o"))?,
+            b"foreign ELF"
+        );
+        Ok(())
+    })??;
+    Ok(())
+}

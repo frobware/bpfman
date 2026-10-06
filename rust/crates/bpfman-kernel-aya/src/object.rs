@@ -8,9 +8,6 @@ use bpfman_model::ProgramSpec;
 
 use std::collections::BTreeMap;
 
-#[path = "verification.rs"]
-mod xdp;
-
 pub(super) struct LocalObject {
     pub(super) bytes: Vec<u8>,
     pub(super) license: String,
@@ -80,7 +77,9 @@ impl LocalObject {
                     .load()
                     .map_err(|e| LoadCause::Program(Box::new(e)))?;
             }
-            ProgramSpec::Xdp(_) => xdp::load(program)?,
+            ProgramSpec::Xdp(_) => {
+                crate::verification::load(program, xdp_frags(&self.bytes, spec.name().as_str())?)?
+            }
             _ => return Err(LoadCause::Unsupported("program type")),
         }
 
@@ -212,4 +211,12 @@ pub(super) fn load(
     }
     .load(spec)
     .map_err(Into::into)
+}
+
+pub(super) fn xdp_frags(bytes: &[u8], name: &str) -> Result<bool, LoadCause> {
+    let object = Object::parse(bytes).map_err(|e| LoadCause::Parse(Box::new(e)))?;
+    match object.programs.get(name).map(|p| &p.section) {
+        Some(ProgramSection::Xdp { frags, .. }) => Ok(*frags),
+        _ => Err(LoadCause::Invalid("selected ELF program is not XDP".into())),
+    }
 }

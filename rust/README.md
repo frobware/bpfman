@@ -849,8 +849,43 @@ and foreign runtime authority; production-interpreter fakes cross acquisition,
 cancellation, and individual cleanup failures.
 
 Attached-program unload removes all XDP links through the same protocol.
-Loading an `xdp.frags` section does not establish fragmented-packet execution
-support.
+
+### XDP multi-buffer packets
+
+`xdp.frags` programs execute on native and generic SKB multi-buffer packets. Each
+extension is verified against an unpinned dispatcher matching its ELF declaration.
+Before first attach and each membership replacement, the Aya adapter reads the selected
+program's published ELF through `RuntimeWriter::read_bytecode`. This read uses
+the retained runtime descriptor, refuses symlinks, mount crossings, special files,
+extra hard links, and inputs over 64 MiB. Missing or malformed bytecode fails the
+operation; it does not silently mean no fragment support. Extension instructions
+are reused from their pins, not reloaded from the ELF.
+
+The pure `XdpConfig` encoder writes each member's `BPF_F_XDP_HAS_FRAGS` flag and
+enables the dispatcher's fragment flag only when every member declares support,
+following [libxdp's chain policy](https://github.com/xdp-project/xdp-tools/blob/master/lib/libxdp/libxdp.c).
+Make builds linear and `xdp.frags` variants from the same dispatcher source;
+the default shared object used by Go remains linear. Rust selects the appropriate
+variant and Aya supplies its kernel load flag. No store/schema changes or new
+recovery protocol are required. Mixed chains work at normal MTU; if the native
+driver rejects a non-fragment dispatcher at jumbo MTU, replacement leaves the
+old fragment-aware chain active.
+
+Run `direnv exec . make rust-test-xdp-frags` for six tests on both stores: the
+unchanged `TestLoad_XDPFragsProgram` normal-MTU script and shared veth acceptance
+in separate sender/receiver namespaces with explicitly requested driver and SKB
+modes. Interface observations assert the selected mode before traffic. The
+multi-buffer tests send 8 KB ICMP payloads with IP fragmentation prohibited.
+Probe counters prove total XDP length exceeds the
+linear buffer, and `bpf_xdp_load_bytes` reads both the final payload byte and
+across the linear/fragment boundary. Tests cover two-member execution, proceed-on
+stopping, attach/detach publication rollback, incompatible jumbo membership,
+mixed-chain ABI flags, re-enabling fragments, either survivor, stable outer
+identity, last detach, and residue-free unload. These are XDP multi-buffer
+packets, not IP fragments. This acceptance covers native and generic SKB veth
+with PASS, including replacement, rollback, mixed membership, and either survivor.
+Jumbo mixed-chain refusal is asserted for native veth; it is a driver constraint,
+not a generic SKB requirement. Physical NICs remain unverified.
 
 ### Dispatcher replacement policy
 
@@ -943,8 +978,8 @@ last-member deletion failure, and complete teardown. Shared fake tests also cove
 multiple interfaces, foreign kernel instances, failed retirement, cancellation,
 partial progress, and new links added during retained recovery.
 
-Run `direnv exec . make rust-test-xdp-corpus` for eleven additional unchanged Go
-scripts, each registered separately on SQLite and JSON (22 real-kernel tests):
+Run `direnv exec . make rust-test-xdp-corpus` for twelve additional unchanged Go
+scripts, each registered separately on SQLite and JSON (24 real-kernel tests):
 
 | Coverage | Unchanged scripts |
 | --- | --- |
@@ -953,6 +988,7 @@ scripts, each registered separately on SQLite and JSON (22 real-kernel tests):
 | Custom DROP continuation and PASS/DROP stopping | `TestMultiProgXDP_AllProceed_CustomProceedOn`, `TestMultiProgXDP_ChainStopsAtDrop_DefaultProceedOn`, `TestMultiProgXDP_ChainStopsAtPass_CustomProceedOn` |
 | Proceed-on masks, single actions, combinations, and defaults | `TestXDP_ProceedOnPassEncoding`, `TestXDP_ProceedOnEncodingMatrix` |
 | Priority zero and equal-priority ordering | `TestDispatcher_ZeroPriorityDefaultOrderingXDP`, `TestXDP_DispatcherPriorityTieBreakByName` |
+| Fragment-aware attachment and normal-MTU traffic | `TestLoad_XDPFragsProgram` |
 | Independent interface membership | `TestDispatcher_MultipleInterfacesIndependentXDP` |
 
 The traffic scripts inspect real BPF maps and packet delivery. Encoding tests
@@ -960,7 +996,8 @@ establish the stored masks; they do not establish delivery for TX or REDIRECT.
 Every DSL run must execute its selected script and finish with empty program,
 link, and dispatcher inventories and no owned program, map, link, bytecode,
 staging, or XDP revision artifacts. No script changes or new production behavior
-were needed for this corpus.
+were needed for the original eleven-script corpus. The added fragments script
+uses the supported namespace and fragment-aware dispatcher paths.
 
 ### Explicit XDP network namespaces
 
@@ -1001,12 +1038,12 @@ isolation, and residue-free teardown. Store contracts exercise namespace
 persistence and reject changing a committed namespace during replacement. A
 worker-entry failure test verifies that no effect runs or caller namespace changes.
 
-Next: fragmented-packet execution and the uprobe mount-namespace helper remain
-separate boundaries.
+Next: TX/REDIRECT packet-delivery acceptance. The uprobe mount-namespace helper
+remains a separate attachment-family boundary.
 
-The selectable-mode checkpoint passed the full `direnv exec . make rust-check`
+The multi-buffer checkpoint passed the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-38 fake-kernel lifecycle tests, and all 74 real-kernel tests. NixOS kernel-build
+38 fake-kernel lifecycle tests, and all 80 real-kernel tests. NixOS kernel-build
 discovery and the optional `KERNEL_DEV` override are documented in
 [AGENTS.md](AGENTS.md).
 
@@ -1043,6 +1080,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 74 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 80 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

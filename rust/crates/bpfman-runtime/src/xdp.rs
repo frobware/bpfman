@@ -260,7 +260,7 @@ trait Effects: Sized {
         r: &XdpAttach,
     ) -> Result<(XdpKey, Self::Prepared), LinkCause>;
 
-    fn load(&mut self, r: &XdpAttach) -> Result<Self::Kernel, LinkCause>;
+    fn load(&mut self, w: &RuntimeWriter<'_>, r: &XdpAttach) -> Result<Self::Kernel, LinkCause>;
 
     fn directory(
         &mut self,
@@ -407,7 +407,7 @@ fn attach<F: Effects>(
             None => f.prepare(w, r)?,
         };
         check(c)?;
-        let mut kernel = f.load(r)?;
+        let mut kernel = f.load(w, r)?;
         macro_rules! acquire {
             ($call:expr,$variant:ident) => {
                 match $call {

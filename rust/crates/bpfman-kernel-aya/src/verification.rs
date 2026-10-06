@@ -6,14 +6,13 @@
 use crate::failure::LoadCause;
 use aya::programs::{Extension, Program, Xdp};
 
-pub(super) fn load(program: &mut Program) -> Result<(), LoadCause> {
-    let config = test_config();
+pub(super) fn load(program: &mut Program, frags: bool) -> Result<(), LoadCause> {
+    let mut config = test_config();
+    config[3] = u8::from(frags);
+    config[84..88].copy_from_slice(&(if frags { 32u32 } else { 0 }).to_ne_bytes());
     let mut dispatcher = aya::EbpfLoader::new()
         .override_global("conf", config.as_slice(), true)
-        .load(aya::include_bytes_aligned!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../dispatcher/xdp_dispatcher_v2.bpf.o"
-        )))
+        .load(dispatcher_bytes(frags))
         .map_err(|e| LoadCause::Kernel(Box::new(e)))?;
     let target: &mut Xdp = dispatcher
         .program_mut("xdp_dispatcher")
@@ -42,4 +41,19 @@ fn test_config() -> [u8; 124] {
         priority.copy_from_slice(&50u32.to_ne_bytes());
     }
     config
+}
+
+// Each embedded variant comes from the same shared source. Only its section differs.
+pub(super) fn dispatcher_bytes(frags: bool) -> &'static [u8] {
+    if frags {
+        aya::include_bytes_aligned!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../dispatcher/xdp_dispatcher_v2_frags.bpf.o"
+        ))
+    } else {
+        aya::include_bytes_aligned!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../dispatcher/xdp_dispatcher_v2.bpf.o"
+        ))
+    }
 }

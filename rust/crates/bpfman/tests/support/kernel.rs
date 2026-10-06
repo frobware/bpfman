@@ -883,7 +883,11 @@ impl XdpLifecycle for FakeKernel {
         Ok((key, PreparedXdp { extension, key }))
     }
 
-    fn load_dispatcher(&self, _proceed_on: XdpProceedOn) -> Result<Loaded, Error> {
+    fn xdp_frags(&self, _: &RuntimeWriter<'_>, _: NonZeroU32, _: &Symbol) -> Result<bool, Error> {
+        Ok(false)
+    }
+
+    fn load_dispatcher(&self, _config: &XdpConfig) -> Result<Loaded, Error> {
         self.enter(Point::LoadDispatcher)?;
         Ok(self.new_program("xdp_dispatcher", "xdp", &[]))
     }
@@ -1069,7 +1073,7 @@ impl XdpReplacement for FakeKernel {
     }
 
     fn load_revision(&self, _config: &XdpConfig) -> Result<Loaded, Error> {
-        self.load_dispatcher(XdpProceedOn::default())
+        self.load_dispatcher(&XdpConfig::single(XdpProceedOn::default()))
     }
 
     fn create_revision_at(

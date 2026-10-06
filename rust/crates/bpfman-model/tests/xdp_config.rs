@@ -63,3 +63,26 @@ fn priority_and_slot_boundaries_are_refined_once() -> Result<(), InvalidXdpConfi
     }
     Ok(())
 }
+
+#[test]
+fn fragments_require_every_member_and_encode_each_slot() -> Result<(), InvalidXdpConfig> {
+    for members in [[false, false], [true, false], [false, true], [true, true]] {
+        let config = XdpConfig::new(&[XdpProceedOn::default(); 2])?.with_frags(&members)?;
+        assert_eq!(config.supports_frags(), members.iter().all(|&m| m));
+        for (slot, member) in members.into_iter().enumerate() {
+            let expected = if member { 32u32 } else { 0 };
+            let offset = 84 + slot * 4;
+            assert_eq!(&config.bytes()[offset..offset + 4], &expected.to_ne_bytes());
+        }
+        assert!(config.bytes()[92..].iter().all(|&b| b == 0));
+    }
+    assert_eq!(
+        XdpConfig::single(Default::default()).with_frags(&[]),
+        Err(InvalidXdpConfig::FragmentCount)
+    );
+    assert_eq!(
+        XdpConfig::single(Default::default()).with_frags(&[true, true]),
+        Err(InvalidXdpConfig::FragmentCount)
+    );
+    Ok(())
+}

@@ -44,8 +44,19 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Effects for Adapter<'_, S, K> 
         Ok((key, prepared))
     }
 
-    fn load(&mut self, r: &XdpAttach) -> Result<K::Dispatcher, LinkCause> {
-        self.1.load_dispatcher(r.proceed_on).map_err(Into::into)
+    fn load(&mut self, w: &RuntimeWriter<'_>, r: &XdpAttach) -> Result<K::Dispatcher, LinkCause> {
+        let program = self
+            .0
+            .open(w)?
+            .read_records()?
+            .into_iter()
+            .find(|p| p.id == r.program_id)
+            .ok_or(Cause::NotFound)?;
+        let frags = self.1.xdp_frags(w, r.program_id, program.spec.name())?;
+        let config = bpfman_model::XdpConfig::single(r.proceed_on)
+            .with_frags(&[frags])
+            .map_err(|_| Cause::Invalid("invalid fragment declarations"))?;
+        self.1.load_dispatcher(&config).map_err(Into::into)
     }
 
     fn directory(

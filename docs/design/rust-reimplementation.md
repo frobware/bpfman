@@ -3,14 +3,19 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds configurable XDP attachment modes on both SQLite and JSON stores.
-Per-interface TOML selects `drv` (default), `skb`, or `hw`; failed non-SKB first
-attachment falls back once to SKB. Replacement retains the outer link and its
-actual mode. Real traffic acceptance covers driver/SKB attachment and hardware
-request fallback on veth; actual hardware offload remains unverified.
-Explicit namespace support was committed and pushed as `e5810ccef`. Namespace
-descriptors and consuming ownership transitions remain in use for attachment,
-replacement, detach, and recovery. The next slice is fragmented-packet execution.
+checkpoint adds native and generic SKB XDP multi-buffer execution on both SQLite
+and JSON stores.
+All-fragment-aware chains select an `xdp.frags` dispatcher; mixed chains select
+a linear dispatcher. Published ELF declarations are read beneath the retained
+runtime descriptor without changing the Go-compatible persistence schema.
+Driver and SKB veth acceptance proves multi-buffer lengths and cross-buffer
+helper reads using 8 KB ICMP payloads with IP fragmentation prohibited, including
+replacement, publication rollback, mixed membership, and either survivor. The unchanged
+normal-MTU fragments script also passes on both stores.
+Configurable modes were committed and pushed as `d072f207d`; hardware-request
+fallback is verified but actual offload remains unverified. Namespace descriptors
+and consuming recovery transitions remain in use. The next bounded slice is
+TX/REDIRECT packet-delivery acceptance.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -25,8 +30,8 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
-| XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Fragmented-packet execution, actual hardware offload |
-| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain and chain-execution acceptance | Fragmented-packet execution |
+| XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, and driver/SKB multi-buffer acceptance | TX/REDIRECT packet delivery |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | Persistence | Go-compatible SQLite schema 2; JSON format 6 for namespace-aware XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
@@ -41,7 +46,7 @@ for the supported command surface.
 
 Validation uses `direnv exec . make rust-check`: formatting, Clippy, workspace
 tests, compile-fail contracts, documentation, 38 shared fake-kernel lifecycle
-tests, and 74 real-kernel tests. The replacement fault matrix covers attach and
+tests, and 80 real-kernel tests. The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
 foreign-runtime retries, and post-commit retirement. Real packet tests prove
@@ -55,10 +60,11 @@ foreign kernel instances, cancellation, and links added during retained recovery
 Both stores run unchanged Go DSL scripts for XDP link round-trip, last detach,
 priority ordering, ten-slot capacity refusal, slot reuse, configuration after
 detach, default proceed-on rebuilding, and attached-program survivor rebuilding.
-Eleven more unchanged scripts run individually on each backend: ten-slot chain
+Twelve more unchanged scripts run individually on each backend: ten-slot chain
 execution, four fill/drain/refill peaks, exact weighted packet counts with
 staggered detach, default/custom proceed-on continuation and stopping, mask
-encoding, priority-zero/name ordering, and independent interfaces. The shared
+encoding, priority-zero/name ordering, independent interfaces, and normal-MTU
+`xdp.frags` traffic. The shared
 DSL harness checks empty program/link/dispatcher inventories and no owned XDP
 revision artifacts after cleanup. These scripts required no production changes.
 See the [corpus matrix](../../rust/README.md#xdp-attachment-and-replacement).
@@ -78,7 +84,9 @@ round-trip/rebuild scripts, path replacement and disappearance, identical
 interface indices across namespaces, publication failure and retained unload,
 and caller-namespace isolation. Mode selection and fallback follow the legacy
 Rust implementation; current Go does not expose per-interface mode configuration.
-The next bounded slice is fragmented-packet execution. Go remains the behavioural
+Multi-buffer execution additionally uses libxdp's all-members fragment
+policy; Go currently leaves its dispatcher fragment flag zero. The next bounded
+slice is TX/REDIRECT packet-delivery acceptance. Go remains the behavioural
 authority for the existing shared surface.
 
 ## Summary
@@ -784,9 +792,10 @@ Implementation and validation checkpoints:
    Direct adapter traffic and identity/failure tests remain separate coverage.
 5. Implemented: unchanged Go priority-ordering, slot-reuse, ten-slot capacity,
    configuration-after-detach, and default-proceed-on rebuild scripts run on
-   both stores in `rust-check`. The eleven-script `rust-test-xdp-corpus` target
+   both stores in `rust-check`. The twelve-script `rust-test-xdp-corpus` target
    also admits fill/drain/refill, ten-slot traffic, exact counters, proceed-on
-   chains and encoding, priority-zero/name ordering, and independent interfaces.
+   chains and encoding, priority-zero/name ordering, independent interfaces, and normal-MTU
+`xdp.frags` traffic.
 
 Use the forwarding store fault decorator for publication and deletion failures;
 no fake store is needed. SQLite `:memory:` remains suitable for adapter tests;
@@ -1412,7 +1421,7 @@ Completed checkpoint:
 - Explicit XDP namespaces with retained descriptors, isolated worker threads,
   persisted paths, namespace identity refusal/retry, and unchanged namespace DSL
   scripts on both stores. Namespace-aware JSON snapshots use format 6.
-- Eleven additional unchanged XDP scripts per backend covering ten-slot and
+- Twelve additional unchanged XDP scripts per backend covering ten-slot and
   fill/drain traffic, exact counters, proceed-on chains, ordering, and independent
   interfaces; shared DSL assertions also require empty inventories and XDP pins.
 - Attached XDP program unload with retained dispatcher prerequisites, explicit
@@ -1450,8 +1459,13 @@ XDP modes follow the legacy Rust per-interface `xdp_mode` configuration, driver
 default, and non-SKB fallback. Current Go has no interface-mode configuration;
 its existing driver-mode behavior remains the default. Modes use the existing
 consuming resource transitions; no additional typestate is needed for this
-data-free choice. Next, implement fragmented-packet execution as a separate
-kernel and packet-path boundary.
+data-free choice. Native and generic SKB multi-buffer execution are implemented:
+ELF-declared support drives the pure per-slot ABI configuration and dispatcher selection,
+with all-member support required to enable fragments. Both stores run the
+unchanged normal-MTU fragments script and jumbo driver/SKB veth lifecycle
+acceptance; see [the verified packet boundary](../../rust/README.md#xdp-multi-buffer-packets).
+Next, establish TX/REDIRECT packet delivery. Physical NIC packet execution and
+actual hardware offload remain unverified.
 
 The uprobe mount-namespace helper, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this

@@ -937,6 +937,8 @@ E2E_SCRIPTS_TEST_BIN := $(BIN_DIR)/e2e-scripts.test
 BPFMAN_UNDER_TEST ?= $(BIN_DIR)/bpfman
 E2E_SCRIPTS_TEST_PKG := github.com/bpfman/bpfman/e2e/scriptrunner
 E2E_IMAGE_NO_VERIFY_CONFIG := $(abspath e2e/config/no-signature-verification.toml)
+BPFMAN_RUNTIME_DIR ?=
+BPFMAN_STORE ?=
 BPFMAN_CONFIG ?=
 
 ifeq ($(BPFMAN_E2E_BYTECODE_SOURCE),image)
@@ -1026,8 +1028,10 @@ run-e2e-scripts:
 	    -test.count=$(STRESS_COUNT) $(if $(filter-out 0,$(PARALLEL)),-test.parallel $(PARALLEL)) \
 	    -test.run "$(if $(TEST),$(TEST),TestBPFManScripts)"
 
+RUST_DISPATCHER = dispatcher/xdp_dispatcher_v2.bpf.o dispatcher/xdp_dispatcher_v2_frags.bpf.o
+
 .PHONY: test-e2e-selection
-test-e2e-selection:
+test-e2e-selection: $(RUST_DISPATCHER)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test e2e_selection --locked
 
 # Every Cargo entry point names the new manifest. These are opt-in while the
@@ -1035,15 +1039,12 @@ test-e2e-selection:
 .PHONY: rust-check rust-build rust-test rust-fmt rust-fmt-fix rust-lock rust-lint rust-doc
 rust-check: rust-fmt rust-lint rust-test rust-doc
 
-RUST_DISPATCHER = dispatcher/xdp_dispatcher_v2.bpf.o
-rust-build rust-lint rust-doc rust-test-load-compensation rust-test-kernel-fake rust-test-unload test-e2e-selection: $(RUST_DISPATCHER)
-
-rust-build:
+rust-build: $(RUST_DISPATCHER)
 	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked
 
 # Build fixtures before entering the privileged test runner. Passwordless sudo
 # is required; unavailable privileges fail the gate rather than skipping tests.
-RUST_TEST_INPUTS = e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
+RUST_TEST_INPUTS = e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
 RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
 RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh", "$(abspath rust/test-runner.sh)"]'
 
@@ -1052,7 +1053,7 @@ rust-test: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 
 # Public lifecycle with the stateful fake kernel and both concrete stores.
 .PHONY: rust-test-kernel-fake
-rust-test-kernel-fake:
+rust-test-kernel-fake: $(RUST_DISPATCHER)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --locked --test kernel_lifecycle
 
 # Pure XDP planning, ABI, ownership transitions, and compile-fail contracts.
@@ -1068,12 +1069,12 @@ rust-test-xdp-store:
 
 # Exercise the same load interpreter used by the CLI, with injected effects.
 .PHONY: rust-test-load-compensation
-rust-test-load-compensation:
+rust-test-load-compensation: $(RUST_DISPATCHER)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-runtime --locked --lib load::tests:: -- --nocapture --test-threads=1
 
 # Exercise committed-state teardown ordering and residue through production code.
 .PHONY: rust-test-unload
-rust-test-unload:
+rust-test-unload: $(RUST_DISPATCHER)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-runtime --locked --lib unload -- --nocapture --test-threads=1
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --locked --test unload
 
@@ -1086,10 +1087,10 @@ rust-fmt-fix:
 rust-lock:
 	cargo generate-lockfile --manifest-path $(RUST_MANIFEST)
 
-rust-lint:
+rust-lint: $(RUST_DISPATCHER)
 	cargo clippy --manifest-path $(RUST_MANIFEST) --workspace --all-targets --all-features --locked -- -D warnings
 
-rust-doc:
+rust-doc: $(RUST_DISPATCHER)
 	RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path $(RUST_MANIFEST) --workspace --no-deps --locked
 
 # `run-e2e-scripts` lives in the recipe rather than the
@@ -1461,6 +1462,12 @@ $(BIN_DIR)/protoc-gen-go-grpc: | $(BIN_DIR)
 # incremental rebuilds against the real outputs without needing
 # a phony intermediary.
 # ---------------------------------------------------------------------------
+# Rust selects this fragment-aware variant only for chains whose members all opt in.
+dispatcher/xdp_dispatcher_v2_frags.bpf.o: dispatcher/bpf/xdp_dispatcher_v2.bpf.c Makefile
+	$(call quiet_cmd,CLANG-BPF,$@)
+	$(Q)clang $(LIBBPF_CFLAGS) $(BPF_CFLAGS) -g -O2 -target bpfel -c $(BPF_TARGET_ARCH) \
+		-DXDP_DISPATCHER_SECTION='"xdp.frags"' -MD -MP -MF$(@:.bpf.o=.bpf.d) $< -o $@
+
 dispatcher/%.bpf.o: dispatcher/bpf/%.bpf.c Makefile
 	$(call quiet_cmd,CLANG-BPF,$@)
 	$(Q)clang $(LIBBPF_CFLAGS) $(BPF_CFLAGS) -g -O2 -target bpfel -c $(BPF_TARGET_ARCH) \
@@ -1881,3 +1888,8 @@ rust-test-observation: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 .PHONY: rust-test-xdp-modes
 rust-test-xdp-modes: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_runtime_replacement --nocapture
+
+# xdp.frags load and native/SKB multi-buffer packet-path acceptance on both stores.
+.PHONY: rust-test-xdp-frags
+rust-test-xdp-frags: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_frags --nocapture

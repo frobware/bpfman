@@ -7,7 +7,7 @@ use bpfman_fs::{
     PreparedXdp, RuntimeWriter, XdpExtensionPin, XdpOuter, XdpProgramPin, XdpRevision,
 };
 use bpfman_kernel::{Acquisition, Error, ErrorKind, Removal, XdpArtifacts, XdpLifecycle};
-use bpfman_model::{InterfaceName, XdpKey, XdpProceedOn, XdpSnapshot};
+use bpfman_model::{InterfaceName, XdpKey, XdpSnapshot};
 use std::num::NonZeroU32;
 
 fn kernel(e: impl std::error::Error + Send + Sync + 'static) -> Error {
@@ -49,11 +49,18 @@ impl XdpLifecycle for Kernel {
         Ok((p.key(), p))
     }
 
-    fn load_dispatcher(&self, proceed_on: XdpProceedOn) -> Result<Dispatcher, Error> {
-        bpfman_kernel::XdpReplacement::load_revision(
-            self,
-            &bpfman_model::XdpConfig::single(proceed_on),
-        )
+    fn load_dispatcher(&self, config: &bpfman_model::XdpConfig) -> Result<Dispatcher, Error> {
+        bpfman_kernel::XdpReplacement::load_revision(self, config)
+    }
+
+    fn xdp_frags(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+        name: &bpfman_model::Symbol,
+    ) -> Result<bool, Error> {
+        let bytes = w.read_bytecode(id).map_err(filesystem)?;
+        crate::object::xdp_frags(&bytes, name.as_str()).map_err(Into::into)
     }
 
     fn create_revision(
@@ -158,10 +165,9 @@ impl bpfman_kernel::XdpReplacement for Kernel {
     fn load_revision(&self, config: &bpfman_model::XdpConfig) -> Result<Dispatcher, Error> {
         let mut bpf = aya::EbpfLoader::new()
             .override_global("conf", config.bytes().as_slice(), true)
-            .load(aya::include_bytes_aligned!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../../dispatcher/xdp_dispatcher_v2.bpf.o"
-            )))
+            .load(crate::verification::dispatcher_bytes(
+                config.supports_frags(),
+            ))
             .map_err(kernel)?;
         let program: &mut Xdp = bpf
             .program_mut("xdp_dispatcher")

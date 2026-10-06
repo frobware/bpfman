@@ -5,6 +5,11 @@ macro_rules! backend_tests {
     ($module:ident, $store:literal) => {
         mod $module {
             #[test]
+            fn xdp_frags_normal_mtu() {
+                crate::cli::dsl($store, "TestLoad_XDPFragsProgram");
+            }
+
+            #[test]
             fn fill_drain_refill() {
                 crate::cli::dsl($store, "TestXDP_DispatcherFillDrainRefill");
             }

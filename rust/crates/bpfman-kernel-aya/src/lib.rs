@@ -13,6 +13,7 @@ mod pinning;
 mod program;
 mod syscall;
 mod tracepoint;
+mod verification;
 mod xdp;
 
 pub use netns::XdpNamespace;

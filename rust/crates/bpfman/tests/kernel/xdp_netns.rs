@@ -149,7 +149,7 @@ where
             .prepare_xdp(w, a, &request(a, select(&alias)).interface, &select(&alias))
             .expect("prepare retained namespace");
         let dispatcher = kernel
-            .load_dispatcher(Default::default())
+            .load_dispatcher(&bpfman_model::XdpConfig::single(Default::default()))
             .expect("dispatcher");
         fs::rename(&alias, &saved).expect("hide namespace after preparation");
         let Err(missing) = kernel.pin_outer(w, &prepared, &dispatcher, Default::default()) else {

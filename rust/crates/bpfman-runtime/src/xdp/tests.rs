@@ -122,7 +122,7 @@ impl Effects for Fake {
         Ok((key(), ()))
     }
 
-    fn load(&mut self, _: &XdpAttach) -> Result<(), LinkCause> {
+    fn load(&mut self, _: &RuntimeWriter<'_>, _: &XdpAttach) -> Result<(), LinkCause> {
         self.enter(Stage::Load)
     }
 

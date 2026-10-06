@@ -19,6 +19,7 @@ pub use xdp::{
 };
 
 mod artifacts;
+mod bytecode;
 mod directory;
 mod error;
 mod layout;

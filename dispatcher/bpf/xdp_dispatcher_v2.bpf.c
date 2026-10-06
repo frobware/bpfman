@@ -128,7 +128,11 @@ __attribute__((noinline)) int compat_test(struct xdp_md *ctx) {
   return ret;
 }
 
-SEC("xdp")
+#ifndef XDP_DISPATCHER_SECTION
+#define XDP_DISPATCHER_SECTION "xdp"
+#endif
+
+SEC(XDP_DISPATCHER_SECTION)
 int xdp_dispatcher(struct xdp_md *ctx) {
   __u8 num_progs_enabled = conf.num_progs_enabled;
   int ret;

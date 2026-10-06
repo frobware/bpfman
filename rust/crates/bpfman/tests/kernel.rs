@@ -318,3 +318,26 @@ fn sqlite_xdp_netns_recovery() {
 fn json_xdp_netns_recovery() {
     xdp_netns::exercise(bpfman_store_json::Backend);
 }
+
+#[path = "kernel/xdp_frags.rs"]
+mod xdp_frags;
+
+#[test]
+fn sqlite_xdp_frags_multibuffer() {
+    xdp_frags::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn json_xdp_frags_multibuffer() {
+    xdp_frags::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn sqlite_xdp_frags_multibuffer_skb() {
+    xdp_frags::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn json_xdp_frags_multibuffer_skb() {
+    xdp_frags::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+}

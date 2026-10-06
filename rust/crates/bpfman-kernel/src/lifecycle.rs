@@ -2,9 +2,7 @@
 use crate::Error;
 use bpfman_core::EffectFailure;
 use bpfman_fs::{Bytecode, RuntimeWriter};
-use bpfman_model::{
-    InterfaceName, ProgramSpec, Symbol, Tracepoint, XdpKey, XdpProceedOn, XdpSnapshot,
-};
+use bpfman_model::{InterfaceName, ProgramSpec, Symbol, Tracepoint, XdpKey, XdpSnapshot};
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64},
@@ -200,7 +198,14 @@ pub trait XdpLifecycle {
         netns: &bpfman_model::NetworkNamespace,
     ) -> Result<(XdpKey, Self::PreparedXdp), Error>;
     /// Load the configured one-member dispatcher.
-    fn load_dispatcher(&self, proceed_on: XdpProceedOn) -> Result<Self::Dispatcher, Error>;
+    fn load_dispatcher(&self, config: &bpfman_model::XdpConfig) -> Result<Self::Dispatcher, Error>;
+    /// Observe the selected program's fragment declaration from its published ELF.
+    fn xdp_frags(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        program: NonZeroU32,
+        name: &bpfman_model::Symbol,
+    ) -> Result<bool, Error>;
     /// Exclusively create revision one.
     fn create_revision(
         &self,

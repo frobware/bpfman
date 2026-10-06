@@ -201,6 +201,7 @@ fn stage<S: XdpReplacementStore, K: Kernel>(
     resources: &mut Vec<Owned<S, K>>,
 ) -> Result<(), LinkCause> {
     let mut prepared = Vec::new();
+    let mut frags = Vec::new();
     for placement in plan.placements() {
         check(c)?;
         let member = &desired[placement.source()];
@@ -213,10 +214,19 @@ fn stage<S: XdpReplacementStore, K: Kernel>(
         if observed != key {
             return Err(invalid("interface identity changed"));
         }
+        frags.push(
+            app.kernel
+                .xdp_frags(w, member.request.program_id, &member.name)?,
+        );
         prepared.push((placement.slot(), p));
     }
     check(c)?;
-    let mut dispatcher = app.kernel.load_revision(plan.config())?;
+    let config = plan
+        .config()
+        .clone()
+        .with_frags(&frags)
+        .map_err(|_| invalid("invalid fragment declarations"))?;
+    let mut dispatcher = app.kernel.load_revision(&config)?;
     macro_rules! acquire {
         ($call:expr,$variant:ident) => {
             match $call {
