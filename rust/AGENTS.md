@@ -22,6 +22,30 @@ The architecture and compatibility goals are in
   its exit status. Investigate failures; never skip or weaken a test to get a
   green result. Run relevant real-kernel acceptance tests when the implemented
   surface and environment support them; report untested boundaries accurately.
+- On NixOS, Go and Rust tests share `e2e-kmod-build` and
+  `e2e/kmod/prepare-kdir.sh`. If `/lib/modules/$(uname -r)/build` is absent, the
+  helper discovers the matching `kernel.dev` output from
+  `/run/current-system/kernel` through `nix-store -q --deriver` and `--outputs`,
+  then realizes it with `nix-store -r` if needed. Run the normal Make target;
+  an absent store path does not by itself mean sources are unavailable.
+  Nix discovery suppresses lookup stderr, so sandbox denial of the Nix daemon
+  can surface as a misleading missing-build-tree error. Rerun the normal gate
+  with the required sandbox escalation before declaring the prerequisite blocked.
+  The helper creates the writable kbuild mirror and supplies BTF.
+- `KERNEL_DEV` can explicitly select an already realized matching development
+  output. The successful override recorded for kernel `6.18.54` was:
+
+  ```sh
+  direnv exec . make rust-check \
+    KERNEL_DEV=/nix/store/l096hgmdqnz643qzcqjwahfyrsff5c2y-linux-6.18.54-dev
+  ```
+
+  `KERNEL_DEV` names the output root containing `lib/modules/<release>/build`,
+  not the build directory itself. Check `uname -r` and that the path still exists
+  before reusing it: a Nix store path can disappear after garbage collection.
+  An explicit `KERNEL_DEV` bypasses automatic discovery and realization; if its
+  path is gone, omit the override and let the shared helper realize the output.
+  Keep using the normal Make targets and do not skip kernel tests.
 - Assume passwordless sudo for real-kernel tests. Keep them in the normal
   `rust-test`/`rust-check` gate without privilege-related `#[ignore]` attributes.
   Build fixtures as the invoking user and run the kernel test binary through

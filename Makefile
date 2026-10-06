@@ -1055,6 +1055,11 @@ rust-test: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 rust-test-kernel-fake:
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --locked --test kernel_lifecycle
 
+# Pure XDP planning, ABI, ownership transitions, and compile-fail contracts.
+.PHONY: rust-test-xdp-core
+rust-test-xdp-core:
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-model -p bpfman-core --locked
+
 # Exercise the same load interpreter used by the CLI, with injected effects.
 .PHONY: rust-test-load-compensation
 rust-test-load-compensation:

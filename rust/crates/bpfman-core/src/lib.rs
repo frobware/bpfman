@@ -10,9 +10,19 @@
 extern crate alloc;
 
 mod xdp;
+mod xdp_plan;
+mod xdp_replace;
 pub use xdp::{
     XdpAttempt, XdpCleanup, XdpCleanupContinuation, XdpCleanupKind, XdpCleanupReport,
     XdpCleanupStep, XdpResource,
+};
+pub use xdp_plan::{
+    XdpMemberIdentity, XdpMemberOrder, XdpMembershipPlan, XdpPlacement, XdpPlanError,
+    XdpRevisionPlan, plan_xdp_membership,
+};
+pub use xdp_replace::{
+    XdpPublication, XdpReplacement, XdpReplacementRollback, XdpRestoration, XdpRestoreContinuation,
+    XdpRestoreFailure, XdpRestoreStep, XdpRetirement,
 };
 
 mod link;

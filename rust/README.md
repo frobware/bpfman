@@ -31,8 +31,8 @@ unchanged; SQLite still uses rusqlite's bundled library.
 
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
-| `bpfman-model` | 0 | Pure program specifications, stored records, and kernel observations |
-| `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, and forward unload continuations |
+| `bpfman-model` | 0 | Pure program specifications, stored records, kernel observations, and bounded XDP configuration |
+| `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, unload continuations, and XDP replacement planning |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
 | `bpfman-kernel` | 3 | Backend-independent observation and lifecycle capabilities with opaque ownership |
 | `bpfman-kernel-aya` | 4 | Aya loading, Linux observations, attachment handles, and private BPF syscall boundaries |
@@ -801,6 +801,37 @@ This is a single-member checkpoint. Detach an XDP link explicitly before program
 unload. Additional members, dispatcher replacement, explicit `--netns`, selectable
 XDP modes, and traffic/proceed-on execution acceptance remain unfinished. Loading
 an `xdp.frags` section does not establish fragmented-packet execution support.
+
+### Dispatcher replacement policy
+
+The first replacement implementation step is available in the pure crates.
+`plan_xdp_membership` assigns contiguous slots using Go's stable ordering:
+priority, new before existing at equal priority, then program name. Exact ties
+retain input order. It validates capacity and duplicate link identities, checks
+revision overflow, and selects last-member removal without loading an empty
+dispatcher. `XdpConfig` encodes every supported capacity using the existing ABI;
+the current single-member loading path uses the same encoder.
+
+`XdpReplacement` carries opaque old/staged revision ownership through switch,
+publication, and restoration. Rejected switches permit staged cleanup; failures
+after switching require successful restoration first. Failed restoration retains
+both revisions, the original cause, and every attempt for explicit retry.
+Successful publication returns old-revision cleanup ownership and committed new
+ownership separately. `XdpCleanup` records stable instruction IDs so multiple
+extension failures remain distinguishable across retries.
+
+Run `direnv exec . make rust-test-xdp-core` for the policy, ABI, and compile-fail
+tests. This does not establish multi-member kernel or traffic support. The next
+step is implementing conditional snapshot replacement in both stores and owned
+link switching/restoration in the kernel boundary, then connecting the runtime
+and running the shared fake-kernel and real-traffic acceptance suites.
+
+Checkpoint validation passed through the full `direnv exec . make rust-check`
+gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
+16 fake-kernel lifecycle tests, and all 36 real-kernel tests on the supported
+surface. The new pure suites include nine replacement-policy tests and three
+configuration tests. NixOS kernel-build discovery and the optional `KERNEL_DEV`
+override are documented in [AGENTS.md](AGENTS.md).
 
 ### Injectable kernel lifecycle
 

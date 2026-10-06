@@ -10,6 +10,8 @@ use alloc::string::String;
 
 mod xdp;
 pub use xdp::{InterfaceName, InvalidXdp, XdpKey, XdpLink, XdpProceedOn, XdpSnapshot, xdp_config};
+mod xdp_config;
+pub use xdp_config::{InvalidXdpConfig, XDP_MAX_MEMBERS, XdpConfig, XdpPriority, XdpSlot};
 
 mod link;
 mod load;

@@ -3,16 +3,25 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint completes kernel injection across the supported tracepoint and
-single-member XDP lifecycles, using both SQLite and JSON stores. The next milestone
-is an XDP **one → two → one → zero member lifecycle** using dispatcher replacement.
-Full behavioural parity remains unfinished.
+checkpoint adds pure XDP dispatcher-replacement policy on top of the injectable
+tracepoint and single-member XDP lifecycles, using both SQLite and JSON stores.
+The next milestone remains an XDP **one → two → one → zero member lifecycle**
+using dispatcher replacement. Full behavioural parity remains unfinished.
+
+The first dispatcher-replacement step now has pure membership planning, bounded
+slot/priority values, complete multi-member ABI encoding, and consuming
+switch/publication/restoration transitions. Failed restoration retains both
+revisions; cleanup attempts retain stable identities across retries. These
+policies are tested independently of I/O. Replacement kernel/store capabilities
+and runtime integration remain to be implemented; the supported CLI still admits
+only one member per interface.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One member per interface, current network namespace, driver-mode BPF link, last detach | Additional members, replacement, explicit namespaces, selectable modes |
+| XDP replacement policy | Pure ordering, bounded slots/priorities, multi-member ABI, ownership transitions, stable cleanup IDs | Kernel/store capabilities, runtime integration, multi-member acceptance |
 | XDP observations | Program/link get and list; complete dispatcher snapshot as JSON | Broader dispatcher CLI and traffic acceptance |
 | Persistence | Go-compatible SQLite schema 2; JSON format 4 for XDP attachment | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend for reads, load, attach, detach, unload, and retries; Aya confined to its adapter | Replacement capabilities for multi-member dispatchers |
@@ -23,11 +32,15 @@ refused; unsupported commands and flags fail clearly. See
 for the supported command surface.
 
 Validation for this checkpoint passed through `direnv exec . make rust-check`,
-including formatting, Clippy, workspace tests, documentation, 16 fake-kernel
-lifecycle tests, and 36 real-kernel tests. Both backends run the unchanged
+including formatting, Clippy, workspace tests, documentation, nine replacement
+policy tests, three configuration tests, five replacement compile-fail contracts,
+16 fake-kernel lifecycle tests, and 36 real-kernel tests. Both backends run the unchanged
 `TestXDP_LinkRoundTrip.bpfman` and
 `TestDispatcher_LifecycleAfterLastDetachXDP.bpfman` scripts. This establishes the
-first-member lifecycle; it does not establish multi-member or traffic parity.
+first-member lifecycle and pure replacement policy; it does not establish
+multi-member runtime or traffic parity. The full gate used the shared Go/Rust
+kernel-build helper outside the sandbox, allowing Nix to discover and realize
+the matching development output; see the NixOS guidance in `rust/AGENTS.md`.
 
 The kernel boundary is now replaceable across the supported lifecycle. One
 `Bpfman<S, K>` instance uses the same backend for observations, load, attach,
@@ -704,8 +717,13 @@ the forward token is cancelled; retries remain explicit and caller-budgeted.
 
 Implement and validate this milestone in the following order:
 
-1. Add pure planning and transition tests for deterministic ordering, bounded
-   slots, proceed-on configuration, revision selection, and rollback dependencies.
+1. Implemented: pure planning and transition tests for deterministic ordering,
+   bounded slots, proceed-on configuration, revision selection, and rollback
+   dependencies. `plan_xdp_membership` preserves Go's stable ordering by priority,
+   unattached before attached, and program name. `XdpReplacement` distinguishes
+   rejected switches from failures after mutation and gates staged cleanup on
+   successful restoration. `XdpCleanup` distinguishes individual member cleanup
+   attempts by stable instruction IDs. Run `direnv exec . make rust-test-xdp-core`.
 2. Extend the narrow kernel capabilities and concrete adapter with owned revision
    switching and restoration. Extend each real store with atomic, conditional
    replacement of the complete dispatcher/member snapshot.
@@ -1305,6 +1323,8 @@ named-selection DSL scripts.
 
 Completed checkpoint:
 
+- Pure replacement planning, multi-member ABI encoding, consuming switch/publication/
+  restoration transitions, and stable per-instruction cleanup retry history.
 - Pure one-slot XDP configuration and dependency-aware cleanup policy.
 - First attach and last detach in the current namespace with driver-mode BPF links.
 - Atomic dispatcher/member publication and conditional deletion on both stores.

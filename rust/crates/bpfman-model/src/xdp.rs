@@ -117,11 +117,5 @@ pub struct XdpSnapshot {
 
 /// One-slot dispatcher configuration matching Go's C ABI.
 pub fn xdp_config(proceed_on: XdpProceedOn) -> [u8; 124] {
-    let mut bytes = [0; 124];
-    bytes[..4].copy_from_slice(&[236, 2, 1, 0]);
-    bytes[4..8].copy_from_slice(&proceed_on.mask().to_ne_bytes());
-    for priority in bytes[44..84].chunks_exact_mut(4) {
-        priority.copy_from_slice(&50u32.to_ne_bytes());
-    }
-    bytes
+    *crate::XdpConfig::single(proceed_on).bytes()
 }
