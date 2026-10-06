@@ -139,6 +139,14 @@ impl XdpLifecycle for Kernel {
 impl bpfman_kernel::XdpReplacement for Kernel {
     type Switch = bpfman_fs::XdpSwitch<Self>;
 
+    fn validate_prepared_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        p: &Self::PreparedXdp,
+    ) -> Result<(), Error> {
+        p.validate(w).map_err(filesystem)
+    }
+
     fn load_revision(&self, config: &bpfman_model::XdpConfig) -> Result<Dispatcher, Error> {
         let mut bpf = aya::EbpfLoader::new()
             .override_global("conf", config.bytes().as_slice(), true)

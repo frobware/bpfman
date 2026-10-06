@@ -8,6 +8,14 @@ pub trait XdpReplacement: XdpLifecycle {
     /// Retained restoration evidence binding the runtime, outer link, and targets.
     type Switch: Send + Sync + 'static;
 
+    /// Validate retained managed-program evidence before continuing an admitted
+    /// multi-link operation. Must reject another runtime or kernel instance.
+    fn validate_prepared_xdp(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        prepared: &Self::PreparedXdp,
+    ) -> Result<(), Error>;
+
     /// Load the complete validated dispatcher configuration.
     fn load_revision(&self, config: &XdpConfig) -> Result<Self::Dispatcher, Error>;
     /// Exclusively create a selected revision without adopting prior residue.

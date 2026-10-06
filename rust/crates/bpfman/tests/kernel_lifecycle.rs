@@ -7,6 +7,9 @@ mod faults;
 #[path = "support/kernel.rs"]
 mod kernel;
 
+#[path = "lifecycle/xdp_unload.rs"]
+mod xdp_unload;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -139,10 +142,6 @@ fn lifecycle<S: Store>(backend: S) {
     let id = f.app.load(f.request(true)).expect("XDP load").record.id;
     let link = f.app.attach_xdp(xdp(id)).expect("XDP attach");
     assert!(f.app.get_link(link.id).expect("extension").pin_present);
-    assert!(
-        f.app.unload(id).is_err(),
-        "attached XDP unload remains unsupported"
-    );
     let held = f.kernel.hold_outer();
     assert!(held.attached());
     assert_eq!(
@@ -772,6 +771,36 @@ fn xdp_replacement_cancellation<S: Store>(backend: S) {
 macro_rules! backend_tests {
     ($module:ident,$backend:expr) => {
         mod $module {
+            #[test]
+            fn xdp_unload_post_detach() {
+                super::xdp_unload::post_detach($backend);
+            }
+
+            #[test]
+            fn xdp_unload_lifecycle() {
+                super::xdp_unload::lifecycle($backend);
+            }
+
+            #[test]
+            fn xdp_unload_preflight() {
+                super::xdp_unload::preflight($backend);
+            }
+
+            #[test]
+            fn xdp_unload_replacement_failures() {
+                super::xdp_unload::replacement_failures($backend);
+            }
+
+            #[test]
+            fn xdp_unload_restoration() {
+                super::xdp_unload::restoration($backend);
+            }
+
+            #[test]
+            fn xdp_unload_partial_and_cancellation() {
+                super::xdp_unload::partial_and_cancellation($backend);
+            }
+
             #[test]
             fn xdp_replacement_lifecycle() {
                 super::xdp_replacement_lifecycle($backend);

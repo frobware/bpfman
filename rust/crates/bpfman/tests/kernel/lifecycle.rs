@@ -21,7 +21,13 @@ fn load<S: OpenStore + CommitLoad>(
 }
 
 pub(super) fn exercise<
-    S: OpenStore + CommitLoad + UnloadStore + bpfman_store::LinkStore + Clone + Sync,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::LinkStore
+        + Clone
+        + Sync,
 >(
     backend: S,
 ) where

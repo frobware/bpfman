@@ -44,6 +44,8 @@ mod observation;
 mod store;
 mod unload;
 mod unload_error;
+mod unload_xdp;
+pub use unload_xdp::UnloadXdpAttempt;
 
 /// An instance bound to an initialized store, runtime, and kernel backend.
 ///
@@ -280,16 +282,21 @@ pub struct UnloadCause {
 /// A successful operation may retain cleanup warnings, matching Go's contract.
 #[must_use = "inspect cleanup warnings and retain any unresolved work"]
 pub struct UnloadReport<
-    S: bpfman_store::UnloadStore + bpfman_store::LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: bpfman_store::UnloadStore + bpfman_store::LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > {
     report: unload::StoreReport<S, K>,
+    xdp: unload_xdp::Progress<S, K>,
 }
 
 /// Unload failure, retaining progress and receipts if teardown began.
 pub struct UnloadError<
-    S: bpfman_store::UnloadStore + bpfman_store::LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: bpfman_store::UnloadStore + bpfman_store::LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > {
     failure: unload_error::Failure<S, K>,
 }

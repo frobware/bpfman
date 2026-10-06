@@ -65,7 +65,7 @@ impl From<bpfman_runtime::ObservationError> for Error {
     }
 }
 
-impl<S: bpfman_store::UnloadStore + bpfman_store::LinkStore + 'static>
+impl<S: bpfman_store::UnloadStore + bpfman_store::LinkStore + bpfman_store::XdpStore + 'static>
     From<bpfman_runtime::UnloadError<S, bpfman_kernel_aya::Kernel>> for Error
 {
     fn from(cause: bpfman_runtime::UnloadError<S, bpfman_kernel_aya::Kernel>) -> Self {

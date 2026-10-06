@@ -142,8 +142,10 @@ pub(super) type StoreReport<S, K> = bpfman_core::UnloadReport<
 >;
 
 impl<
-    S: bpfman_store::OpenStore + UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: bpfman_store::XdpReplacementStore + UnloadStore + LinkStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > Bpfman<S, K>
 where
     S::Reader: LinkReader,
@@ -173,25 +175,45 @@ where
                     cancelled: Some(cancellation.flag()),
                 },
                 |writer| {
-                    let report = run(
+                    if cancellation.is_cancelled() {
+                        return Err(crate::UnloadCause::from(
+                            crate::unload_error::Cause::Cancelled,
+                        )
+                        .into());
+                    }
+                    let operation = prepare(
                         &writer,
                         &mut real::Effects(&self.store, &self.kernel),
                         id,
                         cancellation,
                     )?;
-                    finish::<S, K>(report)
+                    let xdp = crate::unload_xdp::observe(self, &writer, id)?;
+                    if cancellation.is_cancelled() {
+                        return Err(crate::UnloadCause::from(
+                            crate::unload_error::Cause::Cancelled,
+                        )
+                        .into());
+                    }
+                    crate::unload_xdp::resume(
+                        self,
+                        &writer,
+                        UnloadReport {
+                            report: operation.defer(),
+                            xdp,
+                        },
+                    )
                 },
             )
             .map_err(crate::UnloadCause::from)?
     }
 }
 
-fn run<F: UnloadEffects>(
+fn prepare<F: UnloadEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
     id: NonZeroU32,
     cancellation: &crate::Cancellation,
-) -> Result<ReportFor<F>, F::Error> {
+) -> Result<OperationFor<F>, F::Error> {
     let check = |effects: &F| {
         if cancellation.is_cancelled() {
             Err(effects.cancelled())
@@ -210,19 +232,26 @@ fn run<F: UnloadEffects>(
 
     // Removing an existing pin is irreversible. Cancellation after admission
     // must not strand a half-completed teardown.
-    Ok(drain(
-        writer,
-        effects,
-        UnloadProgram::new_with_links(
-            links,
-            artifacts.pin,
-            record,
-            artifacts.maps,
-            artifacts.directory,
-            map_set,
-            artifacts.bytecode,
-        ),
+    Ok(UnloadProgram::new_with_links(
+        links,
+        artifacts.pin,
+        record,
+        artifacts.maps,
+        artifacts.directory,
+        map_set,
+        artifacts.bytecode,
     ))
+}
+
+#[cfg(test)]
+fn run<F: UnloadEffects>(
+    writer: &RuntimeWriter<'_>,
+    effects: &mut F,
+    id: NonZeroU32,
+    cancellation: &crate::Cancellation,
+) -> Result<ReportFor<F>, F::Error> {
+    let operation = prepare(writer, effects, id, cancellation)?;
+    Ok(drain(writer, effects, operation))
 }
 
 pub(super) fn drain<F: UnloadEffects>(
@@ -283,13 +312,16 @@ pub(super) fn drain<F: UnloadEffects>(
 }
 
 pub(super) fn finish<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 >(
     report: StoreReport<S, K>,
+    xdp: crate::unload_xdp::Progress<S, K>,
 ) -> Result<UnloadReport<S, K>, UnloadError<S, K>> {
     let failed = report.failed();
-    let report = UnloadReport { report };
+    let report = UnloadReport { report, xdp };
 
     if failed {
         Err(UnloadError {

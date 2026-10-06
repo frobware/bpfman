@@ -92,7 +92,7 @@ pub struct XdpReport<S: XdpStore, K: bpfman_kernel::XdpReplacement> {
 }
 
 impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> XdpError<S, K> {
-    fn cause(&self) -> Option<&LinkCause> {
+    pub(crate) fn cause(&self) -> Option<&LinkCause> {
         self.admission
             .as_ref()
             .or(self.primary.as_ref())
@@ -494,6 +494,53 @@ where
             .map_err(|e| XdpError::from(LinkCause::from(e)))?
     }
 
+    pub(crate) fn detach_xdp_locked(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+    ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
+        replacement::detach(self, w, id, &Cancellation::new())
+    }
+
+    pub(crate) fn retry_xdp_locked(
+        &self,
+        w: &RuntimeWriter<'_>,
+        mut error: XdpError<S, K>,
+    ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
+        let Some(recovery) = error.recovery.take() else {
+            return Err(error);
+        };
+        let report = match recovery {
+            Recovery::Cleanup(report) => cleanup(
+                w,
+                &mut real::Adapter(&self.store, &self.kernel),
+                report.retry(),
+            ),
+            Recovery::Restore { failure, blocked } => {
+                error = replacement::restore(self, w, failure.retry(), blocked);
+                match error.recovery.take() {
+                    Some(Recovery::Cleanup(report)) => *report,
+                    other => {
+                        error.recovery = other;
+                        return Err(error);
+                    }
+                }
+            }
+        };
+        if report.unresolved() == 0 {
+            Ok(XdpReport {
+                report,
+                primary: error.primary,
+                restorations: error.restorations,
+                committed: error.committed,
+            })
+        } else {
+            error.recovery = Some(Recovery::Cleanup(Box::new(report)));
+            error.admission = None;
+            Err(error)
+        }
+    }
+
     /// Retry unresolved cleanup once, retaining history and original failure.
     pub fn retry_xdp_cleanup(
         &self,
@@ -518,43 +565,12 @@ where
                 cancelled: Some(c.flag()),
             },
             |w| {
-                let Some(mut error) = pending.take() else {
+                let Some(error) = pending.take() else {
                     return Err(XdpError::from(LinkCause::from(Cause::Invalid(
                         "missing retry ownership",
                     ))));
                 };
-                let Some(recovery) = error.recovery.take() else {
-                    return Err(error);
-                };
-                let report = match recovery {
-                    Recovery::Cleanup(report) => cleanup(
-                        &w,
-                        &mut real::Adapter(&self.store, &self.kernel),
-                        report.retry(),
-                    ),
-                    Recovery::Restore { failure, blocked } => {
-                        error = replacement::restore(self, &w, failure.retry(), blocked);
-                        match error.recovery.take() {
-                            Some(Recovery::Cleanup(report)) => *report,
-                            other => {
-                                error.recovery = other;
-                                return Err(error);
-                            }
-                        }
-                    }
-                };
-                if report.unresolved() == 0 {
-                    Ok(XdpReport {
-                        report,
-                        primary: error.primary,
-                        restorations: error.restorations,
-                        committed: error.committed,
-                    })
-                } else {
-                    error.recovery = Some(Recovery::Cleanup(Box::new(report)));
-                    error.admission = None;
-                    Err(error)
-                }
+                self.retry_xdp_locked(&w, error)
             },
         );
         match result {
@@ -592,6 +608,14 @@ impl<S: bpfman_store::OpenStore, K> Bpfman<S, K>
 where
     S::Reader: XdpDispatcherReader,
 {
+    /// List complete supported dispatchers from one store snapshot, without the writer lock.
+    pub fn list_xdp_dispatchers(&self) -> Result<Vec<XdpDispatcherSnapshot>, LinkCause> {
+        self.store
+            .reader()
+            .read_xdp_dispatchers()
+            .map_err(Into::into)
+    }
+
     /// Read a complete dispatcher snapshot without acquiring the writer lock.
     pub fn get_xdp_dispatcher(&self, key: XdpKey) -> Result<XdpDispatcherSnapshot, LinkCause> {
         self.store

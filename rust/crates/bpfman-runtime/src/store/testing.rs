@@ -213,3 +213,59 @@ impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
         self.backend.delete_link(writer, receipt)
     }
 }
+
+impl<S: bpfman_store::XdpStore> bpfman_store::XdpStore for Faults<S> {
+    type XdpReceipt = S::XdpReceipt;
+
+    fn preflight_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+        program: NonZeroU32,
+    ) -> Result<(), Error> {
+        self.backend.preflight_xdp(w, key, program)
+    }
+
+    fn commit_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        request: bpfman_store::XdpCommit<'_>,
+    ) -> Result<bpfman_model::StoredLink, Error> {
+        self.backend.commit_xdp(w, request)
+    }
+
+    fn observe_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::XdpSnapshot, Self::XdpReceipt)>, Error> {
+        self.backend.observe_xdp(w, id)
+    }
+
+    fn delete_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::XdpReceipt,
+    ) -> Result<(), EffectFailure<Self::XdpReceipt, Error>> {
+        self.backend.delete_xdp(w, receipt)
+    }
+}
+
+impl<S: bpfman_store::XdpReplacementStore> bpfman_store::XdpReplacementStore for Faults<S> {
+    fn observe_xdp_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<(bpfman_model::XdpDispatcherSnapshot, Self::XdpReceipt)>, Error> {
+        self.backend.observe_xdp_dispatcher(w, key)
+    }
+
+    fn replace_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::XdpReceipt,
+        request: bpfman_store::XdpReplace<'_>,
+    ) -> Result<bpfman_model::XdpDispatcherSnapshot, EffectFailure<Self::XdpReceipt, Error>> {
+        self.backend.replace_xdp(w, receipt, request)
+    }
+}

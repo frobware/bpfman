@@ -259,3 +259,26 @@ fn sqlite_unchanged_xdp_replacement_dsl() {
 fn json_unchanged_xdp_replacement_dsl() {
     xdp_replacement_dsl("json");
 }
+
+#[path = "kernel/xdp_unload.rs"]
+mod xdp_unload;
+
+#[test]
+fn sqlite_xdp_unload_lifecycle() {
+    xdp_unload::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_xdp_unload_lifecycle() {
+    xdp_unload::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_unchanged_xdp_unload_dsl() {
+    cli::dsl("sqlite", "TestXDP_UnloadDispatcherMemberRebuildsSurvivor");
+}
+
+#[test]
+fn json_unchanged_xdp_unload_dsl() {
+    cli::dsl("json", "TestXDP_UnloadDispatcherMemberRebuildsSurvivor");
+}

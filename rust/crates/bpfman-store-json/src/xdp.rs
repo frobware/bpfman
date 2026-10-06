@@ -311,6 +311,17 @@ pub(super) fn dispatcher(
 }
 
 impl bpfman_store::XdpDispatcherReader for Reader {
+    fn read_xdp_dispatchers(&mut self) -> Result<Vec<XdpDispatcherSnapshot>, Error> {
+        let (_, state) = read(&self.file)?;
+        let keys: std::collections::BTreeSet<_> = state.xdp.iter().map(Row::key).collect();
+        keys.into_iter()
+            .map(|key| {
+                dispatcher(&state, &self.layout, key)?.ok_or(Failure::Invalid("missing dispatcher"))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
+    }
+
     fn read_xdp_dispatcher(&mut self, key: XdpKey) -> Result<Option<XdpDispatcherSnapshot>, Error> {
         let (_, state) = read(&self.file)?;
         dispatcher(&state, &self.layout, key).map_err(Into::into)

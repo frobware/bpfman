@@ -1,6 +1,6 @@
-use crate::{Bpfman, UnloadCause, UnloadError, UnloadErrorKind, UnloadReport, unload};
+use crate::{Bpfman, UnloadCause, UnloadError, UnloadErrorKind, UnloadReport};
 use bpfman_core::{UnloadAttempt, UnloadKind};
-use bpfman_store::{LinkReader, LinkStore, OpenStore, UnloadStore};
+use bpfman_store::{LinkReader, LinkStore, UnloadStore};
 use std::{fmt, num::NonZeroU32};
 
 #[derive(Debug, thiserror::Error)]
@@ -20,8 +20,10 @@ pub(super) enum Cause {
 }
 
 pub(super) enum Failure<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > {
     Before(UnloadCause),
     Incomplete(Box<UnloadReport<S, K>>),
@@ -56,8 +58,10 @@ impl From<bpfman_store::Error> for UnloadCause {
 }
 
 impl<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > From<UnloadCause> for UnloadError<S, K>
 {
     fn from(cause: UnloadCause) -> Self {
@@ -99,30 +103,52 @@ impl UnloadCause {
 }
 
 impl<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > UnloadReport<S, K>
 {
-    /// All attempted effects, including successful ones and previous retry passes.
+    /// Program and standalone-link effects, including previous retry passes.
+    /// Dispatcher work is reported separately by [`Self::xdp_attempts`].
     pub fn attempts(&self) -> &[UnloadAttempt<UnloadCause>] {
         self.report.attempts()
     }
 
+    /// Dispatcher detach and recovery outcomes, before program teardown.
+    pub fn xdp_attempts(&self) -> &[crate::UnloadXdpAttempt<S, K>] {
+        self.xdp.attempts()
+    }
+
     /// Retained work, including dependencies that could not yet be attempted.
     pub fn unresolved(&self) -> usize {
-        self.report.remaining().len()
+        self.report.remaining().len() + self.xdp.unresolved()
     }
 }
 
 impl<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > UnloadError<S, K>
 {
     /// Backend-independent failure category.
     pub fn kind(&self) -> UnloadErrorKind {
-        self.primary()
-            .map_or(UnloadErrorKind::Unavailable, UnloadCause::kind)
+        if let Some(cause) = self.primary() {
+            return cause.kind();
+        }
+        match self
+            .report()
+            .and_then(|r| r.xdp.cause())
+            .map(crate::LinkCause::kind)
+        {
+            Some(crate::LinkErrorKind::Cancelled) => UnloadErrorKind::Cancelled,
+            Some(crate::LinkErrorKind::NotFound) => UnloadErrorKind::NotFound,
+            Some(crate::LinkErrorKind::InvalidState) => UnloadErrorKind::InvalidState,
+            Some(crate::LinkErrorKind::Unsupported) => UnloadErrorKind::Unsupported,
+            _ => UnloadErrorKind::Unavailable,
+        }
     }
 
     /// Progress if teardown started; preflight errors have no cleanup report.
@@ -154,8 +180,10 @@ impl<
 }
 
 impl<
-    S: OpenStore + UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: bpfman_store::XdpReplacementStore + UnloadStore + LinkStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > Bpfman<S, K>
 where
     S::Reader: LinkReader,
@@ -184,7 +212,8 @@ where
     }
 
     /// Retry retained cleanup once, preserving receipts if lock acquisition fails.
-    /// No new observations or automatic retry loops are performed.
+    /// Dispatcher continuations revalidate logical member identity; cleanup uses retained receipts.
+    /// Failed forward detaches are never retried inline with their recovery.
     pub fn retry_unload_cleanup(
         &self,
         report: UnloadReport<S, K>,
@@ -208,13 +237,9 @@ where
                 cancelled: Some(cancellation.flag()),
             },
             |writer| {
-                pending.take().map(|report| {
-                    unload::finish::<S, K>(unload::drain(
-                        &writer,
-                        &mut unload::real::Effects(&self.store, &self.kernel),
-                        report.report.retry(),
-                    ))
-                })
+                pending
+                    .take()
+                    .map(|report| crate::unload_xdp::resume(self, &writer, report))
             },
         );
 
@@ -242,8 +267,10 @@ where
 }
 
 impl<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > fmt::Debug for UnloadReport<S, K>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -255,8 +282,10 @@ impl<
 }
 
 impl<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > fmt::Debug for UnloadError<S, K>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -265,8 +294,10 @@ impl<
 }
 
 impl<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > fmt::Display for UnloadError<S, K>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -278,6 +309,12 @@ impl<
                 "; {} unresolved teardown instructions",
                 report.unresolved()
             )?;
+
+            if let Some(attempt) = report.xdp_attempts().last() {
+                if let Err(error) = attempt.outcome() {
+                    write!(f, "; XDP link {}: {error}", attempt.link_id())?;
+                }
+            }
 
             for attempt in report.attempts() {
                 if let Err(error) = &attempt.outcome {
@@ -304,11 +341,16 @@ impl<
 }
 
 impl<
-    S: UnloadStore + LinkStore,
-    K: bpfman_kernel::ProgramResources + bpfman_kernel::TracepointLinks,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement,
 > std::error::Error for UnloadError<S, K>
 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.primary().map(|e| e as _)
+        if let Some(cause) = self.primary() {
+            return Some(cause);
+        }
+        self.report().and_then(|r| r.xdp.cause()).map(|e| e as _)
     }
 }

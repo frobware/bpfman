@@ -55,7 +55,7 @@ pub(super) fn assert_gone(kernel: NonZeroU32) {
 
 pub(super) fn exercise<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + LinkStore + UnloadStore + Clone,
+    S: OpenStore + CommitLoad + LinkStore + UnloadStore + bpfman_store::XdpReplacementStore + Clone,
     S::Reader: LinkReader,
 {
     let c = Context::new();

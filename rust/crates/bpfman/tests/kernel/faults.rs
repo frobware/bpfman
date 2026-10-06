@@ -423,6 +423,10 @@ impl<S: bpfman_store::XdpReplacementStore> bpfman_store::XdpReplacementStore for
 }
 
 impl<R: bpfman_store::XdpDispatcherReader> bpfman_store::XdpDispatcherReader for Reader<R> {
+    fn read_xdp_dispatchers(&mut self) -> Result<Vec<bpfman_model::XdpDispatcherSnapshot>, Error> {
+        self.reader.read_xdp_dispatchers()
+    }
+
     fn read_xdp_dispatcher(
         &mut self,
         key: bpfman_model::XdpKey,

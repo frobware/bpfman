@@ -669,8 +669,8 @@ direnv exec . make rust-test-unload
 ```
 
 This slice accepts a managed tracepoint with pending or finalised standalone
-links, or an unattached XDP extension. Each must have its own map set, no other
-map-set users, and no shared-map-pin registrations.
+links, or an XDP extension with or without dispatcher links. Each must have its
+own map set, no other map-set users, and no shared-map-pin registrations.
 Other program types, shared state, multiple operands, and `--ignore-missing` are
 explicitly unsupported. A missing managed record returns an error without
 inspecting or adopting a kernel-only program or creating a database. It does not
@@ -687,7 +687,25 @@ adoption accepts only `bytecode.o` and `provenance.json`. Unknown children and
 unsafe paths fail preflight before any managed-object removal. Ordinary missing
 artifacts are treated as already absent.
 
-Unload is forward teardown of committed state, with its own pure continuations:
+XDP unload first removes all of the program's dispatcher memberships under the
+same writer lock, rebuilding surviving members or synchronously detaching the
+last member. All dispatcher and program artifacts are preflighted before effects.
+Program teardown remains deferred until dispatcher work, including old-revision
+retirement, succeeds. `UnloadReport::xdp_attempts()` preserves nested detach,
+restoration, and cleanup history; `attempts()` records the subsequent program
+and standalone-link effects.
+
+A failed restoration retains both revisions and blocks program teardown. A
+successful rollback recovery ends that pass; a separate explicit retry may
+resume the forward detach. Earlier completed detachments are never recreated.
+Retries validate retained managed-program evidence and logical member identity;
+the canonical program pin must remain present while dispatcher work is pending.
+Foreign runtimes/kernel instances and moved or replaced pins are refused. New
+links added while recovery is retained block program teardown until explicitly
+handled.
+
+After dispatcher prerequisites, unload is forward teardown of committed state,
+with its own pure continuations:
 
 1. For each link, remove its pin and then delete its record. A failure stops
    later links and all program teardown; successful detachments remain complete.
@@ -759,7 +777,7 @@ get/list observations, and unload with the other implementation.
 
 ## XDP attachment and replacement
 
-`link attach xdp PROGRAM_ID INTERFACE --priority N [-m KEY=VALUE]` attaches the
+`link attach xdp PROGRAM_ID INTERFACE --priority N [-m KEY=VALUE]` attaches
 a member of a dispatcher in the current network namespace. Up to ten links may
 share an interface, including multiple links for one program. `--proceed-on`
 accepts comma-separated or repeated `aborted`, `drop`, `pass`, `tx`, `redirect`,
@@ -767,10 +785,13 @@ and `dispatcher_return`; the default is `pass,dispatcher_return`. The command
 supports text and JSON output. `link get`, `link list`, and `program get` expose
 stored XDP details and actual tracing-link observations. `dispatcher get xdp
 NSID IFINDEX -o json` reads the complete stored snapshot without a writer lock.
+`dispatcher list [--type xdp] [--nsid N] [--ifindex N] -o json` lists summaries
+from one validated store snapshot, also without that lock. Zero or omitted
+namespace/interface filters select all; only XDP and JSON output are supported.
 
 The runtime resolves the interface, validates the managed EXT program, loads a
 one-slot dispatcher, and pins its program, extension link, and outer interface
-link using Go's path layout. Only driver mode and BPF links are supported. An
+link using Go's path layout. Only driver mode and BPF links are supported. A
 foreign occupied attach point is refused. Managed membership changes use complete
 revision replacement; there is no netlink fallback.
 SQLite atomically publishes the dispatcher header, managed link, and member
@@ -802,10 +823,10 @@ residue-free teardown. Shared store tests cover atomic snapshots, stale receipts
 and foreign runtime authority; production-interpreter fakes cross acquisition,
 cancellation, and individual cleanup failures.
 
-Detach all XDP links explicitly before program unload. Attached-program unload,
-explicit `--netns`, selectable XDP modes, and the broader traffic corpus remain
-unfinished. Loading
-an `xdp.frags` section does not establish fragmented-packet execution support.
+Attached-program unload removes all XDP links through the same protocol.
+Explicit `--netns`, selectable XDP modes, and the broader traffic corpus remain
+unfinished. Loading an `xdp.frags` section does not establish fragmented-packet
+execution support.
 
 ### Dispatcher replacement policy
 
@@ -888,13 +909,21 @@ either survivor, and restoration after failed attach/detach publication. Both
 stores also run the unchanged Go priority-ordering, slot-reuse, ten-slot capacity,
 configuration-after-detach, and default-proceed-on rebuild scripts.
 
-Next: integrate attached XDP program unload with the same replacement protocol
-and admit the unchanged survivor-rebuild script. Broader fill/drain and
-chain-execution acceptance remains subsequent work.
+Run `direnv exec . make rust-test-xdp-unload` for attached-unload acceptance on
+both stores. The unchanged `TestXDP_UnloadDispatcherMemberRebuildsSurvivor.bpfman`
+script verifies CLI survivor rebuilding. Real packet tests unload either member,
+including duplicate links for the removed program, and verify surviving execution,
+stable outer identity, failed-publication restoration, moved-pin refusal on retry,
+last-member deletion failure, and complete teardown. Shared fake tests also cover
+multiple interfaces, foreign kernel instances, failed retirement, cancellation,
+partial progress, and new links added during retained recovery.
+
+Next: broader XDP fill/drain and chain-execution acceptance using unchanged Go
+scripts.
 
 Checkpoint validation passed through the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-24 fake-kernel lifecycle tests, and all 42 real-kernel tests on the supported
+36 fake-kernel lifecycle tests, and all 46 real-kernel tests on the supported
 surface. The new pure suites include nine replacement-policy tests and three
 configuration tests. NixOS kernel-build discovery and the optional `KERNEL_DEV`
 override are documented in [AGENTS.md](AGENTS.md).
@@ -932,6 +961,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 42 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 46 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

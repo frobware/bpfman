@@ -198,6 +198,12 @@ where
         .expect("other");
         let mut reader = writer(&runtime, |w| backend.open(w).expect("open"));
         writer(&other, |w| backend.open(w).expect("open other"));
+        assert!(
+            reader
+                .read_xdp_dispatchers()
+                .expect("empty listing")
+                .is_empty()
+        );
         let key = XdpKey {
             nsid: NonZeroU64::MIN,
             ifindex: n(7),
@@ -473,6 +479,10 @@ where
                 )
                 .map_err(|e| e.cause)
                 .expect("remove either member");
+            assert_eq!(
+                reader.read_xdp_dispatchers().expect("complete listing"),
+                std::slice::from_ref(&one)
+            );
             assert_eq!(one.members().len(), 1);
             assert_eq!(one.members()[0].member.id, keep.member.id);
             assert_eq!(one.members()[0].details.slot.index(), 0);
@@ -490,6 +500,12 @@ where
                 .expect("last detach");
             assert!(reader.read_xdp_dispatcher(key).expect("absent").is_none());
             assert!(reader.read_links().expect("no residue").is_empty());
+            assert!(
+                reader
+                    .read_xdp_dispatchers()
+                    .expect("empty listing after last detach")
+                    .is_empty()
+            );
         });
     }
 }

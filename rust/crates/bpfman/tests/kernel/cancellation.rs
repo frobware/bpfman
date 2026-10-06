@@ -22,7 +22,14 @@ fn request() -> PreparedProgram {
     .expect("prepare")
 }
 
-pub(super) fn exercise<S: OpenStore + CommitLoad + UnloadStore + bpfman_store::LinkStore + Clone>(
+pub(super) fn exercise<
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::LinkStore
+        + Clone,
+>(
     backend: S,
 ) where
     S::Reader: bpfman_store::LinkReader,

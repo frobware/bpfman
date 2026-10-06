@@ -258,3 +258,11 @@ pub(crate) fn insert_member(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result
     }
     Ok(id)
 }
+
+pub(crate) fn dispatcher_keys(conn: &Connection) -> rusqlite::Result<Vec<(String, i64, i64)>> {
+    conn.prepare_cached("SELECT type, nsid, ifindex FROM dispatchers ORDER BY type, nsid, ifindex")?
+        .query_map([], |r| {
+            Ok((r.get("type")?, r.get("nsid")?, r.get("ifindex")?))
+        })?
+        .collect()
+}

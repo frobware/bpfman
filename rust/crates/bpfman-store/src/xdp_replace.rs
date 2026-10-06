@@ -95,6 +95,10 @@ impl XdpReplace<'_> {
 
 /// Complete dispatcher observations, including every member in slot order.
 pub trait XdpDispatcherReader {
+    /// Read every complete supported dispatcher from one snapshot, ordered by key.
+    /// Unsupported or malformed state fails rather than producing a partial listing.
+    fn read_xdp_dispatchers(&mut self) -> Result<Vec<XdpDispatcherSnapshot>, Error>;
+
     /// Read atomically; malformed membership is an error, never partial success.
     fn read_xdp_dispatcher(&mut self, key: XdpKey) -> Result<Option<XdpDispatcherSnapshot>, Error>;
 }

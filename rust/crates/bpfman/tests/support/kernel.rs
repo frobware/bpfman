@@ -866,13 +866,15 @@ impl XdpLifecycle for FakeKernel {
         interface: &InterfaceName,
     ) -> Result<(XdpKey, PreparedXdp), Error> {
         self.enter(Point::PrepareXdp)?;
-        if interface.as_str() != "fake0" {
-            return Err(error(ErrorKind::Missing, "missing interface"));
-        }
+        let ifindex = match interface.as_str() {
+            "fake0" => NonZeroU32::MIN,
+            "fake1" => NonZeroU32::new(2).expect("interface index"),
+            _ => return Err(error(ErrorKind::Missing, "missing interface")),
+        };
         let extension = self.adopt(w, program, "extension")?;
         let key = XdpKey {
             nsid: NonZeroU64::MIN,
-            ifindex: NonZeroU32::MIN,
+            ifindex,
         };
         Ok((key, PreparedXdp { extension, key }))
     }
@@ -1056,6 +1058,10 @@ pub(super) struct Switch {
 
 impl XdpReplacement for FakeKernel {
     type Switch = Switch;
+
+    fn validate_prepared_xdp(&self, w: &RuntimeWriter<'_>, p: &PreparedXdp) -> Result<(), Error> {
+        self.loaded(w, &p.extension)
+    }
 
     fn load_revision(&self, _config: &XdpConfig) -> Result<Loaded, Error> {
         self.load_dispatcher(XdpProceedOn::default())

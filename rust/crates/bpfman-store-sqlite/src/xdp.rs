@@ -290,6 +290,46 @@ fn canonical_rows(
 }
 
 impl bpfman_store::XdpDispatcherReader for Store {
+    fn read_xdp_dispatchers(&mut self) -> Result<Vec<XdpDispatcherSnapshot>, Error> {
+        self.reader
+            .read(|c| {
+                let tx = c.transaction()?;
+                open::require_supported(open::schema_version(&tx)?)?;
+                let keys = queries::dispatcher_keys(&tx)?;
+                let rows = queries::rows(&tx, None, None)?;
+                let mut result = Vec::new();
+                let mut total = 0;
+                for (kind, nsid, ifindex) in keys {
+                    if kind != "xdp" {
+                        return Err(Failure::Unsupported(
+                            "only XDP dispatcher listing is implemented",
+                        ));
+                    }
+                    let key = XdpKey {
+                        nsid: id64(nsid)?,
+                        ifindex: id32(ifindex)?,
+                    };
+                    let selected: Vec<_> = rows
+                        .iter()
+                        .filter(|r| r.nsid == nsid && r.ifindex == ifindex)
+                        .cloned()
+                        .collect();
+                    total += selected.len();
+                    let snapshot = decode_rows(&selected)?.ok_or_else(invalid)?;
+                    if snapshot.members().iter().any(|s| s.details.key != key) {
+                        return Err(invalid());
+                    }
+                    result.push(snapshot);
+                }
+                if total != rows.len() {
+                    return Err(invalid());
+                }
+                Ok(result)
+            })
+            .map_err(crate::Error::from)
+            .map_err(Into::into)
+    }
+
     fn read_xdp_dispatcher(&mut self, key: XdpKey) -> Result<Option<XdpDispatcherSnapshot>, Error> {
         self.reader
             .read(|c| {

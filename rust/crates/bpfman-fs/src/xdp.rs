@@ -362,6 +362,13 @@ impl<E: ExtensionProgram> PreparedXdp<E> {
         self.key
     }
 
+    /// Revalidate retained managed-program identity under its original writer.
+    pub fn validate(&self, writer: &RuntimeWriter<'_>) -> Result<(), Error> {
+        self.extension_entry.check_writer(writer)?;
+        open_owned(&self.extension_entry)?;
+        Ok(())
+    }
+
     /// Exclusively create the first revision directory; never adopt prior residue.
     pub fn create_revision(
         &self,

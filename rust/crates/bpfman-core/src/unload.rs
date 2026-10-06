@@ -89,6 +89,16 @@ impl<P, R, M, D, S, B, E, L, Q> UnloadProgram<P, R, M, D, S, B, E, L, Q> {
         }
     }
 
+    /// Retain every unexecuted instruction without performing an effect. Used when
+    /// an interpreter-owned prerequisite must finish before program teardown.
+    pub fn defer(mut self) -> UnloadReport<P, R, M, D, S, B, E, L, Q> {
+        self.remaining.extend(self.pending);
+        UnloadReport {
+            remaining: self.remaining,
+            attempts: self.attempts,
+        }
+    }
+
     /// Dispatch the next effect whose prerequisites succeeded in this pass.
     pub fn next(mut self) -> UnloadStep<P, R, M, D, S, B, E, L, Q> {
         while let Some(work) = self.pending.pop_front() {

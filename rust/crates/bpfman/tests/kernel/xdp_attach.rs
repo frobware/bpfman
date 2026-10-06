@@ -189,8 +189,7 @@ where
     );
     foreign.no_artifacts();
 
-    // Refusing attached unload must precede every destructive operation.
-    assert!(app.unload(program).is_err());
+    // Refused foreign attachment did not disturb this program or member.
     assert!(c.layout.program_pin_path(program).exists());
     assert!(app.get_link(first.id).expect("still attached").pin_present);
 

@@ -31,6 +31,7 @@ trait TestStore:
     OpenStore<Reader: LinkReader>
     + CommitLoad
     + UnloadStore<ProgramReceipt: Send, MapSetReceipt: Send>
+    + bpfman_store::XdpReplacementStore
     + LinkStore<LinkReceipt: Send>
     + Copy
     + Send
@@ -41,6 +42,7 @@ impl<S> TestStore for S where
     S: OpenStore<Reader: LinkReader>
         + CommitLoad
         + UnloadStore<ProgramReceipt: Send, MapSetReceipt: Send>
+        + bpfman_store::XdpReplacementStore
         + LinkStore<LinkReceipt: Send>
         + Copy
         + Send
@@ -177,9 +179,16 @@ fn retained_backend_receipts_survive_failed_unload_and_explicit_retry<S: TestSto
     let error = bpfman.unload(id()).expect_err("record failure");
 
     assert!(!store.records(&runtime).is_empty());
+    // Standalone-link and XDP preflight each validate the retained store handle.
     assert_eq!(
         calls(&store),
-        ["commit", "observe", "validate", "delete program"]
+        [
+            "commit",
+            "observe",
+            "validate",
+            "validate",
+            "delete program"
+        ]
     );
 
     let error = bpfman.retry_unload(error).expect_err("unchanged fault");

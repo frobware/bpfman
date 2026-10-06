@@ -10,8 +10,17 @@ use std::{num::NonZeroU32, sync::mpsc, time::Duration};
 
 const BUDGET: Duration = Duration::from_secs(3);
 
-fn exercise<S: OpenStore + UnloadStore + bpfman_store::LinkStore + Copy + Send + Sync>(backend: S)
-where
+fn exercise<
+    S: OpenStore
+        + UnloadStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::LinkStore
+        + Copy
+        + Send
+        + Sync,
+>(
+    backend: S,
+) where
     S::Reader: bpfman_store::LinkReader,
 {
     let temp = tempfile::tempdir().expect("runtime");
