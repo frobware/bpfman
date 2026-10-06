@@ -52,6 +52,12 @@
             go_1_25
             pkg-config
 
+            # Rust toolchain for the rust/ workspace.
+            cargo
+            clippy
+            rust-analyzer
+            rustc
+            rustfmt
 
             parallel
 
@@ -116,6 +122,10 @@
             # hack/fedora-vm-host-deps.sh.
             virtiofsd
           ];
+
+          # nixpkgs' rustc ships no rust-src; rust-analyzer needs it
+          # to resolve std.
+          RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
 
           shellHook = ''
             # Build env values (CGO_ENABLED, linker mode, STATIC) are
