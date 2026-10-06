@@ -70,7 +70,7 @@ fn metadata(raw: &str) -> Result<(String, String), String> {
 impl LinkCommand {
     pub(crate) fn execute<S>(
         self,
-        app: &bpfman_runtime::Bpfman<S>,
+        app: &bpfman_runtime::Bpfman<S, bpfman_kernel_aya::Kernel>,
         cancellation: &bpfman_runtime::Cancellation,
     ) -> Result<(), crate::error::Error>
     where

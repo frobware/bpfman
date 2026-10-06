@@ -24,7 +24,7 @@ pub(crate) enum DispatcherTarget {
 impl DispatcherCommand {
     pub(crate) fn execute<S>(
         self,
-        app: &bpfman_runtime::Bpfman<S>,
+        app: &bpfman_runtime::Bpfman<S, bpfman_kernel_aya::Kernel>,
     ) -> Result<(), crate::error::Error>
     where
         S: bpfman_store::OpenStore,

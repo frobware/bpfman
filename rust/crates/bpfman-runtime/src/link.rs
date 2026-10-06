@@ -243,7 +243,7 @@ fn detach<F: Effects>(
     ))
 }
 
-impl<S: OpenStore + LinkStore> Bpfman<S> {
+impl<S: OpenStore + LinkStore, K> Bpfman<S, K> {
     /// Attach a managed tracepoint, preserving pending intent if cleanup fails.
     pub fn attach_tracepoint(&self, request: TracepointAttach) -> Result<StoredLink, LinkError<S>> {
         self.attach_tracepoint_with_cancellation(request, &Cancellation::new())
@@ -382,7 +382,7 @@ impl<S: OpenStore + LinkStore> Bpfman<S> {
     }
 }
 
-impl<S: OpenStore> Bpfman<S>
+impl<S: OpenStore, K> Bpfman<S, K>
 where
     S::Reader: bpfman_store::LinkReader,
 {

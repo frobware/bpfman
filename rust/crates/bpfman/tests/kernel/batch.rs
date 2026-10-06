@@ -29,6 +29,7 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
+        bpfman_kernel_aya::Kernel,
         TIMEOUT,
     );
     let loaded = app.load_batch(prepare()).expect("batch");

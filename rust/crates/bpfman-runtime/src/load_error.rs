@@ -108,7 +108,7 @@ impl LoadError {
     }
 }
 
-impl<S: bpfman_store::OpenStore> Bpfman<S> {
+impl<S: bpfman_store::OpenStore, K> Bpfman<S, K> {
     /// Retry unresolved load cleanup once under this instance's writer lock.
     /// The original failure remains the result, including after complete cleanup.
     /// Acquisition failure retains all receipts and is exposed by `retry_lock_error`.

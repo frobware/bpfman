@@ -6,7 +6,7 @@ use bpfman_store::{OpenStore, ProgramReader};
 
 use crate::{Bpfman, Error, error::store_error};
 
-impl<S: OpenStore> Bpfman<S> {
+impl<S: OpenStore, K> Bpfman<S, K> {
     /// Read managed summaries without kernel observations or the writer lock.
     pub fn list(&self, filter: &ProgramFilter) -> Result<Vec<StoredProgramSummary>, Error> {
         self.list_with_cancellation(filter, &crate::Cancellation::new())

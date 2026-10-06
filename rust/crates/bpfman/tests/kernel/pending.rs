@@ -19,6 +19,7 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
+        bpfman_kernel_aya::Kernel,
         TIMEOUT,
     );
     let loaded = app
@@ -184,6 +185,7 @@ where
         let store = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
+            bpfman_kernel_aya::Kernel,
             TIMEOUT,
         );
         let loaded = app

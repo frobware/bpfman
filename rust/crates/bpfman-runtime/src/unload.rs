@@ -141,7 +141,7 @@ pub(super) type StoreReport<S> = bpfman_core::UnloadReport<
     <S as LinkStore>::LinkReceipt,
 >;
 
-impl<S: bpfman_store::OpenStore + UnloadStore + LinkStore> Bpfman<S>
+impl<S: bpfman_store::OpenStore + UnloadStore + LinkStore, K> Bpfman<S, K>
 where
     S::Reader: LinkReader,
 {

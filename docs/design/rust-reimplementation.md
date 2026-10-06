@@ -285,9 +285,11 @@ Unload uses associated, non-cloneable program and map-set receipts. Failures
 return those receipts with their causes. An explicit retry supplies the same
 backend and runtime authority; the backend validates evidence again before
 mutation. No generic transaction callback, SQL row, or file-format payload
-appears in the contracts. Shared tests exercise both persistent backends and an
-independent in-memory test implementation; SQLite remains the default selection
-for Go interoperability.
+appears in the contracts. Shared tests exercise both real persistent backends.
+Failure decorators may intercept individual store operations, but never implement
+storage, atomicity,
+or receipt validation themselves. No fake store is needed; SQLite remains the
+default selection for Go interoperability.
 
 ### Ownership within an adapter, compensation across adapters
 
@@ -358,9 +360,10 @@ meaningful:
 | `bpfman-csi` | Front end | CSI integration using narrow runtime capabilities |
 | `bpfman` | Composition root | CLI, daemon mode, namespace-helper mode, configuration, logging, and dependency construction |
 
-The kernel split above is the next step, not the current implementation:
-`bpfman-kernel` currently provides concrete read-only Linux observations, and
-`bpfman-kernel-aya` does not yet exist in the new workspace.
+The observation portion of this split is implemented: `bpfman-kernel` defines
+portable read capabilities and `bpfman-kernel-aya` implements Linux observations.
+Loading, attachment, opaque ownership contracts, and removal of Aya from runtime
+and filesystem code remain the next portion of the refactor.
 
 This is a starting point, not a target crate count. A crate should be split when
 doing so enforces a dependency rule, isolates a portability constraint, or
@@ -480,9 +483,13 @@ before two or more operations demonstrate the same abstraction.
 The current implementation has operation-level test seams, but it does not yet
 have a kernel abstraction equivalent to the store boundary:
 
-- `Bpfman<S>` selects a store only; callers cannot supply a kernel backend.
-- `bpfman-kernel` exports four concrete observation functions for programs, maps,
-  tracepoint links, and extension links, rather than injectable capabilities.
+- `Bpfman<S, K>` now accepts an observation backend alongside the real store.
+  Program, map, link, and pin reads use its `ProgramObservations` and
+  `LinkObservations` capabilities, including post-load result observation.
+- `bpfman-kernel` owns those portable observation contracts and classified
+  errors; `bpfman-kernel-aya` implements Linux observations and the CLI selects it.
+  Stateful fake-observer tests exercise public reads with both real stores.
+  Mutation remains concrete and is not yet replaceable by this observer.
 - Private load, unload, tracepoint, and XDP effect traits support fault injection
   through the production interpreters. They combine kernel, filesystem, and store
   effects; they do not provide one coherent kernel backend across operations.
@@ -541,8 +548,8 @@ replacement.
 
 Use generics to express the store and kernel dependencies, conceptually
 `Bpfman<S, K>`. Each operation should require only the capability traits it uses.
-The concrete application shape remains subject to the kernel-boundary refactor;
-this is a design direction, not an API already implemented.
+The application now has this generic shape for observations. Generic loading,
+attachment and cleanup capabilities remain part of the kernel-boundary refactor.
 
 Associated types on the relevant capabilities keep backend-owned resources opaque:
 for example, `K::LoadedProgram` and `K::Link`. The concrete adapter owns Aya objects;
@@ -657,7 +664,8 @@ reports one pass and does not persist a recovery queue.
 receipts. Its private `xdp/syscall.rs` is the narrowly reviewed unsafe boundary for
 link creation, inspection, fd-preserving pinning, and synchronous detach. All other
 filesystem modules deny unsafe code, and workspace-law tests preserve the remaining
-lint gates. Read-only kernel observations remain in `bpfman-kernel`.
+lint gates. Read-only Linux observations live in `bpfman-kernel-aya`, behind
+the injected `bpfman-kernel` contracts.
 
 ### After the kernel boundary: dispatcher replacement
 

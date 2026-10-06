@@ -116,7 +116,9 @@ impl PreparedProgram {
     }
 }
 
-impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
+impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::ProgramObservations>
+    Bpfman<S, K>
+{
     /// Load one prepared local program without attaching it. Private maps are
     /// pinned; failures retain unresolved ownership for an explicit cleanup pass.
     pub fn load(&self, request: PreparedProgram) -> Result<ObservedProgram, LoadError> {
@@ -219,6 +221,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> Bpfman<S> {
                             .collect();
                         let observe = |stored: StoredProgramSummary| {
                             crate::observation::observe(
+                                &self.kernel,
                                 store,
                                 writer.directory(),
                                 stored.id(),

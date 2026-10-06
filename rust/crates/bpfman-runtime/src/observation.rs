@@ -75,14 +75,14 @@ trait KernelObservations {
     fn map(&mut self, id: u32) -> Result<KernelMap, Failure>;
 }
 
-struct Kernel;
+struct Kernel<'a, K>(&'a K);
 
-impl KernelObservations for Kernel {
+impl<K: bpfman_kernel::ProgramObservations> KernelObservations for Kernel<'_, K> {
     fn program(
         &mut self,
         id: NonZeroU32,
     ) -> Result<(KernelProgram, Option<ProgramStats>), Failure> {
-        bpfman_kernel::observe_program(id).map_err(|cause| {
+        self.0.program(id).map_err(|cause| {
             if cause.kind() == bpfman_kernel::ErrorKind::Missing {
                 Failure::KernelMissing {
                     id,
@@ -95,7 +95,7 @@ impl KernelObservations for Kernel {
     }
 
     fn map(&mut self, id: u32) -> Result<KernelMap, Failure> {
-        bpfman_kernel::observe_map(id).map_err(Failure::from)
+        self.0.map(id).map_err(Failure::from)
     }
 }
 
@@ -109,7 +109,8 @@ fn path(path: std::path::PathBuf) -> Result<String, Failure> {
         .map_err(|_| Failure::Path)
 }
 
-impl<S: OpenStore> Bpfman<S>
+impl<S: OpenStore, K: bpfman_kernel::ProgramObservations + bpfman_kernel::LinkObservations>
+    Bpfman<S, K>
 where
     S::Reader: bpfman_store::LinkReader,
 {
@@ -127,6 +128,7 @@ where
         cancellation: &crate::Cancellation,
     ) -> Result<ObservedProgram, ObservationError> {
         let mut observed = observe_cancellable(
+            &self.kernel,
             &self.store,
             self.store.runtime(),
             id,
@@ -142,8 +144,13 @@ where
         // removed concurrently may be absent; never synthesize their presence.
         for record in links.into_iter().filter(|record| record.program_id == id) {
             observed.links.push(
-                crate::link_observation::observe_record(self.store.runtime(), record, cancellation)
-                    .map_err(Failure::from)?,
+                crate::link_observation::observe_record(
+                    &self.kernel,
+                    self.store.runtime(),
+                    record,
+                    cancellation,
+                )
+                .map_err(Failure::from)?,
             );
         }
 
@@ -151,13 +158,21 @@ where
     }
 }
 
-pub(super) fn observe<S: OpenStore>(
+pub(super) fn observe<S: OpenStore, K: bpfman_kernel::ProgramObservations>(
+    kernel: &K,
     store: &ActiveStore<S>,
     runtime: &RuntimeDirectory,
     id: NonZeroU32,
     view: View,
 ) -> Result<ObservedProgram, ObservationError> {
-    observe_cancellable(store, runtime, id, view, &crate::Cancellation::new())
+    observe_cancellable(
+        kernel,
+        store,
+        runtime,
+        id,
+        view,
+        &crate::Cancellation::new(),
+    )
 }
 
 fn check(cancellation: &crate::Cancellation) -> Result<(), Failure> {
@@ -168,7 +183,8 @@ fn check(cancellation: &crate::Cancellation) -> Result<(), Failure> {
     }
 }
 
-fn observe_cancellable<S: OpenStore>(
+fn observe_cancellable<S: OpenStore, K: bpfman_kernel::ProgramObservations>(
+    kernel: &K,
     store: &ActiveStore<S>,
     runtime: &RuntimeDirectory,
     id: NonZeroU32,
@@ -191,13 +207,13 @@ fn observe_cancellable<S: OpenStore>(
         .collect();
     let pins = match view {
         View::Load => Vec::new(),
-        View::Get => runtime
-            .read_map_pins(record.map_set)
+        View::Get => kernel
+            .map_pins(runtime, record.map_set)
             .map_err(Failure::from)?,
     };
     check(cancellation)?;
     build(
-        &mut CancellableKernel(cancellation),
+        &mut CancellableKernel(kernel, cancellation),
         runtime.layout(),
         record,
         users,
@@ -257,7 +273,7 @@ fn build<K: KernelObservations>(
     })
 }
 
-impl<S: OpenStore> Bpfman<S> {
+impl<S: OpenStore, K: bpfman_kernel::ProgramObservations> Bpfman<S, K> {
     /// List full records and optional live kernel data without the writer lock.
     /// Missing kernel objects are null; other lookup failures remain errors.
     /// Use `list` for summaries without kernel privileges.
@@ -279,7 +295,8 @@ impl<S: OpenStore> Bpfman<S> {
         let records = bpfman_core::select_records(records(&self.store)?, filter);
 
         check(cancellation)?;
-        entries(&mut CancellableKernel(cancellation), records).map_err(ObservationError::from)
+        entries(&mut CancellableKernel(&self.kernel, cancellation), records)
+            .map_err(ObservationError::from)
     }
 }
 
@@ -304,23 +321,23 @@ fn entries<K: KernelObservations>(
 #[cfg(test)]
 mod tests;
 
-struct CancellableKernel<'a>(&'a crate::Cancellation);
+struct CancellableKernel<'a, K>(&'a K, &'a crate::Cancellation);
 
-impl KernelObservations for CancellableKernel<'_> {
+impl<K: bpfman_kernel::ProgramObservations> KernelObservations for CancellableKernel<'_, K> {
     fn program(
         &mut self,
         id: NonZeroU32,
     ) -> Result<(KernelProgram, Option<ProgramStats>), Failure> {
-        check(self.0)?;
-        let result = Kernel.program(id)?;
-        check(self.0)?;
+        check(self.1)?;
+        let result = Kernel(self.0).program(id)?;
+        check(self.1)?;
         Ok(result)
     }
 
     fn map(&mut self, id: u32) -> Result<KernelMap, Failure> {
-        check(self.0)?;
-        let result = Kernel.map(id)?;
-        check(self.0)?;
+        check(self.1)?;
+        let result = Kernel(self.0).map(id)?;
+        check(self.1)?;
         Ok(result)
     }
 }

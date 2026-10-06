@@ -152,6 +152,7 @@ dependencies = [
  "bpfman-core",
  "bpfman-fs",
  "bpfman-kernel",
+ "bpfman-kernel-aya",
  "bpfman-lock",
  "bpfman-model",
  "bpfman-runtime",
@@ -196,7 +197,18 @@ dependencies = [
 name = "bpfman-kernel"
 version = "0.1.0"
 dependencies = [
+ "bpfman-fs",
+ "bpfman-model",
+ "thiserror",
+]
+
+[[package]]
+name = "bpfman-kernel-aya"
+version = "0.1.0"
+dependencies = [
  "aya-obj",
+ "bpfman-fs",
+ "bpfman-kernel",
  "bpfman-model",
  "chrono",
  "libc",
@@ -226,9 +238,12 @@ dependencies = [
  "bpfman-core",
  "bpfman-fs",
  "bpfman-kernel",
+ "bpfman-kernel-aya",
  "bpfman-lock",
  "bpfman-model",
  "bpfman-store",
+ "bpfman-store-json",
+ "bpfman-store-sqlite",
  "chrono",
  "libc",
  "serde_json",

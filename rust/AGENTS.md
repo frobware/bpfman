@@ -224,6 +224,13 @@ The architecture and compatibility goals are in
   residue, blocked dependent cleanup, all outcomes, and explicit retry history.
 - Generic lifecycle and outside-in tests use store contracts and public
   observations, never SQL queries or triggers to set up state or inject faults.
+  Use real SQLite or JSON stores, including when the kernel is fake. Do not add
+  a simulated store implementation. SQLite `:memory:` is a real backend and is
+  suitable for adapter tests; use temporary files when testing multiple independent
+  connections, reopening, locking, or persistent store identity.
+  A test-only failure decorator may intercept
+  a named operation and retain its receipt on failure; all successful persistence
+  and receipt validation must delegate unchanged to the concrete backend.
   Keep persistence-format fixtures in explicitly backend-specific adapter and
   compatibility tests. Prefer Rust integration tests for the new workspace;
   continue using the unchanged Go DSL corpus for CLI acceptance.

@@ -1,6 +1,7 @@
 //! A bpfman instance, bound to its runtime and persistence backend.
 //!
-//! Open the selected store once, then inject it into [`Bpfman`]. Read methods
+//! Open the selected store once, then inject it and a kernel observer into
+//! [`Bpfman`]. Read methods
 //! borrow the instance without acquiring the writer lock. Mutations and explicit
 //! cleanup passes acquire scoped writer authority internally. The library never
 //! installs signal handlers, a telemetry subscriber, or formats command output.
@@ -15,10 +16,10 @@
 //! use bpfman_store::OpenStore;
 //! use std::time::Duration;
 //!
-//! fn list<S: OpenStore>(backend: S, layout: &RuntimeLayout) -> Result<(), Error> {
+//! fn list<S: OpenStore, K>(backend: S, kernel: K, layout: &RuntimeLayout) -> Result<(), Error> {
 //!     let timeout = Duration::from_secs(30);
 //!     let store = ActiveStore::open(backend, layout, timeout)?;
-//!     let bpfman = Bpfman::new(store, timeout);
+//!     let bpfman = Bpfman::new(store, kernel, timeout);
 //!     let programs = bpfman.list(&Default::default())?;
 //!     // The caller chooses how to use or present these domain values.
 //!     Ok(())
@@ -44,7 +45,11 @@ mod store;
 mod unload;
 mod unload_error;
 
-/// An instance of bpfman bound to an initialized store and its runtime.
+/// An instance bound to an initialized store, runtime, and kernel observer.
+///
+/// The injected backend currently governs observations, including post-load
+/// result reads. Loading, attachment, and cleanup still use concrete Linux
+/// adapters; they are not simulated by supplying a fake observer.
 ///
 /// Construct the active store at startup, then move it into this application.
 /// Operations share the adopted runtime, not an operation-wide mutex. Reads
@@ -54,7 +59,7 @@ mod unload_error;
 /// Application dependencies cannot be replaced through the public API:
 /// ```compile_fail,E0616
 /// use bpfman_runtime::Bpfman;
-/// fn replace<S: bpfman_store::OpenStore>(app: &mut Bpfman<S>) {
+/// fn replace<S: bpfman_store::OpenStore, K>(app: &mut Bpfman<S, K>) {
 ///     let _store = &mut app.store;
 /// }
 /// ```
@@ -63,10 +68,11 @@ mod unload_error;
 /// ```compile_fail,E0308
 /// use bpfman_runtime::Bpfman;
 /// fn uninitialized<S>(backend: S) {
-///     let _app = Bpfman::new(backend, std::time::Duration::from_secs(1));
+///     let _app = Bpfman::new(backend, (), std::time::Duration::from_secs(1));
 /// }
 /// ```
-pub struct Bpfman<S: bpfman_store::OpenStore> {
+pub struct Bpfman<S: bpfman_store::OpenStore, K> {
+    kernel: K,
     store: ActiveStore<S>,
     lock_timeout: std::time::Duration,
 }

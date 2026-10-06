@@ -3,7 +3,7 @@ use bpfman_model::{LinkState, ObservedLink};
 use bpfman_store::{LinkReader, OpenStore};
 use std::num::NonZeroU64;
 
-impl<S: OpenStore> Bpfman<S>
+impl<S: OpenStore, K: bpfman_kernel::LinkObservations> Bpfman<S, K>
 where
     S::Reader: LinkReader,
 {
@@ -26,26 +26,21 @@ where
             .find(|r| r.id == id)
             .ok_or(Cause::NotFound)?;
 
-        observe_record(self.store.runtime(), record, cancellation)
+        observe_record(&self.kernel, self.store.runtime(), record, cancellation)
     }
 }
 
-pub(super) fn observe_record(
+pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
+    backend: &K,
     runtime: &bpfman_fs::RuntimeDirectory,
     record: bpfman_model::StoredLink,
     cancellation: &Cancellation,
 ) -> Result<ObservedLink, LinkCause> {
-    let (path, observer): (_, fn(_) -> _) = match &record.details {
-        bpfman_model::LinkDetails::Tracepoint(_) => (
-            runtime.layout().link_pin_path(record.id),
-            bpfman_kernel::observe_tracepoint_link,
-        ),
-        bpfman_model::LinkDetails::Xdp(details) => (
-            runtime
-                .layout()
-                .xdp_extension_path(details.key, details.revision),
-            bpfman_kernel::observe_extension_link,
-        ),
+    let path = match &record.details {
+        bpfman_model::LinkDetails::Tracepoint(_) => runtime.layout().link_pin_path(record.id),
+        bpfman_model::LinkDetails::Xdp(details) => runtime
+            .layout()
+            .xdp_extension_path(details.key, details.revision),
     };
     if path.to_str() != Some(record.pin_path.as_str()) {
         return Err(Cause::Invalid("link pin differs from canonical runtime layout").into());
@@ -55,14 +50,20 @@ pub(super) fn observe_record(
         LinkState::Pending => None,
         LinkState::Attached { kernel_id } => Some(kernel_id),
     };
-    let kernel = match kernel_id.map(observer).transpose() {
+    let kernel = match kernel_id
+        .map(|id| match &record.details {
+            bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_link(id),
+            bpfman_model::LinkDetails::Xdp(_) => backend.extension_link(id),
+        })
+        .transpose()
+    {
         Ok(kernel) => kernel,
         Err(error) if error.kind() == bpfman_kernel::ErrorKind::Missing => None,
         Err(error) => return Err(error.into()),
     };
     let pin = match &record.details {
-        bpfman_model::LinkDetails::Tracepoint(_) => runtime.read_link_pin(record.id)?,
-        bpfman_model::LinkDetails::Xdp(details) => runtime.read_xdp_link_pin(details)?,
+        bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_pin(runtime, record.id)?,
+        bpfman_model::LinkDetails::Xdp(details) => backend.extension_pin(runtime, details)?,
     };
     if kernel
         .as_ref()

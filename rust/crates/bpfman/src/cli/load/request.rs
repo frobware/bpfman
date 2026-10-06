@@ -165,7 +165,7 @@ impl LoadRequest {
 impl PreparedLoad {
     pub(crate) fn execute<S: bpfman_store::OpenStore + bpfman_store::CommitLoad>(
         self,
-        bpfman: &bpfman_runtime::Bpfman<S>,
+        bpfman: &bpfman_runtime::Bpfman<S, bpfman_kernel_aya::Kernel>,
         cancellation: &bpfman_runtime::Cancellation,
     ) -> Result<(), crate::error::Error> {
         let stored = bpfman.load_batch_with_cancellation(self.request, cancellation)?;

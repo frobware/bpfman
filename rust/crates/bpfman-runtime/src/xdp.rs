@@ -362,7 +362,7 @@ fn attach<F: Effects>(
     result.map_err(|cause| (cause, cleanup(w, f, XdpCleanup::new(resources))))
 }
 
-impl<S: XdpStore> Bpfman<S> {
+impl<S: XdpStore, K> Bpfman<S, K> {
     /// Attach the first extension to an unoccupied interface in this namespace.
     pub fn attach_xdp(&self, request: XdpAttach) -> Result<StoredLink, XdpError<S>> {
         self.attach_xdp_with_cancellation(request, &Cancellation::new())
@@ -492,7 +492,7 @@ fn finish<S: XdpStore>(
     }
 }
 
-impl<S: bpfman_store::OpenStore> Bpfman<S>
+impl<S: bpfman_store::OpenStore, K> Bpfman<S, K>
 where
     S::Reader: XdpReader,
 {

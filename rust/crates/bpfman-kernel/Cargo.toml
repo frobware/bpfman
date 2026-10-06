@@ -1,6 +1,6 @@
 [package]
 name = "bpfman-kernel"
-description = "Read-only kernel program and map observation"
+description = "Backend-independent kernel observation capabilities"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,22 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-# Cargo cannot override an inherited forbid for one module. Mirror the workspace
-# gates, using deny only here so the private read-only syscall module can opt in.
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "deny"
-unreachable_pub = "deny"
-[lints.clippy]
-disallowed_methods = "deny"
-unwrap_used = "deny"
-expect_used = "deny"
-panic = "deny"
-dbg_macro = "deny"
+[lints]
+workspace = true
 
 [dependencies]
 bpfman-model.workspace = true
-aya-obj.workspace = true
-libc.workspace = true
-chrono.workspace = true
+bpfman-fs.workspace = true
 thiserror.workspace = true

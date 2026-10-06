@@ -55,6 +55,7 @@ where
 
     let app = Bpfman::new(
         ActiveStore::open(backend, &layout, BUDGET).expect("store"),
+        bpfman_kernel_aya::Kernel,
         BUDGET,
     );
     assert_eq!(

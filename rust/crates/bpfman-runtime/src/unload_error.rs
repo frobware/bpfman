@@ -123,7 +123,7 @@ impl<S: UnloadStore + LinkStore> UnloadError<S> {
     }
 }
 
-impl<S: OpenStore + UnloadStore + LinkStore> Bpfman<S>
+impl<S: OpenStore + UnloadStore + LinkStore, K> Bpfman<S, K>
 where
     S::Reader: LinkReader,
 {

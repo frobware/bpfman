@@ -6,19 +6,13 @@ use std::{
     os::fd::{AsRawFd, OwnedFd},
 };
 
-impl Error {
-    /// Classify without exposing raw syscall/backend types.
-    pub fn kind(&self) -> ErrorKind {
-        match self.source.kind() {
-            std::io::ErrorKind::NotFound => ErrorKind::Missing,
-            std::io::ErrorKind::InvalidData => ErrorKind::InvalidData,
-            _ => ErrorKind::Unavailable,
-        }
-    }
-}
-
 fn failure(operation: &'static str, source: std::io::Error) -> Error {
-    Error { operation, source }
+    let kind = match source.kind() {
+        std::io::ErrorKind::NotFound => ErrorKind::Missing,
+        std::io::ErrorKind::InvalidData => ErrorKind::InvalidData,
+        _ => ErrorKind::Unavailable,
+    };
+    Error::new(kind, operation, source)
 }
 
 fn fdinfo(fd: &OwnedFd) -> BTreeMap<String, u64> {
@@ -86,7 +80,9 @@ fn loaded_at(nanos: u64) -> Result<Option<String>, Error> {
 
 /// Observe one live program by ID, preserving unavailable fields and counters.
 /// A descriptor holds the object alive across both metadata queries and procfs.
-pub fn observe_program(id: NonZeroU32) -> Result<(KernelProgram, Option<ProgramStats>), Error> {
+pub(crate) fn observe_program(
+    id: NonZeroU32,
+) -> Result<(KernelProgram, Option<ProgramStats>), Error> {
     let (fd, info, maps, len, restricted) =
         syscall::program(id.get()).map_err(|e| failure("observe kernel program", e))?;
     let extra = fdinfo(&fd);
@@ -119,7 +115,7 @@ pub fn observe_program(id: NonZeroU32) -> Result<(KernelProgram, Option<ProgramS
 }
 
 /// Observe a live map's metadata and procfs accounting/frozen flag.
-pub fn observe_map(id: u32) -> Result<KernelMap, Error> {
+pub(crate) fn observe_map(id: u32) -> Result<KernelMap, Error> {
     let (fd, info) = syscall::map(id).map_err(|e| failure("observe kernel map", e))?;
     let extra = fdinfo(&fd);
 
@@ -223,7 +219,7 @@ fn map_kind(kind: u32) -> String {
 
 /// Observe a standalone perf-event link by its kernel identity. Absence is
 /// distinct from denied observation; this acquires no bpfman writer lock.
-pub fn observe_tracepoint_link(id: NonZeroU32) -> Result<bpfman_model::KernelLink, Error> {
+pub(crate) fn observe_tracepoint_link(id: NonZeroU32) -> Result<bpfman_model::KernelLink, Error> {
     let info = syscall::link(id.get()).map_err(|e| failure("observe kernel link", e))?;
     let program_id = NonZeroU32::new(info.prog_id)
         .filter(|_| {
@@ -247,7 +243,7 @@ pub fn observe_tracepoint_link(id: NonZeroU32) -> Result<bpfman_model::KernelLin
 }
 
 /// Observe a dispatcher extension's actual tracing link identity and BTF target.
-pub fn observe_extension_link(id: NonZeroU32) -> Result<bpfman_model::KernelLink, Error> {
+pub(crate) fn observe_extension_link(id: NonZeroU32) -> Result<bpfman_model::KernelLink, Error> {
     let (program, attach_type, target_obj_id, target_btf_id) =
         syscall::extension(id.get()).map_err(|e| failure("observe extension link", e))?;
     let program_id = NonZeroU32::new(program).ok_or_else(|| {

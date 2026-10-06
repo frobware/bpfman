@@ -1,7 +1,7 @@
 //! Replace only persistence; keep production routing for open and commit.
 
 use super::*;
-use crate::store::testing::Memory;
+use crate::store::testing::Faults;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -18,12 +18,12 @@ fn mapped<R>(failure: EffectFailure<R, TestError>) -> EffectFailure<R, Error> {
     }
 }
 
-struct StoreEffects<'a> {
+struct StoreEffects<'a, S> {
     fake: Fake,
-    store: &'a Memory,
+    store: &'a Faults<S>,
 }
 
-impl LoadCleanup for StoreEffects<'_> {
+impl<S> LoadCleanup for StoreEffects<'_, S> {
     type ProgramPin = Program;
     type MapPin = Map;
     type Bytecode = BytecodeReceipt;
@@ -54,7 +54,7 @@ impl LoadCleanup for StoreEffects<'_> {
     }
 }
 
-impl CleanupEffects for StoreEffects<'_> {
+impl<S> CleanupEffects for StoreEffects<'_, S> {
     type MapDirectory = Directory;
 
     fn remove_map_directory(
@@ -66,8 +66,8 @@ impl CleanupEffects for StoreEffects<'_> {
     }
 }
 
-impl LoadEffects for StoreEffects<'_> {
-    type Store = Memory;
+impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for StoreEffects<'_, S> {
+    type Store = <Faults<S> as bpfman_store::OpenStore>::Reader;
     type Prepared = ();
     type Kernel = Kernel;
 
@@ -79,7 +79,7 @@ impl LoadEffects for StoreEffects<'_> {
         LoadCause::BatchAborted.into()
     }
 
-    fn open_store(&mut self, w: &RuntimeWriter<'_>) -> Result<Memory, Error> {
+    fn open_store(&mut self, w: &RuntimeWriter<'_>) -> Result<Self::Store, Error> {
         real::Effects(self.store).open_store(w).map_err(Into::into)
     }
 
@@ -148,10 +148,15 @@ impl LoadEffects for StoreEffects<'_> {
     }
 }
 
-#[test]
-fn independent_store_commit_failure_runs_production_compensation() {
+fn independent_store_commit_failure_runs_production_compensation<
+    S: bpfman_store::OpenStore + bpfman_store::CommitLoad,
+>(
+    backend: S,
+) {
     with_writer(|writer| {
-        let store = Memory::new(writer);
+        let store = Faults::new(backend);
+        bpfman_store::OpenStore::open(&store, writer).expect("initialize real store");
+        store.clear_calls();
         store.fail("commit", bpfman_store::ErrorKind::Unavailable);
         let mut effects = StoreEffects {
             fake: Fake::new(
@@ -169,7 +174,15 @@ fn independent_store_commit_failure_runs_production_compensation() {
         };
 
         assert_eq!(store.calls(), ["open", "commit"]);
-        assert_eq!(store.residue(), (false, false));
+        assert!(
+            store
+                .records(
+                    &bpfman_fs::RuntimeDirectory::open_existing(writer.layout().clone())
+                        .expect("runtime")
+                        .expect("exists")
+                )
+                .is_empty()
+        );
         assert_eq!(
             effects.fake.resources,
             BTreeSet::from([
@@ -206,14 +219,19 @@ fn independent_store_commit_failure_runs_production_compensation() {
 
         // Explicit cleanup never repeats the failed store commit.
         assert_eq!(store.calls(), ["open", "commit"]);
-        assert!(!writer.database_path().exists());
+        assert!(writer.database_path().exists());
     });
 }
 
-#[test]
-fn independent_store_open_failure_precedes_acquisition_and_commit_success_ends_cleanup() {
+fn independent_store_open_failure_precedes_acquisition_and_commit_success_ends_cleanup<
+    S: bpfman_store::OpenStore + bpfman_store::CommitLoad,
+>(
+    backend: S,
+) {
     with_writer(|writer| {
-        let store = Memory::new(writer);
+        let store = Faults::new(backend);
+        bpfman_store::OpenStore::open(&store, writer).expect("initialize real store");
+        store.clear_calls();
         store.fail("open", bpfman_store::ErrorKind::IncompatibleState);
         let mut effects = StoreEffects {
             fake: Fake::new(writer, []),
@@ -232,7 +250,16 @@ fn independent_store_open_failure_precedes_acquisition_and_commit_success_ends_c
             Fault::Before(Event::RemoveBytecode),
         ]);
         assert!(invoke(writer, &mut effects, &["1"]).is_ok());
-        assert_eq!(store.residue(), (true, true));
+        assert_eq!(
+            store
+                .records(
+                    &bpfman_fs::RuntimeDirectory::open_existing(writer.layout().clone())
+                        .expect("runtime")
+                        .expect("exists")
+                )
+                .len(),
+            1
+        );
         assert_eq!(store.calls(), ["open", "open", "commit"]);
         assert!(!effects.fake.events.iter().any(|event| matches!(
             event,
@@ -241,6 +268,20 @@ fn independent_store_open_failure_precedes_acquisition_and_commit_success_ends_c
                 | Event::RemoveMap(_)
                 | Event::RemoveDirectory
         )));
-        assert!(!writer.database_path().exists());
+        assert!(writer.database_path().exists());
     });
 }
+
+macro_rules! backend_tests {
+    ($module:ident, $backend:expr) => {
+        mod $module {
+            #[test]
+            fn independent_store_commit_failure_runs_production_compensation() { super::independent_store_commit_failure_runs_production_compensation($backend); }
+            #[test]
+            fn independent_store_open_failure_precedes_acquisition_and_commit_success_ends_cleanup() { super::independent_store_open_failure_precedes_acquisition_and_commit_success_ends_cleanup($backend); }
+        }
+    };
+}
+
+backend_tests!(sqlite, bpfman_store_sqlite::Backend);
+backend_tests!(json, bpfman_store_json::Backend);

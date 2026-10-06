@@ -12,7 +12,8 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-core", 1),
     ("bpfman-lock", 1),
     ("bpfman-fs", 2),
-    ("bpfman-kernel", 2),
+    ("bpfman-kernel", 3),
+    ("bpfman-kernel-aya", 4),
     ("bpfman-store", 3),
     ("bpfman-store-sqlite", 4),
     ("bpfman-store-json", 4),
@@ -209,6 +210,32 @@ fn runtime_and_store_contract_cannot_reach_a_persistence_backend() {
 }
 
 #[test]
+fn runtime_and_kernel_contract_cannot_select_the_linux_observer() {
+    let meta = metadata();
+
+    for name in ["bpfman-runtime", "bpfman-kernel"] {
+        let start = array(&meta["workspace_members"])
+            .iter()
+            .find(|id| package(meta, id)["name"] == name)
+            .expect("member");
+        let mut pending = vec![start];
+        let mut seen = HashSet::new();
+
+        while let Some(id) = pending.pop() {
+            if !seen.insert(string(id)) {
+                continue;
+            }
+            assert_ne!(
+                package(meta, id)["name"],
+                "bpfman-kernel-aya",
+                "{name} must receive the observer from the composition root"
+            );
+            pending.extend(normal_dependencies(meta, id));
+        }
+    }
+}
+
+#[test]
 fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
     let meta = metadata();
 
@@ -228,7 +255,7 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                     "Aya is confined to pin I/O and the private kernel adapter"
                 ),
                 "aya-obj" => assert!(
-                    matches!(name, "bpfman-runtime" | "bpfman-kernel"),
+                    matches!(name, "bpfman-runtime" | "bpfman-kernel-aya"),
                     "ELF parsing and generated BPF ABI layouts belong in kernel adapters"
                 ),
                 "rusqlite" | "libsqlite3-sys" => assert_eq!(
@@ -305,7 +332,7 @@ fn pure_closures_have_only_reviewed_dependencies_and_features() {
 fn syscall_exception_keeps_all_other_workspace_lint_gates() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let workspace = std::fs::read_to_string(root.join("Cargo.toml")).expect("workspace");
-    let kernel = std::fs::read_to_string(root.join("crates/bpfman-kernel/Cargo.toml"))
+    let kernel = std::fs::read_to_string(root.join("crates/bpfman-kernel-aya/Cargo.toml"))
         .expect("kernel manifest");
     let section = |text: &str, header: &str| -> Vec<String> {
         text.split_once(header)
@@ -343,14 +370,15 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
         }
     }
 
-    let syscall = std::fs::read_to_string(root.join("crates/bpfman-kernel/src/syscall.rs"))
+    let syscall = std::fs::read_to_string(root.join("crates/bpfman-kernel-aya/src/syscall.rs"))
         .expect("syscall boundary");
 
     assert!(syscall.contains("#![allow(unsafe_code)]"));
 
     for module in ["lib.rs", "observe.rs"] {
-        let source = std::fs::read_to_string(root.join("crates/bpfman-kernel/src").join(module))
-            .expect("safe observation module");
+        let source =
+            std::fs::read_to_string(root.join("crates/bpfman-kernel-aya/src").join(module))
+                .expect("safe observation module");
 
         assert!(!source.contains("allow(unsafe_code)"));
     }

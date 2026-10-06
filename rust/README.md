@@ -34,7 +34,8 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-model` | 0 | Pure program specifications, stored records, and kernel observations |
 | `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, and forward unload continuations |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
-| `bpfman-kernel` | 2 | Read-only BPF metadata and statistics with a private syscall boundary |
+| `bpfman-kernel` | 3 | Backend-independent program, map, link and pin observation contracts |
+| `bpfman-kernel-aya` | 4 | Linux observations and private BPF syscall boundary |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
@@ -136,8 +137,8 @@ crate defines small, statically dispatched interfaces:
   snapshot without the writer lock.
 
 There are no connection types, schema-version fields, or transaction callbacks
-in these contracts. SQLite and JSON implement the same operations, alongside
-an independent test-only in-memory backend.
+in these contracts. SQLite and JSON implement the same operations. Tests use these real stores;
+fault decorators intercept selected operations without implementing persistence.
 
 `ActiveStore` retains the handle returned by startup and clones it for each
 caller without reopening the backend. Clones share backend resources, not a
@@ -203,11 +204,11 @@ authority internally. Backends must reject foreign or stale evidence.
 Failed-load cleanup needs only filesystem receipts and never reopens or retries
 the store.
 
-Tests use the in-memory backend through production read/unload operations and
+Tests use both real stores through production read/unload operations and
 the production load interpreter with fake kernel/filesystem effects. They check
 open failures before acquisition, atomic commit failure with independent cleanup
 failures, successful commit without compensation, retained receipts, unchanged
-faults, and wrong-runtime/backend rejection. Existing SQLite, exhaustive
+faults, and wrong-runtime rejection. Existing SQLite, exhaustive
 compensation, and real-kernel compatibility gates remain in place.
 
 Generic live-kernel tests inject failures at store operations through a test-only
@@ -416,7 +417,7 @@ trimming trailing fractional zeros without reducing precision. CLI conversion
 owns JSON field names and the different load/get/list envelopes; the pure model
 has no serialization or backend dependencies.
 
-The `bpfman-kernel` adapter supplies fields unavailable through Aya's public
+The `bpfman-kernel-aya` adapter supplies fields unavailable through Aya's public
 metadata API. Its private syscall module is the only unsafe exception: it
 supports read-only descriptor lookup and metadata queries, bounds its buffers,
 and owns descriptors until observation completes. Generated Aya ABI structs
@@ -800,3 +801,19 @@ This is a single-member checkpoint. Detach an XDP link explicitly before program
 unload. Additional members, dispatcher replacement, explicit `--netns`, selectable
 XDP modes, and traffic/proceed-on execution acceptance remain unfinished. Loading
 an `xdp.frags` section does not establish fragmented-packet execution support.
+
+### Injectable kernel observations
+
+`Bpfman<S, K>::new(store, kernel, timeout)` accepts one observer alongside its
+active real store. Program/map reads require `ProgramObservations`; standalone
+and extension-link reads require `LinkObservations`. These capabilities include
+pin observations so a fake read does not accidentally access a real BPF object.
+The CLI selects `bpfman_kernel_aya::Kernel`. Observation errors retain classified
+failures and private source chains.
+
+Public application tests use a stateful fake observer with both SQLite and JSON.
+They cover missing and denied observations, identity mismatches, cancellation,
+and reads under writer contention without bpffs or privileges. This is the first
+part of the kernel refactor: mutation, owned handles, and Aya containment in
+loading/filesystem code remain to be converted before a complete lifecycle can
+run with a fake kernel.

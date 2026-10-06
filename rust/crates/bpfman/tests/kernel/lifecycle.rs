@@ -9,7 +9,7 @@ use bpfman_store::{CommitLoad, OpenStore, UnloadStore};
 use std::{collections::BTreeMap, fs};
 
 fn load<S: OpenStore + CommitLoad>(
-    bpfman: &bpfman_runtime::Bpfman<S>,
+    bpfman: &bpfman_runtime::Bpfman<S, bpfman_kernel_aya::Kernel>,
 ) -> Result<ObservedProgram, bpfman_runtime::LoadError> {
     let request = bpfman_runtime::PreparedProgram::new(
         &fixture("tracepoint_counter.bpf.o"),
@@ -30,7 +30,11 @@ pub(super) fn exercise<
     let store = Faults::new(backend);
     let active =
         bpfman_runtime::ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("active store");
-    let bpfman = bpfman_runtime::Bpfman::new(active, std::time::Duration::from_millis(50));
+    let bpfman = bpfman_runtime::Bpfman::new(
+        active,
+        bpfman_kernel_aya::Kernel,
+        std::time::Duration::from_millis(50),
+    );
     let unrelated = load(&bpfman).expect("unrelated load").record.id;
     let pid = load(&bpfman).expect("load").record.id;
     c.present(pid);

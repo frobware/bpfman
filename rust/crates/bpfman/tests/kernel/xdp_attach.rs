@@ -67,7 +67,7 @@ fn request(program_id: NonZeroU32, interface: &Interface) -> XdpAttach {
 fn gone(id: NonZeroU32) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        match bpfman_kernel::observe_extension_link(id) {
+        match bpfman_kernel::LinkObservations::extension_link(&bpfman_kernel_aya::Kernel, id) {
             Err(e) if e.kind() == bpfman_kernel::ErrorKind::Missing => return,
             Ok(_) => {}
             Err(e) => {
@@ -92,6 +92,7 @@ where
     let store = Faults::new(backend.clone());
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
+        bpfman_kernel_aya::Kernel,
         TIMEOUT,
     );
     let program = app
@@ -142,6 +143,7 @@ where
     let foreign = Context::new();
     let foreign_app = Bpfman::new(
         ActiveStore::open(backend, &foreign.layout, TIMEOUT).expect("foreign store"),
+        bpfman_kernel_aya::Kernel,
         TIMEOUT,
     );
     let foreign_program = foreign_app

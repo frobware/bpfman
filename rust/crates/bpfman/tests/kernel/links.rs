@@ -47,7 +47,9 @@ fn fire() {
 }
 
 pub(super) fn assert_gone(kernel: NonZeroU32) {
-    let error = bpfman_kernel::observe_tracepoint_link(kernel).expect_err("link must be gone");
+    let error =
+        bpfman_kernel::LinkObservations::tracepoint_link(&bpfman_kernel_aya::Kernel, kernel)
+            .expect_err("link must be gone");
     assert_eq!(error.kind(), bpfman_kernel::ErrorKind::Missing);
 }
 
@@ -60,6 +62,7 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
+        bpfman_kernel_aya::Kernel,
         TIMEOUT,
     );
     let loaded = app

@@ -73,7 +73,7 @@ where
         cli.lock_timeout,
         cancellation,
     )?;
-    let bpfman = bpfman_runtime::Bpfman::new(store, cli.lock_timeout);
+    let bpfman = bpfman_runtime::Bpfman::new(store, bpfman_kernel_aya::Kernel, cli.lock_timeout);
 
     match command {
         cli::PreparedCommand::Get { id, output } => {
