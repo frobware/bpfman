@@ -3,9 +3,10 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint completes XDP first attach and last detach alongside the tracepoint
-lifecycle, using both SQLite and JSON stores. Full behavioural parity remains
-unfinished.
+checkpoint completes kernel injection across the supported tracepoint and
+single-member XDP lifecycles, using both SQLite and JSON stores. The next milestone
+is an XDP **one → two → one → zero member lifecycle** using dispatcher replacement.
+Full behavioural parity remains unfinished.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
@@ -14,6 +15,7 @@ unfinished.
 | XDP links | One member per interface, current network namespace, driver-mode BPF link, last detach | Additional members, replacement, explicit namespaces, selectable modes |
 | XDP observations | Program/link get and list; complete dispatcher snapshot as JSON | Broader dispatcher CLI and traffic acceptance |
 | Persistence | Go-compatible SQLite schema 2; JSON format 4 for XDP attachment | No implicit upgrade or conversion of existing state |
+| Kernel boundary | One injected backend for reads, load, attach, detach, unload, and retries; Aya confined to its adapter | Replacement capabilities for multi-member dispatchers |
 
 XDP programs must be explicitly detached before unload. Occupied attach points are
 refused; unsupported commands and flags fail clearly. See
@@ -21,8 +23,9 @@ refused; unsupported commands and flags fail clearly. See
 for the supported command surface.
 
 Validation for this checkpoint passed through `direnv exec . make rust-check`,
-including formatting, Clippy, workspace tests, documentation, and 36 real-kernel
-tests. Both backends run the unchanged `TestXDP_LinkRoundTrip.bpfman` and
+including formatting, Clippy, workspace tests, documentation, 16 fake-kernel
+lifecycle tests, and 36 real-kernel tests. Both backends run the unchanged
+`TestXDP_LinkRoundTrip.bpfman` and
 `TestDispatcher_LifecycleAfterLastDetachXDP.bpfman` scripts. This establishes the
 first-member lifecycle; it does not establish multi-member or traffic parity.
 
@@ -32,6 +35,13 @@ detach, unload, and cleanup retries. Aya and BPF syscalls are confined to
 `bpfman-kernel-aya`; filesystem authority stays in `bpfman-fs`. A stateful fake
 exercises the public lifecycle with both real stores. Dispatcher replacement is
 the next implementation slice. Go remains the behavioural authority throughout.
+
+The observation boundary was committed in `3a5f6e675`; the remaining lifecycle
+work was committed in `7ae389c67`. That work preserves opaque ownership receipts,
+partial-acquisition failures, cancellation, dependency-aware compensation, and
+explicit retry history. Tests exercise batch rollback, foreign-kernel retries,
+and synchronous outer-link detach while another handle retains the object.
+Persistence and bytecode publication remain real in the fake-kernel suite.
 
 ## Summary
 
@@ -640,7 +650,14 @@ contain the narrowly reviewed unsafe boundary for observation, link creation,
 fd-preserving pinning, and synchronous detach. Workspace-law tests preserve all
 other lint gates; the filesystem crate inherits the workspace unsafe prohibition.
 
-### After the kernel boundary: dispatcher replacement
+### Next milestone: XDP dispatcher replacement
+
+The first milestone is attaching a second program to an existing managed XDP
+dispatcher, removing either member while the survivor remains active, and finally
+detaching the last member. Each nonempty membership change stages a complete new
+revision and updates the existing durable outer link. Foreign attachments remain
+refused. Keep this milestone within the current network namespace and driver mode;
+attached-program unload and broader attachment surfaces follow it.
 
 Dispatcher replacement provides the next proof of the architecture. The core owns:
 
@@ -662,15 +679,55 @@ Replacement must preserve the Go ordering:
 2. compute the complete desired member set and next revision;
 3. load and pin the new dispatcher;
 4. attach and pin every extension to it;
-5. create or swap the live XDP link, or install the replacement TC filter;
+5. update the existing live XDP link to target the staged dispatcher;
 6. atomically persist the complete new snapshot;
 7. restore the old live attachment if persistence fails;
-8. remove the new resources on failure; and
+8. remove the new resources only after proving they are no longer the live
+   target; and
 9. remove the old revision after successful persistence.
 
-TC replacement must continue to persist and use the exact kernel-assigned
-filter handle. XDP replacement must continue to reuse the durable dispatcher
-link while changing the program it targets.
+The store snapshot and live kernel target cannot change atomically together.
+Retain the old revision until publication succeeds. The switch capability must
+distinguish rejection before mutation from failure after changing the target,
+returning ownership and evidence for restoration in the latter case. A rejected
+switch leaves the old snapshot and attachment authoritative. If publication fails
+after switching, restore the previous target before cleaning the staged revision. If restoration
+fails, retain the ownership and evidence required to retry safely; do not discard
+resources that may still serve traffic. Preserve the original error and every
+cleanup attempt. After successful publication, old-revision cleanup failures must
+retain retryable ownership without rolling back the committed membership.
+
+Cancellation before publication follows the same compensation path, including
+restoration after a successful switch. An in-flight store commit determines its
+own outcome. Cleanup and restoration must finish their admitted pass even when
+the forward token is cancelled; retries remain explicit and caller-budgeted.
+
+Implement and validate this milestone in the following order:
+
+1. Add pure planning and transition tests for deterministic ordering, bounded
+   slots, proceed-on configuration, revision selection, and rollback dependencies.
+2. Extend the narrow kernel capabilities and concrete adapter with owned revision
+   switching and restoration. Extend each real store with atomic, conditional
+   replacement of the complete dispatcher/member snapshot.
+3. Run the public one → two → one → zero lifecycle with the shared stateful fake
+   kernel and both real stores. Inject failures during staging, switching,
+   publication, restoration, and cleanup. Assert the live target, stored snapshot,
+   retained receipts, blocked dependents, and retry history after each pass.
+4. Add real-kernel traffic tests proving that both members execute in the expected
+   order, proceed-on controls continuation, and removing either member leaves the
+   survivor active. Check durable outer-link identity across replacement and
+   residue-free last detach.
+5. Admit the unchanged Go priority-ordering, slot-reuse, configuration-after-detach,
+   survivor-rebuild, and chain-execution scripts as their required surfaces become
+   executable, and run the full `rust-check` gate on both stores before claiming the milestone complete.
+
+Use the forwarding store fault decorator for publication and deletion failures;
+no fake store is needed. SQLite `:memory:` remains suitable for adapter tests;
+use temporary files for the shared lifecycle's reopening, locking, and receipt
+identity checks. Fake-kernel tests establish orchestration and simulated resource
+ownership; real-kernel traffic and lifetime tests establish execution behaviour.
+
+Later TC replacement must persist and use the exact kernel-assigned filter handle.
 
 ## Filesystem and locking capabilities
 
@@ -1260,16 +1317,11 @@ Completed checkpoint:
 
 The kernel-boundary refactor is complete for this supported surface; see
 [Kernel and bpffs adapter](#injectable-kernel-boundary).
-The next implementation slice is dispatcher replacement.
-
-1. Derive ordering, bounded slots, and the next revision from the complete member set.
-2. Add a second member by staging a revision and updating the durable outer link.
-3. Restore the old attachment if atomic snapshot publication fails; remove the old
-   revision only after successful publication.
-4. Remove one member while retaining survivors, then integrate attached XDP unload.
-5. Admit the unchanged priority-ordering, slot-reuse, configuration-after-detach,
-   survivor-rebuild, and chain-execution scripts as their required surfaces become
-   executable. Run traffic/proceed-on acceptance before claiming execution parity.
+The next implementation slice is the
+[one → two → one → zero XDP milestone](#next-milestone-xdp-dispatcher-replacement),
+including failed publication, failed restoration, and explicit cleanup retries.
+Complete that lifecycle and its real-traffic acceptance before integrating
+attached XDP program unload.
 
 Explicit namespace helpers, additional XDP modes, capacity/fill-drain coverage,
 TC replacement with exact filter handles and clsact ownership, and TCX ordering
