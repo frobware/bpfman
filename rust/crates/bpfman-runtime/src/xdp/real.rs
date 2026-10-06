@@ -92,6 +92,7 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Effects for Adapter<'_, S, K> 
         o: &Self::Outer,
     ) -> Result<StoredLink, LinkCause> {
         let details = XdpLink {
+            slot: bpfman_model::XdpSlot::FIRST,
             key,
             interface: r.interface.clone(),
             priority: r.priority,

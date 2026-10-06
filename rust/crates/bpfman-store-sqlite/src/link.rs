@@ -166,12 +166,19 @@ impl LinkReader for Store {
                     .filter(|row| row.kind != "xdp")
                     .map(decode)
                     .collect::<Result<Vec<_>, _>>()?;
-                links.extend(
-                    queries::xdp::rows(&tx, None, None)?
-                        .iter()
-                        .map(|row| crate::xdp::decode(row).map(|s| s.member))
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
+                let rows = queries::xdp::rows(&tx, None, None)?;
+                let mut groups = std::collections::BTreeMap::new();
+                for row in rows {
+                    groups
+                        .entry((row.nsid, row.ifindex))
+                        .or_insert_with(Vec::new)
+                        .push(row);
+                }
+                for rows in groups.values() {
+                    if let Some(snapshot) = crate::xdp::decode_rows(rows)? {
+                        links.extend(snapshot.members().iter().map(|s| s.member.clone()));
+                    }
+                }
                 links.sort_by_key(|l| l.id);
                 Ok(links)
             })

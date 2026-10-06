@@ -38,9 +38,11 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
 ) -> Result<ObservedLink, LinkCause> {
     let path = match &record.details {
         bpfman_model::LinkDetails::Tracepoint(_) => runtime.layout().link_pin_path(record.id),
-        bpfman_model::LinkDetails::Xdp(details) => runtime
-            .layout()
-            .xdp_extension_path(details.key, details.revision),
+        bpfman_model::LinkDetails::Xdp(details) => {
+            runtime
+                .layout()
+                .xdp_slot_path(details.key, details.revision, details.slot)
+        }
     };
     if path.to_str() != Some(record.pin_path.as_str()) {
         return Err(Cause::Invalid("link pin differs from canonical runtime layout").into());

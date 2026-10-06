@@ -44,6 +44,9 @@ impl TryFrom<usize> for XdpSlot {
 }
 
 impl XdpSlot {
+    /// First slot, used for initial attachment.
+    pub const FIRST: Self = Self(0);
+
     /// Zero-based chain position.
     pub fn index(self) -> usize {
         usize::from(self.0)

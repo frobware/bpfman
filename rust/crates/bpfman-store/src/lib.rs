@@ -4,6 +4,10 @@
 
 mod xdp;
 pub use xdp::{XdpCommit, XdpReader, XdpStore};
+mod xdp_replace;
+pub use xdp_replace::{
+    XdpDispatcherReader, XdpMemberCommit, XdpMemberId, XdpReplace, XdpReplacementStore,
+};
 
 mod error;
 mod link;

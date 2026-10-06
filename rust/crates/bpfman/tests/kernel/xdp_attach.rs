@@ -193,6 +193,40 @@ where
 
     // A wrong kernel object at an otherwise canonical path is not adopted.
     let extension = c.layout.xdp_extension_path(details.key, details.revision);
+    // Observations must use the recorded slot, never silently inspect link_0.
+    let runtime = bpfman_fs::RuntimeDirectory::open_existing(c.layout.clone())
+        .expect("open runtime")
+        .expect("runtime exists");
+    let mut another_slot = details.clone();
+    another_slot.slot = 1usize.try_into().expect("slot");
+    assert!(
+        runtime
+            .read_xdp_link_pin(&bpfman_kernel_aya::Kernel, &another_slot)
+            .expect("empty slot")
+            .is_none()
+    );
+    let slot_pin = c
+        .layout
+        .xdp_slot_path(details.key, details.revision, another_slot.slot);
+    fs::rename(&extension, &slot_pin).expect("move pin to slot one");
+    let observed = runtime
+        .read_xdp_link_pin(&bpfman_kernel_aya::Kernel, &another_slot)
+        .expect("slot one")
+        .expect("pin present");
+    assert_eq!(
+        first.state,
+        LinkState::Attached {
+            kernel_id: observed.id
+        }
+    );
+    assert!(
+        runtime
+            .read_xdp_link_pin(&bpfman_kernel_aya::Kernel, details)
+            .expect("empty original slot")
+            .is_none()
+    );
+    fs::rename(&slot_pin, &extension).expect("restore pin");
+
     let outer = c.layout.xdp_outer_path(details.key);
     let saved = c
         .layout

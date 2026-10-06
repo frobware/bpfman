@@ -175,6 +175,7 @@ impl Effects for Fake {
             id: NonZeroU64::MIN,
             program_id: r.program_id,
             details: bpfman_model::LinkDetails::Xdp(XdpLink {
+                slot: bpfman_model::XdpSlot::FIRST,
                 key,
                 interface: r.interface.clone(),
                 priority: r.priority,

@@ -112,7 +112,18 @@ impl RuntimeLayout {
         key: bpfman_model::XdpKey,
         revision: std::num::NonZeroU32,
     ) -> PathBuf {
-        self.xdp_revision_path(key, revision).join("link_0")
+        self.xdp_slot_path(key, revision, bpfman_model::XdpSlot::FIRST)
+    }
+
+    /// Canonical extension pin for a validated dispatcher slot, for stored records.
+    pub fn xdp_slot_path(
+        &self,
+        key: bpfman_model::XdpKey,
+        revision: std::num::NonZeroU32,
+        slot: bpfman_model::XdpSlot,
+    ) -> PathBuf {
+        self.xdp_revision_path(key, revision)
+            .join(format!("link_{}", slot.index()))
     }
 
     /// Stable outer interface link pin path.

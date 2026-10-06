@@ -1,7 +1,9 @@
 use crate::{Backend, Store, XdpReceipt, error::Failure, open, queries::xdp as queries};
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeLayout, RuntimeWriter};
-use bpfman_model::{LinkDetails, LinkState, StoredLink, XdpKey, XdpLink, XdpSnapshot};
+use bpfman_model::{
+    LinkDetails, LinkState, StoredLink, XdpDispatcherSnapshot, XdpKey, XdpLink, XdpSnapshot,
+};
 use bpfman_store::{Error, XdpCommit, XdpReader, XdpStore};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 use std::{
@@ -10,7 +12,7 @@ use std::{
 };
 
 fn invalid() -> Failure {
-    Failure::InvalidLink("invalid single-member XDP snapshot")
+    Failure::InvalidLink("invalid XDP snapshot")
 }
 
 fn id32(raw: i64) -> Result<NonZeroU32, Failure> {
@@ -29,7 +31,6 @@ fn id64(raw: i64) -> Result<NonZeroU64, Failure> {
 
 pub(super) fn decode(row: &queries::Row) -> Result<XdpSnapshot, Failure> {
     if row.program_kind != "xdp"
-        || row.position != 0
         || !row.netns.is_empty()
         || !row.dispatcher_netns.is_empty()
         || row.kernel == row.outer
@@ -37,7 +38,7 @@ pub(super) fn decode(row: &queries::Row) -> Result<XdpSnapshot, Failure> {
         || row.priority > i32::MAX as i64
     {
         return Err(Failure::Unsupported(
-            "only single-member XDP dispatchers in the current namespace are implemented",
+            "only XDP dispatchers in the current namespace are implemented",
         ));
     }
     let actions: Vec<u32> = serde_json::from_str(&row.proceed_on).map_err(Failure::LinkMetadata)?;
@@ -49,6 +50,10 @@ pub(super) fn decode(row: &queries::Row) -> Result<XdpSnapshot, Failure> {
         mask |= 1 << code;
     }
     let details = XdpLink {
+        slot: usize::try_from(row.position)
+            .ok()
+            .and_then(|p| p.try_into().ok())
+            .ok_or_else(invalid)?,
         key: XdpKey {
             nsid: id64(row.nsid)?,
             ifindex: id32(row.ifindex)?,
@@ -89,7 +94,7 @@ pub(super) fn decode(row: &queries::Row) -> Result<XdpSnapshot, Failure> {
 fn canonical(row: &queries::Row, layout: &RuntimeLayout) -> Result<XdpSnapshot, Failure> {
     let s = decode(row)?;
     if layout
-        .xdp_extension_path(s.details.key, s.details.revision)
+        .xdp_slot_path(s.details.key, s.details.revision, s.details.slot)
         .to_str()
         != Some(s.member.pin_path.as_str())
     {
@@ -142,7 +147,8 @@ impl XdpReader for Store {
                 if row.is_none() && !queries::vacant(&tx, key)? {
                     return Err(invalid());
                 }
-                row.map(decode).transpose()
+                let snapshot = decode_rows(&rows)?;
+                Ok(snapshot.and_then(|s| s.members().first().cloned()))
             })
             .map_err(crate::Error::from)
             .map_err(Into::into)
@@ -210,13 +216,16 @@ impl XdpStore for Backend {
                 return Ok(None);
             };
             let snapshot = canonical(&row, w.layout())?;
+            if snapshot.details.slot != bpfman_model::XdpSlot::FIRST {
+                return Err(invalid());
+            }
             if queries::rows(&tx, Some(snapshot.details.key), None)?.len() != 1 {
                 return Err(Failure::Unsupported("multi-member XDP detach"));
             }
             let receipt = XdpReceipt {
                 root: w.identity()?,
                 database: identity(w)?,
-                row,
+                rows: vec![row],
             };
             Ok(Some((snapshot, receipt)))
         })()
@@ -237,19 +246,180 @@ impl XdpStore for Backend {
             }
             let mut c = connection(w)?;
             let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            let snapshot = canonical(&receipt.row, w.layout())?;
+            let first = receipt.rows.first().ok_or_else(invalid)?;
+            let snapshot = canonical(first, w.layout())?;
             let rows = queries::rows(&tx, Some(snapshot.details.key), None)?;
-            if rows != [receipt.row.clone()] {
+            if rows != receipt.rows {
                 return Err(Failure::InvalidLink(
                     "XDP snapshot changed since observation",
                 ));
             }
-            queries::remove(&tx, &receipt.row)?;
+            for row in &receipt.rows {
+                queries::remove_member(&tx, row.id)?;
+            }
+            queries::remove_dispatcher(&tx, first)?;
             tx.commit()?;
             Ok(())
         })();
         result.map_err(|cause| EffectFailure {
             cause: crate::Error::from(cause).into(),
+            remaining: receipt,
+        })
+    }
+}
+
+pub(super) fn decode_rows(rows: &[queries::Row]) -> Result<Option<XdpDispatcherSnapshot>, Failure> {
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let mut members = rows.iter().map(decode).collect::<Result<Vec<_>, _>>()?;
+    members.sort_by_key(|s| s.details.slot);
+    XdpDispatcherSnapshot::new(members)
+        .map(Some)
+        .map_err(|_| invalid())
+}
+
+fn canonical_rows(
+    rows: &[queries::Row],
+    layout: &RuntimeLayout,
+) -> Result<XdpDispatcherSnapshot, Failure> {
+    for row in rows {
+        canonical(row, layout)?;
+    }
+    decode_rows(rows)?.ok_or_else(invalid)
+}
+
+impl bpfman_store::XdpDispatcherReader for Store {
+    fn read_xdp_dispatcher(&mut self, key: XdpKey) -> Result<Option<XdpDispatcherSnapshot>, Error> {
+        self.reader
+            .read(|c| {
+                let tx = c.transaction()?;
+                open::require_supported(open::schema_version(&tx)?)?;
+                let rows = queries::rows(&tx, Some(key), None)?;
+                if rows.is_empty() && !queries::vacant(&tx, key)? {
+                    return Err(invalid());
+                }
+                decode_rows(&rows)
+            })
+            .map_err(crate::Error::from)
+            .map_err(Into::into)
+    }
+}
+
+impl bpfman_store::XdpReplacementStore for Backend {
+    fn observe_xdp_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: XdpKey,
+    ) -> Result<Option<(XdpDispatcherSnapshot, XdpReceipt)>, Error> {
+        (|| -> Result<_, Failure> {
+            let mut c = connection(w)?;
+            let tx = c.transaction()?;
+            let rows = queries::rows(&tx, Some(key), None)?;
+            if rows.is_empty() {
+                return if queries::vacant(&tx, key)? {
+                    Ok(None)
+                } else {
+                    Err(invalid())
+                };
+            }
+            let snapshot = canonical_rows(&rows, w.layout())?;
+            Ok(Some((
+                snapshot,
+                XdpReceipt {
+                    root: w.identity()?,
+                    database: identity(w)?,
+                    rows,
+                },
+            )))
+        })()
+        .map_err(crate::Error::from)
+        .map_err(Into::into)
+    }
+
+    fn replace_xdp(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: XdpReceipt,
+        request: bpfman_store::XdpReplace<'_>,
+    ) -> Result<XdpDispatcherSnapshot, EffectFailure<XdpReceipt, Error>> {
+        let result = (|| -> Result<_, Error> {
+            let apply = || -> Result<_, Failure> {
+                if w.identity()? != receipt.root || identity(w)? != receipt.database {
+                    return Err(Failure::InvalidLink(
+                        "XDP receipt belongs to another runtime or store",
+                    ));
+                }
+                let old = canonical_rows(&receipt.rows, w.layout())?;
+                let first = receipt.rows.first().ok_or_else(invalid)?;
+                let mut c = connection(w)?;
+                let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if queries::rows(&tx, Some(old.members()[0].details.key), None)? != receipt.rows {
+                    return Err(Failure::InvalidLink(
+                        "XDP snapshot changed since observation",
+                    ));
+                }
+                // Validate before any DML; retain the portable error at the outer boundary.
+                let mut desired = Vec::new();
+                for (position, member) in request.members.iter().enumerate() {
+                    let a = &member.attachment;
+                    let (program_name, program_pin) = queries::program(&tx, a.program_id.get())?;
+                    let mut row = first.clone();
+                    row.id = match member.identity {
+                        bpfman_store::XdpMemberId::Existing(id) => {
+                            i64::try_from(id.get()).map_err(|_| invalid())?
+                        }
+                        bpfman_store::XdpMemberId::New => 0,
+                    };
+                    row.program = i64::from(a.program_id.get());
+                    row.program_name = program_name;
+                    row.program_pin = program_pin;
+                    row.kernel = i64::from(a.extension_link_id.get());
+                    row.position = position as i64;
+                    let slot = position.try_into().map_err(|_| invalid())?;
+                    row.pin = w
+                        .layout()
+                        .xdp_slot_path(a.details.key, a.details.revision, slot)
+                        .into_os_string()
+                        .into_string()
+                        .map_err(|_| invalid())?;
+                    row.metadata =
+                        serde_json::to_string(a.metadata).map_err(Failure::LinkMetadata)?;
+                    row.created = a.created_at.into();
+                    row.priority = i64::from(a.details.priority);
+                    let codes: Vec<_> = (0..32)
+                        .filter(|code| a.details.proceed_on.mask() & (1 << code) != 0)
+                        .collect();
+                    row.proceed_on =
+                        serde_json::to_string(&codes).map_err(Failure::LinkMetadata)?;
+                    row.dispatcher = i64::from(a.details.dispatcher_id.get());
+                    row.revision = i64::from(a.details.revision.get());
+                    row.dispatcher_updated = request.updated_at.into();
+                    desired.push(row);
+                }
+                for row in &receipt.rows {
+                    queries::remove_member(&tx, row.id)?;
+                }
+                queries::update_dispatcher(&tx, desired.first().ok_or_else(invalid)?)?;
+                for row in &mut desired {
+                    row.id = queries::insert_member(&tx, row)?;
+                }
+                let snapshot = canonical_rows(&desired, w.layout())?;
+                desired.sort_by_key(|r| r.id);
+                if queries::rows(&tx, Some(old.members()[0].details.key), None)? != desired {
+                    return Err(Failure::InvalidLink(
+                        "XDP publication did not preserve the requested snapshot",
+                    ));
+                }
+                tx.commit()?;
+                Ok(snapshot)
+            };
+            let current = canonical_rows(&receipt.rows, w.layout()).map_err(crate::Error::from)?;
+            request.validate(&current)?;
+            apply().map_err(crate::Error::from).map_err(Into::into)
+        })();
+        result.map_err(|cause| EffectFailure {
+            cause,
             remaining: receipt,
         })
     }

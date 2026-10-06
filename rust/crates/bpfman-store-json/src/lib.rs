@@ -48,5 +48,6 @@ pub struct LinkReceipt {
 pub struct XdpReceipt {
     root: RuntimeIdentity,
     store: String,
-    row: xdp::Row,
+    rows: Vec<xdp::Row>,
+    programs: Vec<state::Program>,
 }

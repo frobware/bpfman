@@ -23,9 +23,10 @@ pub struct XdpCommit<'a> {
     pub created_at: &'a str,
 }
 
-/// Snapshot reads independent of writer authority.
+/// Single-member observations for the currently supported kernel lifecycle.
+/// Complete membership is available through `crate::XdpDispatcherReader`.
 pub trait XdpReader {
-    /// Read one complete dispatcher snapshot; absence is distinct from errors.
+    /// Read a singleton dispatcher; multiple members are an error, never truncated.
     fn read_xdp(&mut self, key: XdpKey) -> Result<Option<XdpSnapshot>, Error>;
 }
 
@@ -49,7 +50,7 @@ pub trait XdpStore: OpenStore {
         request: XdpCommit<'_>,
     ) -> Result<StoredLink, Error>;
 
-    /// Observe one member with conditional evidence for the complete snapshot.
+    /// Observe a singleton with conditional evidence; reject multi-member dispatchers.
     fn observe_xdp(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -67,14 +68,15 @@ pub trait XdpStore: OpenStore {
 impl XdpCommit<'_> {
     /// Validate invariants required of a first-attach snapshot before mutation.
     pub fn validate(&self) -> Result<(), Error> {
-        if self.details.priority > i32::MAX as u32
+        if self.details.slot != bpfman_model::XdpSlot::FIRST
+            || self.details.priority > i32::MAX as u32
             || self.details.revision != NonZeroU32::MIN
             || self.extension_link_id == self.outer_link_id
         {
             return Err(Error::new(
                 crate::ErrorKind::InvalidData,
                 std::io::Error::other(
-                    "first XDP snapshot requires revision one, a valid priority, and distinct kernel links",
+                    "first XDP snapshot requires slot zero, revision one, a valid priority, and distinct kernel links",
                 ),
             ));
         }

@@ -1060,6 +1060,12 @@ rust-test-kernel-fake:
 rust-test-xdp-core:
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-model -p bpfman-core --locked
 
+# Complete XDP persistence contracts and backend-specific atomicity/format tests.
+.PHONY: rust-test-xdp-store
+rust-test-xdp-store:
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-store-sqlite -p bpfman-store-json --locked
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test xdp_store --locked
+
 # Exercise the same load interpreter used by the CLI, with injected effects.
 .PHONY: rust-test-load-compensation
 rust-test-load-compensation:

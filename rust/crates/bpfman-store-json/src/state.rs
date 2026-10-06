@@ -1,3 +1,4 @@
+//! Version 5 adds multi-member XDP replacement; version 4 adds first attachment.
 //! Version 3 adds XDP extension loads; version 2 adds standalone tracepoint links.
 //! Version 1 retains its existing program operations; link creation requires a
 //! separately initialized version 2 or newer store. Never upgrade a snapshot implicitly.
@@ -88,7 +89,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 4,
+            version: 5,
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
             next_generation: 1,
@@ -108,7 +109,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=4) {
+        if !matches!(header.version, 1..=5) {
             return Err(Failure::Version(header.version));
         }
 
@@ -204,11 +205,9 @@ impl State {
         let mut keys = BTreeSet::new();
         let mut dispatchers = BTreeSet::new();
         for row in &self.xdp {
-            if !keys.insert(row.key())
-                || !link_ids.insert(row.link_id)
+            if !link_ids.insert(row.link_id)
                 || row.link_id.get() >= self.next_link_id
                 || !kernel_ids.insert(row.extension_link_id)
-                || !kernel_ids.insert(row.outer_link_id)
                 || !self
                     .programs
                     .iter()
@@ -219,8 +218,35 @@ impl State {
                 ));
             }
             let details = row.details()?;
-            if !dispatchers.insert(details.dispatcher_id) {
-                return Err(Failure::Invalid("duplicate dispatcher ID"));
+            if keys.insert(row.key())
+                && (!dispatchers.insert(details.dispatcher_id)
+                    || !kernel_ids.insert(row.outer_link_id))
+            {
+                return Err(Failure::Invalid("duplicate dispatcher or outer link ID"));
+            }
+            if row.position >= bpfman_model::XDP_MAX_MEMBERS {
+                return Err(Failure::Invalid("invalid XDP slot"));
+            }
+        }
+
+        for key in keys {
+            let mut rows: Vec<_> = self.xdp.iter().filter(|r| r.key() == key).collect();
+            rows.sort_by_key(|r| r.position);
+            let first = rows.first().ok_or(Failure::Invalid("empty XDP snapshot"))?;
+            let header = first.details()?;
+            if self.version < 5 && rows.len() != 1 {
+                return Err(Failure::Invalid("multi-member XDP requires format 5"));
+            }
+            for (position, row) in rows.iter().enumerate() {
+                let details = row.details()?;
+                if row.position != position
+                    || row.outer_link_id != first.outer_link_id
+                    || details.interface != header.interface
+                    || details.revision != header.revision
+                    || details.dispatcher_id != header.dispatcher_id
+                {
+                    return Err(Failure::Invalid("inconsistent XDP dispatcher membership"));
+                }
             }
         }
 

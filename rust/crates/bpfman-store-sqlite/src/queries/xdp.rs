@@ -160,10 +160,17 @@ pub(crate) fn insert(
     Ok(id)
 }
 
-pub(crate) fn remove(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result<()> {
+pub(crate) fn remove_member(tx: &Transaction<'_>, id: i64) -> rusqlite::Result<()> {
     let links = tx
         .prepare_cached("DELETE FROM links WHERE id=:id")?
-        .execute(named_params! { ":id": row.id })?;
+        .execute(named_params! { ":id": id })?;
+    if links != 1 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_dispatcher(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result<()> {
     let dispatchers = tx
         .prepare_cached(
             "DELETE FROM dispatchers WHERE type='xdp' AND nsid=:nsid
@@ -174,9 +181,80 @@ pub(crate) fn remove(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result<()> {
             ":ifindex": row.ifindex,
             ":program": row.dispatcher,
         })?;
-    if links != 1 || dispatchers != 1 {
+    if dispatchers != 1 {
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }
 
     Ok(())
+}
+
+pub(crate) fn program(c: &Connection, id: u32) -> rusqlite::Result<(String, String)> {
+    c.prepare_cached(
+        "SELECT program_name, pin_path FROM managed_programs
+         WHERE program_id=:id AND program_type='xdp'",
+    )?
+    .query_row(named_params! { ":id": id }, |r| {
+        Ok((r.get("program_name")?, r.get("pin_path")?))
+    })
+}
+
+pub(crate) fn update_dispatcher(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result<()> {
+    let changed = tx
+        .prepare_cached(
+            "UPDATE dispatchers SET program_id=:program, revision=:revision, updated_at=:updated
+         WHERE type='xdp' AND nsid=:nsid AND ifindex=:ifindex",
+        )?
+        .execute(named_params! {
+            ":program": row.dispatcher,
+            ":revision": row.revision,
+            ":updated": row.dispatcher_updated,
+            ":nsid": row.nsid,
+            ":ifindex": row.ifindex,
+        })?;
+
+    if changed != 1 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(())
+}
+
+pub(crate) fn insert_member(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result<i64> {
+    let changed = tx.prepare_cached(
+        "INSERT INTO links(id,kind,kernel_prog_id,kernel_link_id,pin_path,metadata_json,created_at)
+         VALUES(NULLIF(:id,0),'xdp',:program,:kernel,:pin,:metadata,:created)",
+    )?
+    .execute(named_params! {
+        ":id": row.id,
+        ":program": row.program,
+        ":kernel": row.kernel,
+        ":pin": row.pin,
+        ":metadata": row.metadata,
+        ":created": row.created,
+    })?;
+
+    if changed != 1 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    let id = tx.last_insert_rowid();
+    let changed = tx
+        .prepare_cached(
+            "INSERT INTO link_xdp_details(id,interface,ifindex,priority,position,proceed_on,
+            netns,nsid,dispatcher_program_id)
+         VALUES(:id,:interface,:ifindex,:priority,:position,:actions,'',:nsid,:dispatcher)",
+        )?
+        .execute(named_params! {
+            ":id": id,
+            ":interface": row.interface,
+            ":ifindex": row.ifindex,
+            ":priority": row.priority,
+            ":position": row.position,
+            ":actions": row.proceed_on,
+            ":nsid": row.nsid,
+            ":dispatcher": row.dispatcher,
+        })?;
+
+    if changed != 1 {
+        return Err(rusqlite::Error::QueryReturnedNoRows);
+    }
+    Ok(id)
 }

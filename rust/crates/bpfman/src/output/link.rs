@@ -15,7 +15,7 @@ fn record(link: &StoredLink) -> Value {
                 "interface": d.interface.as_str(),
                 "ifindex": d.key.ifindex.get(),
                 "priority": d.priority,
-                "position": 0,
+                "position": d.slot.index(),
                 "proceed_on": (0..32)
                     .filter(|code| d.proceed_on.mask() & (1 << code) != 0)
                     .collect::<Vec<_>>(),

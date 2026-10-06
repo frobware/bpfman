@@ -71,5 +71,5 @@ pub struct LinkReceipt {
 pub struct XdpReceipt {
     root: bpfman_fs::RuntimeIdentity,
     database: (u64, u64),
-    row: queries::xdp::Row,
+    rows: Vec<queries::xdp::Row>,
 }

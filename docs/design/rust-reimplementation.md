@@ -3,8 +3,9 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds pure XDP dispatcher-replacement policy on top of the injectable
-tracepoint and single-member XDP lifecycles, using both SQLite and JSON stores.
+checkpoint adds atomic multi-member XDP persistence and pure replacement policy
+on top of the injectable tracepoint and single-member XDP lifecycles, using both
+SQLite and JSON stores.
 The next milestone remains an XDP **one → two → one → zero member lifecycle**
 using dispatcher replacement. Full behavioural parity remains unfinished.
 
@@ -12,18 +13,19 @@ The first dispatcher-replacement step now has pure membership planning, bounded
 slot/priority values, complete multi-member ABI encoding, and consuming
 switch/publication/restoration transitions. Failed restoration retains both
 revisions; cleanup attempts retain stable identities across retries. These
-policies are tested independently of I/O. Replacement kernel/store capabilities
-and runtime integration remain to be implemented; the supported CLI still admits
-only one member per interface.
+policies are tested independently of I/O. Both stores now observe and conditionally
+replace complete multi-member snapshots, preserving surviving managed link IDs.
+Kernel switching/restoration and runtime integration remain to be implemented;
+the supported CLI still admits only one member per interface.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One member per interface, current network namespace, driver-mode BPF link, last detach | Additional members, replacement, explicit namespaces, selectable modes |
-| XDP replacement policy | Pure ordering, bounded slots/priorities, multi-member ABI, ownership transitions, stable cleanup IDs | Kernel/store capabilities, runtime integration, multi-member acceptance |
+| XDP replacement | Pure ordering, bounded slots/priorities, multi-member ABI, ownership transitions, stable cleanup IDs; atomic conditional snapshots in both stores | Kernel switching/restoration, runtime integration, multi-member acceptance |
 | XDP observations | Program/link get and list; complete dispatcher snapshot as JSON | Broader dispatcher CLI and traffic acceptance |
-| Persistence | Go-compatible SQLite schema 2; JSON format 4 for XDP attachment | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; JSON format 5 for multi-member XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend for reads, load, attach, detach, unload, and retries; Aya confined to its adapter | Replacement capabilities for multi-member dispatchers |
 
 XDP programs must be explicitly detached before unload. Occupied attach points are
@@ -34,10 +36,13 @@ for the supported command surface.
 Validation for this checkpoint passed through `direnv exec . make rust-check`,
 including formatting, Clippy, workspace tests, documentation, nine replacement
 policy tests, three configuration tests, five replacement compile-fail contracts,
-16 fake-kernel lifecycle tests, and 36 real-kernel tests. Both backends run the unchanged
+six shared XDP store contracts, SQLite replacement DML fault tests, JSON
+replacement publication/format tests, 16 fake-kernel lifecycle tests, and 36
+real-kernel tests. Both backends run the unchanged
 `TestXDP_LinkRoundTrip.bpfman` and
 `TestDispatcher_LifecycleAfterLastDetachXDP.bpfman` scripts. This establishes the
-first-member lifecycle and pure replacement policy; it does not establish
+first-member lifecycle, pure replacement policy, and multi-member persistence;
+it does not establish
 multi-member runtime or traffic parity. The full gate used the shared Go/Rust
 kernel-build helper outside the sandbox, allowing Nix to discover and realize
 the matching development output; see the NixOS guidance in `rust/AGENTS.md`.
@@ -606,7 +611,9 @@ SQLite retains Go schema version 2 and its migration history. JSON format 4 adds
 complete single-member XDP dispatcher snapshots. Older JSON formats retain their
 existing operations: tracepoint programs from version 1, tracepoint links from
 version 2, and XDP loads from version 3. XDP attachment requires a separately
-initialized version 4 runtime. Neither backend implicitly migrates or repairs
+initialized version 4 or newer runtime. Format 5 adds multi-member replacement
+and is used for newly created JSON stores. Format 4 retains single-member
+operations and refuses replacement. Neither backend implicitly migrates or repairs
 existing state. The implementation does not use sled.
 
 The store has two classes of operation:
@@ -724,9 +731,16 @@ Implement and validate this milestone in the following order:
    rejected switches from failures after mutation and gates staged cleanup on
    successful restoration. `XdpCleanup` distinguishes individual member cleanup
    attempts by stable instruction IDs. Run `direnv exec . make rust-test-xdp-core`.
-2. Extend the narrow kernel capabilities and concrete adapter with owned revision
-   switching and restoration. Extend each real store with atomic, conditional
-   replacement of the complete dispatcher/member snapshot.
+2. Store portion implemented: `XdpDispatcherSnapshot` validates complete membership
+   in contiguous slot order. `XdpReplacementStore` observes and atomically replaces
+   an unchanged snapshot under runtime writer authority, retaining receipts on
+   failure. Surviving links preserve managed IDs, programs, metadata, timestamps,
+   priorities, and proceed-on masks; their slots, kernel extension links, and
+   revision change together. SQLite uses schema 2 transactions; new JSON stores
+   use format 5, with no implicit upgrade of older stores. Run
+   `direnv exec . make rust-test-xdp-store` for shared contracts and backend faults.
+   Still required: extend the narrow kernel capabilities and concrete adapter
+   with owned revision switching and restoration.
 3. Run the public one → two → one → zero lifecycle with the shared stateful fake
    kernel and both real stores. Inject failures during staging, switching,
    publication, restoration, and cleanup. Assert the live target, stored snapshot,
@@ -1323,6 +1337,8 @@ named-selection DSL scripts.
 
 Completed checkpoint:
 
+- Atomic conditional multi-member snapshot replacement in both stores, bounded
+  slot observations, and retained complete-snapshot receipts on failure.
 - Pure replacement planning, multi-member ABI encoding, consuming switch/publication/
   restoration transitions, and stable per-instruction cleanup retry history.
 - Pure one-slot XDP configuration and dependency-aware cleanup policy.

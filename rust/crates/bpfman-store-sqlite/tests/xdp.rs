@@ -44,6 +44,7 @@ fn scope(
                 },
             )?;
             let details = XdpLink {
+                slot: bpfman_model::XdpSlot::FIRST,
                 key: XdpKey {
                     nsid: NonZeroU64::MIN,
                     ifindex: id(7),
@@ -129,6 +130,10 @@ fn malformed_dispatcher_members_are_errors_not_absence() -> Result {
                 "UPDATE link_xdp_details SET position=0",
             ),
             (
+                "UPDATE link_xdp_details SET position=1; UPDATE links SET pin_path=replace(pin_path,'link_0','link_1')",
+                "UPDATE link_xdp_details SET position=0; UPDATE links SET pin_path=replace(pin_path,'link_1','link_0')",
+            ),
+            (
                 "UPDATE link_xdp_details SET proceed_on='[5]'",
                 "UPDATE link_xdp_details SET proceed_on='[2,31]'",
             ),
@@ -155,6 +160,67 @@ fn malformed_dispatcher_members_are_errors_not_absence() -> Result {
             db.execute_batch(restore)?;
             assert_eq!(reader.read_links()?, std::slice::from_ref(&link));
         }
+        Ok(())
+    })
+}
+
+#[test]
+fn replacement_rolls_back_every_dml_failure_and_retains_receipt() -> Result {
+    use bpfman_store::{
+        XdpDispatcherReader, XdpMemberCommit, XdpMemberId, XdpReplace, XdpReplacementStore,
+    };
+    scope(|w, db, reader, request| {
+        let link = commit(w, request);
+        let old = reader.read_xdp_dispatcher(request.details.key)?;
+        let mut details = request.details.clone();
+        details.dispatcher_id = id(56);
+        details.revision = id(2);
+        let members = [XdpMemberCommit {
+            identity: XdpMemberId::Existing(link.id),
+            attachment: XdpCommit {
+                details: &details,
+                extension_link_id: id(67),
+                ..*request
+            },
+        }];
+        let replacement = || XdpReplace {
+            members: &members,
+            updated_at: request.created_at,
+        };
+        let (_, mut receipt) = Backend
+            .observe_xdp_dispatcher(w, request.details.key)?
+            .expect("snapshot");
+        for (operation, table) in [
+            ("DELETE", "links"),
+            ("DELETE", "link_xdp_details"),
+            ("UPDATE", "dispatchers"),
+            ("INSERT", "links"),
+            ("INSERT", "link_xdp_details"),
+        ] {
+            for action in ["ABORT, 'injected'", "IGNORE"] {
+                db.execute_batch(&format!("CREATE TRIGGER inject BEFORE {operation} ON {table} BEGIN SELECT RAISE({action}); END"))?;
+                let failure = Backend
+                    .replace_xdp(w, receipt, replacement())
+                    .expect_err("DML fault");
+                receipt = failure.remaining;
+                assert_eq!(
+                    reader.read_xdp_dispatcher(request.details.key)?,
+                    old,
+                    "{operation} {table} {action}"
+                );
+                assert_eq!(reader.read_links()?, std::slice::from_ref(&link));
+                db.execute_batch("DROP TRIGGER inject")?;
+            }
+        }
+        let snapshot = Backend
+            .replace_xdp(w, receipt, replacement())
+            .map_err(|e| e.cause)?;
+        assert_eq!(snapshot.members()[0].member.id, link.id);
+        assert_eq!(snapshot.members()[0].details.revision, id(2));
+        assert_eq!(
+            reader.read_xdp_dispatcher(request.details.key)?,
+            Some(snapshot)
+        );
         Ok(())
     })
 }

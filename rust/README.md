@@ -164,7 +164,9 @@ JSON version 4 adds complete single-member XDP dispatcher snapshots to private
 tracepoint/XDP programs and standalone tracepoint links. Versions 1–3 retain
 their existing operations: tracepoint programs from version 1, tracepoint links
 from version 2, and XDP loads from version 3. XDP attachment requires a separately
-initialized version 4 runtime. Existing stores never upgrade implicitly.
+initialized version 4 or newer runtime. New stores use version 5, which adds
+multi-member XDP replacement. Version 4 retains its single-member operations
+and rejects replacement. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
 descriptor and atomically renames it into place under the runtime writer lock.
 Failed publication leaves the old state intact; interrupted staging files are
@@ -770,7 +772,8 @@ one-slot dispatcher, and pins its program, extension link, and outer interface
 link using Go's path layout. Only driver mode and BPF links are supported. An
 occupied attach point is refused; there is no replacement or netlink fallback.
 SQLite atomically publishes the dispatcher header, managed link, and member
-using Go schema version 2. JSON publishes the same domain snapshot in version 4.
+using Go schema version 2. JSON supports that snapshot from version 4; newly
+created JSON stores use version 5.
 A successful commit ends compensation, including when cancellation arrives late.
 
 `link detach LINK_ID` synchronously detaches the outer link before releasing
@@ -821,10 +824,30 @@ ownership separately. `XdpCleanup` records stable instruction IDs so multiple
 extension failures remain distinguishable across retries.
 
 Run `direnv exec . make rust-test-xdp-core` for the policy, ABI, and compile-fail
-tests. This does not establish multi-member kernel or traffic support. The next
-step is implementing conditional snapshot replacement in both stores and owned
-link switching/restoration in the kernel boundary, then connecting the runtime
-and running the shared fake-kernel and real-traffic acceptance suites.
+tests. This does not establish multi-member kernel or traffic support.
+
+The persistence portion is also implemented. `XdpDispatcherReader` returns a
+validated `XdpDispatcherSnapshot` containing one to ten members in contiguous
+slot order. Slots are carried in ordinary XDP link observations and canonical
+pin paths. `XdpReplacementStore` publishes a complete desired membership only
+while the observed snapshot and runtime/store identity still match. Surviving
+managed link IDs, program identities, metadata, creation timestamps, priorities,
+and proceed-on masks are preserved. Revision, dispatcher ID, slots, extension
+kernel links, and membership change atomically; the durable outer link stays
+unchanged. Failures return the receipt for an explicit retry and commit nothing.
+SQLite rechecks and publishes within one transaction using Go schema 2. JSON
+publishes a complete format-5 file and never implicitly upgrades format 4.
+
+Run `direnv exec . make rust-test-xdp-store` for the six shared store contracts
+and backend-specific tests. Coverage includes 1 → 2 → 1 → 0 persistence with
+removal of either member, growth to ten slots, capacity refusal, stable IDs,
+reopening, stale/foreign receipts, invalid requests, SQLite DML aborts and ignored
+writes, JSON publication obstruction, malformed membership, and format-4 refusal.
+The single-member store entry points used by the runtime continue to reject
+multi-member dispatchers. No multi-member kernel lifecycle is admitted yet.
+
+Next: owned link switching/restoration in the kernel boundary, followed by runtime
+integration and the shared fake-kernel and real-traffic acceptance suites.
 
 Checkpoint validation passed through the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,

@@ -29,7 +29,7 @@ pub(crate) fn dispatcher(out: &mut impl Write, snapshot: &XdpSnapshot) -> io::Re
                 "link_id": member.id.get(),
                 "kernel_link_id": kernel,
                 "link_pin_path": member.pin_path,
-                "position": 0,
+                "position": d.slot.index(),
                 "priority": d.priority,
                 "proceed_on": d.proceed_on.mask(),
                 "ifname": d.interface.as_str(),

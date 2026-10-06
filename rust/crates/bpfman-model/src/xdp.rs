@@ -86,6 +86,8 @@ impl XdpProceedOn {
 /// One extension's attachment to a dispatcher revision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XdpLink {
+    /// Validated position in the dispatcher chain.
+    pub slot: crate::XdpSlot,
     /// Owning attach point.
     pub key: XdpKey,
     /// Observed interface name.
@@ -100,7 +102,7 @@ pub struct XdpLink {
     pub revision: NonZeroU32,
 }
 
-/// Complete single-member XDP snapshot. Persistence publishes it atomically.
+/// One member and its dispatcher details from a consistent store observation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct XdpSnapshot {
     /// Extension name from the same stored snapshot.
@@ -111,8 +113,60 @@ pub struct XdpSnapshot {
     pub details: XdpLink,
     /// Outer interface link kernel ID.
     pub outer_link_id: NonZeroU32,
-    /// Sole managed extension link.
+    /// Managed extension link.
     pub member: StoredLink,
+}
+
+/// Complete nonempty dispatcher snapshot, ordered by contiguous chain slots.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct XdpDispatcherSnapshot(alloc::vec::Vec<XdpSnapshot>);
+
+/// Inconsistent membership, slots, or shared dispatcher identity.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidXdpSnapshot;
+
+impl fmt::Display for InvalidXdpSnapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("invalid XDP dispatcher snapshot")
+    }
+}
+
+impl core::error::Error for InvalidXdpSnapshot {}
+
+impl XdpDispatcherSnapshot {
+    /// Validate capacity, shared dispatcher identity, and distinct member links.
+    pub fn new(members: alloc::vec::Vec<XdpSnapshot>) -> Result<Self, InvalidXdpSnapshot> {
+        let first = members.first().ok_or(InvalidXdpSnapshot)?;
+        if members.len() > crate::XDP_MAX_MEMBERS {
+            return Err(InvalidXdpSnapshot);
+        }
+        for (index, member) in members.iter().enumerate() {
+            let crate::LinkState::Attached { kernel_id } = member.member.state else {
+                return Err(InvalidXdpSnapshot);
+            };
+            if member.details.slot.index() != index
+                || member.details.key != first.details.key
+                || member.details.interface != first.details.interface
+                || member.details.dispatcher_id != first.details.dispatcher_id
+                || member.details.revision != first.details.revision
+                || member.outer_link_id != first.outer_link_id
+                || member.member.details != crate::LinkDetails::Xdp(member.details.clone())
+                || member.details.priority > i32::MAX as u32
+                || kernel_id == member.outer_link_id
+                || members[..index].iter().any(|prior| {
+                    prior.member.id == member.member.id || prior.member.state == member.member.state
+                })
+            {
+                return Err(InvalidXdpSnapshot);
+            }
+        }
+        Ok(Self(members))
+    }
+
+    /// All members in execution order; the slice is never empty.
+    pub fn members(&self) -> &[XdpSnapshot] {
+        &self.0
+    }
 }
 
 /// One-slot dispatcher configuration matching Go's C ABI.

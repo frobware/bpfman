@@ -530,7 +530,7 @@ impl RuntimeDirectory {
         use rustix::fs::{Mode, OFlags, openat2};
         let pin = match openat2(
             &revision,
-            "link_0",
+            format!("link_{}", details.slot.index()),
             OFlags::PATH | OFlags::CLOEXEC,
             Mode::empty(),
             CONFINED,
