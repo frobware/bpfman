@@ -282,3 +282,6 @@ fn sqlite_unchanged_xdp_unload_dsl() {
 fn json_unchanged_xdp_unload_dsl() {
     cli::dsl("json", "TestXDP_UnloadDispatcherMemberRebuildsSurvivor");
 }
+
+#[path = "kernel/xdp_corpus.rs"]
+mod xdp_corpus;

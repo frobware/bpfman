@@ -1863,6 +1863,10 @@ rust-test-xdp-switch: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-unload: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_unload --nocapture
 
+.PHONY: rust-test-xdp-corpus
+rust-test-xdp-corpus: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_corpus --nocapture
+
 # Run the unchanged Go DSL script against Rust; observations use only public CLI
 # output and runtime artifacts. No storage queries or format assumptions here.
 .PHONY: rust-test-observation

@@ -824,9 +824,8 @@ and foreign runtime authority; production-interpreter fakes cross acquisition,
 cancellation, and individual cleanup failures.
 
 Attached-program unload removes all XDP links through the same protocol.
-Explicit `--netns`, selectable XDP modes, and the broader traffic corpus remain
-unfinished. Loading an `xdp.frags` section does not establish fragmented-packet
-execution support.
+Explicit `--netns` and selectable XDP modes remain unfinished. Loading an
+`xdp.frags` section does not establish fragmented-packet execution support.
 
 ### Dispatcher replacement policy
 
@@ -918,12 +917,32 @@ last-member deletion failure, and complete teardown. Shared fake tests also cove
 multiple interfaces, foreign kernel instances, failed retirement, cancellation,
 partial progress, and new links added during retained recovery.
 
-Next: broader XDP fill/drain and chain-execution acceptance using unchanged Go
-scripts.
+Run `direnv exec . make rust-test-xdp-corpus` for eleven additional unchanged Go
+scripts, each registered separately on SQLite and JSON (22 real-kernel tests):
+
+| Coverage | Unchanged scripts |
+| --- | --- |
+| Ten-slot traffic and four fill/drain/refill peaks | `TestXDP_DispatcherChainExecution`, `TestXDP_DispatcherFillDrainRefill` |
+| Exact weighted counters through staggered detach | `TestMultiProgXDP_AllProceed_DefaultProceedOn` |
+| Custom DROP continuation and PASS/DROP stopping | `TestMultiProgXDP_AllProceed_CustomProceedOn`, `TestMultiProgXDP_ChainStopsAtDrop_DefaultProceedOn`, `TestMultiProgXDP_ChainStopsAtPass_CustomProceedOn` |
+| Proceed-on masks, single actions, combinations, and defaults | `TestXDP_ProceedOnPassEncoding`, `TestXDP_ProceedOnEncodingMatrix` |
+| Priority zero and equal-priority ordering | `TestDispatcher_ZeroPriorityDefaultOrderingXDP`, `TestXDP_DispatcherPriorityTieBreakByName` |
+| Independent interface membership | `TestDispatcher_MultipleInterfacesIndependentXDP` |
+
+The traffic scripts inspect real BPF maps and packet delivery. Encoding tests
+establish the stored masks; they do not establish delivery for TX or REDIRECT.
+Every DSL run must execute its selected script and finish with empty program,
+link, and dispatcher inventories and no owned program, map, link, bytecode,
+staging, or XDP revision artifacts. No script changes or new production behavior
+were needed for this corpus.
+
+Next: explicit network-namespace support, starting with the unchanged namespace
+link round-trip and dispatcher-rebuild scripts. Selectable modes and fragmented
+packet execution remain separate boundaries.
 
 Checkpoint validation passed through the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-36 fake-kernel lifecycle tests, and all 46 real-kernel tests on the supported
+36 fake-kernel lifecycle tests, and all 68 real-kernel tests on the supported
 surface. The new pure suites include nine replacement-policy tests and three
 configuration tests. NixOS kernel-build discovery and the optional `KERNEL_DEV`
 override are documented in [AGENTS.md](AGENTS.md).
@@ -961,6 +980,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 46 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 68 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

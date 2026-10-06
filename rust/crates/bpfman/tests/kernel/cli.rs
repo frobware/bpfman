@@ -295,5 +295,13 @@ fn run_dsl(store: &'static str, script: &str, binary: &std::path::Path) {
         c.json(binary, &["program", "list", "-o", "json"])["programs"],
         serde_json::json!([])
     );
+    assert_eq!(
+        c.json(binary, &["link", "list", "-o", "json"])["links"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        c.json(binary, &["dispatcher", "list", "-o", "json"])["dispatchers"],
+        serde_json::json!([])
+    );
     c.no_artifacts();
 }
