@@ -3,9 +3,8 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds DEVMAP-backed XDP forwarding acceptance in native and generic
-SKB modes on both SQLite and JSON stores, building on direct delivery and
-multi-buffer execution.
+checkpoint adds genuine multi-buffer TX, direct REDIRECT, and DEVMAP forwarding
+acceptance in native and generic SKB modes on both SQLite and JSON stores.
 All-fragment-aware chains select an `xdp.frags` dispatcher; mixed chains select
 a linear dispatcher. Published ELF declarations are read beneath the retained
 runtime descriptor without changing the Go-compatible persistence schema.
@@ -20,8 +19,10 @@ prove TX return to the sender and direct REDIRECT delivery to a separate receive
 proceed-on stopping/continuation, replacement, publication rollback, and either
 survivor. DEVMAP tests additionally prove live target updates, PASS/DROP lookup
 fallback, stable map identity/contents across replacement and restoration, and
-eventual kernel reclamation after unload. The next bounded slice is multi-buffer
-TX/REDIRECT forwarding.
+eventual kernel reclamation after unload. Four additional suites repeat the direct
+and map-backed forwarding lifecycle with 8 KB Ethernet payloads, exact full-payload
+capture, and independent multi-buffer evidence in each executing member and
+receiving peer. The next bounded slice is DEVMAP broadcast/exclude-ingress flags.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -37,7 +38,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
-| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, and DEVMAP forwarding acceptance | Multi-buffer forwarding, DEVMAP egress programs and broadcast |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, and DEVMAP forwarding acceptance with normal and multi-buffer packets | DEVMAP egress programs and broadcast |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | Persistence | Go-compatible SQLite schema 2; JSON format 6 for namespace-aware XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
@@ -52,7 +53,7 @@ for the supported command surface.
 
 Validation uses `direnv exec . make rust-check`: formatting, Clippy, workspace
 tests, compile-fail contracts, documentation, 38 shared fake-kernel lifecycle
-tests, and 88 real-kernel tests. The replacement fault matrix covers attach and
+tests, and 92 real-kernel tests. The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
 foreign-runtime retries, and post-commit retirement. Real packet tests prove
@@ -91,6 +92,17 @@ publication. Map updates run inside the target namespace; final reclamation is
 observed with a bounded wait for kernel-deferred program/map release. See
 [DEVMAP acceptance](../../rust/README.md#xdp-devmap-forwarding).
 
+Four combined multi-buffer forwarding suites run the same direct-delivery and
+DEVMAP scenarios on both stores and ingress modes. All interfaces use MTU 9000;
+fragment-aware receive dispatchers enable native veth transmission. The raw helper
+sends three 8014-byte frames with an offset-dependent payload pattern and checks
+all received payload bytes. Exact BPF counters prove total length exceeds linear
+length, successful final-byte reads, and correct reads across the linear/fragment
+boundary at each executing member and receiving peer. The same proof is required
+after successful replacement, failed attach/detach publication restoration,
+either survivor, and live DEVMAP changes. No production changes were required.
+See [multi-buffer forwarding](../../rust/README.md#xdp-multi-buffer-forwarding).
+
 The full gate uses the shared Go/Rust kernel-build helper outside the sandbox,
 allowing Nix to discover and realize the matching development output; see the
 `KERNEL_DEV` and NixOS guidance in `rust/AGENTS.md`.
@@ -105,7 +117,7 @@ and caller-namespace isolation. Mode selection and fallback follow the legacy
 Rust implementation; current Go does not expose per-interface mode configuration.
 Multi-buffer execution additionally uses libxdp's all-members fragment
 policy; Go currently leaves its dispatcher fragment flag zero. The next bounded
-slice is multi-buffer TX/REDIRECT forwarding. Go remains the behavioural
+slice is DEVMAP broadcast/exclude-ingress flags. Go remains the behavioural
 authority for the existing shared surface.
 
 The multi-buffer checkpoint (`d5c4652ae`) also passed Go `test-all`: package tests,
@@ -113,7 +125,8 @@ lint, script acceptance, kernel tests, and gRPC concurrency. This includes the u
 `TestLoad_XDPFragsProgram` script. The Nix development shell required
 `GOFLAGS=-ldflags=-linkmode=external`; existing image, policy, and shared-runtime
 skips remain. This validates the existing Go test surface; new multi-buffer,
-direct-delivery, and DEVMAP assertions run separately against Rust.
+direct-delivery, DEVMAP, and multi-buffer forwarding assertions run separately
+against Rust.
 
 ## Summary
 
@@ -1500,9 +1513,12 @@ updates, PASS/DROP fallback, proceed-on behavior, stable map identity and conten
 through replacement/rollback/survivor rebuilding, and eventual reclamation after
 unload. The test fixture updates maps inside the private network namespace and
 supports Aya's four/eight-byte DEVMAP value layouts. No production changes were
-needed. Next, establish multi-buffer TX/REDIRECT forwarding. DEVMAP egress programs,
-broadcast, physical NIC packet execution, and actual hardware offload remain
-unverified.
+needed. The same direct and DEVMAP lifecycle scenarios now also forward genuine
+multi-buffer frames in native and SKB modes on both stores. Exact fragment/tail/
+boundary counters at ingress and receiving peers supplement full 8014-byte frame
+captures with an offset-dependent payload pattern. Next, establish DEVMAP
+broadcast/exclude-ingress behavior. DEVMAP egress programs, physical NIC packet
+execution, and actual hardware offload remain unverified.
 
 The uprobe mount-namespace helper, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this

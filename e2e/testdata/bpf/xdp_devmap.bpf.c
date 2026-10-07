@@ -11,11 +11,11 @@ struct {
   __uint(max_entries, 1);
 } delivery_targets SEC(".maps");
 
-SEC("xdp")
+SEC(DELIVERY_SECTION)
 int devmap_delivery(struct xdp_md *ctx) {
   if (!probe(ctx))
     return XDP_PASS;
-  count(0);
+  observe(ctx, 0);
   return bpf_redirect_map(&delivery_targets, 0, devmap_fallback);
 }
 

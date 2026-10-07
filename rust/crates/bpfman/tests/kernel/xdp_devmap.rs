@@ -4,7 +4,7 @@
 use super::{
     faults::{Faults, Point},
     support::*,
-    xdp_delivery::{Network, traffic},
+    xdp_delivery::{Frames, Network},
 };
 use bpfman_model::*;
 use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram, XdpAttach};
@@ -107,13 +107,20 @@ fn map_released(id: u32) {
     }
 }
 
-fn scenario<S>(backend: S, mode: XdpMode, fallback: u32, proceed: bool, keep_redirect: bool)
-where
+fn scenario<S>(
+    backend: S,
+    mode: XdpMode,
+    fallback: u32,
+    proceed: bool,
+    keep_redirect: bool,
+    frames: Frames,
+) where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     let c = Context::new();
     let network = Network::new();
+    frames.configure(&network);
     let faults = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
@@ -137,13 +144,19 @@ where
         .id
     };
     let redirect = load(
-        "xdp_devmap.bpf.o",
+        frames.devmap_object(),
         "devmap_delivery",
         [("devmap_fallback".into(), fallback.to_ne_bytes().to_vec())].into(),
     );
-    let tail = load("xdp_delivery.bpf.o", "delivery_tail", Default::default());
-    let observer = load("xdp_pass.bpf.o", "pass", Default::default());
-    let ids = [redirect, tail];
+    let tail = load(
+        frames.delivery_object(),
+        "delivery_tail",
+        Default::default(),
+    );
+    let (object, symbol) = frames.observer();
+    let observer = load(object, symbol, Default::default());
+    let ids = [redirect, tail, observer];
+    let traffic = |execution, delivery| frames.traffic(&c, &network, ids, execution, delivery);
     let targets = Targets::open(&c, redirect);
     let request = |id, interface: &str, requested_mode, priority, proceed_on| XdpAttach {
         program_id: id,
@@ -192,19 +205,13 @@ where
     let single_delivery = if proceed { [0, 3, 0] } else { [0, 0, 3] };
     let chain_delivery = if proceed { [0, 0, 0] } else { [0, 0, 3] };
     let chain_execution = [3, if proceed { 3 } else { 0 }];
-    traffic(&c, &network, ids, [3, 0], missing_delivery);
+    traffic([3, 0], missing_delivery);
 
     let out_index = targets.set(&network, "out0");
-    traffic(&c, &network, ids, [3, 0], single_delivery);
+    traffic([3, 0], single_delivery);
     // The next packet must use a live map update without rebuilding the dispatcher.
     targets.set(&network, "in0");
-    traffic(
-        &c,
-        &network,
-        ids,
-        [3, 0],
-        if proceed { [0, 3, 0] } else { [3, 0, 0] },
-    );
+    traffic([3, 0], if proceed { [0, 3, 0] } else { [3, 0, 0] });
     targets.set(&network, "out0");
     assert_eq!(
         app.get_xdp_dispatcher(details.key).expect("same revision"),
@@ -220,7 +227,7 @@ where
     assert!(error.restoration_attempts()[0].is_ok());
     assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
     targets.check(Some(out_index));
-    traffic(&c, &network, ids, [3, 0], single_delivery);
+    traffic([3, 0], single_delivery);
     faults.set(None);
 
     let second = app
@@ -237,25 +244,13 @@ where
     );
     assert_eq!(chain.members()[0].outer_link_id, outer_id);
     targets.check(Some(out_index));
-    traffic(&c, &network, ids, chain_execution, chain_delivery);
+    traffic(chain_execution, chain_delivery);
 
     targets.delete(&network);
     // PASS fallback reaches the tail; DROP fallback stops before it.
-    traffic(
-        &c,
-        &network,
-        ids,
-        [3, if fallback == 2 { 3 } else { 0 }],
-        [0, 0, 0],
-    );
+    traffic([3, if fallback == 2 { 3 } else { 0 }], [0, 0, 0]);
     targets.set(&network, "in0");
-    traffic(
-        &c,
-        &network,
-        ids,
-        chain_execution,
-        if proceed { [0, 0, 0] } else { [3, 0, 0] },
-    );
+    traffic(chain_execution, if proceed { [0, 0, 0] } else { [3, 0, 0] });
     targets.set(&network, "out0");
 
     let (removed, survivor) = if keep_redirect {
@@ -275,7 +270,7 @@ where
         chain
     );
     targets.check(Some(out_index));
-    traffic(&c, &network, ids, chain_execution, chain_delivery);
+    traffic(chain_execution, chain_delivery);
     faults.set(None);
 
     app.detach_xdp(removed).expect("remove member");
@@ -285,18 +280,18 @@ where
     assert_eq!(remaining.members()[0].outer_link_id, outer_id);
     targets.check(Some(out_index));
     if keep_redirect {
-        traffic(&c, &network, ids, [3, 0], single_delivery);
+        traffic([3, 0], single_delivery);
         targets.delete(&network);
-        traffic(&c, &network, ids, [3, 0], missing_delivery);
+        traffic([3, 0], missing_delivery);
         targets.set(&network, "out0");
-        traffic(&c, &network, ids, [3, 0], single_delivery);
+        traffic([3, 0], single_delivery);
     } else {
-        traffic(&c, &network, ids, [0, 3], [0, 0, 0]);
+        traffic([0, 3], [0, 0, 0]);
     }
     app.detach_xdp(survivor).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
     targets.check(Some(out_index));
-    traffic(&c, &network, ids, [0, 0], [0, 3, 0]);
+    traffic([0, 0], [0, 3, 0]);
 
     for id in observers {
         app.detach_xdp(id).expect("remove receiving peer");
@@ -324,7 +319,7 @@ where
     c.no_artifacts();
 }
 
-pub(super) fn exercise<S>(backend: S, mode: XdpMode)
+pub(super) fn exercise<S>(backend: S, mode: XdpMode, frames: Frames)
 where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
@@ -332,7 +327,14 @@ where
     for fallback in [1, 2] {
         for proceed in [false, true] {
             for keep_redirect in [false, true] {
-                scenario(backend.clone(), mode, fallback, proceed, keep_redirect);
+                scenario(
+                    backend.clone(),
+                    mode,
+                    fallback,
+                    proceed,
+                    keep_redirect,
+                    frames,
+                );
             }
         }
     }

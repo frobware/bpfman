@@ -1044,7 +1044,7 @@ rust-build: $(RUST_DISPATCHER)
 
 # Build fixtures before entering the privileged test runner. Passwordless sudo
 # is required; unavailable privileges fail the gate rather than skipping tests.
-RUST_TEST_INPUTS = $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_devmap.bpf.o e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
+RUST_TEST_INPUTS = e2e/testdata/bpf/xdp_delivery_frags.bpf.o e2e/testdata/bpf/xdp_devmap_frags.bpf.o $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_devmap.bpf.o e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
 RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
 RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh", "$(abspath rust/test-runner.sh)"]'
 
@@ -1907,3 +1907,8 @@ rust-test-xdp-delivery: rust-build $(RUST_TEST_INPUTS)
 .PHONY: rust-test-xdp-devmap
 rust-test-xdp-devmap: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_delivery --nocapture
+
+# Genuine multi-buffer TX/direct REDIRECT/DEVMAP forwarding and full payload capture.
+.PHONY: rust-test-xdp-multibuffer-forwarding
+rust-test-xdp-multibuffer-forwarding: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_multibuffer_forwarding --nocapture

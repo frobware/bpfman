@@ -13,13 +13,14 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
 )
 
-func run() error {
+func run(size int) error {
 	protocol := int(binary.NativeEndian.Uint16([]byte{0x88, 0xb5}))
 	var sockets []int
 	defer func() {
@@ -47,11 +48,16 @@ func run() error {
 			sourceIndex = iface.Index
 		}
 	}
-	frame := make([]byte, 64)
+	frame := make([]byte, size)
 	copy(frame[:6], []byte{2, 0, 0, 0, 0, 2})   // in0
 	copy(frame[6:12], []byte{2, 0, 0, 0, 0, 1}) // source0
 	binary.BigEndian.PutUint16(frame[12:14], 0x88b5)
 	binary.BigEndian.PutUint32(frame[14:18], 0xb9f00001)
+	// An offset-dependent pattern detects loss, reordering, and corruption of
+	// fragments as well as truncation. BPF probes check this same pattern.
+	for offset := 22; offset < len(frame); offset++ {
+		frame[offset] = byte((offset-22)%251 + 1)
+	}
 	for sequence := range uint32(3) {
 		binary.BigEndian.PutUint32(frame[18:22], sequence)
 		if err := unix.Sendto(sockets[0], frame, 0, &unix.SockaddrLinklayer{Protocol: uint16(protocol), Ifindex: sourceIndex}); err != nil {
@@ -61,7 +67,7 @@ func run() error {
 	var counts [3]uint32
 	var seen [3][3]bool
 	deadline := time.Now().Add(300 * time.Millisecond)
-	buffer := make([]byte, 2048)
+	buffer := make([]byte, size+1)
 	for time.Now().Before(deadline) {
 		remaining := max(1, int(time.Until(deadline).Milliseconds()))
 		if _, err := unix.Poll(polls, remaining); err != nil && err != unix.EINTR {
@@ -139,7 +145,21 @@ func updateTarget(args []string) error {
 func main() {
 	var err error
 	if len(os.Args) == 1 {
-		err = run()
+		err = run(64)
+	} else if os.Args[1] == "packets" {
+		if len(os.Args) != 3 {
+			err = fmt.Errorf("usage: packets SIZE (64 through 9014 bytes)")
+		} else {
+			var size int
+			size, err = strconv.Atoi(os.Args[2])
+			if err == nil {
+				if size < 64 || size > 9014 {
+					err = fmt.Errorf("frame size must be between 64 and 9014 bytes")
+				} else {
+					err = run(size)
+				}
+			}
+		}
 	} else {
 		err = updateTarget(os.Args[1:])
 	}

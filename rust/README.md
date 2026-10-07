@@ -1065,8 +1065,8 @@ local delivery, and final teardown leaves empty inventories and no owned artifac
 No production changes were needed for this acceptance slice.
 
 This establishes normal-sized veth frames with direct interface redirects.
-The DEVMAP suite below covers map-based redirects. CPUMAP/XSKMAP redirects,
-multi-buffer TX/REDIRECT, physical NICs, and actual hardware offload remain
+The suites below cover map-based redirects and multi-buffer forwarding.
+CPUMAP/XSKMAP redirects, physical NICs, and actual hardware offload remain
 unverified. The kernel's
 [redirect documentation](https://docs.kernel.org/bpf/redirect.html) explains why
 invoking the helper alone does not prove transmission: the returned action and
@@ -1112,15 +1112,43 @@ changes were needed for this slice.
 
 This covers unicast `BPF_MAP_TYPE_DEVMAP` with normal-sized veth frames and no
 egress program. DEVMAP_HASH, broadcast/exclude-ingress flags, attached egress
-programs, CPUMAP/XSKMAP, multi-buffer forwarding, physical NICs, and hardware
-offload remain unverified.
+programs, CPUMAP/XSKMAP, physical NICs, and hardware offload remain unverified.
+The suite below covers multi-buffer forwarding.
 
-Next: multi-buffer TX/REDIRECT forwarding. The uprobe mount-namespace helper
-remains a separate attachment-family boundary.
+### XDP multi-buffer forwarding
 
-The DEVMAP checkpoint passed the full `direnv exec . make rust-check`
+Run `direnv exec . make rust-test-xdp-multibuffer-forwarding` for four combined
+real-kernel suites: SQLite/JSON with explicitly observed native/SKB ingress modes.
+Each runs the direct TX/REDIRECT and DEVMAP lifecycle scenarios above with three
+8014-byte Ethernet frames (8000 bytes after the Ethernet header) and MTU 9000 on
+all four interfaces. Separate `xdp.frags` fixtures share the ordinary fixtures'
+actions and map definitions. Receiving peers use fragment-aware native PASS
+members to enable veth transmission and independently inspect forwarded frames.
+
+The packet helper's `packets SIZE` mode fills bytes after the magic/sequence header
+with an offset-dependent pattern. Capture checks exact length and every payload
+byte, rejects duplicate sequence numbers, and excludes outgoing copies. Every
+executing member and receiving peer must increment four exact counters: marked
+frames, total length exceeding linear length, correct final-byte helper reads,
+and correct two-byte reads across the linear/fragment boundary. A jumbo frame
+that was linearized would fail this evidence check even if capture succeeded.
+Inactive members must leave all four counters unchanged.
+
+This repeats default stopping and explicit continuation into DROP, either
+survivor, stable outer-link identity, successful replacement, failed attach/detach
+publication restoration, last detach, and complete cleanup. DEVMAP additionally
+retains live target updates, PASS/DROP missing-entry fallback, original map identity
+and contents, and eventual reclamation. Neither the runtime nor the persisted
+schema needed changes, and no Rust dependency or unsafe code was added.
+
+The verified boundary is unicast veth forwarding on kernel 6.18.54. DEVMAP egress
+programs, broadcast/exclude-ingress flags, physical NICs, and hardware offload
+remain unverified. Next: DEVMAP broadcast/exclude-ingress behavior. The uprobe
+mount-namespace helper remains a separate attachment-family boundary.
+
+The multi-buffer forwarding checkpoint passed the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-38 fake-kernel lifecycle tests, and all 88 real-kernel tests. NixOS kernel-build
+38 fake-kernel lifecycle tests, and all 92 real-kernel tests. NixOS kernel-build
 discovery and the optional `KERNEL_DEV` override are documented in
 [AGENTS.md](AGENTS.md).
 
@@ -1157,6 +1185,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 88 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 92 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

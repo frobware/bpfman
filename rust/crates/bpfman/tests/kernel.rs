@@ -347,22 +347,38 @@ mod xdp_delivery;
 
 #[test]
 fn sqlite_xdp_packet_delivery() {
-    xdp_delivery::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+    xdp_delivery::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::Linear,
+    );
 }
 
 #[test]
 fn json_xdp_packet_delivery() {
-    xdp_delivery::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+    xdp_delivery::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::Linear,
+    );
 }
 
 #[test]
 fn sqlite_xdp_packet_delivery_skb() {
-    xdp_delivery::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+    xdp_delivery::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::Linear,
+    );
 }
 
 #[test]
 fn json_xdp_packet_delivery_skb() {
-    xdp_delivery::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+    xdp_delivery::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::Linear,
+    );
 }
 
 #[path = "kernel/xdp_devmap.rs"]
@@ -370,20 +386,92 @@ mod xdp_devmap;
 
 #[test]
 fn sqlite_xdp_devmap_delivery() {
-    xdp_devmap::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+    xdp_devmap::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::Linear,
+    );
 }
 
 #[test]
 fn json_xdp_devmap_delivery() {
-    xdp_devmap::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+    xdp_devmap::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::Linear,
+    );
 }
 
 #[test]
 fn sqlite_xdp_devmap_delivery_skb() {
-    xdp_devmap::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+    xdp_devmap::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::Linear,
+    );
 }
 
 #[test]
 fn json_xdp_devmap_delivery_skb() {
-    xdp_devmap::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+    xdp_devmap::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::Linear,
+    );
+}
+
+#[test]
+fn sqlite_xdp_multibuffer_forwarding() {
+    xdp_delivery::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+    xdp_devmap::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+}
+
+#[test]
+fn sqlite_xdp_multibuffer_forwarding_skb() {
+    xdp_delivery::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+    xdp_devmap::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+}
+
+#[test]
+fn json_xdp_multibuffer_forwarding() {
+    xdp_delivery::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+    xdp_devmap::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+}
+
+#[test]
+fn json_xdp_multibuffer_forwarding_skb() {
+    xdp_delivery::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+    xdp_devmap::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::MultiBuffer,
+    );
 }

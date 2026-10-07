@@ -72,8 +72,11 @@ impl Network {
         ip(&command)
     }
 
-    fn packets(&self, expected: [u32; 3]) {
-        let output = self.probe(&[]);
+    fn packets(&self, frames: Frames, expected: [u32; 3]) {
+        let output = match frames {
+            Frames::Linear => self.probe(&[]),
+            Frames::MultiBuffer => self.probe(&["packets", "8014"]),
+        };
         let counts: [u32; 3] = serde_json::from_slice(&output).expect("capture counts");
         assert_eq!(counts, expected, "[returned, local, redirected]");
     }
@@ -97,30 +100,90 @@ fn count(c: &Context, id: NonZeroU32, key: u32) -> u64 {
     map.get(&key, 0).expect("counter").iter().sum()
 }
 
-pub(super) fn traffic(
-    c: &Context,
-    network: &Network,
-    ids: [NonZeroU32; 2],
-    execution: [u64; 2],
-    delivery: [u32; 3],
-) {
-    let before = [count(c, ids[0], 0), count(c, ids[1], 1)];
-    network.packets(delivery);
-    let after = [count(c, ids[0], 0), count(c, ids[1], 1)];
-    assert_eq!(
-        [after[0] - before[0], after[1] - before[1]],
-        execution,
-        "exact marked-frame execution counts"
-    );
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Frames {
+    Linear,
+    MultiBuffer,
 }
 
-fn scenario<S>(backend: S, mode: XdpMode, action_code: u32, proceed: bool, keep_action: bool)
-where
+impl Frames {
+    pub(super) fn delivery_object(self) -> &'static str {
+        match self {
+            Self::Linear => "xdp_delivery.bpf.o",
+            Self::MultiBuffer => "xdp_delivery_frags.bpf.o",
+        }
+    }
+
+    pub(super) fn devmap_object(self) -> &'static str {
+        match self {
+            Self::Linear => "xdp_devmap.bpf.o",
+            Self::MultiBuffer => "xdp_devmap_frags.bpf.o",
+        }
+    }
+
+    pub(super) fn observer(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Linear => ("xdp_pass.bpf.o", "pass"),
+            Self::MultiBuffer => (self.delivery_object(), "delivery_observer"),
+        }
+    }
+
+    pub(super) fn configure(self, network: &Network) {
+        if self == Self::MultiBuffer {
+            for iface in ["source0", "in0", "sink0", "out0"] {
+                ip(&["-n", &network.0, "link", "set", "dev", iface, "mtu", "9000"]);
+            }
+        }
+    }
+
+    pub(super) fn traffic(
+        self,
+        c: &Context,
+        network: &Network,
+        ids: [NonZeroU32; 3],
+        execution: [u64; 2],
+        delivery: [u32; 3],
+    ) {
+        let metrics: Vec<_> = match self {
+            Self::Linear => vec![(ids[0], 0, execution[0]), (ids[1], 1, execution[1])],
+            Self::MultiBuffer => [
+                (ids[0], 0, execution[0]),
+                (ids[1], 4, execution[1]),
+                (ids[2], 0, u64::from(delivery[0] + delivery[2])),
+            ]
+            .into_iter()
+            .flat_map(|(id, base, expected)| (base..base + 4).map(move |key| (id, key, expected)))
+            .collect(),
+        };
+        let before: Vec<_> = metrics
+            .iter()
+            .map(|&(id, key, _)| count(c, id, key))
+            .collect();
+        network.packets(self, delivery);
+        for ((id, key, expected), before) in metrics.into_iter().zip(before) {
+            assert_eq!(
+                count(c, id, key) - before,
+                expected,
+                "{id}: metric {key}: execution, fragments, tail read, boundary read"
+            );
+        }
+    }
+}
+
+fn scenario<S>(
+    backend: S,
+    mode: XdpMode,
+    action_code: u32,
+    proceed: bool,
+    keep_action: bool,
+    frames: Frames,
+) where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     let c = Context::new();
     let network = Network::new();
+    frames.configure(&network);
     let faults = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
@@ -150,7 +213,7 @@ where
     )
     .expect("u32 ifindex");
     let action = load(
-        "xdp_delivery.bpf.o",
+        frames.delivery_object(),
         "delivery",
         [
             ("delivery_action".into(), action_code.to_ne_bytes().to_vec()),
@@ -158,9 +221,15 @@ where
         ]
         .into(),
     );
-    let tail = load("xdp_delivery.bpf.o", "delivery_tail", Default::default());
-    let observer = load("xdp_pass.bpf.o", "pass", Default::default());
-    let ids = [action, tail];
+    let tail = load(
+        frames.delivery_object(),
+        "delivery_tail",
+        Default::default(),
+    );
+    let (object, symbol) = frames.observer();
+    let observer = load(object, symbol, Default::default());
+    let ids = [action, tail, observer];
+    let traffic = |execution, delivery| frames.traffic(&c, &network, ids, execution, delivery);
     let netns = network.namespace();
     let request = |id, iface: &str, requested_mode, priority, proceed_on| XdpAttach {
         program_id: id,
@@ -213,7 +282,7 @@ where
     };
     let old = app.get_xdp_dispatcher(details.key).expect("snapshot");
     let outer_id = old.members()[0].outer_link_id;
-    traffic(&c, &network, ids, [3, 0], single_delivery);
+    traffic([3, 0], single_delivery);
 
     faults.set(Some(Point::XdpReplace));
     let error = app
@@ -223,7 +292,7 @@ where
     assert_eq!(error.restoration_attempts().len(), 1);
     assert!(error.restoration_attempts()[0].is_ok());
     assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
-    traffic(&c, &network, ids, [3, 0], single_delivery);
+    traffic([3, 0], single_delivery);
     faults.set(None);
 
     let second = app
@@ -240,7 +309,7 @@ where
     );
     assert_eq!(chain.members()[0].outer_link_id, outer_id);
     let both_execution = [3, if proceed { 3 } else { 0 }];
-    traffic(&c, &network, ids, both_execution, chain_delivery);
+    traffic(both_execution, chain_delivery);
 
     let (removed, survivor) = if keep_action {
         (second.id, first.id)
@@ -258,7 +327,7 @@ where
         app.get_xdp_dispatcher(details.key).expect("restored"),
         chain
     );
-    traffic(&c, &network, ids, both_execution, chain_delivery);
+    traffic(both_execution, chain_delivery);
     faults.set(None);
 
     app.detach_xdp(removed).expect("remove member");
@@ -271,10 +340,10 @@ where
     } else {
         ([0, 3], [0, 0, 0])
     };
-    traffic(&c, &network, ids, execution, delivery);
+    traffic(execution, delivery);
     app.detach_xdp(survivor).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
-    traffic(&c, &network, ids, [0, 0], [0, 3, 0]);
+    traffic([0, 0], [0, 3, 0]);
 
     for id in observers {
         app.detach_xdp(id).expect("remove receiving peer");
@@ -287,7 +356,7 @@ where
     c.no_artifacts();
 }
 
-pub(super) fn exercise<S>(backend: S, mode: XdpMode)
+pub(super) fn exercise<S>(backend: S, mode: XdpMode, frames: Frames)
 where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
@@ -295,7 +364,14 @@ where
     for action_code in [3, 4] {
         for proceed in [false, true] {
             for keep_action in [false, true] {
-                scenario(backend.clone(), mode, action_code, proceed, keep_action);
+                scenario(
+                    backend.clone(),
+                    mode,
+                    action_code,
+                    proceed,
+                    keep_action,
+                    frames,
+                );
             }
         }
     }
