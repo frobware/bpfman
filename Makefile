@@ -1044,9 +1044,13 @@ rust-build: $(RUST_DISPATCHER)
 
 # Build fixtures before entering the privileged test runner. Passwordless sudo
 # is required; unavailable privileges fail the gate rather than skipping tests.
-RUST_TEST_INPUTS = e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
+RUST_TEST_INPUTS = $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
 RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
 RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh", "$(abspath rust/test-runner.sh)"]'
+
+# A raw-Ethernet test fixture; Go and x/sys are already in the test toolchain.
+$(BIN_DIR)/xdp-delivery-probe: e2e/testdata/xdp-delivery/main.go go.mod go.sum | $(BIN_DIR)
+	CGO_ENABLED=0 go build -o $@ ./e2e/testdata/xdp-delivery
 
 rust-test: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) --workspace --locked $(RUST_TEST_RUNNER)
@@ -1893,3 +1897,8 @@ rust-test-xdp-modes: rust-build $(RUST_TEST_INPUTS)
 .PHONY: rust-test-xdp-frags
 rust-test-xdp-frags: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_frags --nocapture
+
+# Native/SKB TX and direct REDIRECT packet delivery, continuation, and rollback.
+.PHONY: rust-test-xdp-delivery
+rust-test-xdp-delivery: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_packet_delivery --nocapture

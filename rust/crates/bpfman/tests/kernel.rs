@@ -341,3 +341,26 @@ fn sqlite_xdp_frags_multibuffer_skb() {
 fn json_xdp_frags_multibuffer_skb() {
     xdp_frags::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
 }
+
+#[path = "kernel/xdp_delivery.rs"]
+mod xdp_delivery;
+
+#[test]
+fn sqlite_xdp_packet_delivery() {
+    xdp_delivery::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn json_xdp_packet_delivery() {
+    xdp_delivery::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn sqlite_xdp_packet_delivery_skb() {
+    xdp_delivery::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn json_xdp_packet_delivery_skb() {
+    xdp_delivery::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+}

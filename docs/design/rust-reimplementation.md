@@ -3,8 +3,8 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds native and generic SKB XDP multi-buffer execution on both SQLite
-and JSON stores.
+checkpoint adds native and generic SKB TX/direct-REDIRECT packet-delivery
+acceptance on both SQLite and JSON stores, building on multi-buffer execution.
 All-fragment-aware chains select an `xdp.frags` dispatcher; mixed chains select
 a linear dispatcher. Published ELF declarations are read beneath the retained
 runtime descriptor without changing the Go-compatible persistence schema.
@@ -14,8 +14,10 @@ replacement, publication rollback, mixed membership, and either survivor. The un
 normal-MTU fragments script also passes on both stores.
 Configurable modes were committed and pushed as `d072f207d`; hardware-request
 fallback is verified but actual offload remains unverified. Namespace descriptors
-and consuming recovery transitions remain in use. The next bounded slice is
-TX/REDIRECT packet-delivery acceptance.
+and consuming recovery transitions remain in use. Marked-frame captures now
+prove TX return to the sender and direct REDIRECT delivery to a separate receiver,
+proceed-on stopping/continuation, replacement, publication rollback, and either
+survivor. The next bounded slice is DEVMAP-based redirect acceptance.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -31,7 +33,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
-| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, and driver/SKB multi-buffer acceptance | TX/REDIRECT packet delivery |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer and TX/direct-REDIRECT delivery acceptance | DEVMAP redirect and multi-buffer forwarding |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | Persistence | Go-compatible SQLite schema 2; JSON format 6 for namespace-aware XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
@@ -46,7 +48,7 @@ for the supported command surface.
 
 Validation uses `direnv exec . make rust-check`: formatting, Clippy, workspace
 tests, compile-fail contracts, documentation, 38 shared fake-kernel lifecycle
-tests, and 80 real-kernel tests. The replacement fault matrix covers attach and
+tests, and 84 real-kernel tests. The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
 foreign-runtime retries, and post-commit retirement. Real packet tests prove
@@ -69,8 +71,15 @@ DSL harness checks empty program/link/dispatcher inventories and no owned XDP
 revision artifacts after cleanup. These scripts required no production changes.
 See the [corpus matrix](../../rust/README.md#xdp-attachment-and-replacement).
 Direct adapter tests additionally cover moved pins/parents, undeclared slots,
-and recovery after successful updates whose observations fail. TX/REDIRECT mask
-encoding is covered, but their packet-delivery behavior is not.
+and recovery after successful updates whose observations fail. Four additional
+TX/direct-REDIRECT delivery tests cover both stores and explicit driver/SKB modes.
+Each exercises both actions, default stopping or explicit continuation into DROP,
+and either survivor. Capture sockets open before transmission and reject outgoing
+copies and duplicate frames; exact per-member counters independently prove chain
+execution. Exhausting a chain whose last action permits continuation returns PASS,
+matching the shared dispatcher used by Go and legacy Rust. No production behavior
+changes were needed. See
+[packet-delivery acceptance](../../rust/README.md#xdp-tx-and-redirect-packet-delivery).
 
 The full gate uses the shared Go/Rust kernel-build helper outside the sandbox,
 allowing Nix to discover and realize the matching development output; see the
@@ -86,11 +95,11 @@ and caller-namespace isolation. Mode selection and fallback follow the legacy
 Rust implementation; current Go does not expose per-interface mode configuration.
 Multi-buffer execution additionally uses libxdp's all-members fragment
 policy; Go currently leaves its dispatcher fragment flag zero. The next bounded
-slice is TX/REDIRECT packet-delivery acceptance. Go remains the behavioural
+slice is DEVMAP-based redirect acceptance. Go remains the behavioural
 authority for the existing shared surface.
 
-The subsequent Go `test-all` gate also passed: package tests, lint, script
-acceptance, kernel tests, and gRPC concurrency. This includes the unchanged
+The multi-buffer checkpoint (`d5c4652ae`) also passed Go `test-all`: package tests,
+lint, script acceptance, kernel tests, and gRPC concurrency. This includes the unchanged
 `TestLoad_XDPFragsProgram` script. The Nix development shell required
 `GOFLAGS=-ldflags=-linkmode=external`; existing image, policy, and shared-runtime
 skips remain. The new multi-buffer assertions have only been exercised against
@@ -1471,8 +1480,13 @@ ELF-declared support drives the pure per-slot ABI configuration and dispatcher s
 with all-member support required to enable fragments. Both stores run the
 unchanged normal-MTU fragments script and jumbo driver/SKB veth lifecycle
 acceptance; see [the verified packet boundary](../../rust/README.md#xdp-multi-buffer-packets).
-Next, establish TX/REDIRECT packet delivery. Physical NIC packet execution and
-actual hardware offload remain unverified.
+Native and explicit SKB TX/direct-REDIRECT packet delivery are now covered on
+both stores, including proceed-on continuation, replacement, failed attach/detach
+publication restoration, either survivor, and last detach. The tests use a
+Go raw-Ethernet fixture solely to send and capture packets, keeping packet syscalls
+and unsafe code out of the Rust workspace. No production changes were required.
+Next, establish DEVMAP redirect and multi-buffer forwarding. Physical NIC packet
+execution and actual hardware offload remain unverified.
 
 The uprobe mount-namespace helper, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this

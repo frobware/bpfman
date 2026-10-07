@@ -992,7 +992,8 @@ scripts, each registered separately on SQLite and JSON (24 real-kernel tests):
 | Independent interface membership | `TestDispatcher_MultipleInterfacesIndependentXDP` |
 
 The traffic scripts inspect real BPF maps and packet delivery. Encoding tests
-establish the stored masks; they do not establish delivery for TX or REDIRECT.
+establish the stored masks; separate packet-delivery tests below establish TX
+and direct REDIRECT delivery.
 Every DSL run must execute its selected script and finish with empty program,
 link, and dispatcher inventories and no owned program, map, link, bytecode,
 staging, or XDP revision artifacts. No script changes or new production behavior
@@ -1038,12 +1039,44 @@ isolation, and residue-free teardown. Store contracts exercise namespace
 persistence and reject changing a committed namespace during replacement. A
 worker-entry failure test verifies that no effect runs or caller namespace changes.
 
-Next: TX/REDIRECT packet-delivery acceptance. The uprobe mount-namespace helper
+### XDP TX and REDIRECT packet delivery
+
+Run `direnv exec . make rust-test-xdp-delivery` for four real-kernel tests:
+SQLite and JSON, each with explicitly verified native and SKB ingress modes.
+A private namespace contains two veth pairs. Marked Ethernet frames enter `in0`
+from `source0`; TX returns them to `source0`, while `bpf_redirect(ifindex, 0)`
+sends them through `out0` to `sink0`. Receiving peers have native PASS dispatchers
+to enable the veth receive path for native XDP transmission.
+
+The Go test fixture `e2e/testdata/xdp-delivery/main.go` opens all three raw capture
+sockets before sending three frames. It excludes outgoing copies, validates frame
+length/payload, and refuses duplicate sequence numbers. Captures prove the exact
+delivery location; per-member BPF counters independently prove execution. Go and
+its existing `x/sys` dependency are already part of the test toolchain; the fixture
+adds no Rust dependencies, unsafe blocks, or production commands.
+
+Each test covers both TX and direct REDIRECT, default stopping and explicit
+proceed-on continuation into a DROP member, and removal of either member. When
+the final member permits continuation, exhausting the shared dispatcher returns
+PASS; the tests also capture this local delivery. Failed attach/detach publication
+must restore both the complete snapshot and the packet path. Successful replacement
+and survivor rebuilding retain the outer link ID. Last detach restores ordinary
+local delivery, and final teardown leaves empty inventories and no owned artifacts.
+No production changes were needed for this acceptance slice.
+
+This establishes normal-sized veth frames with direct interface redirects.
+DEVMAP/CPUMAP/XSKMAP redirects, multi-buffer TX/REDIRECT, physical NICs, and actual
+hardware offload remain unverified. The kernel's
+[redirect documentation](https://docs.kernel.org/bpf/redirect.html) explains why
+invoking the helper alone does not prove transmission: the returned action and
+the driver's redirect/flush path must complete too.
+
+Next: DEVMAP-based redirect acceptance. The uprobe mount-namespace helper
 remains a separate attachment-family boundary.
 
-The multi-buffer checkpoint passed the full `direnv exec . make rust-check`
+The packet-delivery checkpoint passed the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-38 fake-kernel lifecycle tests, and all 80 real-kernel tests. NixOS kernel-build
+38 fake-kernel lifecycle tests, and all 84 real-kernel tests. NixOS kernel-build
 discovery and the optional `KERNEL_DEV` override are documented in
 [AGENTS.md](AGENTS.md).
 
@@ -1080,6 +1113,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 80 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 84 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.
