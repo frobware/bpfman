@@ -89,6 +89,13 @@ policy; Go currently leaves its dispatcher fragment flag zero. The next bounded
 slice is TX/REDIRECT packet-delivery acceptance. Go remains the behavioural
 authority for the existing shared surface.
 
+The subsequent Go `test-all` gate also passed: package tests, lint, script
+acceptance, kernel tests, and gRPC concurrency. This includes the unchanged
+`TestLoad_XDPFragsProgram` script. The Nix development shell required
+`GOFLAGS=-ldflags=-linkmode=external`; existing image, policy, and shared-runtime
+skips remain. The new multi-buffer assertions have only been exercised against
+Rust, so this result establishes compatibility of the existing Go test surface.
+
 ## Summary
 
 This document proposes a new Rust implementation of bpfman based on the
