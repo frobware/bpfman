@@ -1115,8 +1115,43 @@ changes were needed for this slice.
 
 This covers unicast `BPF_MAP_TYPE_DEVMAP` with normal-sized veth frames and no
 egress program. The suites below cover multi-buffer forwarding,
-broadcast/exclude-ingress flags, and ordinary-frame egress PASS/DROP. DEVMAP_HASH,
-CPUMAP/XSKMAP, physical NICs, and hardware offload remain unverified.
+broadcast/exclude-ingress flags, ordinary-frame egress PASS/DROP, and DEVMAP_HASH
+unicast. CPUMAP/XSKMAP, physical NICs, and hardware offload remain unverified.
+
+### XDP DEVMAP_HASH unicast
+
+DEVMAP_HASH selects an output interface using an arbitrary 32-bit key.
+`max_entries` limits how many entries exist, rather than the range of valid keys.
+The same namespace-aware Go map-update fixture accepts both map types and applies
+the array bounds check only to DEVMAP.
+
+Run `direnv exec . make rust-test-xdp-devmap-hash` for eight real-kernel suites:
+SQLite/JSON, explicit driver/SKB ingress, and ordinary/genuine multi-buffer frames.
+They reuse the DEVMAP forwarding lifecycle with a two-entry hash map and keys
+`0x80000001` and `0xffffffff`. The second key names an unused target; packets
+must follow only the requested key, including PASS/DROP fallback while that key
+is missing. A third insertion at full capacity must fail with `E2BIG`, leaving
+both existing entries intact. Existing-key updates at capacity remain permitted.
+
+Each suite covers stopping/continuation, live target updates, deletion and
+repopulation, successful replacement, failed attach/detach publication restoration,
+either survivor, and last detach. Retained map descriptors and pin IDs prove stable
+identity. Exact key-set and value checks additionally preserve the unused entry.
+The jumbo cases require full 8014-byte payload capture and independent fragment,
+tail-read, and boundary-read counters in each executing member and receiving peer.
+Unload removes the owned pin; closing the retained descriptor must allow bounded
+kernel reclamation. Final inventories and owned artifacts must be empty.
+
+This extends acceptance for the existing loader and lifecycle. No production API,
+persistence schema, Rust dependency, or Aya changes were required. Hash-backed
+broadcast/ingress exclusion and egress remain unverified; the next bounded slice
+is DEVMAP_HASH broadcast and ingress exclusion.
+
+The hash checkpoint passed `direnv exec . make rust-check`: formatting, Clippy,
+workspace tests, compile-fail contracts, Rustdoc, 38 shared fake-kernel lifecycle
+tests, and all 116 real-kernel tests, with none ignored or skipped. The eight
+focused hash suites, Go fixture lint, Makefile lint, and BPF fixture formatting
+also passed. Aya and the lockfile remain unchanged.
 
 ### XDP multi-buffer forwarding
 
@@ -1196,8 +1231,9 @@ lifecycle. The Go helper accepts explicit map keys and an additional capture
 interface while retaining existing packet/map operations. No production command,
 persistence change, Rust dependency, or unsafe block was added.
 
-The next section adds DEVMAP egress programs. DEVMAP_HASH, CPUMAP/XSKMAP, physical
-NICs, and actual hardware offload remain unverified. Multi-buffer fan-out needs kernel support.
+The next section adds DEVMAP egress programs. Hash-backed broadcast and egress,
+CPUMAP/XSKMAP, physical NICs, and actual hardware offload remain unverified.
+Multi-buffer fan-out needs kernel support.
 The uprobe mount-namespace helper remains a separate attachment-family boundary.
 
 The broadcast checkpoint passed `direnv exec . make rust-check`: formatting,
@@ -1259,8 +1295,9 @@ egress execution can be implemented through a supported API.
 
 Go's current loader forces all managed XDP to EXT and clears its attach type, so
 native DEVMAP egress is beyond that Go path. Go still supports more of the overall
-bpfman surface. Next: DEVMAP_HASH unicast acceptance; multi-buffer egress and fan-out
-remain separate library/kernel boundaries.
+bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
+behavior. Hash-backed broadcast and egress remain unverified; multi-buffer egress
+and fan-out remain separate library/kernel boundaries.
 
 The egress checkpoint passed `direnv exec . make rust-check`: formatting,
 Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
@@ -1301,6 +1338,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 108 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 116 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

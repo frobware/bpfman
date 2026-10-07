@@ -136,10 +136,11 @@ func updateTarget(args []string) error {
 		return err
 	}
 	defer m.Close()
-	if m.Type() != ebpf.DevMap || (m.ValueSize() != 4 && m.ValueSize() != 8) {
-		return fmt.Errorf("expected a DEVMAP with 4- or 8-byte values")
+	if (m.Type() != ebpf.DevMap && m.Type() != ebpf.DevMapHash) || (m.ValueSize() != 4 && m.ValueSize() != 8) {
+		return fmt.Errorf("expected a DEVMAP or DEVMAP_HASH with 4- or 8-byte values")
 	}
-	if key >= m.MaxEntries() {
+	// Hash capacity limits the number of entries, not the range of valid keys.
+	if m.Type() == ebpf.DevMap && key >= m.MaxEntries() {
 		return fmt.Errorf("key %d outside DEVMAP capacity %d", key, m.MaxEntries())
 	}
 	if args[0] == "devmap-delete" {

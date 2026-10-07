@@ -1,4 +1,4 @@
-//! DEVMAP packet forwarding and pinned map lifetime across dispatcher revisions.
+//! DEVMAP/DEVMAP_HASH forwarding and pinned map lifetime across dispatcher revisions.
 #![allow(clippy::panic)]
 
 use super::{
@@ -11,22 +11,90 @@ use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram, XdpAttach};
 use bpfman_store::*;
 use std::{num::NonZeroU32, path::PathBuf};
 
+const HASH_KEY: u32 = 0x8000_0001;
+const SPARE_KEY: u32 = u32::MAX;
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Array,
+    Hash,
+}
+
+impl Kind {
+    fn key(self) -> u32 {
+        match self {
+            Self::Array => 0,
+            Self::Hash => HASH_KEY,
+        }
+    }
+
+    fn object(self, frames: Frames) -> &'static str {
+        match (self, frames) {
+            (Self::Array, _) => frames.devmap_object(),
+            (Self::Hash, Frames::Linear) => "xdp_devmap_hash.bpf.o",
+            (Self::Hash, Frames::MultiBuffer) => "xdp_devmap_hash_frags.bpf.o",
+        }
+    }
+}
+
+enum TargetMap {
+    Array(aya::maps::xdp::DevMap<aya::maps::MapData>),
+    Hash(aya::maps::xdp::DevMapHash<aya::maps::MapData>),
+}
+
+impl TargetMap {
+    fn get(&self, key: u32) -> Result<(u32, Option<NonZeroU32>), aya::maps::MapError> {
+        match self {
+            Self::Array(map) => map.get(key, 0).map(|value| (value.if_index, value.prog_id)),
+            Self::Hash(map) => map.get(key, 0).map(|value| (value.if_index, value.prog_id)),
+        }
+    }
+}
+
 pub(super) struct Targets {
     pin: PathBuf,
     id: u32,
-    map: aya::maps::xdp::DevMap<aya::maps::MapData>,
+    key: u32,
+    map: TargetMap,
 }
 
 impl Targets {
     pub(super) fn open(c: &Context, program: NonZeroU32) -> Self {
+        Self::open_kind(c, program, Kind::Array)
+    }
+
+    fn open_kind(c: &Context, program: NonZeroU32, kind: Kind) -> Self {
         let pin = c
             .layout
             .map_directory_path(program)
             .join("delivery_targets");
         let data = aya::maps::MapData::from_pin(&pin).expect("DEVMAP pin");
-        let id = data.info().expect("DEVMAP info").id();
-        let map = aya::maps::Map::DevMap(data).try_into().expect("DEVMAP");
-        let targets = Self { pin, id, map };
+        let info = data.info().expect("map info");
+        let id = info.id();
+        let map = match kind {
+            Kind::Array => {
+                assert_eq!(info.map_type().expect("type"), aya::maps::MapType::DevMap);
+                TargetMap::Array(aya::maps::Map::DevMap(data).try_into().expect("DEVMAP"))
+            }
+            Kind::Hash => {
+                assert_eq!(
+                    info.map_type().expect("type"),
+                    aya::maps::MapType::DevMapHash
+                );
+                assert_eq!(info.max_entries(), 2, "capacity differs from key range");
+                let map: aya::maps::xdp::DevMapHash<_> = aya::maps::Map::DevMapHash(data)
+                    .try_into()
+                    .expect("DEVMAP_HASH");
+                assert_eq!(map.keys().count(), 0, "initially empty hash");
+                TargetMap::Hash(map)
+            }
+        };
+        let targets = Self {
+            pin,
+            id,
+            key: kind.key(),
+            map,
+        };
         let info = aya::programs::ProgramInfo::from_pin(c.layout.program_pin_path(program))
             .expect("managed extension");
         assert!(
@@ -40,7 +108,7 @@ impl Targets {
     }
 
     fn check(&self, expected: Option<u32>) {
-        self.check_at(0, expected);
+        self.check_at(self.key, expected);
     }
 
     fn check_at(&self, key: u32, expected: Option<u32>) {
@@ -57,15 +125,12 @@ impl Targets {
         );
         match expected {
             Some((index, program)) => {
-                let value = self.map.get(key, 0).expect("target");
-                assert_eq!(
-                    value.if_index, index,
-                    "target contents must survive rebuilding"
-                );
-                assert_eq!(value.prog_id, program, "egress program identity");
+                let (if_index, prog_id) = self.map.get(key).expect("target");
+                assert_eq!(if_index, index, "target contents must survive rebuilding");
+                assert_eq!(prog_id, program, "egress program identity");
             }
             None => assert!(matches!(
-                self.map.get(key, 0),
+                self.map.get(key),
                 Err(aya::maps::MapError::KeyNotFound)
             )),
         }
@@ -114,7 +179,7 @@ impl Targets {
     }
 
     fn set(&self, network: &Network, interface: &str) -> u32 {
-        self.set_at(network, 0, interface)
+        self.set_at(network, self.key, interface)
     }
 
     pub(super) fn set_at(&self, network: &Network, key: u32, interface: &str) -> u32 {
@@ -136,7 +201,7 @@ impl Targets {
     }
 
     fn delete(&self, network: &Network) {
-        self.delete_at(network, 0);
+        self.delete_at(network, self.key);
     }
 
     pub(super) fn delete_at(&self, network: &Network, key: u32) {
@@ -153,14 +218,32 @@ impl Targets {
     }
 
     pub(super) fn check_entries(&self, expected: &[Option<u32>]) {
-        assert_eq!(
-            self.map.len() as usize,
-            expected.len(),
-            "complete map contents"
-        );
+        let TargetMap::Array(map) = &self.map else {
+            panic!("array map required");
+        };
+        assert_eq!(map.len() as usize, expected.len(), "complete map contents");
         for (key, &value) in expected.iter().enumerate() {
             self.check_at(key as u32, value);
         }
+    }
+
+    fn check_hash(&self, expected: Option<u32>, spare: u32) {
+        self.check(expected);
+        self.check_at(SPARE_KEY, Some(spare));
+        let TargetMap::Hash(map) = &self.map else {
+            panic!("hash map required");
+        };
+        let mut keys: Vec<_> = map.keys().map(|key| key.expect("hash key")).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            if expected.is_some() {
+                vec![HASH_KEY, SPARE_KEY]
+            } else {
+                vec![SPARE_KEY]
+            },
+            "complete hash contents, including unrelated entry"
+        );
     }
 
     pub(super) fn assert_unloaded(self) {
@@ -199,6 +282,7 @@ fn scenario<S>(
     proceed: bool,
     keep_redirect: bool,
     frames: Frames,
+    kind: Kind,
 ) where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
@@ -229,7 +313,7 @@ fn scenario<S>(
         .id
     };
     let redirect = load(
-        frames.devmap_object(),
+        kind.object(frames),
         "devmap_delivery",
         [("devmap_fallback".into(), fallback.to_ne_bytes().to_vec())].into(),
     );
@@ -242,7 +326,17 @@ fn scenario<S>(
     let observer = load(object, symbol, Default::default());
     let ids = [redirect, tail, observer];
     let traffic = |execution, delivery| frames.traffic(&c, &network, ids, execution, delivery);
-    let targets = Targets::open(&c, redirect);
+    let targets = Targets::open_kind(&c, redirect, kind);
+    // The unused entry must neither redirect a missing key nor disappear on rebuild.
+    let spare = match kind {
+        Kind::Array => None,
+        Kind::Hash => Some(targets.set_at(&network, SPARE_KEY, "in0")),
+    };
+    let check = |expected| match spare {
+        Some(index) => targets.check_hash(expected, index),
+        None => targets.check(expected),
+    };
+    check(None);
     let request = |id, interface: &str, requested_mode, priority, proceed_on| XdpAttach {
         program_id: id,
         interface: interface.parse().expect("interface"),
@@ -293,6 +387,25 @@ fn scenario<S>(
     traffic([3, 0], missing_delivery);
 
     let out_index = targets.set(&network, "out0");
+    check(Some(out_index));
+    if spare.is_some() {
+        // Two arbitrary keys fill capacity two. A third must fail in the kernel,
+        // while replacement of either existing entry remains permitted.
+        let output = network.probe_output(&[
+            "devmap-set",
+            targets.pin.to_str().expect("pin"),
+            "out0",
+            "7",
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("argument list too long"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        targets.check_at(7, None);
+        check(Some(out_index));
+    }
     traffic([3, 0], single_delivery);
     // The next packet must use a live map update without rebuilding the dispatcher.
     targets.set(&network, "in0");
@@ -311,7 +424,7 @@ fn scenario<S>(
     assert_eq!(error.restoration_attempts().len(), 1);
     assert!(error.restoration_attempts()[0].is_ok());
     assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
-    targets.check(Some(out_index));
+    check(Some(out_index));
     traffic([3, 0], single_delivery);
     faults.set(None);
 
@@ -328,10 +441,11 @@ fn scenario<S>(
         [first.id, second.id]
     );
     assert_eq!(chain.members()[0].outer_link_id, outer_id);
-    targets.check(Some(out_index));
+    check(Some(out_index));
     traffic(chain_execution, chain_delivery);
 
     targets.delete(&network);
+    check(None);
     // PASS fallback reaches the tail; DROP fallback stops before it.
     traffic([3, if fallback == 2 { 3 } else { 0 }], [0, 0, 0]);
     targets.set(&network, "in0");
@@ -354,7 +468,7 @@ fn scenario<S>(
         app.get_xdp_dispatcher(details.key).expect("restored"),
         chain
     );
-    targets.check(Some(out_index));
+    check(Some(out_index));
     traffic(chain_execution, chain_delivery);
     faults.set(None);
 
@@ -363,10 +477,11 @@ fn scenario<S>(
     assert_eq!(remaining.members().len(), 1);
     assert_eq!(remaining.members()[0].member.id, survivor);
     assert_eq!(remaining.members()[0].outer_link_id, outer_id);
-    targets.check(Some(out_index));
+    check(Some(out_index));
     if keep_redirect {
         traffic([3, 0], single_delivery);
         targets.delete(&network);
+        check(None);
         traffic([3, 0], missing_delivery);
         targets.set(&network, "out0");
         traffic([3, 0], single_delivery);
@@ -375,14 +490,14 @@ fn scenario<S>(
     }
     app.detach_xdp(survivor).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
-    targets.check(Some(out_index));
+    check(Some(out_index));
     traffic([0, 0], [0, 3, 0]);
 
     for id in observers {
         app.detach_xdp(id).expect("remove receiving peer");
     }
     assert_eq!(app.unload(tail).expect("unload tail").unresolved(), 0);
-    targets.check(Some(out_index));
+    check(Some(out_index));
     assert_eq!(
         app.unload(redirect).expect("unload redirect").unresolved(),
         0
@@ -403,6 +518,22 @@ where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    exercise_kind(backend, mode, frames, Kind::Array);
+}
+
+pub(super) fn exercise_hash<S>(backend: S, mode: XdpMode, frames: Frames)
+where
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
+{
+    exercise_kind(backend, mode, frames, Kind::Hash);
+}
+
+fn exercise_kind<S>(backend: S, mode: XdpMode, frames: Frames, kind: Kind)
+where
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
+{
     for fallback in [1, 2] {
         for proceed in [false, true] {
             for keep_redirect in [false, true] {
@@ -413,6 +544,7 @@ where
                     proceed,
                     keep_redirect,
                     frames,
+                    kind,
                 );
             }
         }

@@ -11,9 +11,12 @@ volatile const __u32 devmap_flags = 0;
 #ifndef DEVMAP_KEY
 #define DEVMAP_KEY 0
 #endif
+#ifndef DEVMAP_TYPE
+#define DEVMAP_TYPE BPF_MAP_TYPE_DEVMAP
+#endif
 
 struct {
-  __uint(type, BPF_MAP_TYPE_DEVMAP);
+  __uint(type, DEVMAP_TYPE);
   __type(key, __u32);
   __type(value, __u32);
   __uint(max_entries, DEVMAP_ENTRIES);
