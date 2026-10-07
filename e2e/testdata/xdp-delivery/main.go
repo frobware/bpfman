@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/cilium/ebpf"
 	"golang.org/x/sys/unix"
 )
 
@@ -100,8 +101,49 @@ func run() error {
 	return json.NewEncoder(os.Stdout).Encode(counts)
 }
 
+// DEVMAP updates resolve ifindices in the updating process's network namespace.
+// The caller runs this fixture via ip netns exec, just like packet capture.
+func updateTarget(args []string) error {
+	if len(args) != 2 && len(args) != 3 {
+		return fmt.Errorf("usage: devmap-delete PIN | devmap-set PIN INTERFACE")
+	}
+	if args[0] != "devmap-delete" && args[0] != "devmap-set" {
+		return fmt.Errorf("unknown operation %q", args[0])
+	}
+	if (args[0] == "devmap-delete" && len(args) != 2) || (args[0] == "devmap-set" && len(args) != 3) {
+		return fmt.Errorf("invalid arguments for %s", args[0])
+	}
+	m, err := ebpf.LoadPinnedMap(args[1], nil)
+	if err != nil {
+		return err
+	}
+	defer m.Close()
+	if m.Type() != ebpf.DevMap || m.MaxEntries() != 1 || (m.ValueSize() != 4 && m.ValueSize() != 8) {
+		return fmt.Errorf("expected a one-entry DEVMAP with 4- or 8-byte values")
+	}
+	key := uint32(0)
+	if args[0] == "devmap-delete" {
+		return m.Delete(key)
+	}
+	iface, err := net.InterfaceByName(args[2])
+	if err != nil {
+		return err
+	}
+	// Aya upgrades values to bpf_devmap_val on supporting kernels. Leave the
+	// optional egress-program FD zero; this slice only selects an interface.
+	value := make([]byte, m.ValueSize())
+	binary.NativeEndian.PutUint32(value[:4], uint32(iface.Index))
+	return m.Update(key, value, ebpf.UpdateAny)
+}
+
 func main() {
-	if err := run(); err != nil {
+	var err error
+	if len(os.Args) == 1 {
+		err = run()
+	} else {
+		err = updateTarget(os.Args[1:])
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

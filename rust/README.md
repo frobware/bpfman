@@ -1065,18 +1065,62 @@ local delivery, and final teardown leaves empty inventories and no owned artifac
 No production changes were needed for this acceptance slice.
 
 This establishes normal-sized veth frames with direct interface redirects.
-DEVMAP/CPUMAP/XSKMAP redirects, multi-buffer TX/REDIRECT, physical NICs, and actual
-hardware offload remain unverified. The kernel's
+The DEVMAP suite below covers map-based redirects. CPUMAP/XSKMAP redirects,
+multi-buffer TX/REDIRECT, physical NICs, and actual hardware offload remain
+unverified. The kernel's
 [redirect documentation](https://docs.kernel.org/bpf/redirect.html) explains why
 invoking the helper alone does not prove transmission: the returned action and
 the driver's redirect/flush path must complete too.
 
-Next: DEVMAP-based redirect acceptance. The uprobe mount-namespace helper
+### XDP DEVMAP forwarding
+
+A DEVMAP is an address book for output interfaces. For example, entry `0` can
+name `out0`: the BPF program calls `bpf_redirect_map` with key `0`, and the kernel
+sends the frame through that interface. User space can change the entry while
+the program runs. An empty entry returns the fallback action chosen by the
+program, such as PASS to continue normal processing or DROP to discard the frame.
+See the kernel's [DEVMAP documentation](https://docs.kernel.org/bpf/map_devmap.html).
+
+Run `direnv exec . make rust-test-xdp-devmap` for four real-kernel suites:
+SQLite/JSON with explicitly observed native/SKB ingress modes. Each covers
+PASS and DROP lookup fallback, default REDIRECT stopping or explicit continuation
+into a DROP member, and removal of either member. The same marked-frame captures
+and exact execution counters used for direct delivery prove forwarding to
+`sink0`, a live target change returning frames to `source0`, and suppressed
+forwarding when the dispatcher continues. Changing the map does not rebuild
+the dispatcher.
+
+The original DEVMAP pin ID and retained descriptor must observe the same target
+after successful replacement, failed attach/detach publication restoration,
+survivor rebuilding, and last detach. Missing PASS entries reach the next member;
+missing DROP entries stop before it. Entries can be deleted and repopulated after
+rebuilding, including while the redirect program is the only survivor.
+
+The shared Go fixture populates/deletes key `0` using the existing Cilium library.
+It runs inside the private namespace because DEVMAP updates resolve interface
+indices in the updating process's namespace. It handles four-byte ifindices and
+Aya's eight-byte values with an unused egress-program FD. This is test setup;
+it adds no production map-editing command, shared-map protocol, or Rust dependency.
+The local Linux reference checkout at `~/src/linux.git` confirmed the namespace
+lookup and deferred program/map release paths; see [AGENTS.md](AGENTS.md).
+
+Unload removes the owned pin. After closing the test's retained descriptor, a
+five-second bounded observation must see the map ID disappear; Linux releases
+program-held map references after deferred reclamation. Other observation errors
+fail the test. Final inventories and owned artifacts must be empty. No production
+changes were needed for this slice.
+
+This covers unicast `BPF_MAP_TYPE_DEVMAP` with normal-sized veth frames and no
+egress program. DEVMAP_HASH, broadcast/exclude-ingress flags, attached egress
+programs, CPUMAP/XSKMAP, multi-buffer forwarding, physical NICs, and hardware
+offload remain unverified.
+
+Next: multi-buffer TX/REDIRECT forwarding. The uprobe mount-namespace helper
 remains a separate attachment-family boundary.
 
-The packet-delivery checkpoint passed the full `direnv exec . make rust-check`
+The DEVMAP checkpoint passed the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
-38 fake-kernel lifecycle tests, and all 84 real-kernel tests. NixOS kernel-build
+38 fake-kernel lifecycle tests, and all 88 real-kernel tests. NixOS kernel-build
 discovery and the optional `KERNEL_DEV` override are documented in
 [AGENTS.md](AGENTS.md).
 
@@ -1113,6 +1157,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 84 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 88 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

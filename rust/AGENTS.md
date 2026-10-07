@@ -50,6 +50,12 @@ The architecture and compatibility goals are in
   `rust-test`/`rust-check` gate without privilege-related `#[ignore]` attributes.
   Build fixtures as the invoking user and run the kernel test binary through
   `sudo -n` in a private mount namespace; missing privileges must fail the gate.
+- Local Linux sources are available for mechanism review at `~/src/linux.git`.
+  Check the revision with `git -C ~/src/linux.git describe --always --dirty`
+  before drawing version-specific conclusions. The checkout was at `v6.12`
+  during DEVMAP acceptance work; the running test kernel was `6.18.54`.
+  Continue using the shared build helper and `KERNEL_DEV` for matching kbuild
+  sources; the reference checkout does not select the test kernel's build tree.
 
 ## Visibility and crate boundaries
 

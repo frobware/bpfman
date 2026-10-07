@@ -364,3 +364,26 @@ fn sqlite_xdp_packet_delivery_skb() {
 fn json_xdp_packet_delivery_skb() {
     xdp_delivery::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
 }
+
+#[path = "kernel/xdp_devmap.rs"]
+mod xdp_devmap;
+
+#[test]
+fn sqlite_xdp_devmap_delivery() {
+    xdp_devmap::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn json_xdp_devmap_delivery() {
+    xdp_devmap::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn sqlite_xdp_devmap_delivery_skb() {
+    xdp_devmap::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn json_xdp_devmap_delivery_skb() {
+    xdp_devmap::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+}

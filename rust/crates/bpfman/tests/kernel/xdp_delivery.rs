@@ -20,10 +20,10 @@ fn ip(args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
-struct Network(String);
+pub(super) struct Network(String);
 
 impl Network {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let network = Self(format!("bpfman-delivery-{}", std::process::id()));
         ip(&["netns", "add", &network.0]);
         for (a, b) in [("in0", "source0"), ("out0", "sink0")] {
@@ -44,26 +44,36 @@ impl Network {
         network
     }
 
-    fn links(&self, iface: &str) -> serde_json::Value {
+    pub(super) fn links(&self, iface: &str) -> serde_json::Value {
         serde_json::from_slice(&ip(&[
             "-n", &self.0, "-j", "-d", "link", "show", "dev", iface,
         ]))
         .expect("link JSON")
     }
 
-    fn packets(&self, expected: [u32; 3]) {
+    pub(super) fn namespace(&self) -> NetworkNamespace {
+        format!("/run/netns/{}", self.0).parse().expect("namespace")
+    }
+
+    pub(super) fn probe(&self, args: &[&str]) -> Vec<u8> {
         let probe = std::path::PathBuf::from(
             std::env::var_os("BPFMAN_SHELL_BIN_DIR").expect("Make test binary directory"),
         )
         .join("xdp-delivery-probe");
-        let output = ip(&[
+        let mut command = vec![
             "netns",
             "exec",
             &self.0,
             "timeout",
             "5s",
             probe.to_str().expect("probe path"),
-        ]);
+        ];
+        command.extend_from_slice(args);
+        ip(&command)
+    }
+
+    fn packets(&self, expected: [u32; 3]) {
+        let output = self.probe(&[]);
         let counts: [u32; 3] = serde_json::from_slice(&output).expect("capture counts");
         assert_eq!(counts, expected, "[returned, local, redirected]");
     }
@@ -87,7 +97,7 @@ fn count(c: &Context, id: NonZeroU32, key: u32) -> u64 {
     map.get(&key, 0).expect("counter").iter().sum()
 }
 
-fn traffic(
+pub(super) fn traffic(
     c: &Context,
     network: &Network,
     ids: [NonZeroU32; 2],
@@ -151,9 +161,7 @@ where
     let tail = load("xdp_delivery.bpf.o", "delivery_tail", Default::default());
     let observer = load("xdp_pass.bpf.o", "pass", Default::default());
     let ids = [action, tail];
-    let netns: NetworkNamespace = format!("/run/netns/{}", network.0)
-        .parse()
-        .expect("namespace");
+    let netns = network.namespace();
     let request = |id, iface: &str, requested_mode, priority, proceed_on| XdpAttach {
         program_id: id,
         interface: iface.parse().expect("interface"),
