@@ -6,6 +6,10 @@ Implementation is in progress in the independent `rust/` workspace. The current
 checkpoint adds native DEVMAP egress loading and ordinary-frame PASS/DROP
 execution in driver and generic SKB ingress modes on both SQLite and JSON stores,
 building on broadcast, ingress exclusion, and multi-buffer unicast forwarding.
+At the egress checkpoint (`e64d4ccb2`), Rust's managed XDP surface has gone beyond
+the current Go implementation: Rust can load and execute native DEVMAP egress
+programs, while Go's loader converts all managed XDP selections into dispatcher
+extensions. The comparison below also records mode and fragment-dispatch differences.
 All-fragment-aware chains select an `xdp.frags` dispatcher; mixed chains select
 a linear dispatcher. Published ELF declarations are read beneath the retained
 runtime descriptor without changing the Go-compatible persistence schema.
@@ -166,16 +170,46 @@ allowing Nix to discover and realize the matching development output; see the
 in fake-kernel tests. Namespace acceptance includes the unchanged namespace
 round-trip/rebuild scripts, path replacement and disappearance, identical
 interface indices across namespaces, publication failure and retained unload,
-and caller-namespace isolation. Mode selection and fallback follow the legacy
-Rust implementation; current Go does not expose per-interface mode configuration.
-Multi-buffer execution additionally uses libxdp's all-members fragment
-policy; Go currently leaves its dispatcher fragment flag zero. Go also converts
-every managed XDP program to EXT and clears its attach type, so its current loader
-cannot preserve the native `BPF_XDP_DEVMAP` role. Egress loading/execution is a new
-Rust capability beyond that Go path. Earlier forwarding/broadcast additions mostly
-established acceptance for existing Rust behavior. Go remains broader overall,
-including other program families, shared maps, OCI, and gRPC, and remains the
-behavioural authority for the existing shared surface.
+and caller-namespace isolation.
+
+### Where Rust goes beyond Go
+
+The new Rust implementation now provides additional managed XDP behavior beyond
+Go. The clearest addition in `e64d4ccb2` is native DEVMAP egress support:
+
+- **DEVMAP egress programs:** Rust distinguishes interface programs from
+  `xdp/devmap` and `xdp.frags/devmap` selections. Interface programs load as EXT;
+  egress programs load as native XDP with `BPF_XDP_DEVMAP`. Go's
+  [loader](../../platform/ebpf/load.go) sets every managed XDP selection to EXT
+  and clears its attach type, so it cannot load the native egress role. Rust
+  proves ordinary-frame PASS/DROP forwarding, ingress/output interface context,
+  rollback, and map-held program lifetime through managed unload on both stores
+  and driver/SKB ingress. Cilium/ebpf and Linux support the underlying mechanism;
+  this difference is in the managers' load and lifecycle paths.
+- **Configured attachment modes:** Rust exposes driver, generic SKB, and hardware
+  requests with the established fallback behavior, following the legacy Rust
+  implementation. Go's [attachment path](../../platform/ebpf/attach_xdp.go)
+  supplies no mode flag to `link.AttachXDP`, relying on default attachment
+  behavior without per-interface mode configuration. Actual hardware offload
+  remains unverified.
+- **Fragment-aware dispatcher chains:** Rust applies libxdp's all-members fragment
+  policy, selecting a fragment-aware dispatcher only when every member declares
+  support. Real native/SKB jumbo tests verify helper reads, forwarding, replacement,
+  and recovery. Go's [dispatcher configuration](../../dispatcher/dispatcher.go)
+  currently leaves its fragment flag zero; successful loading of an `xdp.frags`
+  selection does not establish this packet-path behavior.
+
+The earlier TX, redirect, DEVMAP unicast, and broadcast work expanded packet and
+lifecycle acceptance for existing Rust behavior. Egress adds a production loader
+capability. DEVMAP entry updates still use a test helper; there is no production
+map-editing API or shared-map protocol in this slice. Multi-buffer egress pairing
+awaits upstream Aya extension flag preservation, and Linux 6.18.54 rejects
+multi-buffer fan-out. These boundaries are covered by explicit rejection tests.
+
+Go remains broader overall, including other program families, shared maps, OCI,
+and gRPC, and remains the behavioural authority for the existing shared surface.
+Rust's XDP additions do not complete overall feature parity or establish physical
+NIC execution and hardware-offload support.
 
 The multi-buffer checkpoint (`d5c4652ae`) also passed Go `test-all`: package tests,
 lint, script acceptance, kernel tests, and gRPC concurrency. This includes the unchanged
