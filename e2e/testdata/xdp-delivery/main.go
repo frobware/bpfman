@@ -110,12 +110,15 @@ func run(size int, captures []string) error {
 // DEVMAP updates resolve ifindices in the updating process's network namespace.
 // The caller runs this fixture via ip netns exec, just like packet capture.
 func updateTarget(args []string) error {
-	if len(args) == 0 || (args[0] != "devmap-delete" && args[0] != "devmap-set") {
-		return fmt.Errorf("usage: devmap-delete PIN [KEY] | devmap-set PIN INTERFACE [KEY]")
+	if len(args) == 0 || (args[0] != "devmap-delete" && args[0] != "devmap-set" && args[0] != "devmap-egress") {
+		return fmt.Errorf("usage: devmap-delete PIN [KEY] | devmap-set PIN INTERFACE [KEY] | devmap-egress PIN INTERFACE PROGRAM_PIN [KEY]")
 	}
 	minimum := 2
 	if args[0] == "devmap-set" {
 		minimum = 3
+	}
+	if args[0] == "devmap-egress" {
+		minimum = 4
 	}
 	if len(args) < minimum || len(args) > minimum+1 {
 		return fmt.Errorf("invalid arguments for %s", args[0])
@@ -146,10 +149,20 @@ func updateTarget(args []string) error {
 	if err != nil {
 		return err
 	}
-	// Aya upgrades values to bpf_devmap_val on supporting kernels. Leave the
-	// optional egress-program FD zero; this slice only selects an interface.
+	// Updates take a program FD; lookups return its kernel ID instead.
 	value := make([]byte, m.ValueSize())
 	binary.NativeEndian.PutUint32(value[:4], uint32(iface.Index))
+	if args[0] == "devmap-egress" {
+		if len(value) != 8 {
+			return fmt.Errorf("egress program requires an 8-byte DEVMAP value")
+		}
+		program, err := ebpf.LoadPinnedProgram(args[3], nil)
+		if err != nil {
+			return err
+		}
+		defer program.Close()
+		binary.NativeEndian.PutUint32(value[4:], uint32(program.FD()))
+	}
 	return m.Update(key, value, ebpf.UpdateAny)
 }
 

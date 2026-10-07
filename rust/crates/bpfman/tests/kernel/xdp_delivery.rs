@@ -76,6 +76,16 @@ impl Network {
     }
 
     pub(super) fn probe(&self, args: &[&str]) -> Vec<u8> {
+        let output = self.probe_output(args);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    }
+
+    pub(super) fn probe_output(&self, args: &[&str]) -> std::process::Output {
         let probe = std::path::PathBuf::from(
             std::env::var_os("BPFMAN_SHELL_BIN_DIR").expect("Make test binary directory"),
         )
@@ -89,7 +99,7 @@ impl Network {
             probe.to_str().expect("probe path"),
         ];
         command.extend_from_slice(args);
-        ip(&command)
+        Command::new("ip").args(&command).output().expect("probe")
     }
 
     fn packets<const N: usize>(&self, frames: Frames, expected: [u32; N]) {

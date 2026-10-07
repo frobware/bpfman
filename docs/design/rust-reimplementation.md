@@ -3,9 +3,9 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds DEVMAP broadcast and ingress-exclusion acceptance in native and
-generic SKB modes on both SQLite and JSON stores, building on multi-buffer
-TX/direct-REDIRECT/unicast forwarding.
+checkpoint adds native DEVMAP egress loading and ordinary-frame PASS/DROP
+execution in driver and generic SKB ingress modes on both SQLite and JSON stores,
+building on broadcast, ingress exclusion, and multi-buffer unicast forwarding.
 All-fragment-aware chains select an `xdp.frags` dispatcher; mixed chains select
 a linear dispatcher. Published ELF declarations are read beneath the retained
 runtime descriptor without changing the Go-compatible persistence schema.
@@ -27,8 +27,13 @@ receiving peer. Eight broadcast suites additionally prove ordinary-sized fan-out
 ingress exclusion, ignored lookup keys, empty/sparse map behavior, and preservation
 through replacement and restoration. On Linux 6.18.54, multi-buffer broadcast with
 multiple eligible targets reports `EOPNOTSUPP`; tests require that exact rejection
-and retain successful single-target jumbo delivery. The next bounded slice is
-DEVMAP egress programs.
+and retain successful single-target jumbo delivery. DEVMAP egress tests additionally
+prove correct ingress/output interface context, live program replacement, rollback,
+and map-held program lifetime after managed unpinning. Fragment-capable egress
+loads correctly, but multi-buffer egress pairing remains blocked by Aya 0.14's
+extension flag handling; tests require that exact map-update rejection and prove
+jumbo unicast without an egress program remains intact. Aya is unchanged.
+The next bounded slice is DEVMAP_HASH unicast acceptance.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -44,7 +49,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
-| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, and DEVMAP forwarding acceptance with normal and multi-buffer packets; broadcast and ingress exclusion | DEVMAP egress programs; kernel multi-buffer fan-out limitation |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, and DEVMAP forwarding acceptance; broadcast, ingress exclusion, and ordinary-frame egress PASS/DROP | Multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation; DEVMAP_HASH |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | Persistence | Go-compatible SQLite schema 2; JSON format 6 for namespace-aware XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
@@ -57,10 +62,10 @@ clearly. See
 [the workspace checkpoint](../../rust/README.md#xdp-attachment-and-replacement)
 for the supported command surface.
 
-The broadcast checkpoint passed `direnv exec . make rust-check`: formatting,
+The egress checkpoint passed `direnv exec . make rust-check`: formatting,
 Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
-fake-kernel lifecycle tests, and all 100 real-kernel tests, with none ignored or
-skipped. The eight focused suites in `make rust-test-xdp-broadcast`, Go fixture
+fake-kernel lifecycle tests, and all 108 real-kernel tests, with none ignored or
+skipped. The eight focused suites in `make rust-test-xdp-egress`, Go fixture
 lint, and Makefile lint also passed.
 
 The replacement fault matrix covers attach and
@@ -129,6 +134,28 @@ checked against tracefs. The restriction is explicit in the
 No production changes or skipped tests were needed. See
 [broadcast acceptance](../../rust/README.md#xdp-devmap-broadcast-and-ingress-exclusion).
 
+Four egress suites exercise `xdp/devmap` PASS/DROP programs through real traffic,
+live entry updates, successful dispatcher replacement, failed attach/detach
+publication restoration, survivor rebuilding, and last detach. The loader keeps
+ordinary interface XDP as EXT but loads `xdp/devmap` and `xdp.frags/devmap` as native
+XDP with the section's expected attach type. Egress programs cannot join interface
+dispatchers, including after store reopen; CPUMAP sections fail preparation before
+runtime effects. Native XDP uses the existing load compensation and unload/retry
+ownership paths. Removing a program's owned pins/record leaves map-held kernel
+references alive; deleting the entry or releasing the final map reference releases
+the program. The tests verify both orders and eventual kernel reclamation.
+
+Four additional suites record the multi-buffer egress boundary on both stores and
+ingress modes. Aya 0.14 preserves `BPF_F_XDP_HAS_FRAGS` for native XDP but drops it
+when overriding a program as an extension. Linux records a linear DEVMAP owner
+and rejects a fragment-capable egress program with `EINVAL`. Rejected updates must
+preserve empty/populated entries, dispatcher identity, and successful full-payload
+jumbo unicast; the rejected program must never execute. Review of Aya's public API
+found no extension flag setter or XDP-to-extension conversion. Keep upstream Aya
+unchanged; code TODOs identify the flag preservation needed before adding positive
+multi-buffer egress execution tests. See
+[egress acceptance](../../rust/README.md#xdp-devmap-egress-programs).
+
 The full gate uses the shared Go/Rust kernel-build helper outside the sandbox,
 allowing Nix to discover and realize the matching development output; see the
 `KERNEL_DEV` and NixOS guidance in `rust/AGENTS.md`.
@@ -142,9 +169,13 @@ interface indices across namespaces, publication failure and retained unload,
 and caller-namespace isolation. Mode selection and fallback follow the legacy
 Rust implementation; current Go does not expose per-interface mode configuration.
 Multi-buffer execution additionally uses libxdp's all-members fragment
-policy; Go currently leaves its dispatcher fragment flag zero. The next bounded
-slice is DEVMAP egress programs. Go remains the behavioural
-authority for the existing shared surface.
+policy; Go currently leaves its dispatcher fragment flag zero. Go also converts
+every managed XDP program to EXT and clears its attach type, so its current loader
+cannot preserve the native `BPF_XDP_DEVMAP` role. Egress loading/execution is a new
+Rust capability beyond that Go path. Earlier forwarding/broadcast additions mostly
+established acceptance for existing Rust behavior. Go remains broader overall,
+including other program families, shared maps, OCI, and gRPC, and remains the
+behavioural authority for the existing shared surface.
 
 The multi-buffer checkpoint (`d5c4652ae`) also passed Go `test-all`: package tests,
 lint, script acceptance, kernel tests, and gRPC concurrency. This includes the unchanged
@@ -1546,9 +1577,13 @@ captures with an offset-dependent payload pattern. Broadcast and ingress exclusi
 are also verified in both modes/stores with ordinary-sized frames. Multi-buffer
 broadcast preserves single-target forwarding but Linux 6.18.54 rejects cloning
 for multiple eligible targets with `EOPNOTSUPP`; an error tracepoint observer
-proves this kernel boundary through replacement and rollback. Next, establish
-DEVMAP egress program support. Physical NIC packet execution and actual hardware
-offload remain unverified.
+proves this kernel boundary through replacement and rollback. DEVMAP egress now
+loads as native XDP and proves ordinary-frame PASS/DROP on both stores and ingress
+modes, including map-held program lifetime through managed unload. Multi-buffer
+egress awaits upstream Aya extension fragment flags; explicit rejection tests
+retain successful jumbo unicast without egress. Next, establish DEVMAP_HASH
+unicast acceptance. Physical NIC packet execution and actual hardware offload
+remain unverified.
 
 The uprobe mount-namespace helper, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this

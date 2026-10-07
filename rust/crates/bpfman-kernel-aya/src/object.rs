@@ -2,7 +2,7 @@
 
 use super::failure::LoadCause;
 use crate::{Kernel, LoadedObject};
-use aya_obj::{Object, ProgramSection, maps::PinningType};
+use aya_obj::{Object, ProgramSection, maps::PinningType, programs::XdpAttachType};
 use bpfman_kernel::{Error, ObjectInfo, ObjectLoader};
 use bpfman_model::ProgramSpec;
 
@@ -55,7 +55,18 @@ impl LocalObject {
 
     fn load(&self, spec: &ProgramSpec) -> Result<LoadedObject, LoadCause> {
         let mut loader = aya::EbpfLoader::new();
-        if matches!(spec, ProgramSpec::Xdp(_)) {
+        let selection = match spec {
+            ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
+            ProgramSpec::Xdp(_) => Selection::Xdp(xdp_role(&self.bytes, spec.name().as_str())?),
+            _ => return Err(LoadCause::Unsupported("program type")),
+        };
+        if matches!(selection, Selection::Xdp(XdpRole::Interface { .. })) {
+            // TODO: Upstream Aya 0.14's extension override drops BPF_F_XDP_HAS_FRAGS.
+            // Fragment helpers still work against the verification target, but
+            // DEVMAP ownership records a linear program and rejects frags egress
+            // with EINVAL. Enable multi-buffer DEVMAP egress when upstream exposes
+            // flag preservation; do not fork Aya or install linear egress on jumbo
+            // traffic as a workaround. Kernel acceptance records this boundary.
             loader.extension(spec.name().as_str());
         }
         for (name, value) in &self.globals {
@@ -68,8 +79,8 @@ impl LocalObject {
         let program = bpf
             .program_mut(spec.name().as_str())
             .ok_or_else(|| LoadCause::Invalid("selected program disappeared during load".into()))?;
-        match spec {
-            ProgramSpec::Tracepoint(_) => {
+        match selection {
+            Selection::Tracepoint => {
                 let program: &mut aya::programs::TracePoint = program
                     .try_into()
                     .map_err(|e| LoadCause::Program(Box::new(e)))?;
@@ -77,10 +88,17 @@ impl LocalObject {
                     .load()
                     .map_err(|e| LoadCause::Program(Box::new(e)))?;
             }
-            ProgramSpec::Xdp(_) => {
-                crate::verification::load(program, xdp_frags(&self.bytes, spec.name().as_str())?)?
-            }
-            _ => return Err(LoadCause::Unsupported("program type")),
+            Selection::Xdp(role) => match role {
+                XdpRole::Interface { frags } => crate::verification::load(program, frags)?,
+                XdpRole::DevMap => {
+                    let program: &mut aya::programs::Xdp = program
+                        .try_into()
+                        .map_err(|e| LoadCause::Program(Box::new(e)))?;
+                    program
+                        .load()
+                        .map_err(|e| LoadCause::Program(Box::new(e)))?;
+                }
+            },
         }
 
         let ids = program
@@ -149,8 +167,8 @@ fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
         .map_err(|e| LoadCause::Map(Box::new(e)))
 }
 
-// Validate every selection before runtime initialization. XDP sections become
-// extensions at the kernel boundary.
+// Validate every selection before runtime initialization. The ELF section owns
+// the XDP role; retaining bytecode preserves it without changing Go's store schema.
 pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<(), LoadCause> {
     let program = object.programs.get(spec.name().as_str()).ok_or_else(|| {
         LoadCause::Invalid(format!(
@@ -159,8 +177,10 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         ))
     })?;
     match (spec, &program.section) {
-        (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint)
-        | (ProgramSpec::Xdp(_), ProgramSection::Xdp { .. }) => Ok(()),
+        (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint) => Ok(()),
+        (ProgramSpec::Xdp(_), section @ ProgramSection::Xdp { .. }) => {
+            XdpRole::from_section(section).map(|_| ())
+        }
         (ProgramSpec::Tracepoint(_), _) => Err(LoadCause::Invalid(
             "selected ELF program is not a tracepoint".into(),
         )),
@@ -214,9 +234,51 @@ pub(super) fn load(
 }
 
 pub(super) fn xdp_frags(bytes: &[u8], name: &str) -> Result<bool, LoadCause> {
-    let object = Object::parse(bytes).map_err(|e| LoadCause::Parse(Box::new(e)))?;
-    match object.programs.get(name).map(|p| &p.section) {
-        Some(ProgramSection::Xdp { frags, .. }) => Ok(*frags),
-        _ => Err(LoadCause::Invalid("selected ELF program is not XDP".into())),
+    match xdp_role(bytes, name)? {
+        XdpRole::Interface { frags } => Ok(frags),
+        XdpRole::DevMap => Err(LoadCause::Invalid(
+            "DEVMAP egress cannot join an interface dispatcher".into(),
+        )),
     }
+}
+
+#[derive(Clone, Copy)]
+enum XdpRole {
+    Interface { frags: bool },
+    DevMap,
+}
+
+enum Selection {
+    Tracepoint,
+    Xdp(XdpRole),
+}
+
+impl XdpRole {
+    fn from_section(section: &ProgramSection) -> Result<Self, LoadCause> {
+        match section {
+            ProgramSection::Xdp {
+                attach_type: XdpAttachType::Interface,
+                frags,
+            } => Ok(Self::Interface { frags: *frags }),
+            ProgramSection::Xdp {
+                attach_type: XdpAttachType::DevMap,
+                ..
+            } => Ok(Self::DevMap),
+            ProgramSection::Xdp {
+                attach_type: XdpAttachType::CpuMap,
+                ..
+            } => Err(LoadCause::Unsupported("CPUMAP XDP")),
+            _ => Err(LoadCause::Invalid("selected ELF program is not XDP".into())),
+        }
+    }
+}
+
+fn xdp_role(bytes: &[u8], name: &str) -> Result<XdpRole, LoadCause> {
+    let object = Object::parse(bytes).map_err(|e| LoadCause::Parse(Box::new(e)))?;
+    let section = object
+        .programs
+        .get(name)
+        .map(|p| &p.section)
+        .ok_or_else(|| LoadCause::Invalid("selected ELF program does not exist".into()))?;
+    XdpRole::from_section(section)
 }

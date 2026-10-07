@@ -44,6 +44,10 @@ impl Targets {
     }
 
     fn check_at(&self, key: u32, expected: Option<u32>) {
+        self.check_value(key, expected.map(|index| (index, None)));
+    }
+
+    fn check_value(&self, key: u32, expected: Option<(u32, Option<NonZeroU32>)>) {
         assert_eq!(
             aya::maps::MapInfo::from_pin(&self.pin)
                 .expect("current pin")
@@ -52,19 +56,61 @@ impl Targets {
             "replacement must preserve the published map identity"
         );
         match expected {
-            Some(index) => {
+            Some((index, program)) => {
                 let value = self.map.get(key, 0).expect("target");
                 assert_eq!(
                     value.if_index, index,
                     "target contents must survive rebuilding"
                 );
-                assert_eq!(value.prog_id, None, "no egress program in this slice");
+                assert_eq!(value.prog_id, program, "egress program identity");
             }
             None => assert!(matches!(
                 self.map.get(key, 0),
                 Err(aya::maps::MapError::KeyNotFound)
             )),
         }
+    }
+
+    pub(super) fn check_egress(&self, index: u32, program: NonZeroU32) {
+        self.check_value(0, Some((index, Some(program))));
+    }
+
+    pub(super) fn set_egress(&self, c: &Context, network: &Network, program: NonZeroU32) -> u32 {
+        network.probe(&[
+            "devmap-egress",
+            self.pin.to_str().expect("map pin"),
+            "out0",
+            c.layout
+                .program_pin_path(program)
+                .to_str()
+                .expect("program pin"),
+        ]);
+        let index = u32::try_from(
+            network.links("out0")[0]["ifindex"]
+                .as_u64()
+                .expect("ifindex"),
+        )
+        .expect("u32");
+        self.check_egress(index, program);
+        index
+    }
+
+    pub(super) fn reject_egress(&self, c: &Context, network: &Network, program: NonZeroU32) {
+        let output = network.probe_output(&[
+            "devmap-egress",
+            self.pin.to_str().expect("map pin"),
+            "out0",
+            c.layout
+                .program_pin_path(program)
+                .to_str()
+                .expect("program pin"),
+        ]);
+        assert_eq!(output.status.code(), Some(1));
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("invalid argument"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     fn set(&self, network: &Network, interface: &str) -> u32 {

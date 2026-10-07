@@ -362,7 +362,7 @@ kernel observations. `program get ID [-o text|json]` observes one managed progra
 including its maps, statistics, and links. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. `--all` and
 kernel link state filters remain unsupported. Unload supports a tracepoint with private maps and pending or finalised
-standalone links, or an unattached XDP extension with private maps.
+standalone links, an XDP extension, or a native DEVMAP egress program with private maps.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
@@ -670,7 +670,8 @@ direnv exec . make rust-test-unload
 ```
 
 This slice accepts a managed tracepoint with pending or finalised standalone
-links, or an XDP extension with or without dispatcher links. Each must have its
+links, an XDP extension with or without dispatcher links, or a native DEVMAP
+egress program. Each must have its
 own map set, no other map-set users, and no shared-map-pin registrations.
 Other program types, shared state, multiple operands, and `--ignore-missing` are
 explicitly unsupported. A missing managed record returns an error without
@@ -681,7 +682,7 @@ Under one writer scope, store preflight validates canonical artifact paths and
 exclusive ownership. Filesystem observation opens existing objects without
 creating or mounting collections. It verifies descriptor confinement, types,
 hard-link counts and inode identities; a live program pin must match the ID and
-tracepoint or extension type, and its map pins must refer to that program's maps. If the
+tracepoint, extension, or native XDP type, and its map pins must refer to that program's maps. If the
 program pin is already absent after a partial unload, the validated private
 map-set record authorizes inspection of its remaining BPF map pins. Bytecode
 adoption accepts only `bytecode.o` and `provenance.json`. Unknown children and
@@ -762,7 +763,7 @@ and lifetime checks that these fakes cannot establish.
 
 ## XDP extension load checkpoint
 
-Local XDP loads use the same preparation, atomic batch commit, compensation,
+Local interface XDP loads use the same preparation, atomic batch commit, compensation,
 observations, and unload interpreter as tracepoints. A selection is stored as
 `xdp` while its kernel type is `extension`. The Aya adapter verifies it against
 `prog0` of an unpinned one-slot XDP dispatcher, matching Go. The Makefile builds
@@ -775,6 +776,8 @@ Both stores run the unchanged `TestXDP_LoadAndGet.bpfman` and
 failure, commit failure, unload retry, and refusal of tracepoint attachment to
 an XDP program. SQLite interchange tests load with either Go or Rust, compare
 get/list observations, and unload with the other implementation.
+Native DEVMAP egress selections use the same lifecycle with a different kernel
+load role; see [egress programs](#xdp-devmap-egress-programs).
 
 ## XDP attachment and replacement
 
@@ -1111,9 +1114,9 @@ fail the test. Final inventories and owned artifacts must be empty. No productio
 changes were needed for this slice.
 
 This covers unicast `BPF_MAP_TYPE_DEVMAP` with normal-sized veth frames and no
-egress program. DEVMAP_HASH, attached egress programs, CPUMAP/XSKMAP, physical
-NICs, and hardware offload remain unverified. The suites below cover multi-buffer
-forwarding and broadcast/exclude-ingress flags.
+egress program. The suites below cover multi-buffer forwarding,
+broadcast/exclude-ingress flags, and ordinary-frame egress PASS/DROP. DEVMAP_HASH,
+CPUMAP/XSKMAP, physical NICs, and hardware offload remain unverified.
 
 ### XDP multi-buffer forwarding
 
@@ -1193,8 +1196,8 @@ lifecycle. The Go helper accepts explicit map keys and an additional capture
 interface while retaining existing packet/map operations. No production command,
 persistence change, Rust dependency, or unsafe block was added.
 
-Next: DEVMAP egress programs. DEVMAP_HASH, CPUMAP/XSKMAP, physical NICs, and actual
-hardware offload remain unverified. Multi-buffer fan-out needs kernel support.
+The next section adds DEVMAP egress programs. DEVMAP_HASH, CPUMAP/XSKMAP, physical
+NICs, and actual hardware offload remain unverified. Multi-buffer fan-out needs kernel support.
 The uprobe mount-namespace helper remains a separate attachment-family boundary.
 
 The broadcast checkpoint passed `direnv exec . make rust-check`: formatting,
@@ -1203,6 +1206,67 @@ lifecycle tests, and all 100 real-kernel tests, with none ignored or skipped.
 The eight focused broadcast suites, Go fixture lint, and Makefile lint also passed.
 NixOS kernel-build discovery and the optional `KERNEL_DEV` override are documented
 in [AGENTS.md](AGENTS.md).
+
+### XDP DEVMAP egress programs
+
+A DEVMAP entry can also name a final XDP filter for its output device. Returning
+PASS transmits the redirected packet; returning DROP discards it. These programs
+require kernel type XDP and expected attach type `BPF_XDP_DEVMAP`, rather than the
+EXT programs used for managed interface dispatchers.
+
+The loader selects that role from `xdp/devmap` or `xdp.frags/devmap` in the captured
+ELF and loads it through Aya's public `Xdp::load` API. Private maps, pinning,
+publication compensation, observation, and unload/retry reuse the existing
+lifecycle. No new store field, dependency, unsafe code, Aya patch, or production
+map-editing command is needed. The managed kind remains `xdp`; the kernel kind is
+`xdp` for egress and `extension` for interface members. Interface attachment refuses
+native egress programs before creating a dispatcher revision, including after
+store reopen. Unsupported CPUMAP sections fail preparation before runtime effects.
+
+Run `direnv exec . make rust-test-xdp-egress` for eight real-kernel suites.
+`RUST_XDP_EGRESS_FILTER` optionally selects one suite. Four ordinary-frame suites
+cross SQLite/JSON and driver/SKB ingress. They verify PASS/DROP delivery, exact
+egress execution counts and ingress/output interface context, live replacement
+of the entry's program, rejection of interface extensions as egress, successful
+dispatcher replacement, failed attach/detach publication restoration, survivor
+rebuilding, and last detach. Updating a map takes a program FD; reading it returns
+the program ID. The namespace-local Go fixture keeps that distinction explicit.
+
+Map entries retain kernel program references independently of managed pins.
+Unload removes the egress program's owned pins and store record while forwarding
+continues through a referencing entry. This also survives failed record deletion
+and explicit unload retry. Removing the entry releases that program. The second
+case unloads an egress program and its map owner while a retained map descriptor
+keeps the entry/program alive; closing that descriptor releases both. Bounded
+kernel observations verify eventual reclamation, and final managed inventories
+and artifacts must be empty.
+
+The other four suites load native `xdp.frags/devmap` programs and establish the
+current multi-buffer pairing boundary. Aya 0.14's `.extension(name)` override
+does not preserve `BPF_F_XDP_HAS_FRAGS`, although its native XDP branch does.
+Fragment helpers can still execute against the verification dispatcher, so
+earlier jumbo ingress/unicast tests pass; the missing flag appears when Linux
+checks DEVMAP ownership against a fragment-capable egress program. Updates fail
+with `EINVAL`. Tests require rejection for empty and populated maps, preservation
+of map entries and dispatcher identity, zero egress execution, and unchanged
+full-payload jumbo unicast without an egress program.
+
+Aya 0.14 exposes no extension load-flag setter or XDP-to-extension conversion;
+`XdpMode` controls attachment flags and cannot fix this. TODOs in the adapter and
+boundary test record what to revisit when upstream preserves extension fragment
+flags. Keep Aya unchanged and retain these checks until positive multi-buffer
+egress execution can be implemented through a supported API.
+
+Go's current loader forces all managed XDP to EXT and clears its attach type, so
+native DEVMAP egress is beyond that Go path. Go still supports more of the overall
+bpfman surface. Next: DEVMAP_HASH unicast acceptance; multi-buffer egress and fan-out
+remain separate library/kernel boundaries.
+
+The egress checkpoint passed `direnv exec . make rust-check`: formatting,
+Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
+fake-kernel lifecycle tests, and all 108 real-kernel tests, with none ignored or
+skipped. The eight focused egress suites, Go fixture lint, Makefile lint, and BPF
+fixture formatting checks also passed. Upstream Aya and the lockfile are unchanged.
 
 ### Injectable kernel lifecycle
 
@@ -1237,6 +1301,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 100 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 108 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

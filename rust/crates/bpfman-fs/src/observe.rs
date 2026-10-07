@@ -99,7 +99,8 @@ impl RuntimeWriter<'_> {
                 if info.id != id.get()
                     || !matches!(info.kind,
                         kind if kind == crate::PinProgramKind::Tracepoint
-                            || kind == crate::PinProgramKind::Extension)
+                            || kind == crate::PinProgramKind::Extension
+                            || kind == crate::PinProgramKind::Xdp)
                 {
                     return Err(Failure::Unsafe(
                         "program pin has a different kernel identity or type",

@@ -550,3 +550,46 @@ fn json_xdp_devmap_broadcast_frags_skb() {
         xdp_delivery::Frames::MultiBuffer,
     );
 }
+
+#[path = "kernel/xdp_egress.rs"]
+mod xdp_egress;
+
+#[test]
+fn sqlite_xdp_devmap_egress() {
+    xdp_egress::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn sqlite_xdp_devmap_egress_skb() {
+    xdp_egress::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn sqlite_xdp_devmap_egress_frags_boundary() {
+    xdp_egress::fragments_boundary(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn sqlite_xdp_devmap_egress_frags_boundary_skb() {
+    xdp_egress::fragments_boundary(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn json_xdp_devmap_egress() {
+    xdp_egress::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn json_xdp_devmap_egress_skb() {
+    xdp_egress::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn json_xdp_devmap_egress_frags_boundary() {
+    xdp_egress::fragments_boundary(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn json_xdp_devmap_egress_frags_boundary_skb() {
+    xdp_egress::fragments_boundary(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+}
