@@ -11,14 +11,14 @@ use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram, XdpAttach};
 use bpfman_store::*;
 use std::{num::NonZeroU32, path::PathBuf};
 
-struct Targets {
+pub(super) struct Targets {
     pin: PathBuf,
     id: u32,
     map: aya::maps::xdp::DevMap<aya::maps::MapData>,
 }
 
 impl Targets {
-    fn open(c: &Context, program: NonZeroU32) -> Self {
+    pub(super) fn open(c: &Context, program: NonZeroU32) -> Self {
         let pin = c
             .layout
             .map_directory_path(program)
@@ -40,6 +40,10 @@ impl Targets {
     }
 
     fn check(&self, expected: Option<u32>) {
+        self.check_at(0, expected);
+    }
+
+    fn check_at(&self, key: u32, expected: Option<u32>) {
         assert_eq!(
             aya::maps::MapInfo::from_pin(&self.pin)
                 .expect("current pin")
@@ -49,7 +53,7 @@ impl Targets {
         );
         match expected {
             Some(index) => {
-                let value = self.map.get(0, 0).expect("target");
+                let value = self.map.get(key, 0).expect("target");
                 assert_eq!(
                     value.if_index, index,
                     "target contents must survive rebuilding"
@@ -57,18 +61,23 @@ impl Targets {
                 assert_eq!(value.prog_id, None, "no egress program in this slice");
             }
             None => assert!(matches!(
-                self.map.get(0, 0),
+                self.map.get(key, 0),
                 Err(aya::maps::MapError::KeyNotFound)
             )),
         }
     }
 
     fn set(&self, network: &Network, interface: &str) -> u32 {
+        self.set_at(network, 0, interface)
+    }
+
+    pub(super) fn set_at(&self, network: &Network, key: u32, interface: &str) -> u32 {
         // Resolve the netdevice in the private namespace, never in the caller's.
         network.probe(&[
             "devmap-set",
             self.pin.to_str().expect("pin path"),
             interface,
+            &key.to_string(),
         ]);
         let index = u32::try_from(
             network.links(interface)[0]["ifindex"]
@@ -76,13 +85,43 @@ impl Targets {
                 .expect("index"),
         )
         .expect("u32 index");
-        self.check(Some(index));
+        self.check_at(key, Some(index));
         index
     }
 
     fn delete(&self, network: &Network) {
-        network.probe(&["devmap-delete", self.pin.to_str().expect("pin path")]);
-        self.check(None);
+        self.delete_at(network, 0);
+    }
+
+    pub(super) fn delete_at(&self, network: &Network, key: u32) {
+        network.probe(&[
+            "devmap-delete",
+            self.pin.to_str().expect("pin path"),
+            &key.to_string(),
+        ]);
+        self.check_at(key, None);
+    }
+
+    pub(super) fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub(super) fn check_entries(&self, expected: &[Option<u32>]) {
+        assert_eq!(
+            self.map.len() as usize,
+            expected.len(),
+            "complete map contents"
+        );
+        for (key, &value) in expected.iter().enumerate() {
+            self.check_at(key as u32, value);
+        }
+    }
+
+    pub(super) fn assert_unloaded(self) {
+        assert!(!self.pin.exists(), "unload must remove the owned map pin");
+        let id = self.id;
+        drop(self);
+        map_released(id);
     }
 }
 
@@ -302,13 +341,7 @@ fn scenario<S>(
         app.unload(redirect).expect("unload redirect").unresolved(),
         0
     );
-    assert!(
-        !targets.pin.exists(),
-        "unload must remove the owned map pin"
-    );
-    let map_id = targets.id;
-    drop(targets);
-    map_released(map_id);
+    targets.assert_unloaded();
     assert_eq!(
         app.unload(observer).expect("unload observer").unresolved(),
         0

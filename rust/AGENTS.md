@@ -56,6 +56,11 @@ The architecture and compatibility goals are in
   during DEVMAP acceptance work; the running test kernel was `6.18.54`.
   Continue using the shared build helper and `KERNEL_DEV` for matching kbuild
   sources; the reference checkout does not select the test kernel's build tree.
+  Check the full running patch version for packet-path restrictions: Linux
+  `6.18.54` explicitly rejects DEVMAP cloning of multi-buffer frames in native
+  and SKB paths, unlike the older reference sources. Broadcast acceptance
+  observes `EOPNOTSUPP` through a filtered redirect-error tracepoint; see the
+  [verified boundary](README.md#xdp-devmap-broadcast-and-ingress-exclusion).
 
 ## Visibility and crate boundaries
 

@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func run(size int) error {
+func run(size int, captures []string) error {
 	protocol := int(binary.NativeEndian.Uint16([]byte{0x88, 0xb5}))
 	var sockets []int
 	defer func() {
@@ -30,7 +30,7 @@ func run(size int) error {
 	}()
 	var polls []unix.PollFd
 	var sourceIndex int
-	for _, name := range []string{"source0", "in0", "sink0"} {
+	for _, name := range captures {
 		iface, err := net.InterfaceByName(name)
 		if err != nil {
 			return err
@@ -64,8 +64,8 @@ func run(size int) error {
 			return err
 		}
 	}
-	var counts [3]uint32
-	var seen [3][3]bool
+	counts := make([]uint32, len(captures))
+	seen := make([][3]bool, len(captures))
 	deadline := time.Now().Add(300 * time.Millisecond)
 	buffer := make([]byte, size+1)
 	for time.Now().Before(deadline) {
@@ -110,24 +110,35 @@ func run(size int) error {
 // DEVMAP updates resolve ifindices in the updating process's network namespace.
 // The caller runs this fixture via ip netns exec, just like packet capture.
 func updateTarget(args []string) error {
-	if len(args) != 2 && len(args) != 3 {
-		return fmt.Errorf("usage: devmap-delete PIN | devmap-set PIN INTERFACE")
+	if len(args) == 0 || (args[0] != "devmap-delete" && args[0] != "devmap-set") {
+		return fmt.Errorf("usage: devmap-delete PIN [KEY] | devmap-set PIN INTERFACE [KEY]")
 	}
-	if args[0] != "devmap-delete" && args[0] != "devmap-set" {
-		return fmt.Errorf("unknown operation %q", args[0])
+	minimum := 2
+	if args[0] == "devmap-set" {
+		minimum = 3
 	}
-	if (args[0] == "devmap-delete" && len(args) != 2) || (args[0] == "devmap-set" && len(args) != 3) {
+	if len(args) < minimum || len(args) > minimum+1 {
 		return fmt.Errorf("invalid arguments for %s", args[0])
+	}
+	var key uint32
+	if len(args) > minimum {
+		value, err := strconv.ParseUint(args[minimum], 10, 32)
+		if err != nil {
+			return err
+		}
+		key = uint32(value)
 	}
 	m, err := ebpf.LoadPinnedMap(args[1], nil)
 	if err != nil {
 		return err
 	}
 	defer m.Close()
-	if m.Type() != ebpf.DevMap || m.MaxEntries() != 1 || (m.ValueSize() != 4 && m.ValueSize() != 8) {
-		return fmt.Errorf("expected a one-entry DEVMAP with 4- or 8-byte values")
+	if m.Type() != ebpf.DevMap || (m.ValueSize() != 4 && m.ValueSize() != 8) {
+		return fmt.Errorf("expected a DEVMAP with 4- or 8-byte values")
 	}
-	key := uint32(0)
+	if key >= m.MaxEntries() {
+		return fmt.Errorf("key %d outside DEVMAP capacity %d", key, m.MaxEntries())
+	}
 	if args[0] == "devmap-delete" {
 		return m.Delete(key)
 	}
@@ -145,10 +156,10 @@ func updateTarget(args []string) error {
 func main() {
 	var err error
 	if len(os.Args) == 1 {
-		err = run(64)
+		err = run(64, []string{"source0", "in0", "sink0"})
 	} else if os.Args[1] == "packets" {
-		if len(os.Args) != 3 {
-			err = fmt.Errorf("usage: packets SIZE (64 through 9014 bytes)")
+		if len(os.Args) < 3 {
+			err = fmt.Errorf("usage: packets SIZE [EXTRA_CAPTURE_INTERFACE...] (64 through 9014 bytes)")
 		} else {
 			var size int
 			size, err = strconv.Atoi(os.Args[2])
@@ -156,7 +167,7 @@ func main() {
 				if size < 64 || size > 9014 {
 					err = fmt.Errorf("frame size must be between 64 and 9014 bytes")
 				} else {
-					err = run(size)
+					err = run(size, append([]string{"source0", "in0", "sink0"}, os.Args[3:]...))
 				}
 			}
 		}

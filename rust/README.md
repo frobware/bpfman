@@ -1111,9 +1111,9 @@ fail the test. Final inventories and owned artifacts must be empty. No productio
 changes were needed for this slice.
 
 This covers unicast `BPF_MAP_TYPE_DEVMAP` with normal-sized veth frames and no
-egress program. DEVMAP_HASH, broadcast/exclude-ingress flags, attached egress
-programs, CPUMAP/XSKMAP, physical NICs, and hardware offload remain unverified.
-The suite below covers multi-buffer forwarding.
+egress program. DEVMAP_HASH, attached egress programs, CPUMAP/XSKMAP, physical
+NICs, and hardware offload remain unverified. The suites below cover multi-buffer
+forwarding and broadcast/exclude-ingress flags.
 
 ### XDP multi-buffer forwarding
 
@@ -1141,16 +1141,68 @@ retains live target updates, PASS/DROP missing-entry fallback, original map iden
 and contents, and eventual reclamation. Neither the runtime nor the persisted
 schema needed changes, and no Rust dependency or unsafe code was added.
 
-The verified boundary is unicast veth forwarding on kernel 6.18.54. DEVMAP egress
-programs, broadcast/exclude-ingress flags, physical NICs, and hardware offload
-remain unverified. Next: DEVMAP broadcast/exclude-ingress behavior. The uprobe
-mount-namespace helper remains a separate attachment-family boundary.
+The verified boundary here is unicast veth forwarding on kernel 6.18.54.
+The broadcast suite below establishes the additional fan-out boundary.
 
-The multi-buffer forwarding checkpoint passed the full `direnv exec . make rust-check`
+The unicast multi-buffer forwarding checkpoint (`f844ddef4`) passed the full `direnv exec . make rust-check`
 gate: formatting, Clippy, workspace tests, compile-fail contracts, documentation,
 38 fake-kernel lifecycle tests, and all 92 real-kernel tests. NixOS kernel-build
 discovery and the optional `KERNEL_DEV` override are documented in
 [AGENTS.md](AGENTS.md).
+
+### XDP DEVMAP broadcast and ingress exclusion
+
+Run `direnv exec . make rust-test-xdp-broadcast` for eight real-kernel suites:
+SQLite/JSON, native/SKB ingress, and ordinary/multi-buffer frames. Each uses three
+veth pairs with map entries for `in0`, `out0`, and `out1`. Broadcast sends a copy
+to each eligible output. `BPF_F_EXCLUDE_INGRESS` suppresses the `in0` target and
+therefore prevents return to `source0`. Capture at both sinks, the sender, and
+local ingress verifies exact sequence counts and complete payloads. Sparse maps
+and live updates move delivery between sinks without rebuilding the dispatcher.
+The optional `RUST_XDP_BROADCAST_FILTER` Make variable selects an individual suite.
+
+The three-entry BPF fixture deliberately supplies out-of-range lookup key 99 and
+PASS fallback. Broadcast ignores that lookup: an empty map, or a map containing
+only excluded ingress, consumes the frame and returns REDIRECT rather than PASS.
+Default proceed-on stops before the DROP member even in this case. Explicit
+REDIRECT continuation reaches DROP and suppresses all copies; exhausting the
+continuing chain returns PASS for local delivery.
+
+Ordinary-sized frames support genuine fan-out. On Linux 6.18.54, native and SKB
+broadcast explicitly reject cloning multi-buffer frames with `EOPNOTSUPP` when
+more than one destination is eligible. See the
+[version-matched kernel clone paths](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/devmap.c).
+A single eligible destination still receives the complete jumbo frame and proves
+fragment/tail/boundary reads. All executing members retain those fragment checks
+when fan-out is rejected. The tests require zero copies and exactly three
+`EOPNOTSUPP` redirect events, with no other redirect errors; they do not skip the
+multi-buffer cases or claim kernel support for cloning fragments.
+
+A managed tracepoint fixture observes `xdp/xdp_redirect_err`, filtered by the
+original DEVMAP ID and ingress ifindex. Before loading it, the suite verifies
+field offsets/sizes against the running tracefs format. This distinguishes the
+kernel's explicit restriction from an unexplained drop or a manager regression.
+The ordinary source checkout at `v6.12` did not contain these stable-kernel checks;
+matching the full running patch version mattered.
+
+Both packet sizes cover failed attach/detach publication restoration, successful
+replacement, stable outer identity and all map entries, either survivor, map
+updates after rebuilding, last detach, eventual map reclamation, and empty final
+inventories. The error observer is also unloaded through the normal managed
+lifecycle. The Go helper accepts explicit map keys and an additional capture
+interface while retaining existing packet/map operations. No production command,
+persistence change, Rust dependency, or unsafe block was added.
+
+Next: DEVMAP egress programs. DEVMAP_HASH, CPUMAP/XSKMAP, physical NICs, and actual
+hardware offload remain unverified. Multi-buffer fan-out needs kernel support.
+The uprobe mount-namespace helper remains a separate attachment-family boundary.
+
+The broadcast checkpoint passed `direnv exec . make rust-check`: formatting,
+Clippy, workspace tests, compile-fail contracts, documentation, 38 fake-kernel
+lifecycle tests, and all 100 real-kernel tests, with none ignored or skipped.
+The eight focused broadcast suites, Go fixture lint, and Makefile lint also passed.
+NixOS kernel-build discovery and the optional `KERNEL_DEV` override are documented
+in [AGENTS.md](AGENTS.md).
 
 ### Injectable kernel lifecycle
 
@@ -1185,6 +1237,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 92 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 100 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

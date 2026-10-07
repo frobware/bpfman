@@ -44,6 +44,26 @@ impl Network {
         network
     }
 
+    pub(super) fn broadcast(frames: Frames) -> Self {
+        let network = Self::new();
+        ip(&[
+            "-n", &network.0, "link", "add", "out1", "type", "veth", "peer", "name", "sink1",
+        ]);
+        for (iface, mac) in [
+            ("out1", "02:00:00:00:00:05"),
+            ("sink1", "02:00:00:00:00:06"),
+        ] {
+            ip(&[
+                "-n", &network.0, "link", "set", "dev", iface, "address", mac, "up",
+            ]);
+            if frames == Frames::MultiBuffer {
+                ip(&["-n", &network.0, "link", "set", "dev", iface, "mtu", "9000"]);
+            }
+        }
+        frames.configure(&network);
+        network
+    }
+
     pub(super) fn links(&self, iface: &str) -> serde_json::Value {
         serde_json::from_slice(&ip(&[
             "-n", &self.0, "-j", "-d", "link", "show", "dev", iface,
@@ -72,13 +92,23 @@ impl Network {
         ip(&command)
     }
 
-    fn packets(&self, frames: Frames, expected: [u32; 3]) {
-        let output = match frames {
-            Frames::Linear => self.probe(&[]),
-            Frames::MultiBuffer => self.probe(&["packets", "8014"]),
+    fn packets<const N: usize>(&self, frames: Frames, expected: [u32; N]) {
+        let size = if frames == Frames::MultiBuffer {
+            "8014"
+        } else {
+            "64"
         };
-        let counts: [u32; 3] = serde_json::from_slice(&output).expect("capture counts");
-        assert_eq!(counts, expected, "[returned, local, redirected]");
+        let output = match N {
+            3 => self.probe(&["packets", size]),
+            4 => self.probe(&["packets", size, "sink1"]),
+            _ => panic!("unsupported capture topology"),
+        };
+        let counts: Vec<u32> = serde_json::from_slice(&output).expect("capture counts");
+        assert_eq!(
+            counts.as_slice(),
+            expected.as_slice(),
+            "[returned, local, redirected, optional second receiver]"
+        );
     }
 }
 
@@ -91,7 +121,7 @@ impl Drop for Network {
     }
 }
 
-fn count(c: &Context, id: NonZeroU32, key: u32) -> u64 {
+pub(super) fn count(c: &Context, id: NonZeroU32, key: u32) -> u64 {
     let map = aya::maps::MapData::from_pin(c.layout.map_directory_path(id).join("delivery_stats"))
         .expect("delivery map");
     let map: aya::maps::PerCpuArray<_, u64> = aya::maps::Map::PerCpuArray(map)
@@ -100,7 +130,7 @@ fn count(c: &Context, id: NonZeroU32, key: u32) -> u64 {
     map.get(&key, 0).expect("counter").iter().sum()
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Frames {
     Linear,
     MultiBuffer,
@@ -136,20 +166,29 @@ impl Frames {
         }
     }
 
-    pub(super) fn traffic(
+    pub(super) fn traffic<const N: usize>(
         self,
         c: &Context,
         network: &Network,
         ids: [NonZeroU32; 3],
         execution: [u64; 2],
-        delivery: [u32; 3],
+        delivery: [u32; N],
     ) {
         let metrics: Vec<_> = match self {
             Self::Linear => vec![(ids[0], 0, execution[0]), (ids[1], 1, execution[1])],
             Self::MultiBuffer => [
                 (ids[0], 0, execution[0]),
                 (ids[1], 4, execution[1]),
-                (ids[2], 0, u64::from(delivery[0] + delivery[2])),
+                (
+                    ids[2],
+                    0,
+                    delivery
+                        .iter()
+                        .enumerate()
+                        .filter(|(index, _)| *index != 1)
+                        .map(|(_, &count)| u64::from(count))
+                        .sum(),
+                ),
             ]
             .into_iter()
             .flat_map(|(id, base, expected)| (base..base + 4).map(move |key| (id, key, expected)))
