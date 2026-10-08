@@ -1942,7 +1942,8 @@ rust-test-xdp-devmap: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-multibuffer-forwarding: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_multibuffer_forwarding --nocapture
 
-# DEVMAP/DEVMAP_HASH fan-out and ingress exclusion with ordinary and multi-buffer frames.
+# DEVMAP/DEVMAP_HASH publication restoration and jumbo cloning/error evidence.
+# Ordinary fan-out and ingress exclusion run in rust-test-scripts.
 RUST_XDP_BROADCAST_FILTER ?= xdp_devmap_broadcast
 .PHONY: rust-test-xdp-broadcast
 rust-test-xdp-broadcast: rust-build $(RUST_TEST_INPUTS)

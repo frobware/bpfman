@@ -1204,10 +1204,20 @@ discovery and the optional `KERNEL_DEV` override are documented in
 
 ### XDP DEVMAP broadcast and ingress exclusion
 
-Run `direnv exec . make rust-test-xdp-broadcast` for sixteen real-kernel suites:
+Run `direnv exec . make rust-test-scripts rust-test-xdp-broadcast` for ordinary
+script acceptance plus sixteen real-kernel restoration/jumbo suites:
 DEVMAP/DEVMAP_HASH, SQLite/JSON, native/SKB ingress, and ordinary/genuine multi-buffer
 frames. `direnv exec . make rust-test-xdp-broadcast-hash` selects the eight hash-backed
-suites. Each uses three veth pairs with map entries for `in0`, `out0`, and `out1`.
+suites. Four parallel `TestXDP_{Devmap,DevmapHash}_Broadcast_{Drv,Skb}_Linear`
+scripts now own ordinary fan-out, ingress exclusion, live updates, continuation,
+both survivors and last detach, including zero redirect errors observed by a
+map/ifindex-filtered tracepoint. They passed on both stores.
+Both driver scripts also passed against Go and are shared; Go attached in
+driver mode for the requested SKB cases, so those two scripts are Rust-only.
+Rust retains two post-failure packet waves per ordinary scenario (72 to 8 captures
+per matrix invocation), exact map contents/identity, restoration and lifetime
+checks. Jumbo packet/error coverage remains in Rust unchanged.
+Each topology uses three veth pairs with map entries for `in0`, `out0`, and `out1`.
 Broadcast sends a copy
 to each eligible output. `BPF_F_EXCLUDE_INGRESS` suppresses the `in0` target and
 therefore prevents return to `source0`. Capture at both sinks, the sender, and
@@ -1243,8 +1253,9 @@ kernel's explicit restriction from an unexplained drop or a manager regression.
 The ordinary source checkout at `v6.12` did not contain these stable-kernel checks;
 matching the full running patch version mattered.
 
-Both packet sizes cover failed attach/detach publication restoration, successful
-replacement, stable outer identity and all map entries, either survivor, map
+Across the script and Rust suites, both packet sizes cover failed attach/detach
+publication restoration, successful replacement, stable outer identity and all
+map entries, either survivor, map
 updates after rebuilding, last detach, eventual map reclamation, and empty final
 inventories. The error observer is also unloaded through the normal managed
 lifecycle. The Go helper accepts explicit map keys and an additional capture
@@ -1399,8 +1410,8 @@ kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 ## Script parity through the Go runner
 
 Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
-62 admitted scripts: 48 shared Go/Rust scripts and 14 Rust-only scripts,
-out of 149 scripts in total. A Rust-only script additionally declares:
+66 admitted scripts: 50 shared Go/Rust scripts and 16 Rust-only scripts,
+out of 153 scripts in total. A Rust-only script additionally declares:
 
 ```bpfman
 #pragma labels={"rust":"ok","rust-only":"true"}
@@ -1421,8 +1432,8 @@ pooled namespaces; no serial/exclusive label is needed. Both survivor choices
 share the forwarding preamble. Publication-failure restoration remains in Rust,
 with two packet probes per scenario instead of repeating the full matrix there.
 
-The next migration slice admits three unchanged metadata/global-data scripts,
-adds shared `TestProgram_FileLifecycle`, and moves TX/direct REDIRECT into eight
+The CLI/delivery migration admitted three unchanged metadata/global-data scripts,
+added shared `TestProgram_FileLifecycle`, and moved TX/direct REDIRECT into eight
 parallel scripts using the same delivery helper. The nine new scripts passed
 in about 18 s per Rust backend. File capture, complete record/get/list round trips,
 quiet listing and ordinary unload replace duplicate Rust CLI assertions;
@@ -1437,7 +1448,14 @@ DEVMAP labels alone do not establish a Go incompatibility. Unload's missing-ID
 diagnostic and `--ignore-missing`, section-type mismatch diagnostics/unsupported
 families, and the kprobe verifier-log script remain recorded parity gaps in the
 [migration audit](../docs/design/rust-reimplementation.md#cli-loadunload-and-txdirect-redirect-follow-up).
-No production behaviour was changed for this testing slice.
+Ordinary DEVMAP broadcast adds four parallel scripts: DEVMAP/DEVMAP_HASH in driver
+and SKB modes. They reuse the existing fourth-interface capture support and share
+the setup for both survivor choices. Both driver scripts are shared after Go
+comparison; the two SKB scripts are Rust-only because Go attached in driver mode.
+Jumbo broadcast and egress remain migration candidates. See the
+[broadcast follow-up](../docs/design/rust-reimplementation.md#ordinary-devmap-broadcast-follow-up)
+for the assertion mapping and retained Rust guarantees.
+No production behaviour was changed for these testing slices.
 
 Build the binaries and fixtures as the invoking user:
 
@@ -1484,6 +1502,13 @@ tests, none failed or ignored. Both backend batches verified all 62 admitted
 scripts and empty final inventories/artifacts. The kernel stage took 1358.95 s
 (22m39s), compared with 1420.39 s (23m40s) at the preceding checkpoint. These are
 local run timings. Makefile lint and formatting of the new DSL sources passed.
+
+The ordinary broadcast follow-up passed the full `direnv exec . make rust-check`
+gate: formatting, Clippy, userspace/compile-fail contracts, documentation and all
+98 kernel tests, none failed or ignored. Each backend batch checked all 66 admitted
+scripts and empty final inventories/artifacts. The kernel stage took 1180.41 s
+(19m40s), compared with 1358.95 s (22m39s) at the CLI/delivery checkpoint. These are
+local timings, not a controlled benchmark. Makefile lint and DSL formatting passed.
 
 `make rust-test-unit` runs library and binary unit targets without integration
 targets or doctests. Its 92 tests reported approximately 0.60 seconds of aggregate

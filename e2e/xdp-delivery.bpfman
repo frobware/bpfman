@@ -273,3 +273,182 @@ def direct_delivery_behaviour(mode frame_size action_code) {
     direct_delivery_scenario $mode $size $action pass,dispatcher_return
     direct_delivery_scenario $mode $size $action $continuation
 }
+
+# Ordinary broadcast uses a fourth capture socket in the existing probe. Jumbo
+# cloning/error-observer coverage remains in Rust until its own migration slice.
+def broadcast_traffic(pair redirect tail errors ran_redirect ran_tail returned local sink0 sink1) {
+    let expected = jq fromjson "[${ran_redirect},${ran_tail},${returned},${local},${sink0},${sink1}]"
+    guard a <- delivery_stats $redirect
+    guard b <- delivery_stats $tail
+    guard error_before <- delivery_stats $errors
+    guard capture <- net exec $pair.a xdp-delivery-probe packets 64 sink1
+    let counts = $capture.stdout |> jq fromjson
+    assert ($counts |> jq length) == 4
+    foreach key in range 4 {
+        let delivery_key = $key + 2
+        assert $counts[$key] == $expected[$delivery_key]
+    }
+    guard after_a <- delivery_stats $redirect
+    guard after_b <- delivery_stats $tail
+    assert ($after_a[0] - $a[0]) == $expected[0]
+    assert ($after_b[1] - $b[1]) == $expected[1]
+    guard error_after <- delivery_stats $errors
+    foreach key in range 2 {
+        assert ($error_after[$key] - $error_before[$key]) == 0
+    }
+}
+
+def broadcast_entries(targets id) {
+    delivery_map_identity $targets $id
+    guard dump <- bpftool map dump pinned $targets -j
+    return $dump.stdout |> jq "fromjson | sort_by(.key) | tojson"
+}
+
+def broadcast_scenario(object mode flags returned) {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    let size = 64
+    delivery_network $pair $size
+    guard _ <- net exec $pair.a ip link add out1 type veth peer name sink1
+    guard _ <- net exec $pair.a ip link set out1 address 02:00:00:00:00:05 mtu 1500 up
+    guard _ <- net exec $pair.a ip link set sink1 address 02:00:00:00:00:06 mtu 1500 up
+    let netns = "/var/run/netns/${pair.a.ns}"
+    guard config_dir <- tempdir xdp-broadcast
+    defer exec rm -rf $config_dir.path
+    let config = "${config_dir.path}/bpfman.toml"
+    guard _ <- exec sh -c 'printf "[interfaces.in0]\nxdp_mode = \"%s\"\n" "$2" > "$1"' sh $config $mode
+    guard loaded <- bpfman program load file $object --programs xdp:devmap_delivery -g "devmap_flags=0x${u32le $flags}"
+    let redirect = $loaded.programs[0]
+    defer delivery_unload $redirect
+    let targets = "${redirect.record.handles.map_pin_path}/delivery_targets"
+    guard map_info <- bpftool map show pinned $targets -j
+    let target_id = $map_info.stdout |> jq "fromjson | .id"
+    let keys = $map_info.stdout |> jq 'fromjson | if .type == "devmap_hash" then [7,2147483649,4294967295] else [0,1,2] end'
+    assert ($map_info.stdout |> jq "fromjson | .max_entries") == 3
+    guard tail_load <- bpfman program load file testdata/bpf/xdp_delivery.bpf.o --programs xdp:delivery_tail
+    let tail = $tail_load.programs[0]
+    defer delivery_unload $tail
+    guard observer_load <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+    let observer = $observer_load.programs[0]
+    defer delivery_unload $observer
+    guard source_link <- bpfman link attach xdp $observer source0 --netns $netns --priority 50
+    defer bpfman link detach $source_link
+    guard sink0_link <- bpfman link attach xdp $observer sink0 --netns $netns --priority 50
+    defer bpfman link detach $sink0_link
+    guard sink1_link <- bpfman link attach xdp $observer sink1 --netns $netns --priority 50
+    defer bpfman link detach $sink1_link
+    guard first <- delivery_attach $redirect in0 $netns $config 50 pass,dispatcher_return
+    guard interface <- net exec $pair.a ip -j -d link show dev in0
+    let interface_info = $interface.stdout |> jq fromjson
+    let expected_mode = $mode |> jq 'if . == "skb" then 2 else 1 end'
+    assert $interface_info[0].xdp.attached[0].mode == $expected_mode
+    let ifindex = $interface_info[0].ifindex
+    # Keep the original zero-error evidence, filtered to this script's map and
+    # interface so other parallel packet tests cannot affect these counters.
+    guard format <- exec cat /sys/kernel/tracing/events/xdp/xdp_redirect_err/format
+    let fields = $format.stdout |> jq 'gsub("\\s"; "")'
+    foreach field in ["field:intifindex;offset:16;size:4;" "field:interr;offset:20;size:4;" "field:u32map_id;offset:28;size:4;"] {
+        assert contains $fields $field
+    }
+    guard error_load <- bpfman program load file testdata/bpf/xdp_redirect_error.bpf.o --programs tracepoint:redirect_error -g "selected_map_id=0x${u32le $target_id}" -g "selected_ifindex=0x${u32le $ifindex}"
+    let errors = $error_load.programs[0]
+    defer delivery_unload $errors
+    guard error_link <- bpfman link attach tracepoint $errors xdp/xdp_redirect_err
+    defer bpfman link detach $error_link
+    guard initial <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    let outer_id = $initial.runtime.kernel_link_id
+
+    # Absent lookup key 99 and PASS fallback do not change broadcast semantics:
+    # an empty map, or excluded ingress alone, consumes the frames.
+    broadcast_traffic $pair $redirect $tail $errors 3 0 0 0 0 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 $keys[0]
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 0 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $keys[1]
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out1 $keys[2]
+    guard entries <- broadcast_entries $targets $target_id
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 3 3
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $keys[1]
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 0 3
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $keys[2]
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 3 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $keys[2]
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out1 $keys[1]
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 0 3
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $keys[1]
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out1 $keys[2]
+    guard current_entries <- broadcast_entries $targets $target_id
+    assert $current_entries == $entries
+    guard unchanged <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert $unchanged.revision == $initial.revision
+
+    guard second <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+    guard chain <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert $chain.runtime.kernel_link_id == $outer_id
+    assert $chain.members[0].program_id == $redirect.record.program_id
+    assert $chain.members[1].program_id == $tail.record.program_id
+    guard current_entries <- broadcast_entries $targets $target_id
+    assert $current_entries == $entries
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 3 3
+    foreach key in $keys {
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $key
+    }
+    broadcast_traffic $pair $redirect $tail $errors 3 0 0 0 0 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 $keys[0]
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $keys[1]
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out1 $keys[2]
+
+    bpfman link detach $second.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $redirect.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    guard current_entries <- broadcast_entries $targets $target_id
+    assert $current_entries == $entries
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 3 3
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $keys[2]
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 3 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out1 $keys[2]
+    broadcast_traffic $pair $redirect $tail $errors 3 0 $returned 0 3 3
+    guard reattached <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+    bpfman link detach $first.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $tail.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    guard current_entries <- broadcast_entries $targets $target_id
+    assert $current_entries == $entries
+    broadcast_traffic $pair $redirect $tail $errors 0 3 0 0 0 0
+    bpfman link detach $reattached.record.id
+    assert fail bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    broadcast_traffic $pair $redirect $tail $errors 0 0 0 3 0 0
+
+    # Explicit REDIRECT continuation suppresses all copies, including with an
+    # empty map; exhausting the chain returns PASS, while a DROP tail stops it.
+    guard continuing <- delivery_attach $redirect in0 $netns $config 50 pass,redirect,dispatcher_return
+    broadcast_traffic $pair $redirect $tail $errors 3 0 0 3 0 0
+    guard stopping <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+    guard current_entries <- broadcast_entries $targets $target_id
+    assert $current_entries == $entries
+    broadcast_traffic $pair $redirect $tail $errors 3 3 0 0 0 0
+    foreach key in $keys {
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $key
+    }
+    broadcast_traffic $pair $redirect $tail $errors 3 3 0 0 0 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 $keys[0]
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $keys[1]
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out1 $keys[2]
+    bpfman link detach $stopping.record.id
+    broadcast_traffic $pair $redirect $tail $errors 3 0 0 3 0 0
+    bpfman link detach $continuing.record.id
+    assert fail bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    guard current_entries <- broadcast_entries $targets $target_id
+    assert $current_entries == $entries
+    broadcast_traffic $pair $redirect $tail $errors 0 0 0 3 0 0
+    bpfman program unload $redirect
+    assert not path-exists $targets
+}
+
+def broadcast_behaviour(object mode) {
+    broadcast_scenario $object $mode 8 3
+    broadcast_scenario $object $mode 24 0
+}
