@@ -52,6 +52,14 @@ impl Fixture {
     }
 
     fn run(&self, selected: Option<&Path>) -> std::io::Result<Output> {
+        self.run_implementation(selected, None)
+    }
+
+    fn run_implementation(
+        &self,
+        selected: Option<&Path>,
+        implementation: Option<&str>,
+    ) -> std::io::Result<Output> {
         let mut command = Command::new("make");
         command
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
@@ -59,6 +67,7 @@ impl Fixture {
             .arg(format!("BIN_DIR={}", self.go.display()))
             .env("BPFMAN_BIN", self.go.join("bpfman"))
             .env_remove("BPFMAN_UNDER_TEST")
+            .env_remove("BPFMAN_E2E_IMPLEMENTATION")
             .env_remove("E2E_SCRIPTS_TEST_BIN");
         let path = std::env::var_os("PATH").unwrap_or_default();
         let paths = std::iter::once(self.tools.clone()).chain(std::env::split_paths(&path));
@@ -69,6 +78,10 @@ impl Fixture {
 
         if let Some(binary) = selected {
             command.arg(format!("BPFMAN_UNDER_TEST={}", binary.display()));
+        }
+
+        if let Some(implementation) = implementation {
+            command.arg(format!("BPFMAN_E2E_IMPLEMENTATION={implementation}"));
         }
 
         command.output()
@@ -113,5 +126,31 @@ fn invalid_selection_fails_before_running_any_cli() -> Result {
         assert!(String::from_utf8_lossy(&output.stderr).contains(message));
     }
 
+    Ok(())
+}
+
+#[test]
+fn implementation_identity_is_explicit_and_invalid_values_fail_before_execution() -> Result {
+    let f = Fixture::new()?;
+    executable(
+        &f.go.join("e2e-scripts.test"),
+        "printf '%s' \"$BPFMAN_E2E_IMPLEMENTATION\"\n",
+    )?;
+    for (implementation, expected) in [(None, "go"), (Some("go"), "go"), (Some("rust"), "rust")] {
+        // A Rust-looking path does not change admission unless explicitly selected.
+        let output = f.run_implementation(Some(&f.rust.join("bpfman")), implementation)?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8(output.stdout)?, expected);
+    }
+    for implementation in ["", "Rust", "unknown"] {
+        let output = f.run_implementation(None, Some(implementation))?;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("must be go or rust"));
+    }
     Ok(())
 }

@@ -1,0 +1,9 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"devmap"}
+# Given: a private, pooled namespace and an explicit drv XDP dispatcher
+# When: DEVMAP forwarding, live updates and both survivor choices are exercised
+# Then: delivery, continuation, map identity and payload integrity are preserved
+
+import ../xdp-delivery.bpfman
+
+devmap_behaviour testdata/bpf/xdp_devmap.bpf.o drv 64

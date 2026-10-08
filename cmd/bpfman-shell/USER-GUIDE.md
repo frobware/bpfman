@@ -47,6 +47,12 @@ Script metadata labels can be listed without running scripts:
 bpfman-shell --list-scripts --selector 'program in (tc,xdp),external' e2e/scripts
 ```
 
+The e2e runner recognizes `#pragma labels={"rust-only":"true"}`. Such scripts
+run only with `BPFMAN_E2E_IMPLEMENTATION=rust`; the default Go run skips them even
+when its selector matches. `BPFMAN_UNDER_TEST` chooses the executable separately.
+This is runner admission policy, not new script syntax. Scripts remain parallel
+unless they explicitly request serial or exclusive scheduling.
+
 ## Mental Model
 
 A statement is either a bpfman-shell form or a command. Reserved words such as

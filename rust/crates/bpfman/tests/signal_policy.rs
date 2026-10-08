@@ -1,6 +1,11 @@
 //! Subprocess isolation keeps process-wide signal policy out of other tests.
 #![allow(clippy::expect_used)]
 
+#[path = "../src/error.rs"]
+mod error;
+#[path = "../src/signals.rs"]
+mod signals;
+
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, Command, Stdio},
@@ -24,7 +29,9 @@ fn signal_child() {
     if std::env::var_os("BPFMAN_SIGNAL_TEST_CHILD").is_none() {
         return;
     }
-    let shutdown = super::Shutdown::install().expect("handlers");
+    let shutdown = signals::Shutdown::install().expect("handlers");
+    let error: error::Error = std::io::Error::other("injected error").into();
+    assert_eq!(shutdown.exit_code(&error), std::process::ExitCode::FAILURE);
     println!("handlers ready");
     std::io::stdout().flush().expect("ready");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -47,7 +54,7 @@ fn second_signal_forces_exit() {
     ] {
         let mut process = Process(
             Command::new(std::env::current_exe().expect("test binary"))
-                .args(["--exact", "signals::tests::signal_child", "--nocapture"])
+                .args(["--exact", "signal_child", "--nocapture"])
                 .env("BPFMAN_SIGNAL_TEST_CHILD", "1")
                 .stdout(Stdio::piped())
                 .spawn()

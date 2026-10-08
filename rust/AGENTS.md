@@ -322,6 +322,13 @@ The architecture and compatibility goals are in
   Every new store backend must run the existing generic lifecycle, CLI, and DSL
   scenarios by changing backend selection in test setup. Add backend-specific
   tests only for its persistence guarantees; do not duplicate behavioural suites.
+- Put externally observable behavioural scenarios in `.bpfman` scripts, using
+  the existing Go corpus first. Add scripts for implemented gaps; reuse existing
+  syntax/helpers before introducing runner support. Keep Rust unit tests quick
+  and focused on internal validation and transitions. Filesystem, persistence,
+  process and kernel tests are integration contracts, not unit tests.
+- `rust-test-unit` runs library/binary unit targets without integration tests or
+  doctests. Keep process-wide signal fixtures in `tests/signal_policy.rs`.
 - Keep real-kernel tests for guarantees the fake cannot establish: verifier,
   syscalls, namespaces, traffic, and kernel lifetime semantics.
 - Reuse the unchanged `e2e/scripts/*.bpfman` corpus via the Go shell runner.
@@ -331,6 +338,12 @@ The architecture and compatibility goals are in
   only after execution against Rust with both stores. Preserve other labels and
   assertions. Use `BPFMAN_E2E_SCRIPT_SELECTOR='rust=ok,!external'` to batch the set
   through the existing Go runner and its pooled interfaces/parallel scheduler.
+  Rust-only scripts additionally declare `rust-only=true`; always select Rust
+  explicitly with `BPFMAN_E2E_IMPLEMENTATION=rust` alongside `BPFMAN_UNDER_TEST`.
+  The runner defaults to Go and skips Rust-only scripts even when selected.
+  `rust=ok,!rust-only,!external` selects shared parity; `rust=ok,!external`
+  selects all admitted Rust acceptance. The normal gate runs one batch per
+  backend, verifying every selected script passed and final residue is empty.
   Run backend batches sequentially because separate runners share a suite lock.
 - Make each vertical slice's supported command surface explicit. Unsupported
   commands and flags fail clearly; never invent successful observations for

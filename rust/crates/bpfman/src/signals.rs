@@ -107,6 +107,3 @@ impl Drop for Shutdown {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

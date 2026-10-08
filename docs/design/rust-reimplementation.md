@@ -118,11 +118,23 @@ automatically. Existing unicast, broadcast, and all sixteen array/hash egress su
 remain in that gate, including the four array-map jumbo rejection tests. Aya and
 Go's SQLite schema remain unchanged.
 
-The label-selected Go runner also passed all 42 `rust=ok` scripts in parallel
+Before the testing migration, the label-selected Go runner passed all 42 shared
+`rust=ok` scripts in parallel
 against Rust on each store: approximately 52 seconds for SQLite and 52 seconds
 for JSON, with backend batches run sequentially. Both final inventories and all
 managed artifact collections were empty. Script changes add only header labels;
 the assertions and existing scheduling pragmas are preserved.
+
+The testing migration checkpoint also passed `direnv exec . make rust-check`:
+formatting, Clippy, all userspace and compile-fail contracts, documentation, and
+98 real-kernel tests, with none failed or ignored. Individual script wrappers
+were replaced by two backend-wide batches, each checking all 50 admitted scripts
+and empty final inventories/artifact collections. The serial kernel suite took
+1420.39 seconds (23m40s), compared with 1834.78 seconds (30m35s) before migration.
+These are local checkpoint timings, not a controlled benchmark. The fast unit
+target separately passed 92 tests in 0.60 seconds of aggregate test execution.
+See the [migration audit](#testing-migration-audit-8-october-2026) for completed
+work and the remaining behavioural tests to move into scripts.
 
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
@@ -999,7 +1011,7 @@ Implementation and validation checkpoints:
    Direct adapter traffic and identity/failure tests remain separate coverage.
 5. Implemented: unchanged Go priority-ordering, slot-reuse, ten-slot capacity,
    configuration-after-detach, and default-proceed-on rebuild scripts run on
-   both stores in `rust-check`. The twelve-script `rust-test-xdp-corpus` target
+   both stores in `rust-check`. The batched `rust-test-scripts` gate
    also admits fill/drain/refill, ten-slot traffic, exact counters, proceed-on
    chains and encoding, priority-zero/name ordering, independent interfaces, and normal-MTU
 `xdp.frags` traffic.
@@ -1348,8 +1360,8 @@ may run them sequentially against copied state or isolated runtime roots.
 ### `bpfman-shell` as the parity harness
 
 The existing test DSL is a major part of the migration strategy, not merely a
-test suite to run at the end. The current corpus contains 131 `.bpfman`
-end-to-end scripts covering program and link lifecycles, dispatcher rebuilds,
+test suite to run at the end. The corpus contains 132 shared `.bpfman`
+end-to-end scripts plus eight Rust-only DEVMAP scripts covering program and link lifecycles, dispatcher rebuilds,
 ordering and proceed-on behaviour, map sharing, namespaces, OCI images, CLI
 errors, persistence, traffic, and cleanup.
 
@@ -1486,20 +1498,70 @@ for this migration.
 ### Compatibility and differential tests
 
 Prioritize binary behavior against the unchanged `.bpfman` corpus before expanding
-Rust-specific packet scenarios or tuning execution speed. At this checkpoint there
-are 132 scripts; 42 carry `#pragma labels={"rust":"ok"}`, matching the Rust kernel
-gate's current selection on both stores. The remaining 90 are unselected, not
-established failures. These labels are the parity manifest; add one only after the
-script passes against Rust with both SQLite and JSON in file-bytecode mode.
-Preserve existing scheduling labels and assertions. Record failures, unsupported
-capabilities and unavailable prerequisites without marking those scripts `rust=ok`.
+Rust-specific packet scenarios or tuning execution speed. There are 140 scripts:
+42 shared scripts and eight new Rust-only DEVMAP scripts carry `rust=ok`, admitting
+50 scripts against Rust on each store. The remaining 90 are unselected, not
+established failures. Add `rust=ok` only after the script passes against Rust with
+both SQLite and JSON in file-bytecode mode. Preserve existing assertions and
+scheduling labels.
 
-Run admitted scripts in batched Go-runner invocations, one backend batch at a time.
-Reuse its pooled interface leases, parallel scheduler, serial/exclusive pragmas,
-cleanup and failure reporting. Select the Rust binary with `BPFMAN_UNDER_TEST`;
-preserve the script assertions. A direct Rust library test complements this
-binary-behavior contract but does not establish script parity. Measure matching
-Go/Rust scripts once this acceptance path is in place.
+Rust-only scripts additionally carry `#pragma labels={"rust-only":"true"}`.
+`BPFMAN_E2E_IMPLEMENTATION=rust` admits them; the default `go` skips them regardless
+of selector. The explicit implementation setting is independent of binary path
+selection via `BPFMAN_UNDER_TEST`. Shared parity is selected with
+`rust=ok,!rust-only,!external`; all admitted Rust acceptance uses
+`rust=ok,!external`. Rust-only scripts cover already implemented Rust behaviour;
+they do not establish Go parity or, by their label alone, show that Go cannot
+support the same scenario.
+
+The normal gate now runs one parallel Go-runner batch per backend, replacing the
+individual script launches in serial Rust wrappers. Backend batches remain
+sequential because separate runners hold the shared suite lock. Each batch
+checks a nonempty manifest, a PASS for every selected script, empty final
+inventories and no managed artifacts. The existing interface pool, scheduler,
+serial/exclusive pragmas, cleanup and failure reporting remain authoritative.
+
+### Testing migration audit (8 October 2026)
+
+Externally observable behaviour belongs in `.bpfman` scripts. Existing corpus
+coverage comes first; new scripts fill gaps in implemented functionality. Reuse
+existing syntax and helpers before adding specific runner support. Unit tests
+remain valuable for small internal decisions and must be quick. Integration
+contracts that perform I/O or need internal failure injection remain distinct
+from unit tests, even when they run without root.
+
+The test-target inventory across the new workspace has been reviewed by family:
+
+| Existing tests | Destination and current status |
+| --- | --- |
+| Model validation, XDP/TC ABI, core transitions, CLI parsing and output formatting | Keep fast Rust unit tests. `rust-test-unit` runs library/binary unit targets; 92 tests reported 0.60 s aggregate execution, excluding build/startup. |
+| Workspace laws and compile-fail ownership/confinement examples | Keep Rust architecture/type contracts; separate from the fast unit target. |
+| Runtime load, compensation, store, link, XDP and unload unit modules; `kernel_lifecycle` and `tests/lifecycle/*` | Keep internal failure-injection and ownership contracts. Real store/file effects make these integration contracts where applicable; do not duplicate their ordinary external outcomes as packet matrices. |
+| Filesystem layout/directory/artifacts/unload/snapshot and flock tests | Keep adapter contracts for descriptor confinement, replacement races and process locks. Filesystem/process timing is not unit-test execution. |
+| SQLite/JSON adapter tests and shared store/link/XDP/TC/concurrent-store contracts | Keep atomicity, version, receipt and persistence-format integration contracts. Shared CLI behaviour belongs in scripts. |
+| Existing tracepoint/XDP/TC DSL wrappers and XDP/TC corpus modules | Migrated to two backend-wide parallel script batches; obsolete wrappers removed. All 42 existing script bodies are unchanged. |
+| DEVMAP/DEVMAP_HASH unicast packet scenarios | Forwarding, fallback, continuation, live updates, both survivors, payload/fragment evidence and map identity moved to eight parallel Rust-only scripts. Rust retains publication-failure restoration and adapter-lifetime checks. Both stores passed. |
+| Process-signal policy formerly under the CLI unit module | Moved to `tests/signal_policy.rs`; still runs in the normal userspace integration gate. Deterministic in-flight/second-signal mechanics need internal access. |
+| `cli`, `load`, `unload`, `signals`, `telemetry`, `cancellation`, `kernel_observations`, `sqlite_compatibility`, `e2e_selection` integration targets | Review each remaining public CLI scenario against existing scripts, then migrate uncovered behaviour. Retain internal/process, cross-implementation persistence and wiring contracts separately. Migration is pending. |
+| Real-kernel CLI/batch/TC CLI helpers and normal lifecycle paths mixed with faults | Reuse the admitted corpus first, extract any missing public assertions, then remove duplicate successful paths. Keep injected failures, cancellation and retained receipts. Remaining extraction is pending. |
+| XDP attach/switch/runtime/unload/netns, jumbo fragments, TX/direct REDIRECT, broadcast and egress modules; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
+
+This is the first completed migration slice, not a claim that all Rust behavioural
+tests have moved. Next: match the remaining CLI scenarios to the corpus, then
+migrate TX/direct REDIRECT, jumbo forwarding, broadcast and egress using the same
+runner. No new bpfman functionality is needed for that migration.
+
+A representative pre-migration DEVMAP test took 40.83 s and performed 88 captures.
+Its 300 ms observation windows alone accounted for 26.4 s. The shared helper sends
+three marked frames per wave, checks source/local/redirected delivery, detects
+duplicates and payload damage, and checks fragment reads through BPF counters.
+The new scripts share the setup for both survivor choices; Rust retains just the
+two post-failure packet checks per scenario. Observation windows have not been
+shortened. The eight scripts passed together in about 40 s per backend.
+
+A matching XDP fill/drain/refill script took 10.95 s with Go, 14.26 s with Rust
+debug and 9.02 s with Rust release. These are single samples, not a benchmark;
+compare optimized binaries before attributing debug-suite time to the language.
 
 Golden fixtures should cover:
 
@@ -1745,9 +1807,8 @@ Its first native egress update initializes compatible hash ownership on Linux
 6.18.54; the array-map Aya boundary remains unchanged. Physical NIC packet
 execution and actual hardware offload remain unverified. TC ingress now has a
 complete one-to-ten-member ingress replacement lifecycle with attached-program
-unload. The next slice grows the `rust=ok` script set and makes batched Go-runner
-acceptance the normal binary-behavior gate; corpus gaps then determine the next
-capability work.
+unload. Batched Go-runner acceptance is now the normal binary-behavior gate. The testing
+audit tracks remaining behavioural migration; corpus gaps determine capability work.
 
 
 TC ingress uses Go's 84-byte `CONFIG` ABI and a separate unpinned native TC verifier

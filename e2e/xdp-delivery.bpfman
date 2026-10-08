@@ -1,0 +1,196 @@
+# -*- mode: bpfman -*-
+# Shared packet-path assertions. Each caller owns a pooled, private namespace;
+# fixed interface names below are local to that namespace and safe in parallel.
+
+def delivery_network(pair size) {
+    let mtu = $size |> jq "if . == 64 then 1500 else 9000 end"
+    guard _ <- net exec $pair.a ip link add in0 type veth peer name source0
+    guard _ <- net exec $pair.a ip link add out0 type veth peer name sink0
+    foreach name in [source0 in0 sink0 out0] {
+        guard _ <- net exec $pair.a ip link set dev $name mtu $mtu up
+    }
+    guard _ <- net exec $pair.a ip link set source0 address 02:00:00:00:00:01
+    guard _ <- net exec $pair.a ip link set in0 address 02:00:00:00:00:02
+    guard _ <- net exec $pair.a ip link set sink0 address 02:00:00:00:00:03
+    guard _ <- net exec $pair.a ip link set out0 address 02:00:00:00:00:04
+}
+
+def delivery_stats(prog) {
+    guard dump <- bpftool map dump pinned "${prog.record.handles.map_pin_path}/delivery_stats" -j
+    return $dump.stdout |> jq "fromjson | sort_by(.formatted.key) | map([.formatted.values[].value | tonumber] | add)"
+}
+
+def delivery_observer_stats(prog size) {
+    if $size == 64 {
+        return []
+    }
+    guard counters <- delivery_stats $prog
+    return $counters
+}
+
+def delivery_traffic(pair size redirect tail observer ran_redirect ran_tail returned local forwarded) {
+    let expected = jq fromjson "[${ran_redirect},${ran_tail},${returned},${local},${forwarded}]"
+    guard a <- delivery_stats $redirect
+    guard b <- delivery_stats $tail
+    guard c <- delivery_observer_stats $observer $size
+    guard capture <- net exec $pair.a xdp-delivery-probe packets $size
+    let counts = $capture.stdout |> jq fromjson
+    assert $counts[0] == $expected[2]
+    assert $counts[1] == $expected[3]
+    assert $counts[2] == $expected[4]
+    guard after_a <- delivery_stats $redirect
+    guard after_b <- delivery_stats $tail
+    guard after_c <- delivery_observer_stats $observer $size
+    # Multi-buffer counters also prove non-linear input and intact tail bytes.
+    if $size == 64 {
+        assert ($after_a[0] - $a[0]) == $expected[0]
+        assert ($after_b[1] - $b[1]) == $expected[1]
+    } else {
+        foreach key in range 4 {
+            assert ($after_a[$key] - $a[$key]) == $expected[0]
+            let tail_key = $key + 4
+            assert ($after_b[$tail_key] - $b[$tail_key]) == $expected[1]
+            assert ($after_c[$key] - $c[$key]) == ($expected[2] + $expected[4])
+        }
+    }
+}
+
+def delivery_attach(prog iface netns config priority proceed) {
+    # Per-script configuration selects the actual driver/SKB mode. Using the
+    # external CLI here also exercises its global --config option.
+    guard result <- exec bpfman --config $config link attach xdp $prog.record.program_id $iface --netns $netns --priority $priority --proceed-on $proceed -o json
+    return $result.stdout |> jq fromjson
+}
+
+def delivery_map_identity(pin expected) {
+    guard info <- bpftool map show pinned $pin -j
+    assert ($info.stdout |> jq "fromjson | .id") == $expected
+}
+
+def delivery_unload(prog) {
+    if path-exists $prog.record.handles.pin_path {
+        bpfman program unload $prog
+    }
+}
+
+def devmap_scenario(object mode size fallback proceed) {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    delivery_network $pair $size
+    let netns = "/var/run/netns/${pair.a.ns}"
+    guard config_dir <- tempdir xdp-delivery
+    defer exec rm -rf $config_dir.path
+    let config = "${config_dir.path}/bpfman.toml"
+    guard _ <- exec sh -c 'printf "[interfaces.in0]\nxdp_mode = \"%s\"\n" "$2" > "$1"' sh $config $mode
+
+    guard loaded <- bpfman program load file $object --programs xdp:devmap_delivery -g "devmap_fallback=0x${u32le $fallback}"
+    let redirect = $loaded.programs[0]
+    defer delivery_unload $redirect
+    let targets = "${redirect.record.handles.map_pin_path}/delivery_targets"
+    guard map_info <- bpftool map show pinned $targets -j
+    let target_id = $map_info.stdout |> jq "fromjson | .id"
+    let hash = ($map_info.stdout |> jq "fromjson | .type") == devmap_hash
+    let key = $hash |> jq "if . then 2147483649 else 0 end"
+    if $hash {
+        assert ($map_info.stdout |> jq "fromjson | .max_entries") == 2
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 4294967295
+    }
+    let delivery_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_delivery.bpf.o" else "testdata/bpf/xdp_delivery_frags.bpf.o" end'
+    guard tail_load <- bpfman program load file $delivery_object --programs xdp:delivery_tail
+    let tail = $tail_load.programs[0]
+    defer bpfman program unload $tail
+    let observer_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_pass.bpf.o" else "testdata/bpf/xdp_delivery_frags.bpf.o" end'
+    let observer_symbol = $size |> jq 'if . == 64 then "pass" else "delivery_observer" end'
+    guard observer_load <- bpfman program load file $observer_object --programs "xdp:${observer_symbol}"
+    let observer = $observer_load.programs[0]
+    defer bpfman program unload $observer
+    guard source_link <- bpfman link attach xdp $observer source0 --netns $netns --priority 50
+    defer bpfman link detach $source_link
+    guard sink_link <- bpfman link attach xdp $observer sink0 --netns $netns --priority 50
+    defer bpfman link detach $sink_link
+    guard first <- delivery_attach $redirect in0 $netns $config 50 $proceed
+    # Unload is registered before attach: it also cleans attached members if an
+    # assertion fails. Successful paths detach explicitly and check the result.
+    guard interface <- net exec $pair.a ip -j -d link show dev in0
+    let interface_info = $interface.stdout |> jq fromjson
+    let expected_mode = $mode |> jq 'if . == "skb" then 2 else 1 end'
+    assert $interface_info[0].xdp.attached[0].mode == $expected_mode
+    let ifindex = $interface_info[0].ifindex
+    guard initial <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    let outer_id = $initial.runtime.kernel_link_id
+    let local_fallback = $fallback |> jq "if . == 2 then 3 else 0 end"
+    let continues = $proceed == "pass,redirect,dispatcher_return"
+    let local_single = $continues |> jq "if . then 3 else 0 end"
+    let forwarded = $continues |> jq "if . then 0 else 3 end"
+    let returned = $forwarded
+    let tail_ran = $local_single
+    delivery_traffic $pair $size $redirect $tail $observer 3 0 0 $local_fallback 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $key
+    if $hash {
+        # Capacity counts entries, not the numeric key range.
+        let full <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 7
+        assert not $full.ok
+        assert contains $full.stderr "argument list too long"
+    }
+    delivery_traffic $pair $size $redirect $tail $observer 3 0 0 $local_single $forwarded
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 $key
+    delivery_traffic $pair $size $redirect $tail $observer 3 0 $returned $local_single 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $key
+    guard unchanged <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert $unchanged.revision == $initial.revision
+
+    guard second <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+    guard chain <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert $chain.runtime.kernel_link_id == $outer_id
+    assert $chain.members[0].program_id == $redirect.record.program_id
+    assert $chain.members[1].program_id == $tail.record.program_id
+    delivery_map_identity $targets $target_id
+    delivery_traffic $pair $size $redirect $tail $observer 3 $tail_ran 0 0 $forwarded
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $key
+    let fallback_tail = $local_fallback
+    delivery_traffic $pair $size $redirect $tail $observer 3 $fallback_tail 0 0 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 $key
+    delivery_traffic $pair $size $redirect $tail $observer 3 $tail_ran $returned 0 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $key
+
+    # Exercise both survivor choices on this chain instead of repeating the
+    # identical forwarding/update preamble for each choice.
+    bpfman link detach $second.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $redirect.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    delivery_map_identity $targets $target_id
+    delivery_traffic $pair $size $redirect $tail $observer 3 0 0 $local_single $forwarded
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $key
+    delivery_traffic $pair $size $redirect $tail $observer 3 0 0 $local_fallback 0
+    guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $key
+    delivery_traffic $pair $size $redirect $tail $observer 3 0 0 $local_single $forwarded
+    guard reattached <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+    bpfman link detach $first.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $tail.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    delivery_map_identity $targets $target_id
+    delivery_traffic $pair $size $redirect $tail $observer 0 3 0 0 0
+    bpfman link detach $reattached.record.id
+    assert fail bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    delivery_map_identity $targets $target_id
+    delivery_traffic $pair $size $redirect $tail $observer 0 0 0 3 0
+    if $hash {
+        guard entries <- bpftool map dump pinned $targets -j
+        assert ($entries.stdout |> jq "fromjson | length") == 2
+    }
+    bpfman program unload $redirect
+    assert not path-exists $targets
+}
+
+def devmap_behaviour(object mode frame_size) {
+    let size = $frame_size |> jq tonumber
+    foreach fallback in [1 2] {
+        foreach proceed in ["pass,dispatcher_return" "pass,redirect,dispatcher_return"] {
+            devmap_scenario $object $mode $size $fallback $proceed
+        }
+    }
+}

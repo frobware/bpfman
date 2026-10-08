@@ -48,16 +48,6 @@ fn sqlite_go_interoperability() {
 }
 
 #[test]
-fn sqlite_unchanged_tracepoint_dsl() {
-    cli::dsl("sqlite", "TestTracepoint_LoadAndGet");
-}
-
-#[test]
-fn json_unchanged_tracepoint_dsl() {
-    cli::dsl("json", "TestTracepoint_LoadAndGet");
-}
-
-#[test]
 fn sqlite_cancellation_boundaries() {
     cancellation::exercise(bpfman_store_sqlite::Backend);
 }
@@ -78,16 +68,6 @@ fn json_tracepoint_attachment_lifecycle() {
 }
 
 #[test]
-fn sqlite_unchanged_tracepoint_dsl_link_round_trip() {
-    cli::dsl("sqlite", "TestTracepoint_LinkRoundTrip");
-}
-
-#[test]
-fn json_unchanged_tracepoint_dsl_link_round_trip() {
-    cli::dsl("json", "TestTracepoint_LinkRoundTrip");
-}
-
-#[test]
 fn sqlite_attached_unload_failures_and_cancellation() {
     attached::exercise(bpfman_store_sqlite::Backend);
 }
@@ -95,16 +75,6 @@ fn sqlite_attached_unload_failures_and_cancellation() {
 #[test]
 fn json_attached_unload_failures_and_cancellation() {
     attached::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
-fn sqlite_unchanged_tracepoint_dsl_unload_attached() {
-    cli::dsl("sqlite", "TestTracepoint_UnloadAttached");
-}
-
-#[test]
-fn json_unchanged_tracepoint_dsl_unload_attached() {
-    cli::dsl("json", "TestTracepoint_UnloadAttached");
 }
 
 #[test]
@@ -143,16 +113,6 @@ fn json_batch_lifecycle() {
 }
 
 #[test]
-fn sqlite_unchanged_tracepoint_dsl_batch() {
-    cli::dsl("sqlite", "TestMultiProgTracepoint_LoadAttachDetachUnload");
-}
-
-#[test]
-fn json_unchanged_tracepoint_dsl_batch() {
-    cli::dsl("json", "TestMultiProgTracepoint_LoadAttachDetachUnload");
-}
-
-#[test]
 fn sqlite_batch_cli() {
     batch::cli("sqlite");
 }
@@ -173,30 +133,6 @@ fn sqlite_xdp_load_lifecycle() {
 #[test]
 fn json_xdp_load_lifecycle() {
     xdp::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
-fn sqlite_unchanged_xdp_load_dsl() {
-    cli::dsl("sqlite", "TestXDP_LoadAndGet");
-    cli::dsl("sqlite", "TestLoad_NamedProgramSkipsBrokenSibling");
-}
-
-#[test]
-fn json_unchanged_xdp_load_dsl() {
-    cli::dsl("json", "TestXDP_LoadAndGet");
-    cli::dsl("json", "TestLoad_NamedProgramSkipsBrokenSibling");
-}
-
-#[test]
-fn sqlite_unchanged_xdp_attach_dsl() {
-    cli::dsl("sqlite", "TestXDP_LinkRoundTrip");
-    cli::dsl("sqlite", "TestDispatcher_LifecycleAfterLastDetachXDP");
-}
-
-#[test]
-fn json_unchanged_xdp_attach_dsl() {
-    cli::dsl("json", "TestXDP_LinkRoundTrip");
-    cli::dsl("json", "TestDispatcher_LifecycleAfterLastDetachXDP");
 }
 
 #[path = "kernel/xdp_attach.rs"]
@@ -238,28 +174,6 @@ fn json_xdp_runtime_replacement() {
     xdp_runtime::exercise(bpfman_store_json::Backend, "json");
 }
 
-fn xdp_replacement_dsl(store: &'static str) {
-    for script in [
-        "TestDispatcher_PriorityOrderingXDP",
-        "TestDispatcher_SlotReusedAfterDetachXDP",
-        "TestDispatcher_AttachExceedsMaxProgramsXDP",
-        "TestXDP_DefaultProceedOnRebuild",
-        "TestXDP_DispatcherConfigAfterDetach",
-    ] {
-        cli::dsl(store, script);
-    }
-}
-
-#[test]
-fn sqlite_unchanged_xdp_replacement_dsl() {
-    xdp_replacement_dsl("sqlite");
-}
-
-#[test]
-fn json_unchanged_xdp_replacement_dsl() {
-    xdp_replacement_dsl("json");
-}
-
 #[path = "kernel/xdp_unload.rs"]
 mod xdp_unload;
 
@@ -271,39 +185,6 @@ fn sqlite_xdp_unload_lifecycle() {
 #[test]
 fn json_xdp_unload_lifecycle() {
     xdp_unload::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
-fn sqlite_unchanged_xdp_unload_dsl() {
-    cli::dsl("sqlite", "TestXDP_UnloadDispatcherMemberRebuildsSurvivor");
-}
-
-#[test]
-fn json_unchanged_xdp_unload_dsl() {
-    cli::dsl("json", "TestXDP_UnloadDispatcherMemberRebuildsSurvivor");
-}
-
-#[path = "kernel/xdp_corpus.rs"]
-mod xdp_corpus;
-
-#[test]
-fn sqlite_xdp_netns_round_trip() {
-    cli::dsl("sqlite", "TestXDP_NetnsVethPairLinkRoundTrip");
-}
-
-#[test]
-fn json_xdp_netns_round_trip() {
-    cli::dsl("json", "TestXDP_NetnsVethPairLinkRoundTrip");
-}
-
-#[test]
-fn sqlite_xdp_netns_rebuild() {
-    cli::dsl("sqlite", "TestXDP_NetnsDispatcherRebuild");
-}
-
-#[test]
-fn json_xdp_netns_rebuild() {
-    cli::dsl("json", "TestXDP_NetnsDispatcherRebuild");
 }
 
 #[path = "kernel/xdp_netns.rs"]
@@ -797,26 +678,6 @@ fn json_tc_ingress_cli() {
     tc::cli("json");
 }
 
-#[test]
-fn sqlite_tc_ingress_unchanged_load_dsl() {
-    cli::dsl("sqlite", "TestTC_LoadAndGet");
-}
-
-#[test]
-fn json_tc_ingress_unchanged_load_dsl() {
-    cli::dsl("json", "TestTC_LoadAndGet");
-}
-
-#[test]
-fn sqlite_tc_ingress_unchanged_attach_dsl() {
-    cli::dsl("sqlite", "TestTC_LinkRoundTrip");
-}
-
-#[test]
-fn json_tc_ingress_unchanged_attach_dsl() {
-    cli::dsl("json", "TestTC_LinkRoundTrip");
-}
-
 #[path = "kernel/tc_unload.rs"]
 mod tc_unload;
 
@@ -830,8 +691,6 @@ fn json_tc_ingress_attached_unload() {
     tc_unload::exercise(bpfman_store_json::Backend);
 }
 
-#[path = "kernel/tc_corpus.rs"]
-mod tc_corpus;
 #[path = "kernel/tc_replace.rs"]
 mod tc_replace;
 
@@ -843,4 +702,14 @@ fn sqlite_tc_ingress_replacement() {
 #[test]
 fn json_tc_ingress_replacement() {
     tc_replace::exercise(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_script_corpus() {
+    cli::corpus("sqlite");
+}
+
+#[test]
+fn json_script_corpus() {
+    cli::corpus("json");
 }

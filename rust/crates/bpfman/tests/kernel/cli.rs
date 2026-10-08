@@ -245,18 +245,18 @@ pub(super) fn behaviour(store: &'static str) {
     c.no_artifacts();
 }
 
-pub(super) fn dsl(store: &'static str, script: &str) {
-    run_dsl(store, script, &rust());
-}
-
 pub(super) fn go_dsl(script: &str) {
     let binary = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin/bpfman"));
-    run_dsl("sqlite", script, &binary);
+    run_dsl("sqlite", Some(script), &binary);
 }
 
-fn run_dsl(store: &'static str, script: &str, binary: &std::path::Path) {
+pub(super) fn corpus(store: &'static str) {
+    run_dsl(store, None, &rust());
+}
+
+fn run_dsl(store: &'static str, script: Option<&str>, binary: &std::path::Path) {
     let c = Context::with_store(store);
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -264,14 +264,57 @@ fn run_dsl(store: &'static str, script: &str, binary: &std::path::Path) {
     let shell_dir = std::env::var_os("BPFMAN_SHELL_BIN_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin"));
+    let selector = if script.is_some() {
+        "!external"
+    } else {
+        "rust=ok,!external"
+    };
+    let expected = if let Some(script) = script {
+        vec![format!("{script}.bpfman")]
+    } else {
+        let listing = Command::new(shell_dir.join("bpfman-shell"))
+            .args(["--list-scripts", "--selector", selector, "e2e/scripts"])
+            .current_dir(repository())
+            .output()
+            .expect("script manifest");
+        assert!(
+            listing.status.success(),
+            "{}",
+            String::from_utf8_lossy(&listing.stderr)
+        );
+        String::from_utf8(listing.stdout)
+            .expect("script paths")
+            .lines()
+            .map(|path| {
+                std::path::Path::new(path)
+                    .file_name()
+                    .expect("script name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect()
+    };
+    assert!(
+        !expected.is_empty(),
+        "script acceptance must not select an empty corpus"
+    );
+    let filter = script.map_or_else(
+        || "TestBPFManScripts".to_owned(),
+        |name| format!("TestBPFManScripts/scripts/{name}[.]bpfman$"),
+    );
     let output = Command::new("timeout")
-        .arg("180s")
+        .arg("300s")
         .arg("make")
         .arg("run-e2e-scripts")
         .arg(format!("BPFMAN_UNDER_TEST={}", binary.display()))
+        .arg(format!(
+            "BPFMAN_E2E_IMPLEMENTATION={}",
+            if binary == rust() { "rust" } else { "go" }
+        ))
         .arg(format!("E2E_SCRIPTS_TEST_BIN={}", runner.display()))
         .arg(format!("BIN_DIR={}", shell_dir.display()))
-        .arg(format!("TEST=TestBPFManScripts/scripts/{script}[.]bpfman$"))
+        .arg(format!("TEST={filter}"))
+        .arg(format!("BPFMAN_E2E_SCRIPT_SELECTOR={selector}"))
         .env("BPFMAN_RUNTIME_DIR", c.layout.root())
         .env("BPFMAN_STORE", store)
         .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
@@ -289,12 +332,14 @@ fn run_dsl(store: &'static str, script: &str, binary: &std::path::Path) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains(&format!(
-            "--- PASS: TestBPFManScripts/scripts/{script}.bpfman"
-        )),
-        "must execute the selected script"
-    );
+    for script in expected {
+        assert!(
+            String::from_utf8_lossy(&output.stdout)
+                .contains(&format!("--- PASS: TestBPFManScripts/scripts/{script} (")),
+            "must execute selected script {script}: {}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+    }
     assert_eq!(
         c.json(binary, &["program", "list", "-o", "json"])["programs"],
         serde_json::json!([])

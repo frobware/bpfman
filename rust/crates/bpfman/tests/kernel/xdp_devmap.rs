@@ -1,4 +1,5 @@
-//! DEVMAP/DEVMAP_HASH forwarding and pinned map lifetime across dispatcher revisions.
+//! DEVMAP publication-failure restoration with real packet and map-lifetime evidence.
+//! Ordinary forwarding/update/survivor behaviour lives in e2e/xdp-delivery.bpfman.
 #![allow(clippy::panic)]
 
 use super::{
@@ -226,10 +227,6 @@ impl Targets {
         index
     }
 
-    fn delete(&self, network: &Network) {
-        self.delete_at(network, self.key);
-    }
-
     pub(super) fn delete_at(&self, network: &Network, key: u32) {
         network.probe(&[
             "devmap-delete",
@@ -436,11 +433,9 @@ fn scenario<S>(
     };
     let old = app.get_xdp_dispatcher(details.key).expect("snapshot");
     let outer_id = old.members()[0].outer_link_id;
-    let missing_delivery = if fallback == 2 { [0, 3, 0] } else { [0, 0, 0] };
     let single_delivery = if proceed { [0, 3, 0] } else { [0, 0, 3] };
     let chain_delivery = if proceed { [0, 0, 0] } else { [0, 0, 3] };
     let chain_execution = [3, if proceed { 3 } else { 0 }];
-    traffic([3, 0], missing_delivery);
 
     let out_index = targets.set(&network, "out0");
     check(Some(out_index));
@@ -462,16 +457,6 @@ fn scenario<S>(
         targets.check_at(7, None);
         check(Some(out_index));
     }
-    traffic([3, 0], single_delivery);
-    // The next packet must use a live map update without rebuilding the dispatcher.
-    targets.set(&network, "in0");
-    traffic([3, 0], if proceed { [0, 3, 0] } else { [3, 0, 0] });
-    targets.set(&network, "out0");
-    assert_eq!(
-        app.get_xdp_dispatcher(details.key).expect("same revision"),
-        old
-    );
-
     faults.set(Some(Point::XdpReplace));
     let error = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
@@ -498,16 +483,6 @@ fn scenario<S>(
     );
     assert_eq!(chain.members()[0].outer_link_id, outer_id);
     check(Some(out_index));
-    traffic(chain_execution, chain_delivery);
-
-    targets.delete(&network);
-    check(None);
-    // PASS fallback reaches the tail; DROP fallback stops before it.
-    traffic([3, if fallback == 2 { 3 } else { 0 }], [0, 0, 0]);
-    targets.set(&network, "in0");
-    traffic(chain_execution, if proceed { [0, 0, 0] } else { [3, 0, 0] });
-    targets.set(&network, "out0");
-
     let (removed, survivor) = if keep_redirect {
         (second.id, first.id)
     } else {
@@ -534,20 +509,9 @@ fn scenario<S>(
     assert_eq!(remaining.members()[0].member.id, survivor);
     assert_eq!(remaining.members()[0].outer_link_id, outer_id);
     check(Some(out_index));
-    if keep_redirect {
-        traffic([3, 0], single_delivery);
-        targets.delete(&network);
-        check(None);
-        traffic([3, 0], missing_delivery);
-        targets.set(&network, "out0");
-        traffic([3, 0], single_delivery);
-    } else {
-        traffic([0, 3], [0, 0, 0]);
-    }
     app.detach_xdp(survivor).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
     check(Some(out_index));
-    traffic([0, 0], [0, 3, 0]);
 
     for id in observers {
         app.detach_xdp(id).expect("remove receiving peer");

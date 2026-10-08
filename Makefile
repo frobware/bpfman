@@ -54,6 +54,7 @@ RUST_MANIFEST := rust/Cargo.toml
 # contrib/emacs/syntax-gallery.bpfman is deliberately non-canonical.
 BPFMAN_SHELL_FORMAT_SOURCES := \
 	e2e/lib.bpfman \
+	e2e/xdp-delivery.bpfman \
 	$(wildcard e2e/scripts/*.bpfman) \
 	cmd/bpfman-shell/shell/lower/testdata/language.bpfman \
 	cmd/bpfman-shell/shell/lower/testdata/language-lib.bpfman
@@ -936,6 +937,8 @@ E2E_SCRIPTS_TEST_BIN := $(BIN_DIR)/e2e-scripts.test
 # Both the typed shell builtin and raw `exec bpfman` must reach this binary.
 # Use a path to an executable named bpfman, not a command with arguments.
 BPFMAN_UNDER_TEST ?= $(BIN_DIR)/bpfman
+# Explicit identity for rust-only script admission; never infer it from a path.
+BPFMAN_E2E_IMPLEMENTATION ?= go
 E2E_SCRIPTS_TEST_PKG := github.com/bpfman/bpfman/e2e/scriptrunner
 E2E_IMAGE_NO_VERIFY_CONFIG := $(abspath e2e/config/no-signature-verification.toml)
 BPFMAN_RUNTIME_DIR ?=
@@ -979,6 +982,7 @@ E2E_SCRIPTS_FORWARD_VARS := \
 	BPFMAN_E2E_BYTECODE_SOURCE \
 	BPFMAN_E2E_CLSACT_RECLAIM \
 	BPFMAN_E2E_IMAGE_REGISTRY \
+	BPFMAN_E2E_IMPLEMENTATION \
 	BPFMAN_E2E_POLICY_RULE_PREF \
 	BPFMAN_E2E_SCRIPT_REPEATS \
 	BPFMAN_E2E_SCRIPT_SELECTOR \
@@ -1010,7 +1014,7 @@ bpfman-shell-fmt: bpfman-shell-compile
 	done
 
 .PHONY: build-e2e-scripts
-build-e2e-scripts: bpfman-compile bpfman-shell-compile $(E2E_SCRIPTS_TEST_BIN)
+build-e2e-scripts: bpfman-compile bpfman-shell-compile $(E2E_SCRIPTS_TEST_BIN) $(BIN_DIR)/xdp-delivery-probe
 
 # PATH is arranged via `sudo env PATH=...` so the script test
 # binary can resolve bpfman-shell regardless of how sudo's
@@ -1021,6 +1025,7 @@ build-e2e-scripts: bpfman-compile bpfman-shell-compile $(E2E_SCRIPTS_TEST_BIN)
 # whatever PATH it inherits; no in-code path manipulation.
 .PHONY: run-e2e-scripts
 run-e2e-scripts:
+	@test "$(BPFMAN_E2E_IMPLEMENTATION)" = go -o "$(BPFMAN_E2E_IMPLEMENTATION)" = rust || { echo "BPFMAN_E2E_IMPLEMENTATION must be go or rust" >&2; exit 1; }
 	@test "$(notdir $(BPFMAN_UNDER_TEST))" = bpfman || { echo "BPFMAN_UNDER_TEST must name an executable called bpfman" >&2; exit 1; }
 	@test -x "$(abspath $(BPFMAN_UNDER_TEST))" || { echo "BPFMAN_UNDER_TEST is not executable: $(abspath $(BPFMAN_UNDER_TEST))" >&2; exit 1; }
 	sudo env PATH="$(patsubst %/,%,$(dir $(abspath $(BPFMAN_UNDER_TEST)))):$(abspath $(BIN_DIR)):$$PATH" \
@@ -1059,7 +1064,12 @@ $(BIN_DIR)/xdp-delivery-probe: e2e/testdata/xdp-delivery/main.go go.mod go.sum |
 rust-test: rust-test-userspace e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER)
 
-# Fail cheap admission/persistence contracts before the long serial packet suite.
+# Fail cheap admission/persistence contracts before privileged integration tests.
+# Unit tests exclude integration targets, doctests and process-signal fixtures.
+.PHONY: rust-test-unit
+rust-test-unit: $(RUST_DISPATCHER)
+	cargo test --manifest-path $(RUST_MANIFEST) --workspace --lib --bins --locked
+
 .PHONY: rust-test-userspace
 rust-test-userspace: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) sh rust/test-userspace.sh $(RUST_MANIFEST)
@@ -1876,9 +1886,14 @@ ci-test-e2e-grpc:
 ci: ci-check-vendor ci-check-fmt ci-check-goimports ci-check-vet ci-check-gofix ci-check-bpfman-shell-fmt ci-build ci-lint ci-test ci-test-e2e ci-test-e2e-scripts ci-test-e2e-grpc
 
 # Focused subsets of the kernel suite also run by rust-test and rust-check.
+# Script acceptance uses backend-wide Go-runner batches, parallel within each batch.
+.PHONY: rust-test-scripts
+rust-test-scripts: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- script_corpus --nocapture
+
 .PHONY: rust-test-kernel-load
 rust-test-kernel-load: rust-build $(RUST_TEST_INPUTS)
-	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- --skip unchanged_tracepoint_dsl --nocapture
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- --skip script_corpus --nocapture
 
 .PHONY: rust-test-xdp-switch
 rust-test-xdp-switch: rust-build $(RUST_TEST_INPUTS)
@@ -1889,18 +1904,16 @@ rust-test-xdp-unload: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_unload --nocapture
 
 .PHONY: rust-test-xdp-corpus
-rust-test-xdp-corpus: rust-build $(RUST_TEST_INPUTS)
-	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_corpus --nocapture
+rust-test-xdp-corpus: rust-test-scripts
 
 .PHONY: rust-test-xdp-netns
 rust-test-xdp-netns: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_netns --nocapture
 
-# Run the unchanged Go DSL script against Rust; observations use only public CLI
+# Run the admitted DSL corpus against Rust; observations use only public CLI
 # output and runtime artifacts. No storage queries or format assumptions here.
 .PHONY: rust-test-observation
-rust-test-observation: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
-	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- unchanged_tracepoint_dsl --nocapture
+rust-test-observation: rust-test-scripts
 
 # Configured driver/SKB modes and hardware-to-SKB fallback, with real traffic.
 .PHONY: rust-test-xdp-modes

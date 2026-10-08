@@ -406,6 +406,7 @@ For manual selection with prebuilt binaries:
 
 ```sh
 make run-e2e-scripts BPFMAN_UNDER_TEST="$PWD/rust/target/debug/bpfman" \
+    BPFMAN_E2E_IMPLEMENTATION=rust \
     TEST='TestBPFManScripts/scripts/TestTracepoint_LoadAndGet[.]bpfman$'
 ```
 
@@ -990,8 +991,8 @@ last-member deletion failure, and complete teardown. Shared fake tests also cove
 multiple interfaces, foreign kernel instances, failed retirement, cancellation,
 partial progress, and new links added during retained recovery.
 
-Run `direnv exec . make rust-test-xdp-corpus` for twelve additional unchanged Go
-scripts, each registered separately on SQLite and JSON (24 real-kernel tests):
+The batched `direnv exec . make rust-test-scripts` gate includes these twelve
+unchanged Go XDP scripts on SQLite and JSON (`rust-test-xdp-corpus` is an alias):
 
 | Coverage | Unchanged scripts |
 | --- | --- |
@@ -1393,14 +1394,28 @@ kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 
 ## Script parity through the Go runner
 
-Passing scripts carry `#pragma labels={"rust":"ok"}` in their header. The 42
-currently marked scripts pass against the Rust binary with both SQLite and JSON
-in file-bytecode mode. Add this label as more of the 132-script corpus passes;
-preserve assertions and existing scheduling labels. The scripts themselves are
-the parity manifest.
+Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
+50 admitted scripts: 42 shared Go/Rust scripts and eight Rust-only DEVMAP scripts,
+out of 140 scripts in total. A Rust-only script additionally declares:
 
-The tagged selection passed through the parallel Go runner in approximately
-52 seconds per backend, with empty final inventories and managed artifacts.
+```bpfman
+#pragma labels={"rust":"ok","rust-only":"true"}
+```
+
+`BPFMAN_E2E_IMPLEMENTATION` explicitly declares `go` (default) or `rust`. The
+runner skips Rust-only scripts for Go even when the label selector requests them.
+Selecting a Rust-looking executable path does not change this admission rule.
+Only shared scripts establish Go parity. Rust-only labels admit Rust coverage;
+they do not by themselves establish that Go lacks the behaviour. No new DSL
+syntax is required.
+
+The eight DEVMAP array/hash scripts cover driver/SKB modes, ordinary and genuine
+multi-buffer frames, PASS/DROP missing-entry fallback, continuation, live updates,
+both survivors and map identity. They passed concurrently in approximately
+40 seconds per backend, with empty final inventories. Private topologies reuse
+pooled namespaces; no serial/exclusive label is needed. Both survivor choices
+share the forwarding preamble. Publication-failure restoration remains in Rust,
+with two packet probes per scenario instead of repeating the full matrix there.
 
 Build the binaries and fixtures as the invoking user:
 
@@ -1415,6 +1430,7 @@ and parallel scheduling, in a private mount namespace and fresh runtime:
 direnv exec . sudo -n unshare --mount --propagation private -- \
   make run-e2e-scripts \
   BPFMAN_UNDER_TEST=rust/target/debug/bpfman \
+  BPFMAN_E2E_IMPLEMENTATION=rust \
   BPFMAN_RUNTIME_DIR="$(mktemp -d)" \
   BPFMAN_STORE=sqlite \
   BPFMAN_E2E_BYTECODE_SOURCE=file \
@@ -1425,9 +1441,29 @@ direnv exec . sudo -n unshare --mount --propagation private -- \
 Repeat with `BPFMAN_STORE=json` and a fresh runtime. Backend batches run one after
 the other because each runner holds the shared suite lock. Scripts within each
 batch run concurrently, subject to their serial/exclusive pragmas.
-The current full Rust gate also runs these scripts through individual kernel-test
-wrappers; replacing those wrappers with label-selected batches is the next harness
-change. Corpus parity takes priority over further Rust-specific packet scenarios.
+The full `rust-check` gate now runs two `script_corpus` tests: one Go-runner
+batch per backend, checking that every selected script actually passed and that
+managed inventories and artifacts are empty. The old individual Rust script
+wrappers have been removed. `make rust-test-scripts` runs these batches directly;
+`rust-test-xdp-corpus` and `rust-test-observation` also select this acceptance gate.
+Corpus parity takes priority over further Rust-specific packet scenarios.
+
+The migration checkpoint passed `direnv exec . make rust-check`: formatting,
+Clippy, userspace and compile-fail contracts, documentation, and all 98 kernel
+tests, with none failed or ignored. The kernel suite took 1420.39 seconds
+(23m40s), compared with 1834.78 seconds (30m35s) at the preceding checkpoint.
+The lower test count reflects replacing individual script wrappers with two
+batches, each verifying all 50 selected scripts and final cleanup. These local
+timings are not a controlled benchmark.
+
+`make rust-test-unit` runs library and binary unit targets without integration
+targets or doctests. Its 92 tests reported approximately 0.60 seconds of aggregate
+execution, excluding compilation and Cargo startup. Process-wide signal fixtures
+now live in the separate `signal_policy` integration target. Pure validation and
+state transitions stay in Rust; filesystem, persistence, process and kernel
+contracts are integration tests and should not be described as unit tests.
+The remaining migration inventory is in the
+[testing audit](../docs/design/rust-reimplementation.md#testing-migration-audit-8-october-2026).
 
 ## TC ingress attachment and unload
 
@@ -1495,10 +1531,10 @@ across implementations is not supported yet: Go attachments lack Rust's ownershi
 receipt. New JSON stores use format 8 for replacement; format 7 retains singleton
 TC. Older formats retain their operations without upgrading.
 
-`direnv exec . make rust-test-tc-ingress` selects real veth lifecycle/CLI tests and
-the unchanged `TestTC_LoadAndGet`, `TestTC_LinkRoundTrip`, and twelve Go chain,
-ordering, signed-encoding, namespace, survivor-unload and clsact scripts on both
-stores. The Rust runner advertises `BPFMAN_E2E_CLSACT_RECLAIM=true` so the reclaim
+`direnv exec . make rust-test-tc-ingress` selects real veth lifecycle/CLI and
+failure-recovery tests. `make rust-test-scripts` separately runs the unchanged
+`TestTC_LoadAndGet`, `TestTC_LinkRoundTrip`, and twelve Go chain, ordering,
+signed-encoding, namespace, survivor-unload and clsact scripts on both stores. The Rust runner advertises `BPFMAN_E2E_CLSACT_RECLAIM=true` so the reclaim
 script executes independently of Go's disabled production policy.
 The lifecycle tests require exact marked-packet counts, preserve foreign filters
 at the same priority on both hooks, reopen before detach, cross publication and

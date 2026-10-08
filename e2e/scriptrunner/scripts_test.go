@@ -48,7 +48,8 @@ import (
 //
 // Script labels: a `.bpfman` script can declare labels by putting
 // `#pragma labels={"external":"true","program":"xdp"}` in the same
-// header window.
+// header window. `rust-only=true` requires BPFMAN_E2E_IMPLEMENTATION=rust;
+// selectors cannot override this implementation requirement.
 // `serial=true` puts the script through the serial lane: it
 // still enters the Go parallel queue so registration can complete
 // and parallel-eligible scripts can start, but it takes a
@@ -127,6 +128,7 @@ func TestBPFManScripts(t *testing.T) {
 	// subtest, so one malformed pragma does not abort
 	// registration of the rest of the corpus.
 	selector := scriptLabelSelector(t)
+	implementation := scriptImplementation(t)
 	bpfLSM := bpfLSMActive()
 	serial := make(map[string]bool, len(matches))
 	exclusive := make(map[string]bool, len(matches))
@@ -174,7 +176,10 @@ func TestBPFManScripts(t *testing.T) {
 			meta := metadata[abs]
 			skipReason := ""
 			if meta.err == nil {
-				skipReason = scriptSelectorSkipReason(selector, meta.mode.Labels)
+				skipReason = scriptImplementationSkipReason(implementation, meta.mode.Labels)
+				if skipReason == "" {
+					skipReason = scriptSelectorSkipReason(selector, meta.mode.Labels)
+				}
 				if skipReason == "" &&
 					meta.mode.Labels.Get("requires-clsact-reclaim") == "true" &&
 					!clsactReclaimEnabled() {
@@ -276,6 +281,7 @@ const (
 	bpfmanShellRepeatsDefault     = 1
 	bpfmanShellTimelineEnv        = "BPFMAN_E2E_SCRIPT_TIMELINE"
 	bpfmanShellSelectorEnv        = "BPFMAN_E2E_SCRIPT_SELECTOR"
+	bpfmanImplementationEnv       = "BPFMAN_E2E_IMPLEMENTATION"
 	bpfmanShellSelectorDefaultRaw = "!external"
 	bpfmanShellTestPackage        = "github.com/bpfman/bpfman/e2e/scriptrunner"
 )
@@ -384,6 +390,38 @@ func bpfLSMActive() bool {
 		return false
 	}
 	return slices.Contains(strings.Split(strings.TrimSpace(string(data)), ","), "bpf")
+}
+
+// The caller declares the selected CLI implementation independently of its path.
+func scriptImplementation(t *testing.T) string {
+	t.Helper()
+	implementation := os.Getenv(bpfmanImplementationEnv)
+	if implementation == "" {
+		return "go"
+	}
+	if implementation != "go" && implementation != "rust" {
+		t.Fatalf("%s must be go or rust, got %q", bpfmanImplementationEnv, implementation)
+	}
+	return implementation
+}
+
+func scriptImplementationSkipReason(implementation string, labels k8slabels.Set) string {
+	if labels.Get("rust-only") == "true" && implementation != "rust" {
+		return "rust-only script requires BPFMAN_E2E_IMPLEMENTATION=rust"
+	}
+	return ""
+}
+
+func TestScriptImplementationAdmission(t *testing.T) {
+	for _, implementation := range []string{"", "go", "rust"} {
+		t.Setenv(bpfmanImplementationEnv, implementation)
+		selected := scriptImplementation(t)
+		for _, label := range []string{"", "false", "true"} {
+			labels := k8slabels.Set{"rust-only": label}
+			reason := scriptImplementationSkipReason(selected, labels)
+			require.Equal(t, label == "true" && implementation != "rust", reason != "")
+		}
+	}
 }
 
 func scriptSelectorSkipReason(selector k8slabels.Selector, labels k8slabels.Set) string {
