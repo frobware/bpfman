@@ -67,6 +67,10 @@ impl LocalObject {
             // with EINVAL. Enable multi-buffer DEVMAP egress when upstream exposes
             // flag preservation; do not fork Aya or install linear egress on jumbo
             // traffic as a workaround. Kernel acceptance records this boundary.
+            // DEVMAP_HASH differs on Linux 6.18.54: map_type_contains_progs omits
+            // it, so native frags egress initializes compatible ownership at map
+            // update. Positive hash egress tests prove jumbo delivery; this does
+            // not repair the extension flag or the array DEVMAP boundary.
             loader.extension(spec.name().as_str());
         }
         for (name, value) in &self.globals {

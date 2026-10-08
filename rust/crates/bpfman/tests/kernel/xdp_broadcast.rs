@@ -1,4 +1,4 @@
-//! DEVMAP fan-out, ingress exclusion, and restoration of the complete packet path.
+//! DEVMAP/DEVMAP_HASH fan-out, ingress exclusion, and restoration of the complete packet path.
 #![allow(clippy::panic)]
 
 use super::{
@@ -11,8 +11,38 @@ use bpfman_model::*;
 use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram, TracepointAttach, XdpAttach};
 use bpfman_store::*;
 
-fn scenario<S>(backend: S, mode: XdpMode, frames: Frames, exclude: bool, keep_redirect: bool)
-where
+#[derive(Clone, Copy)]
+enum Kind {
+    Array,
+    Hash,
+}
+
+impl Kind {
+    fn object(self, frames: Frames) -> &'static str {
+        match (self, frames) {
+            (Self::Array, Frames::Linear) => "xdp_devmap_broadcast.bpf.o",
+            (Self::Array, Frames::MultiBuffer) => "xdp_devmap_broadcast_frags.bpf.o",
+            (Self::Hash, Frames::Linear) => "xdp_devmap_broadcast_hash.bpf.o",
+            (Self::Hash, Frames::MultiBuffer) => "xdp_devmap_broadcast_hash_frags.bpf.o",
+        }
+    }
+
+    fn keys(self) -> [u32; 3] {
+        match self {
+            Self::Array => [0, 1, 2],
+            Self::Hash => [7, 0x8000_0001, u32::MAX],
+        }
+    }
+}
+
+fn scenario<S>(
+    backend: S,
+    mode: XdpMode,
+    frames: Frames,
+    exclude: bool,
+    keep_redirect: bool,
+    kind: Kind,
+) where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
@@ -43,11 +73,7 @@ where
     // Linux UAPI: BROADCAST is bit 3; EXCLUDE_INGRESS is bit 4.
     let flags: u32 = (1 << 3) | if exclude { 1 << 4 } else { 0 };
     let redirect = load(
-        if frames == Frames::MultiBuffer {
-            "xdp_devmap_broadcast_frags.bpf.o"
-        } else {
-            "xdp_devmap_broadcast.bpf.o"
-        },
+        kind.object(frames),
         "devmap_delivery",
         [("devmap_flags".into(), flags.to_ne_bytes().to_vec())].into(),
     );
@@ -59,8 +85,16 @@ where
     let (object, symbol) = frames.observer();
     let observer = load(object, symbol, Default::default());
     let ids = [redirect, tail, observer];
-    let targets = Targets::open(&c, redirect);
-    targets.check_entries(&[None; 3]);
+    let targets = match kind {
+        Kind::Array => Targets::open(&c, redirect),
+        Kind::Hash => Targets::open_hash(&c, redirect, 3),
+    };
+    let keys = kind.keys();
+    let check = |entries: &[Option<u32>; 3]| {
+        let expected = keys.into_iter().zip(*entries).collect::<Vec<_>>();
+        targets.check_keyed_entries(&expected);
+    };
+    check(&[None; 3]);
     let format = std::fs::read_to_string("/sys/kernel/tracing/events/xdp/xdp_redirect_err/format")
         .expect("XDP redirect error tracepoint format");
     let format: String = format.chars().filter(|c| !c.is_whitespace()).collect();
@@ -169,28 +203,28 @@ where
     let returned = if exclude { 0 } else { 3 };
     let forward = [returned, 0, 3, 3];
 
-    // Broadcast ignores key 99 and PASS fallback: an empty map consumes packets.
+    // Broadcast ignores missing key 99 and PASS fallback: an empty map consumes packets.
     traffic([3, 0], [0; 4]);
-    let input = targets.set_at(&network, 0, "in0");
+    let input = targets.set_at(&network, keys[0], "in0");
     traffic([3, 0], [returned, 0, 0, 0]);
-    let output0 = targets.set_at(&network, 1, "out0");
-    let output1 = targets.set_at(&network, 2, "out1");
+    let output0 = targets.set_at(&network, keys[1], "out0");
+    let output1 = targets.set_at(&network, keys[2], "out1");
     let entries = [Some(input), Some(output0), Some(output1)];
-    targets.check_entries(&entries);
+    check(&entries);
     traffic([3, 0], forward);
 
-    targets.delete_at(&network, 1);
-    targets.check_entries(&[Some(input), None, Some(output1)]);
+    targets.delete_at(&network, keys[1]);
+    check(&[Some(input), None, Some(output1)]);
     traffic([3, 0], [returned, 0, 0, 3]);
-    targets.set_at(&network, 2, "out0");
-    targets.check_entries(&[Some(input), None, Some(output0)]);
+    targets.set_at(&network, keys[2], "out0");
+    check(&[Some(input), None, Some(output0)]);
     traffic([3, 0], [returned, 0, 3, 0]);
-    targets.delete_at(&network, 2);
-    targets.set_at(&network, 1, "out1");
-    targets.check_entries(&[Some(input), Some(output1), None]);
+    targets.delete_at(&network, keys[2]);
+    targets.set_at(&network, keys[1], "out1");
+    check(&[Some(input), Some(output1), None]);
     traffic([3, 0], [returned, 0, 0, 3]);
-    targets.set_at(&network, 1, "out0");
-    targets.set_at(&network, 2, "out1");
+    targets.set_at(&network, keys[1], "out0");
+    targets.set_at(&network, keys[2], "out1");
     assert_eq!(
         app.get_xdp_dispatcher(details.key).expect("same revision"),
         old
@@ -204,7 +238,7 @@ where
     assert_eq!(error.restoration_attempts().len(), 1);
     assert!(error.restoration_attempts()[0].is_ok());
     assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
-    targets.check_entries(&entries);
+    check(&entries);
     traffic([3, 0], forward);
     faults.set(None);
 
@@ -221,15 +255,15 @@ where
         [first.id, second.id]
     );
     assert_eq!(chain.members()[0].outer_link_id, outer_id);
-    targets.check_entries(&entries);
+    check(&entries);
     traffic([3, 0], forward);
-    for key in 0..3 {
+    for key in keys {
         targets.delete_at(&network, key);
     }
-    targets.check_entries(&[None; 3]);
+    check(&[None; 3]);
     // Even with no targets, REDIRECT terminates before the DROP member.
     traffic([3, 0], [0; 4]);
-    for (key, iface) in [(0, "in0"), (1, "out0"), (2, "out1")] {
+    for (key, iface) in keys.into_iter().zip(["in0", "out0", "out1"]) {
         targets.set_at(&network, key, iface);
     }
 
@@ -249,7 +283,7 @@ where
         app.get_xdp_dispatcher(details.key).expect("restored"),
         chain
     );
-    targets.check_entries(&entries);
+    check(&entries);
     traffic([3, 0], forward);
     faults.set(None);
 
@@ -258,19 +292,19 @@ where
     assert_eq!(remaining.members().len(), 1);
     assert_eq!(remaining.members()[0].member.id, survivor);
     assert_eq!(remaining.members()[0].outer_link_id, outer_id);
-    targets.check_entries(&entries);
+    check(&entries);
     if keep_redirect {
         traffic([3, 0], forward);
-        targets.delete_at(&network, 2);
+        targets.delete_at(&network, keys[2]);
         traffic([3, 0], [returned, 0, 3, 0]);
-        targets.set_at(&network, 2, "out1");
+        targets.set_at(&network, keys[2], "out1");
         traffic([3, 0], forward);
     } else {
         traffic([0, 3], [0; 4]);
     }
     app.detach_xdp(survivor).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
-    targets.check_entries(&entries);
+    check(&entries);
     traffic([0, 0], [0, 3, 0, 0]);
 
     // Explicit REDIRECT continuation suppresses all copies. An exhausted chain
@@ -285,13 +319,13 @@ where
     let stopping = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
         .expect("stopping tail");
-    targets.check_entries(&entries);
+    check(&entries);
     traffic([3, 3], [0; 4]);
-    for key in 0..3 {
+    for key in keys {
         targets.delete_at(&network, key);
     }
     traffic([3, 3], [0; 4]);
-    for (key, iface) in [(0, "in0"), (1, "out0"), (2, "out1")] {
+    for (key, iface) in keys.into_iter().zip(["in0", "out0", "out1"]) {
         targets.set_at(&network, key, iface);
     }
     app.detach_xdp(stopping.id).expect("remove stopping tail");
@@ -304,7 +338,7 @@ where
         app.detach_xdp(id).expect("remove receiving peer");
     }
     assert_eq!(app.unload(tail).expect("unload tail").unresolved(), 0);
-    targets.check_entries(&entries);
+    check(&entries);
     assert_eq!(
         app.unload(redirect).expect("unload redirect").unresolved(),
         0
@@ -331,9 +365,25 @@ where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    exercise_kind(backend, mode, frames, Kind::Array);
+}
+
+pub(super) fn exercise_hash<S>(backend: S, mode: XdpMode, frames: Frames)
+where
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
+{
+    exercise_kind(backend, mode, frames, Kind::Hash);
+}
+
+fn exercise_kind<S>(backend: S, mode: XdpMode, frames: Frames, kind: Kind)
+where
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
+{
     for exclude in [false, true] {
         for keep_redirect in [false, true] {
-            scenario(backend.clone(), mode, frames, exclude, keep_redirect);
+            scenario(backend.clone(), mode, frames, exclude, keep_redirect, kind);
         }
     }
 }

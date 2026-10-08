@@ -1044,7 +1044,7 @@ rust-build: $(RUST_DISPATCHER)
 
 # Build fixtures before entering the privileged test runner. Passwordless sudo
 # is required; unavailable privileges fail the gate rather than skipping tests.
-RUST_TEST_INPUTS = e2e/testdata/bpf/xdp_devmap_hash.bpf.o e2e/testdata/bpf/xdp_devmap_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_egress.bpf.o e2e/testdata/bpf/xdp_devmap_egress_frags.bpf.o e2e/testdata/bpf/xdp_redirect_error.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_frags.bpf.o e2e/testdata/bpf/xdp_delivery_frags.bpf.o e2e/testdata/bpf/xdp_devmap_frags.bpf.o $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_devmap.bpf.o e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
+RUST_TEST_INPUTS = e2e/testdata/bpf/xdp_devmap_broadcast_hash.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_hash.bpf.o e2e/testdata/bpf/xdp_devmap_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_egress.bpf.o e2e/testdata/bpf/xdp_devmap_egress_frags.bpf.o e2e/testdata/bpf/xdp_redirect_error.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_frags.bpf.o e2e/testdata/bpf/xdp_delivery_frags.bpf.o e2e/testdata/bpf/xdp_devmap_frags.bpf.o $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_devmap.bpf.o e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
 RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
 RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh", "$(abspath rust/test-runner.sh)"]'
 
@@ -1913,13 +1913,13 @@ rust-test-xdp-devmap: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-multibuffer-forwarding: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_multibuffer_forwarding --nocapture
 
-# DEVMAP fan-out and ingress exclusion with ordinary and multi-buffer frames.
+# DEVMAP/DEVMAP_HASH fan-out and ingress exclusion with ordinary and multi-buffer frames.
 RUST_XDP_BROADCAST_FILTER ?= xdp_devmap_broadcast
 .PHONY: rust-test-xdp-broadcast
 rust-test-xdp-broadcast: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- $(RUST_XDP_BROADCAST_FILTER) --nocapture
 
-# DEVMAP egress PASS/DROP, native/frags loading, rollback, and program references.
+# DEVMAP/DEVMAP_HASH egress PASS/DROP, native/frags loading, rollback, and program references.
 RUST_XDP_EGRESS_FILTER ?= xdp_devmap_egress
 .PHONY: rust-test-xdp-egress
 rust-test-xdp-egress: rust-build $(RUST_TEST_INPUTS)
@@ -1929,3 +1929,13 @@ rust-test-xdp-egress: rust-build $(RUST_TEST_INPUTS)
 .PHONY: rust-test-xdp-devmap-hash
 rust-test-xdp-devmap-hash: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_hash --nocapture
+
+# DEVMAP_HASH fan-out, sparse keys, and ingress exclusion.
+.PHONY: rust-test-xdp-broadcast-hash
+rust-test-xdp-broadcast-hash: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_broadcast_hash --nocapture
+
+# DEVMAP_HASH egress PASS/DROP, sparse-key preservation, and program references.
+.PHONY: rust-test-xdp-egress-hash
+rust-test-xdp-egress-hash: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_egress_hash --nocapture

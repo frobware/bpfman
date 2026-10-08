@@ -1,4 +1,4 @@
-//! Native DEVMAP egress loading, packet execution, and kernel-held references.
+//! Native DEVMAP/DEVMAP_HASH egress loading, packet execution, and kernel-held references.
 #![allow(clippy::panic)]
 
 use super::{
@@ -12,6 +12,43 @@ use bpfman_model::*;
 use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram, XdpAttach};
 use bpfman_store::*;
 use std::num::NonZeroU32;
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Array,
+    Hash,
+}
+
+impl Kind {
+    fn object(self, frames: Frames) -> &'static str {
+        match (self, frames) {
+            (Self::Array, _) => frames.devmap_object(),
+            (Self::Hash, Frames::Linear) => "xdp_devmap_hash.bpf.o",
+            (Self::Hash, Frames::MultiBuffer) => "xdp_devmap_hash_frags.bpf.o",
+        }
+    }
+
+    fn key(self) -> u32 {
+        match self {
+            Self::Array => 0,
+            Self::Hash => 0x8000_0001,
+        }
+    }
+
+    fn open(self, c: &Context, program: NonZeroU32) -> Targets {
+        match self {
+            Self::Array => Targets::open(c, program),
+            Self::Hash => Targets::open_hash(c, program, 2),
+        }
+    }
+
+    fn check_empty(self, targets: &Targets) {
+        match self {
+            Self::Array => targets.check_entries(&[None]),
+            Self::Hash => targets.check_keyed_entries(&[(self.key(), None), (u32::MAX, None)]),
+        }
+    }
+}
 
 struct Counters(aya::maps::PerCpuArray<aya::maps::MapData, u64>);
 
@@ -57,16 +94,18 @@ fn program_released(id: NonZeroU32) {
     }
 }
 
-pub(super) fn exercise<S>(backend: S, mode: XdpMode)
+fn exercise_kind<S>(backend: S, mode: XdpMode, frames: Frames, kind: Kind)
 where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
-    let frames = Frames::Linear;
     let c = Context::new();
     let network = Network::new();
     frames.configure(&network);
-    let egress_object = "xdp_devmap_egress.bpf.o";
+    let egress_object = match frames {
+        Frames::Linear => "xdp_devmap_egress.bpf.o",
+        Frames::MultiBuffer => "xdp_devmap_egress_frags.bpf.o",
+    };
     let prepare = |object, symbol: &str| {
         PreparedProgram::new(
             &bpfman_kernel_aya::Kernel,
@@ -106,11 +145,7 @@ where
         .record
         .id
     };
-    let redirect = load(
-        frames.devmap_object(),
-        "devmap_delivery",
-        Default::default(),
-    );
+    let redirect = load(kind.object(frames), "devmap_delivery", Default::default());
     let tail = load(
         frames.delivery_object(),
         "delivery_tail",
@@ -145,6 +180,14 @@ where
     };
     let pass = egress(2);
     let drop = egress(1);
+    let incompatible = load(
+        match frames {
+            Frames::Linear => "xdp_devmap_egress_frags.bpf.o",
+            Frames::MultiBuffer => "xdp_devmap_egress.bpf.o",
+        },
+        "devmap_egress",
+        Default::default(),
+    );
     let pass_counters = Counters::open(&c, pass);
     let drop_counters = Counters::open(&c, drop);
     for id in [pass, drop] {
@@ -190,7 +233,7 @@ where
         panic!("XDP link")
     };
     let original = app.get_xdp_dispatcher(details.key).expect("snapshot");
-    let targets = Targets::open(&c, redirect);
+    let targets = kind.open(&c, redirect);
     let traffic = |execution, delivery, pass_runs, drop_runs| {
         let before_pass = pass_counters.values(frames);
         let before_drop = drop_counters.values(frames);
@@ -215,14 +258,34 @@ where
         }
     };
     targets.reject_egress(&c, &network, redirect);
-    targets.check_entries(&[None]);
+    kind.check_empty(&targets);
+    if matches!(kind, Kind::Hash) {
+        targets.set_at(&network, u32::MAX, "in0");
+    }
+    let check = |expected| match kind {
+        Kind::Array => match expected {
+            Some(program) => targets.check_egress(out_index, program),
+            None => targets.check_entries(&[None]),
+        },
+        Kind::Hash => {
+            targets.check_hash_egress(expected.map(|program| (out_index, program)), ingress_index)
+        }
+    };
+    check(None);
     traffic([3, 0], [0, 3, 0], 0, 0);
     assert_eq!(targets.set_egress(&c, &network, pass), out_index);
+    check(Some(pass));
     traffic([3, 0], [0, 0, 3], 3, 0);
     targets.reject_egress(&c, &network, tail);
-    targets.check_egress(out_index, pass);
+    check(Some(pass));
+    // The first native egress initializes hash ownership. Later updates must
+    // retain fragment compatibility even though load-time ingress checks omit
+    // DEVMAP_HASH on Linux 6.18.54 (include/linux/bpf.h: map_type_contains_progs).
+    targets.reject_egress(&c, &network, incompatible);
+    check(Some(pass));
     traffic([3, 0], [0, 0, 3], 3, 0);
     targets.set_egress(&c, &network, drop);
+    check(Some(drop));
     traffic([3, 0], [0, 0, 0], 0, 3);
     assert_eq!(
         app.get_xdp_dispatcher(details.key)
@@ -241,7 +304,7 @@ where
         app.get_xdp_dispatcher(details.key).expect("restored"),
         original
     );
-    targets.check_egress(out_index, drop);
+    check(Some(drop));
     traffic([3, 0], [0, 0, 0], 0, 3);
     faults.set(None);
     let second = app
@@ -253,9 +316,10 @@ where
         chain.members()[0].outer_link_id,
         original.members()[0].outer_link_id
     );
-    targets.check_egress(out_index, drop);
+    check(Some(drop));
     traffic([3, 0], [0, 0, 0], 0, 3);
     targets.set_egress(&c, &network, pass);
+    check(Some(pass));
     traffic([3, 0], [0, 0, 3], 3, 0);
     faults.set(Some(Point::XdpReplace));
     let failure = app.detach_xdp(second.id).expect_err("detach rollback");
@@ -266,18 +330,18 @@ where
         app.get_xdp_dispatcher(details.key).expect("restored chain"),
         chain
     );
-    targets.check_egress(out_index, pass);
+    check(Some(pass));
     traffic([3, 0], [0, 0, 3], 3, 0);
     faults.set(None);
     app.detach_xdp(second.id).expect("surviving redirect");
-    targets.check_egress(out_index, pass);
+    check(Some(pass));
     traffic([3, 0], [0, 0, 3], 3, 0);
 
     // Unload removes owned pins/record, but the DEVMAP keeps its program alive.
     faults.set(Some(Point::DeleteProgram));
     let failure = app.unload(pass).expect_err("native XDP teardown failure");
     assert!(!c.layout.program_pin_path(pass).exists());
-    targets.check_egress(out_index, pass);
+    check(Some(pass));
     traffic([3, 0], [0, 0, 3], 3, 0);
     faults.set(None);
     assert_eq!(
@@ -292,18 +356,21 @@ where
         bpfman_kernel_aya::Kernel.program(pass).is_ok(),
         "map-held program survives unpinning"
     );
+    check(Some(pass));
     traffic([3, 0], [0, 0, 3], 3, 0);
-    targets.delete_at(&network, 0);
+    targets.delete_at(&network, kind.key());
+    check(None);
     program_released(pass);
     traffic([3, 0], [0, 3, 0], 0, 0);
 
     targets.set_egress(&c, &network, drop);
+    check(Some(drop));
     assert_eq!(app.unload(drop).expect("unpin DROP").unresolved(), 0);
     c.absent(drop);
-    targets.check_egress(out_index, drop);
+    check(Some(drop));
     traffic([3, 0], [0, 0, 0], 0, 3);
     app.detach_xdp(first.id).expect("last detach");
-    targets.check_egress(out_index, drop);
+    check(Some(drop));
     traffic([0, 0], [0, 3, 0], 0, 0);
     assert_eq!(
         app.unload(redirect).expect("unload map owner").unresolved(),
@@ -315,6 +382,13 @@ where
     );
     targets.assert_unloaded();
     program_released(drop);
+    assert_eq!(
+        app.unload(incompatible)
+            .expect("incompatible cleanup")
+            .unresolved(),
+        0
+    );
+    program_released(incompatible);
     assert_eq!(app.unload(tail).expect("tail cleanup").unresolved(), 0);
     app.detach_xdp(receiving.id).expect("receiver detach");
     assert_eq!(
@@ -437,4 +511,28 @@ where
     assert!(app.list_link_records().expect("links").is_empty());
     assert!(app.list_xdp_dispatchers().expect("dispatchers").is_empty());
     c.no_artifacts();
+}
+
+pub(super) fn exercise<S>(backend: S, mode: XdpMode)
+where
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
+{
+    exercise_kind(backend, mode, Frames::Linear, Kind::Array);
+}
+
+pub(super) fn exercise_hash<S>(backend: S, mode: XdpMode)
+where
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
+{
+    exercise_kind(backend, mode, Frames::Linear, Kind::Hash);
+}
+
+pub(super) fn fragments_hash<S>(backend: S, mode: XdpMode)
+where
+    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S::Reader: LinkReader + XdpDispatcherReader,
+{
+    exercise_kind(backend, mode, Frames::MultiBuffer, Kind::Hash);
 }

@@ -63,6 +63,18 @@ impl Targets {
         Self::open_kind(c, program, Kind::Array)
     }
 
+    pub(super) fn open_hash(c: &Context, program: NonZeroU32, capacity: u32) -> Self {
+        let targets = Self::open_kind(c, program, Kind::Hash);
+        assert_eq!(
+            aya::maps::MapInfo::from_pin(&targets.pin)
+                .expect("hash info")
+                .max_entries(),
+            capacity,
+            "capacity differs from key range"
+        );
+        targets
+    }
+
     fn open_kind(c: &Context, program: NonZeroU32, kind: Kind) -> Self {
         let pin = c
             .layout
@@ -81,7 +93,6 @@ impl Targets {
                     info.map_type().expect("type"),
                     aya::maps::MapType::DevMapHash
                 );
-                assert_eq!(info.max_entries(), 2, "capacity differs from key range");
                 let map: aya::maps::xdp::DevMapHash<_> = aya::maps::Map::DevMapHash(data)
                     .try_into()
                     .expect("DEVMAP_HASH");
@@ -137,7 +148,20 @@ impl Targets {
     }
 
     pub(super) fn check_egress(&self, index: u32, program: NonZeroU32) {
-        self.check_value(0, Some((index, Some(program))));
+        self.check_value(self.key, Some((index, Some(program))));
+    }
+
+    pub(super) fn check_hash_egress(&self, expected: Option<(u32, NonZeroU32)>, spare: u32) {
+        self.check_value(
+            self.key,
+            expected.map(|(index, program)| (index, Some(program))),
+        );
+        self.check_at(SPARE_KEY, Some(spare));
+        let mut keys = vec![SPARE_KEY];
+        if expected.is_some() {
+            keys.push(self.key);
+        }
+        self.check_hash_keys(&keys);
     }
 
     pub(super) fn set_egress(&self, c: &Context, network: &Network, program: NonZeroU32) -> u32 {
@@ -149,6 +173,7 @@ impl Targets {
                 .program_pin_path(program)
                 .to_str()
                 .expect("program pin"),
+            &self.key.to_string(),
         ]);
         let index = u32::try_from(
             network.links("out0")[0]["ifindex"]
@@ -169,6 +194,7 @@ impl Targets {
                 .program_pin_path(program)
                 .to_str()
                 .expect("program pin"),
+            &self.key.to_string(),
         ]);
         assert_eq!(output.status.code(), Some(1));
         assert!(
@@ -227,23 +253,44 @@ impl Targets {
         }
     }
 
-    fn check_hash(&self, expected: Option<u32>, spare: u32) {
-        self.check(expected);
-        self.check_at(SPARE_KEY, Some(spare));
+    pub(super) fn check_keyed_entries(&self, expected: &[(u32, Option<u32>)]) {
+        for &(key, value) in expected {
+            self.check_at(key, value);
+        }
+        match &self.map {
+            TargetMap::Array(map) => {
+                assert_eq!(
+                    map.len() as usize,
+                    expected.len(),
+                    "complete array contents"
+                );
+                let mut keys: Vec<_> = expected.iter().map(|&(key, _)| key).collect();
+                keys.sort_unstable();
+                assert_eq!(keys, (0..map.len()).collect::<Vec<_>>());
+            }
+            TargetMap::Hash(_) => {
+                let populated: Vec<_> = expected
+                    .iter()
+                    .filter_map(|&(key, value)| value.map(|_| key))
+                    .collect();
+                self.check_hash_keys(&populated);
+            }
+        }
+    }
+
+    fn check_hash_keys(&self, expected: &[u32]) {
         let TargetMap::Hash(map) = &self.map else {
             panic!("hash map required");
         };
         let mut keys: Vec<_> = map.keys().map(|key| key.expect("hash key")).collect();
+        let mut expected = expected.to_vec();
         keys.sort_unstable();
-        assert_eq!(
-            keys,
-            if expected.is_some() {
-                vec![HASH_KEY, SPARE_KEY]
-            } else {
-                vec![SPARE_KEY]
-            },
-            "complete hash contents, including unrelated entry"
-        );
+        expected.sort_unstable();
+        assert_eq!(keys, expected, "complete hash contents");
+    }
+
+    fn check_hash(&self, expected: Option<u32>, spare: u32) {
+        self.check_keyed_entries(&[(HASH_KEY, expected), (SPARE_KEY, Some(spare))]);
     }
 
     pub(super) fn assert_unloaded(self) {
@@ -326,7 +373,10 @@ fn scenario<S>(
     let observer = load(object, symbol, Default::default());
     let ids = [redirect, tail, observer];
     let traffic = |execution, delivery| frames.traffic(&c, &network, ids, execution, delivery);
-    let targets = Targets::open_kind(&c, redirect, kind);
+    let targets = match kind {
+        Kind::Array => Targets::open(&c, redirect),
+        Kind::Hash => Targets::open_hash(&c, redirect, 2),
+    };
     // The unused entry must neither redirect a missing key nor disappear on rebuild.
     let spare = match kind {
         Kind::Array => None,

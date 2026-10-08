@@ -61,6 +61,15 @@ The architecture and compatibility goals are in
   and SKB paths, unlike the older reference sources. Broadcast acceptance
   observes `EOPNOTSUPP` through a filtered redirect-error tracepoint; see the
   [verified boundary](README.md#xdp-devmap-broadcast-and-ingress-exclusion).
+- Do not assume array DEVMAP's fragment-egress rejection also applies to
+  DEVMAP_HASH. On Linux `6.18.54`, `include/linux/bpf.h`'s
+  `map_type_contains_progs` omits DEVMAP_HASH, so ingress loading does not initialize
+  hash ownership. The first native egress insertion initializes compatible
+  fragment ownership; later egress updates still require matching fragment flags.
+  `make rust-test-xdp-egress-hash` proves ordinary and genuine multi-buffer
+  PASS/DROP, context/helper reads, rollback, and map-held lifetime in both stores
+  and driver/SKB modes. Aya remains unchanged, and the array DEVMAP boundary is
+  still tested explicitly. See [egress acceptance](README.md#xdp-devmap-egress-programs).
 
 ## Visibility and crate boundaries
 

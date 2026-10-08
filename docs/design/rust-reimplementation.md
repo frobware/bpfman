@@ -3,9 +3,9 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint verifies DEVMAP_HASH unicast with ordinary and multi-buffer frames in
-driver and generic SKB modes on both SQLite and JSON stores, building on native
-DEVMAP egress PASS/DROP, broadcast, and ingress exclusion.
+checkpoint adds native DEVMAP_HASH egress PASS/DROP for ordinary and genuine
+multi-buffer frames in driver and generic SKB modes on both SQLite and JSON stores,
+building on hash/array unicast, broadcast, and ingress exclusion acceptance.
 At the egress checkpoint (`e64d4ccb2`), Rust's managed XDP surface has gone beyond
 the current Go implementation: Rust can load and execute native DEVMAP egress
 programs, while Go's loader converts all managed XDP selections into dispatcher
@@ -34,8 +34,9 @@ multiple eligible targets reports `EOPNOTSUPP`; tests require that exact rejecti
 and retain successful single-target jumbo delivery. DEVMAP egress tests additionally
 prove correct ingress/output interface context, live program replacement, rollback,
 and map-held program lifetime after managed unpinning. Fragment-capable egress
-loads correctly, but multi-buffer egress pairing remains blocked by Aya 0.14's
-extension flag handling; tests require that exact map-update rejection and prove
+loads correctly, but array DEVMAP multi-buffer egress pairing remains blocked by
+Aya 0.14's extension flag handling; tests require that exact map-update rejection
+and prove
 jumbo unicast without an egress program remains intact. Aya is unchanged.
 DEVMAP_HASH acceptance uses two sparse keys beyond the map's capacity value,
 checks the exact key set and unused target through replacement/restoration, and
@@ -43,8 +44,28 @@ proves capacity rejection without modifying existing entries. Live updates,
 PASS/DROP missing-key fallback, either survivor, and eventual map reclamation
 reuse the same forwarding lifecycle as DEVMAP. Genuine multi-buffer counters and
 full 8014-byte payload capture remain required. No production changes were needed.
-The next bounded slice is DEVMAP_HASH broadcast and ingress exclusion; hash-backed
-egress remains separate acceptance work.
+Eight additional broadcast suites reuse the complete fan-out lifecycle with a
+three-entry DEVMAP_HASH keyed by `7`, `0x80000001`, and `0xffffffff`. Exact key sets
+and values, including deletions and repopulation, remain stable through replacement,
+publication restoration, and either survivor. Broadcast ignores missing lookup key
+99 and PASS fallback; ingress exclusion prevents return to the sender. Ordinary
+frames fan out successfully. Genuine multi-buffer frames retain successful
+single-target delivery and require the same exact `EOPNOTSUPP` rejection with no
+copies for multiple eligible targets on Linux 6.18.54. No production changes were
+needed. Eight hash-backed egress suites additionally prove PASS/DROP delivery,
+exact native-egress execution and interface context, live program changes at full
+capacity, extension and fragment-compatibility rejection, replacement/restoration,
+and map-held program lifetime through managed unpinning and unload retry. Sparse
+keys `0x80000001` and `0xffffffff` retain the complete key set and unrelated target.
+All four jumbo suites require full 8014-byte payload capture and fragment/tail/
+boundary reads in executing ingress, egress, and receiving programs. No production
+behavior, persistence, dependency, or Aya changes were needed.
+Unlike array DEVMAP, Linux 6.18.54 omits DEVMAP_HASH from the load-time owner check;
+the first native egress update initializes hash ownership with its fragment flag.
+This permits genuine jumbo egress through the existing public API. Later egress
+updates still require compatible flags. Array DEVMAP's Aya boundary remains.
+The next bounded slice is TC ingress attachment with exact filter handles and
+clsact ownership, before dispatcher replacement.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -60,7 +81,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Local program load | Atomic tracepoint/XDP batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
-| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast acceptance; DEVMAP broadcast, ingress exclusion, and ordinary-frame egress PASS/DROP | Multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation; DEVMAP_HASH broadcast and egress |
+| XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | Persistence | Go-compatible SQLite schema 2; JSON format 6 for namespace-aware XDP snapshots | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
@@ -73,12 +94,13 @@ clearly. See
 [the workspace checkpoint](../../rust/README.md#xdp-attachment-and-replacement)
 for the supported command surface.
 
-The DEVMAP_HASH checkpoint passed `direnv exec . make rust-check`: formatting,
-Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
-fake-kernel lifecycle tests, and all 116 real-kernel tests, with none ignored or
-skipped. The eight focused suites in `make rust-test-xdp-devmap-hash`, Go fixture
-lint, Makefile lint, and BPF fixture formatting also passed. Aya and the lockfile
-remain unchanged.
+The DEVMAP_HASH egress checkpoint passed `direnv exec . make rust-check`:
+formatting, Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
+fake-kernel lifecycle tests, and all 132 real-kernel tests, with none ignored or
+skipped. The eight focused suites in `make rust-test-xdp-egress-hash` and Makefile
+lint also passed. The full gate includes all sixteen array/hash egress suites,
+including the four array-map jumbo rejection tests, plus existing unicast and
+broadcast coverage. Aya and the lockfile remain unchanged.
 
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
@@ -145,8 +167,14 @@ checked against tracefs. The restriction is explicit in the
 [Linux 6.18.54 clone paths](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/devmap.c).
 No production changes or skipped tests were needed. See
 [broadcast acceptance](../../rust/README.md#xdp-devmap-broadcast-and-ingress-exclusion).
+The hash-backed suites repeat this lifecycle using three arbitrary keys beyond
+capacity three, checking the exact populated key set rather than array slots.
+`make rust-test-xdp-broadcast` runs both map types; the eight hash-only suites are
+available through `make rust-test-xdp-broadcast-hash`.
 
-Four egress suites exercise `xdp/devmap` PASS/DROP programs through real traffic,
+Twelve positive egress suites exercise `xdp/devmap` or `xdp.frags/devmap` PASS/DROP
+programs through real traffic (four ordinary array-map suites and eight ordinary/
+genuine multi-buffer hash-map suites),
 live entry updates, successful dispatcher replacement, failed attach/detach
 publication restoration, survivor rebuilding, and last detach. The loader keeps
 ordinary interface XDP as EXT but loads `xdp/devmap` and `xdp.frags/devmap` as native
@@ -157,16 +185,29 @@ ownership paths. Removing a program's owned pins/record leaves map-held kernel
 references alive; deleting the entry or releasing the final map reference releases
 the program. The tests verify both orders and eventual kernel reclamation.
 
-Four additional suites record the multi-buffer egress boundary on both stores and
-ingress modes. Aya 0.14 preserves `BPF_F_XDP_HAS_FRAGS` for native XDP but drops it
-when overriding a program as an extension. Linux records a linear DEVMAP owner
+Four additional array-map suites record the multi-buffer egress boundary on both
+stores and ingress modes. Aya 0.14 preserves `BPF_F_XDP_HAS_FRAGS` for native XDP but drops it
+when overriding a program as an extension. Linux records a linear array DEVMAP owner
 and rejects a fragment-capable egress program with `EINVAL`. Rejected updates must
 preserve empty/populated entries, dispatcher identity, and successful full-payload
 jumbo unicast; the rejected program must never execute. Review of Aya's public API
 found no extension flag setter or XDP-to-extension conversion. Keep upstream Aya
 unchanged; code TODOs identify the flag preservation needed before adding positive
-multi-buffer egress execution tests. See
+array DEVMAP multi-buffer egress execution tests. See
 [egress acceptance](../../rust/README.md#xdp-devmap-egress-programs).
+
+Hash-backed jumbo egress uses the same public loader and lifecycle. On Linux
+6.18.54, [`map_type_contains_progs`](https://github.com/gregkh/linux/blob/v6.18.54/include/linux/bpf.h#L2151)
+omits DEVMAP_HASH, so loading the ingress extension does not initialize hash
+ownership. The first native egress insertion initializes compatible ownership;
+[`bpf_prog_map_compatible`](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/core.c#L2308)
+still rejects later programs with mismatched fragment flags. Positive tests prove
+both ordinary and genuine multi-buffer PASS/DROP, exact context and helper reads,
+live updates at capacity two, failed updates preserving both sparse entries,
+replacement/restoration, and map-held lifetime through managed unload and retry.
+Closing the retained map releases the final DROP program. This is acceptance of
+existing behavior on the tested kernel, not a repair of Aya's extension flags or
+a claim that array DEVMAP supports jumbo egress.
 
 The full gate uses the shared Go/Rust kernel-build helper outside the sandbox,
 allowing Nix to discover and realize the matching development output; see the
@@ -207,11 +248,12 @@ Go. The clearest addition in `e64d4ccb2` is native DEVMAP egress support:
   currently leaves its fragment flag zero; successful loading of an `xdp.frags`
   selection does not establish this packet-path behavior.
 
-The TX, redirect, DEVMAP/DEVMAP_HASH unicast, and DEVMAP broadcast work expanded
+The TX, redirect, and DEVMAP/DEVMAP_HASH unicast and broadcast work expanded
 packet and lifecycle acceptance for existing Rust behavior. Egress adds a
 production loader capability. DEVMAP entry updates still use a test helper;
 there is no production map-editing API or shared-map protocol in this slice.
-Multi-buffer egress pairing awaits upstream Aya extension flag preservation,
+Array DEVMAP multi-buffer egress pairing awaits upstream Aya extension flag
+preservation,
 and Linux 6.18.54 rejects
 multi-buffer fan-out. These boundaries are covered by explicit rejection tests.
 
@@ -1623,14 +1665,23 @@ for multiple eligible targets with `EOPNOTSUPP`; an error tracepoint observer
 proves this kernel boundary through replacement and rollback. DEVMAP egress now
 loads as native XDP and proves ordinary-frame PASS/DROP on both stores and ingress
 modes, including map-held program lifetime through managed unload. Multi-buffer
-egress awaits upstream Aya extension fragment flags; explicit rejection tests
+array-map egress awaits upstream Aya extension fragment flags; explicit rejection tests
 retain successful jumbo unicast without egress. DEVMAP_HASH now repeats ordinary
 and genuine multi-buffer unicast on both stores/modes, with sparse-key semantics,
 capacity rejection, exact contents including an unused entry, live target updates,
 PASS/DROP fallback, replacement/restoration, and reclamation. No production changes
-were needed. Next, establish DEVMAP_HASH broadcast and ingress exclusion, followed
-by hash-backed egress acceptance. Physical NIC packet execution and actual hardware
-offload remain unverified.
+were needed. DEVMAP_HASH broadcast now repeats ingress exclusion, empty/sparse map
+behavior, live updates, continuation into DROP, replacement/restoration, either
+survivor, and reclamation, with exact sparse key-set checks throughout. Both modes
+and stores retain successful ordinary-frame fan-out and genuine single-target
+jumbo delivery; multiple-target jumbo rejection is observed explicitly. Hash-backed
+egress now proves ordinary and genuine multi-buffer PASS/DROP, interface context,
+fragment helper reads, sparse-key preservation, compatible program updates,
+replacement/restoration, and map-held lifetime through managed unload and retry.
+Its first native egress update initializes compatible hash ownership on Linux
+6.18.54; the array-map Aya boundary remains unchanged. Physical NIC packet
+execution and actual hardware offload remain unverified. Next, establish TC ingress
+attachment with exact filter handles and clsact ownership before replacement.
 
 The uprobe mount-namespace helper, TC replacement with exact
 filter handles and clsact ownership, and TCX ordering remain later work in this

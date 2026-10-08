@@ -1144,10 +1144,10 @@ kernel reclamation. Final inventories and owned artifacts must be empty.
 
 This extends acceptance for the existing loader and lifecycle. No production API,
 persistence schema, Rust dependency, or Aya changes were required. Hash-backed
-broadcast/ingress exclusion and egress remain unverified; the next bounded slice
-is DEVMAP_HASH broadcast and ingress exclusion.
+broadcast, ingress exclusion, and ordinary/genuine multi-buffer native egress
+are covered below.
 
-The hash checkpoint passed `direnv exec . make rust-check`: formatting, Clippy,
+The hash unicast checkpoint passed `direnv exec . make rust-check`: formatting, Clippy,
 workspace tests, compile-fail contracts, Rustdoc, 38 shared fake-kernel lifecycle
 tests, and all 116 real-kernel tests, with none ignored or skipped. The eight
 focused hash suites, Go fixture lint, Makefile lint, and BPF fixture formatting
@@ -1190,17 +1190,23 @@ discovery and the optional `KERNEL_DEV` override are documented in
 
 ### XDP DEVMAP broadcast and ingress exclusion
 
-Run `direnv exec . make rust-test-xdp-broadcast` for eight real-kernel suites:
-SQLite/JSON, native/SKB ingress, and ordinary/multi-buffer frames. Each uses three
-veth pairs with map entries for `in0`, `out0`, and `out1`. Broadcast sends a copy
+Run `direnv exec . make rust-test-xdp-broadcast` for sixteen real-kernel suites:
+DEVMAP/DEVMAP_HASH, SQLite/JSON, native/SKB ingress, and ordinary/genuine multi-buffer
+frames. `direnv exec . make rust-test-xdp-broadcast-hash` selects the eight hash-backed
+suites. Each uses three veth pairs with map entries for `in0`, `out0`, and `out1`.
+Broadcast sends a copy
 to each eligible output. `BPF_F_EXCLUDE_INGRESS` suppresses the `in0` target and
 therefore prevents return to `source0`. Capture at both sinks, the sender, and
 local ingress verifies exact sequence counts and complete payloads. Sparse maps
 and live updates move delivery between sinks without rebuilding the dispatcher.
 The optional `RUST_XDP_BROADCAST_FILTER` Make variable selects an individual suite.
 
-The three-entry BPF fixture deliberately supplies out-of-range lookup key 99 and
-PASS fallback. Broadcast ignores that lookup: an empty map, or a map containing
+The array fixture uses keys `0`, `1`, and `2`; the three-entry hash fixture uses
+`7`, `0x80000001`, and `0xffffffff`, all beyond the capacity value. Exact populated
+key-set and value checks preserve every hash entry and reject unexpected entries
+through live updates, deletion/repopulation, replacement, restoration, and unload.
+Both fixtures deliberately supply absent lookup key 99 and PASS fallback.
+Broadcast ignores that lookup: an empty map, or a map containing
 only excluded ingress, consumes the frame and returns REDIRECT rather than PASS.
 Default proceed-on stops before the DROP member even in this case. Explicit
 REDIRECT continuation reaches DROP and suppresses all copies; exhausting the
@@ -1217,7 +1223,7 @@ when fan-out is rejected. The tests require zero copies and exactly three
 multi-buffer cases or claim kernel support for cloning fragments.
 
 A managed tracepoint fixture observes `xdp/xdp_redirect_err`, filtered by the
-original DEVMAP ID and ingress ifindex. Before loading it, the suite verifies
+original map ID and ingress ifindex. Before loading it, the suite verifies
 field offsets/sizes against the running tracefs format. This distinguishes the
 kernel's explicit restriction from an unexplained drop or a manager regression.
 The ordinary source checkout at `v6.12` did not contain these stable-kernel checks;
@@ -1231,15 +1237,18 @@ lifecycle. The Go helper accepts explicit map keys and an additional capture
 interface while retaining existing packet/map operations. No production command,
 persistence change, Rust dependency, or unsafe block was added.
 
-The next section adds DEVMAP egress programs. Hash-backed broadcast and egress,
-CPUMAP/XSKMAP, physical NICs, and actual hardware offload remain unverified.
+The next section adds DEVMAP and DEVMAP_HASH egress programs. CPUMAP/XSKMAP, physical NICs, and actual hardware offload remain
+unverified.
 Multi-buffer fan-out needs kernel support.
 The uprobe mount-namespace helper remains a separate attachment-family boundary.
 
-The broadcast checkpoint passed `direnv exec . make rust-check`: formatting,
-Clippy, workspace tests, compile-fail contracts, documentation, 38 fake-kernel
-lifecycle tests, and all 100 real-kernel tests, with none ignored or skipped.
-The eight focused broadcast suites, Go fixture lint, and Makefile lint also passed.
+The hash-backed broadcast checkpoint passed `direnv exec . make rust-check`:
+formatting, Clippy, workspace tests, compile-fail contracts, documentation, 38
+fake-kernel lifecycle tests, and all 124 real-kernel tests, with none ignored or
+skipped. This includes all sixteen array/hash broadcast suites and the existing
+unicast and egress suites. The eight focused suites in `rust-test-xdp-broadcast-hash`,
+Makefile lint, and BPF fixture formatting also passed. No production or Aya changes
+were required.
 NixOS kernel-build discovery and the optional `KERNEL_DEV` override are documented
 in [AGENTS.md](AGENTS.md).
 
@@ -1259,10 +1268,11 @@ map-editing command is needed. The managed kind remains `xdp`; the kernel kind i
 native egress programs before creating a dispatcher revision, including after
 store reopen. Unsupported CPUMAP sections fail preparation before runtime effects.
 
-Run `direnv exec . make rust-test-xdp-egress` for eight real-kernel suites.
-`RUST_XDP_EGRESS_FILTER` optionally selects one suite. Four ordinary-frame suites
-cross SQLite/JSON and driver/SKB ingress. They verify PASS/DROP delivery, exact
-egress execution counts and ingress/output interface context, live replacement
+Run `direnv exec . make rust-test-xdp-egress` for sixteen real-kernel suites.
+`direnv exec . make rust-test-xdp-egress-hash` selects the eight hash-backed suites;
+`RUST_XDP_EGRESS_FILTER` optionally selects one suite. Four array-map and four
+hash-map ordinary-frame suites cross SQLite/JSON and driver/SKB ingress. They verify
+PASS/DROP delivery, exact egress execution counts and ingress/output interface context, live replacement
 of the entry's program, rejection of interface extensions as egress, successful
 dispatcher replacement, failed attach/detach publication restoration, survivor
 rebuilding, and last detach. Updating a map takes a program FD; reading it returns
@@ -1277,7 +1287,7 @@ keeps the entry/program alive; closing that descriptor releases both. Bounded
 kernel observations verify eventual reclamation, and final managed inventories
 and artifacts must be empty.
 
-The other four suites load native `xdp.frags/devmap` programs and establish the
+Four array-map suites load native `xdp.frags/devmap` programs and establish the
 current multi-buffer pairing boundary. Aya 0.14's `.extension(name)` override
 does not preserve `BPF_F_XDP_HAS_FRAGS`, although its native XDP branch does.
 Fragment helpers can still execute against the verification dispatcher, so
@@ -1291,19 +1301,48 @@ Aya 0.14 exposes no extension load-flag setter or XDP-to-extension conversion;
 `XdpMode` controls attachment flags and cannot fix this. TODOs in the adapter and
 boundary test record what to revisit when upstream preserves extension fragment
 flags. Keep Aya unchanged and retain these checks until positive multi-buffer
-egress execution can be implemented through a supported API.
+array-map egress execution can be implemented through a supported API.
+
+Four additional hash-backed suites prove genuine jumbo `xdp.frags/devmap`
+PASS/DROP through the complete egress lifecycle. Linux 6.18.54's
+[`map_type_contains_progs`](https://github.com/gregkh/linux/blob/v6.18.54/include/linux/bpf.h#L2151)
+omits DEVMAP_HASH, so the ingress extension does not initialize its ownership;
+the first native egress update sets compatible fragment ownership.
+[`bpf_prog_map_compatible`](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/core.c#L2308)
+rejects later egress programs with mismatched fragment flags. The suite requires
+that exact `EINVAL` failure, retained program IDs/contents, and unchanged forwarding.
+Aya remains unchanged; this does not repair its extension flag handling or enable
+array DEVMAP jumbo egress.
+
+Both hash packet sizes use a two-entry map with selected key `0x80000001` and
+unrelated target key `0xffffffff`. Exact populated key sets and interface/program
+IDs survive updates at full capacity, failed extension/incompatible-program updates,
+successful replacement, failed attach/detach publication restoration, surviving
+redirect rebuild, deletion/repopulation, and managed egress unpinning/unload retry.
+The spare never redirects a missing selected key. All jumbo traffic requires full
+8014-byte payload capture and independent fragment, tail-read, and boundary-read
+counters in executing ingress/egress and receiving programs, plus ingress/output
+interface-context checks in egress.
+Deleting the selected entry releases an unpinned PASS program while the unrelated
+entry survives. Retaining the map descriptor keeps an unpinned DROP program alive
+after map-owner unload; closing it releases both map and program. Final inventories
+and managed artifacts must be empty.
 
 Go's current loader forces all managed XDP to EXT and clears its attach type, so
 native DEVMAP egress is beyond that Go path. Go still supports more of the overall
 bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
-behavior. Hash-backed broadcast and egress remain unverified; multi-buffer egress
-and fan-out remain separate library/kernel boundaries.
+behavior, as do hash-backed broadcast, ingress exclusion, and ordinary/genuine
+multi-buffer egress. Array-map multi-buffer egress and multi-buffer fan-out remain
+separate library/kernel boundaries. The next bounded slice is TC ingress attachment
+with exact filter handles and clsact ownership, before dispatcher replacement.
 
-The egress checkpoint passed `direnv exec . make rust-check`: formatting,
+The hash egress checkpoint passed `direnv exec . make rust-check`: formatting,
 Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
-fake-kernel lifecycle tests, and all 108 real-kernel tests, with none ignored or
-skipped. The eight focused egress suites, Go fixture lint, Makefile lint, and BPF
-fixture formatting checks also passed. Upstream Aya and the lockfile are unchanged.
+fake-kernel lifecycle tests, and all 132 real-kernel tests, with none ignored or
+skipped. This includes all sixteen array/hash egress suites: twelve positive
+ordinary/jumbo suites and four array-map jumbo rejection suites. The eight focused
+suites in `rust-test-xdp-egress-hash` and Makefile lint also passed. Upstream Aya,
+dependencies, and the persistence formats remain unchanged.
 
 ### Injectable kernel lifecycle
 
@@ -1338,6 +1377,6 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 116 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, all 132 real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.

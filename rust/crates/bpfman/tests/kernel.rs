@@ -551,6 +551,78 @@ fn json_xdp_devmap_broadcast_frags_skb() {
     );
 }
 
+#[test]
+fn sqlite_xdp_devmap_broadcast_hash() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::Linear,
+    );
+}
+
+#[test]
+fn sqlite_xdp_devmap_broadcast_hash_skb() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::Linear,
+    );
+}
+
+#[test]
+fn json_xdp_devmap_broadcast_hash() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::Linear,
+    );
+}
+
+#[test]
+fn json_xdp_devmap_broadcast_hash_skb() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::Linear,
+    );
+}
+
+#[test]
+fn sqlite_xdp_devmap_broadcast_hash_frags() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+}
+
+#[test]
+fn sqlite_xdp_devmap_broadcast_hash_frags_skb() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+}
+
+#[test]
+fn json_xdp_devmap_broadcast_hash_frags() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Drv,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+}
+
+#[test]
+fn json_xdp_devmap_broadcast_hash_frags_skb() {
+    xdp_broadcast::exercise_hash(
+        bpfman_store_json::Backend,
+        bpfman_model::XdpMode::Skb,
+        xdp_delivery::Frames::MultiBuffer,
+    );
+}
+
 #[path = "kernel/xdp_egress.rs"]
 mod xdp_egress;
 
@@ -592,6 +664,46 @@ fn json_xdp_devmap_egress_frags_boundary() {
 #[test]
 fn json_xdp_devmap_egress_frags_boundary_skb() {
     xdp_egress::fragments_boundary(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn sqlite_xdp_devmap_egress_hash() {
+    xdp_egress::exercise_hash(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn sqlite_xdp_devmap_egress_hash_skb() {
+    xdp_egress::exercise_hash(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn sqlite_xdp_devmap_egress_hash_frags() {
+    xdp_egress::fragments_hash(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn sqlite_xdp_devmap_egress_hash_frags_skb() {
+    xdp_egress::fragments_hash(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn json_xdp_devmap_egress_hash() {
+    xdp_egress::exercise_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn json_xdp_devmap_egress_hash_skb() {
+    xdp_egress::exercise_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
+}
+
+#[test]
+fn json_xdp_devmap_egress_hash_frags() {
+    xdp_egress::fragments_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
+}
+
+#[test]
+fn json_xdp_devmap_egress_hash_frags_skb() {
+    xdp_egress::fragments_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
 }
 
 #[test]
