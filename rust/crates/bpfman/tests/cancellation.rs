@@ -14,6 +14,7 @@ fn exercise<
     S: OpenStore
         + UnloadStore
         + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
         + bpfman_store::LinkStore
         + Copy
         + Send

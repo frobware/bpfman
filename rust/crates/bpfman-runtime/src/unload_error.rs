@@ -12,6 +12,8 @@ pub(super) enum Cause {
     #[error("{0}")]
     Invalid(&'static str),
     #[error(transparent)]
+    Link(crate::LinkCause),
+    #[error(transparent)]
     Kernel(#[from] bpfman_kernel::Error),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
@@ -20,10 +22,11 @@ pub(super) enum Cause {
 }
 
 pub(super) enum Failure<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > {
     Before(UnloadCause),
     Incomplete(Box<UnloadReport<S, K>>),
@@ -58,10 +61,11 @@ impl From<bpfman_store::Error> for UnloadCause {
 }
 
 impl<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > From<UnloadCause> for UnloadError<S, K>
 {
     fn from(cause: UnloadCause) -> Self {
@@ -75,6 +79,13 @@ impl UnloadCause {
     /// Application category; concrete backend diagnostics remain in the source chain.
     pub fn kind(&self) -> UnloadErrorKind {
         match &self.cause {
+            Cause::Link(e) => match e.kind() {
+                crate::LinkErrorKind::Cancelled => UnloadErrorKind::Cancelled,
+                crate::LinkErrorKind::NotFound => UnloadErrorKind::NotFound,
+                crate::LinkErrorKind::InvalidState => UnloadErrorKind::InvalidState,
+                crate::LinkErrorKind::Unsupported => UnloadErrorKind::Unsupported,
+                _ => UnloadErrorKind::Unavailable,
+            },
             Cause::Invalid(_) => UnloadErrorKind::InvalidState,
             Cause::Cancelled => UnloadErrorKind::Cancelled,
             Cause::Filesystem(e) if e.kind() == bpfman_fs::ErrorKind::Cancelled => {
@@ -103,14 +114,15 @@ impl UnloadCause {
 }
 
 impl<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > UnloadReport<S, K>
 {
     /// Program and standalone-link effects, including previous retry passes.
-    /// Dispatcher work is reported separately by [`Self::xdp_attempts`].
+    /// Dispatcher work is reported by [`Self::xdp_attempts`] and [`Self::tc_attempts`].
     pub fn attempts(&self) -> &[UnloadAttempt<UnloadCause>] {
         self.report.attempts()
     }
@@ -120,17 +132,23 @@ impl<
         self.xdp.attempts()
     }
 
+    /// TC filter, dispatcher and record cleanup outcomes before program teardown.
+    pub fn tc_attempts(&self) -> &[crate::UnloadTcAttempt<S, K>] {
+        self.tc.attempts()
+    }
+
     /// Retained work, including dependencies that could not yet be attempted.
     pub fn unresolved(&self) -> usize {
-        self.report.remaining().len() + self.xdp.unresolved()
+        self.report.remaining().len() + self.xdp.unresolved() + self.tc.unresolved()
     }
 }
 
 impl<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > UnloadError<S, K>
 {
     /// Backend-independent failure category.
@@ -140,7 +158,7 @@ impl<
         }
         match self
             .report()
-            .and_then(|r| r.xdp.cause())
+            .and_then(|r| r.xdp.cause().or_else(|| r.tc.cause()))
             .map(crate::LinkCause::kind)
         {
             Some(crate::LinkErrorKind::Cancelled) => UnloadErrorKind::Cancelled,
@@ -180,10 +198,11 @@ impl<
 }
 
 impl<
-    S: bpfman_store::XdpReplacementStore + UnloadStore + LinkStore,
+    S: bpfman_store::XdpReplacementStore + bpfman_store::TcStore + UnloadStore + LinkStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > Bpfman<S, K>
 where
     S::Reader: LinkReader,
@@ -239,7 +258,7 @@ where
             |writer| {
                 pending
                     .take()
-                    .map(|report| crate::unload_xdp::resume(self, &writer, report))
+                    .map(|report| crate::unload::resume(self, &writer, report))
             },
         );
 
@@ -267,10 +286,11 @@ where
 }
 
 impl<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > fmt::Debug for UnloadReport<S, K>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -282,10 +302,11 @@ impl<
 }
 
 impl<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > fmt::Debug for UnloadError<S, K>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -294,10 +315,11 @@ impl<
 }
 
 impl<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > fmt::Display for UnloadError<S, K>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -313,6 +335,12 @@ impl<
             if let Some(attempt) = report.xdp_attempts().last() {
                 if let Err(error) = attempt.outcome() {
                     write!(f, "; XDP link {}: {error}", attempt.link_id())?;
+                }
+            }
+
+            for attempt in report.tc_attempts() {
+                if let Err(error) = attempt.outcome() {
+                    write!(f, "; TC link {}: {error}", attempt.link_id())?;
                 }
             }
 
@@ -341,16 +369,19 @@ impl<
 }
 
 impl<
-    S: UnloadStore + LinkStore + bpfman_store::XdpStore,
+    S: UnloadStore + LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
     K: bpfman_kernel::ProgramResources
         + bpfman_kernel::TracepointLinks
-        + bpfman_kernel::XdpReplacement,
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
 > std::error::Error for UnloadError<S, K>
 {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         if let Some(cause) = self.primary() {
             return Some(cause);
         }
-        self.report().and_then(|r| r.xdp.cause()).map(|e| e as _)
+        self.report()
+            .and_then(|r| r.xdp.cause().or_else(|| r.tc.cause()))
+            .map(|e| e as _)
     }
 }

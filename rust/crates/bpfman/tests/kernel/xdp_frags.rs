@@ -155,7 +155,13 @@ fn packets(c: &Context, peer: &str, active: &[NonZeroU32], inactive: &[NonZeroU3
 
 pub(super) fn exercise<S>(backend: S, mode: XdpMode)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     for keep_first in [false, true] {

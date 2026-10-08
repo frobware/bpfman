@@ -10,7 +10,7 @@ use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram, TcAttach};
 use bpfman_store::*;
 use std::{num::NonZeroU32, process::Command};
 
-fn tc(network: &Network, args: &[&str]) -> serde_json::Value {
+pub(super) fn tc(network: &Network, args: &[&str]) -> serde_json::Value {
     let selector = network.namespace();
     let mut cmd = Command::new("nsenter");
     cmd.arg(format!("--net={}", selector.as_str()))
@@ -29,7 +29,7 @@ fn tc(network: &Network, args: &[&str]) -> serde_json::Value {
     }
 }
 
-fn clsact(network: &Network) -> bool {
+pub(super) fn clsact(network: &Network) -> bool {
     tc(network, &["qdisc", "show", "dev", "in0"])
         .as_array()
         .expect("qdiscs")
@@ -37,7 +37,7 @@ fn clsact(network: &Network) -> bool {
         .any(|q| q["kind"] == "clsact")
 }
 
-fn request(id: NonZeroU32, network: &Network) -> TcAttach {
+pub(super) fn request(id: NonZeroU32, network: &Network) -> TcAttach {
     TcAttach {
         program_id: id,
         interface: "in0".parse().expect("interface"),
@@ -48,7 +48,7 @@ fn request(id: NonZeroU32, network: &Network) -> TcAttach {
     }
 }
 
-fn count(c: &Context, id: NonZeroU32) -> u64 {
+pub(super) fn count(c: &Context, id: NonZeroU32) -> u64 {
     let map = aya::maps::MapData::from_pin(c.layout.map_directory_path(id).join("tc_stats"))
         .expect("TC map");
     let map: aya::maps::PerCpuArray<_, u64> = aya::maps::Map::PerCpuArray(map)
@@ -57,7 +57,7 @@ fn count(c: &Context, id: NonZeroU32) -> u64 {
     map.get(&0, 0).expect("counter").iter().sum()
 }
 
-fn traffic(network: &Network, local: u32) {
+pub(super) fn traffic(network: &Network, local: u32) {
     let output = network.probe(&["packets", "64"]);
     let counts: Vec<u32> = serde_json::from_slice(&output).expect("capture counts");
     assert_eq!(counts, vec![0, local, 0]);
@@ -190,10 +190,12 @@ where
         app.list_link_records().expect("links"),
         vec![record.clone()]
     );
-    assert!(
-        app.unload(id).is_err(),
-        "attached unload must refuse before modifying TC state"
-    );
+    let cancelled = bpfman_runtime::Cancellation::new();
+    cancelled.cancel();
+    let error = app
+        .unload_with_cancellation(id, &cancelled)
+        .expect_err("cancelled unload admission");
+    assert!(error.report().is_none());
     traffic(&network, 0);
 
     let marker = c.layout.root().join("tc").join(format!(
@@ -204,6 +206,12 @@ where
     assert_eq!(evidence, vec![1]);
     std::fs::write(&marker, [9]).expect("malformed evidence fixture");
     assert!(app.detach_tc(record.id).is_err());
+    assert!(
+        app.unload(id)
+            .expect_err("malformed ownership refuses unload")
+            .report()
+            .is_none()
+    );
     traffic(&network, 0);
     std::fs::write(&marker, &evidence).expect("restore ownership evidence");
 
@@ -234,6 +242,12 @@ where
     assert!(
         app.detach_tc(record.id).is_err(),
         "foreign program identity must be preserved"
+    );
+    assert!(
+        app.unload(id)
+            .expect_err("foreign filter refuses unload")
+            .report()
+            .is_none()
     );
     assert_eq!(
         app.list_link_records().expect("unchanged intent"),
@@ -420,7 +434,26 @@ pub(super) fn cli(store: &'static str) {
     traffic(&network, 3);
     c.run(&rust(), &["link", "detach", &link], true);
     assert!(!clsact(&network));
+    c.run(
+        &rust(),
+        &[
+            "link",
+            "attach",
+            "tc",
+            &id,
+            "in0",
+            "ingress",
+            "--netns",
+            namespace.as_str(),
+            "--priority",
+            "25",
+        ],
+        true,
+    );
+    traffic(&network, 0);
     c.run(&rust(), &["program", "unload", &id], true);
+    assert!(!clsact(&network));
+    traffic(&network, 3);
     c.no_artifacts();
 }
 

@@ -46,6 +46,23 @@ impl<S: TcStore, K: TcLifecycle> XdpResource for Resource<S, K> {
     }
 }
 
+/// Validated, unattempted detach ownership. Observation has no destructive effects.
+pub(super) struct Teardown<S: TcStore, K: TcLifecycle>(Vec<Resource<S, K>>);
+
+impl<S: TcStore, K: TcLifecycle> Teardown<S, K> {
+    pub(super) fn run(
+        self,
+        app: &Bpfman<S, K>,
+        w: &RuntimeWriter<'_>,
+    ) -> Result<TcReport<S, K>, TcError<S, K>> {
+        finish(None, cleanup(app, w, XdpCleanup::new(self.0)))
+    }
+
+    pub(super) fn unresolved(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// TC failure retaining all unresolved ownership and every actual cleanup attempt.
 pub struct TcError<S: TcStore, K: TcLifecycle> {
     cause: Option<LinkCause>,
@@ -60,7 +77,7 @@ pub struct TcReport<S: TcStore, K: TcLifecycle> {
 }
 
 impl<S: TcStore, K: TcLifecycle> TcError<S, K> {
-    fn primary(&self) -> Option<&LinkCause> {
+    pub(super) fn primary(&self) -> Option<&LinkCause> {
         self.admission.as_ref().or(self.cause.as_ref()).or_else(|| {
             self.attempts()
                 .iter()
@@ -334,28 +351,9 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
                 },
                 |w| {
                     check(c).map_err(TcError::from)?;
-                    let (snapshot, record) = self
-                        .store
-                        .observe_tc(&w, id)
-                        .map_err(|e| TcError::from(LinkCause::from(e)))?
-                        .ok_or_else(|| TcError::from(LinkCause::from(Cause::NotFound)))?;
-                    let (stage, filter) = self
-                        .kernel
-                        .observe_tc(&w, &snapshot)
-                        .map_err(|e| TcError::from(LinkCause::from(e)))?;
+                    let (_, teardown) = self.observe_tc_locked(&w, id).map_err(TcError::from)?;
                     check(c).map_err(TcError::from)?;
-                    finish(
-                        None,
-                        cleanup(
-                            self,
-                            &w,
-                            XdpCleanup::new(vec![
-                                Resource::Record(record),
-                                Resource::Stage(stage),
-                                Resource::Filter(filter),
-                            ]),
-                        ),
-                    )
+                    teardown.run(self, &w)
                 },
             )
             .map_err(|e| TcError::from(LinkCause::from(e)))?
@@ -379,15 +377,12 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
                 cancelled: Some(c.flag()),
             },
             |w| {
-                let Some(mut error) = pending.take() else {
+                let Some(error) = pending.take() else {
                     return Err(TcError::from(LinkCause::from(Cause::Invalid(
                         "missing TC retry ownership",
                     ))));
                 };
-                let Some(report) = error.cleanup.take() else {
-                    return Err(error);
-                };
-                finish(error.cause, cleanup(self, &w, report.retry()))
+                self.retry_tc_locked(&w, error)
             },
         ) {
             Ok(result) => result,
@@ -399,5 +394,33 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
                 None => Err(TcError::from(LinkCause::from(cause))),
             },
         }
+    }
+
+    pub(super) fn observe_tc_locked(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+    ) -> Result<(StoredLink, Teardown<S, K>), LinkCause> {
+        let (snapshot, record) = self.store.observe_tc(w, id)?.ok_or(Cause::NotFound)?;
+        let (stage, filter) = self.kernel.observe_tc(w, &snapshot)?;
+        Ok((
+            snapshot.member,
+            Teardown(vec![
+                Resource::Record(record),
+                Resource::Stage(stage),
+                Resource::Filter(filter),
+            ]),
+        ))
+    }
+
+    pub(super) fn retry_tc_locked(
+        &self,
+        w: &RuntimeWriter<'_>,
+        mut error: TcError<S, K>,
+    ) -> Result<TcReport<S, K>, TcError<S, K>> {
+        let Some(report) = error.cleanup.take() else {
+            return Err(error);
+        };
+        finish(error.cause, cleanup(self, w, report.retry()))
     }
 }

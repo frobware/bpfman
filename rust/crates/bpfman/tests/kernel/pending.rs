@@ -12,7 +12,13 @@ use bpfman_store::{CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore};
 
 pub(super) fn pinned<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + LinkStore + UnloadStore + bpfman_store::XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + LinkStore
+        + UnloadStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader,
 {
     let c = Context::new();
@@ -176,7 +182,13 @@ where
 
 pub(super) fn unpinned<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + LinkStore + UnloadStore + bpfman_store::XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + LinkStore
+        + UnloadStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader,
 {
     // Cover intent whose kernel acquisition never ran, and intent left after

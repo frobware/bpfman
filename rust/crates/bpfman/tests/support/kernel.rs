@@ -39,6 +39,12 @@ pub(super) enum Point {
     RemoveExtension,
     RemoveDispatcher,
     RemoveRevision,
+    PrepareTc,
+    StageTc,
+    FilterTc,
+    ObserveTc,
+    RemoveTcFilter,
+    RemoveTcStage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,6 +64,8 @@ enum Resource {
     Extension(NonZeroU32),
     Outer(NonZeroU32),
     LiveOuter(NonZeroU32),
+    TcStage(XdpKey, NonZeroU32, NonZeroU32),
+    TcFilter(XdpKey, NonZeroU32, NonZeroU32),
 }
 
 struct Program {
@@ -129,9 +137,10 @@ impl State {
     }
 
     fn collect(&mut self) {
-        self.links.retain(|id, link| link.handles > 0 || self.resources.keys().any(|r| matches!(r, Resource::Link(n) | Resource::Extension(n) | Resource::Outer(n) if n == id)));
+        self.links.retain(|id, link| link.handles > 0 || self.resources.keys().any(|r| matches!(r, Resource::Link(n) | Resource::Extension(n) | Resource::Outer(n) | Resource::TcStage(_, _, n) if n == id)));
         self.programs.retain(|id, program| program.handles > 0
             || self.resources.contains_key(&Resource::Program(*id)) || self.resources.contains_key(&Resource::Dispatcher(*id))
+            || self.resources.keys().any(|r| matches!(r, Resource::TcStage(_, n, _) | Resource::TcFilter(_, n, _) if n == id))
             || self.links.values().any(|l| l.observation.program_id == *id || matches!(l.observation.details, KernelLinkDetails::Tracing { target_obj_id, .. } if target_obj_id == id.get())));
         self.maps.retain(|id, _| {
             self.resources.contains_key(&Resource::Map(*id))
@@ -547,7 +556,7 @@ impl ProgramLoad for FakeKernel {
         self.enter(Point::Load)?;
         let kind = match spec {
             ProgramSpec::Tracepoint(_) => "tracepoint",
-            ProgramSpec::Xdp(_) => "extension",
+            ProgramSpec::Xdp(_) | ProgramSpec::Tc(_) => "extension",
             _ => return Err(error(ErrorKind::Unsupported, "program type")),
         };
         Ok(self.new_program(spec.name().as_str(), kind, maps))
@@ -836,6 +845,23 @@ impl LinkObservations for FakeKernel {
         Ok(s.tracepoint_pins
             .get(&id)
             .map(|id| s.links[id].observation.clone()))
+    }
+
+    fn tc_pin(
+        &self,
+        runtime: &RuntimeDirectory,
+        details: &TcLink,
+    ) -> Result<Option<KernelLink>, Error> {
+        self.check_root(runtime.identity().expect("root"))?;
+        let s = self.state.lock().expect("state");
+        Ok(s.resources.keys().find_map(|r| match r {
+            Resource::TcStage(key, dispatcher, link)
+                if *key == details.key && *dispatcher == details.dispatcher_id =>
+            {
+                s.links.get(link).map(|l| l.observation.clone())
+            }
+            _ => None,
+        }))
     }
 
     fn extension_pin(
@@ -1235,5 +1261,167 @@ impl XdpReplacement for FakeKernel {
             cause,
             remaining: r,
         })
+    }
+}
+
+// The fake models owned TC stage/filter generations and EXT target lifetimes.
+// Qdisc and netlink identity guarantees remain real-kernel acceptance tests.
+impl TcLifecycle for FakeKernel {
+    type Prepared = PreparedXdp;
+    type Stage = Receipt;
+    type Filter = Receipt;
+
+    fn prepare_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        program: NonZeroU32,
+        interface: &InterfaceName,
+        netns: &NetworkNamespace,
+    ) -> Result<(XdpKey, PreparedXdp), Error> {
+        self.enter(Point::PrepareTc)?;
+        self.prepare_xdp(w, program, interface, netns)
+    }
+
+    fn stage_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        prepared: PreparedXdp,
+        _: TcProceedOn,
+    ) -> Acquisition<Receipt> {
+        let fail = |cause| EffectFailure {
+            cause,
+            remaining: None,
+        };
+        self.loaded(w, &prepared.extension).map_err(fail)?;
+        self.enter(Point::StageTc).map_err(fail)?;
+        let dispatcher = self.new_program("tc_dispatcher", "sched_cls", &[]);
+        let mut s = self.state.lock().expect("state");
+        if s.resources
+            .keys()
+            .any(|r| matches!(r, Resource::TcStage(key, _, _) if *key == prepared.key))
+        {
+            return Err(fail(error(ErrorKind::InvalidData, "occupied TC stage")));
+        }
+        let link_id = s.id();
+        s.links.insert(
+            link_id,
+            Link {
+                observation: KernelLink {
+                    id: link_id,
+                    program_id: prepared.extension.id,
+                    details: KernelLinkDetails::Tracing {
+                        attach_type: 0,
+                        target_obj_id: dispatcher.id.get(),
+                        target_btf_id: 1,
+                    },
+                },
+                handles: 0,
+                attached: true,
+            },
+        );
+        drop(s);
+        let receipt = self
+            .insert(Resource::TcStage(prepared.key, dispatcher.id, link_id))
+            .map_err(fail)?;
+        self.after(Point::StageTc, receipt)
+    }
+
+    fn attach_tc_filter(&self, w: &RuntimeWriter<'_>, stage: &Receipt) -> Acquisition<Receipt> {
+        let fail = |cause| EffectFailure {
+            cause,
+            remaining: None,
+        };
+        self.validate(w, stage).map_err(fail)?;
+        let Resource::TcStage(key, dispatcher, _) = stage.resource else {
+            unreachable!("TC stage");
+        };
+        if self
+            .state
+            .lock()
+            .expect("state")
+            .resources
+            .keys()
+            .any(|r| matches!(r, Resource::TcFilter(k, _, _) if *k == key))
+        {
+            return Err(fail(error(ErrorKind::InvalidData, "occupied TC filter")));
+        }
+        let handle = self.state.lock().expect("state").id();
+        self.acquire(
+            w,
+            Point::FilterTc,
+            Resource::TcFilter(key, dispatcher, handle),
+        )
+    }
+
+    fn tc_ids(stage: &Receipt) -> Result<(NonZeroU32, NonZeroU32), Error> {
+        let Resource::TcStage(_, dispatcher, link) = stage.resource else {
+            return Err(error(ErrorKind::InvalidData, "TC stage"));
+        };
+        Ok((dispatcher, link))
+    }
+
+    fn tc_filter(filter: &Receipt) -> Result<(u16, NonZeroU32), Error> {
+        let Resource::TcFilter(_, _, handle) = filter.resource else {
+            return Err(error(ErrorKind::InvalidData, "TC filter"));
+        };
+        Ok((50, handle))
+    }
+
+    fn observe_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &TcSnapshot,
+    ) -> Result<(Receipt, Receipt), Error> {
+        self.writer(w)?;
+        self.enter(Point::ObserveTc)?;
+        let LinkState::Attached { kernel_id } = snapshot.member.state else {
+            return Err(error(ErrorKind::InvalidData, "TC member not attached"));
+        };
+        let d = &snapshot.details;
+        let stage = self
+            .observed(Resource::TcStage(d.key, d.dispatcher_id, kernel_id))
+            .ok_or_else(|| error(ErrorKind::Missing, "TC stage missing"))?;
+        let filter = self
+            .observed(Resource::TcFilter(d.key, d.dispatcher_id, d.filter_handle))
+            .ok_or_else(|| error(ErrorKind::Missing, "TC filter missing"))?;
+        let s = self.state.lock().expect("state");
+        let link = s
+            .links
+            .get(&kernel_id)
+            .ok_or_else(|| error(ErrorKind::Missing, "TC extension missing"))?;
+        if link.observation.program_id != snapshot.member.program_id || d.filter_priority != 50 {
+            return Err(error(ErrorKind::InvalidData, "TC member changed"));
+        }
+        Ok((stage, filter))
+    }
+
+    fn remove_tc_filter(&self, w: &RuntimeWriter<'_>, filter: Receipt) -> Removal<Receipt> {
+        self.remove(w, Point::RemoveTcFilter, filter)
+    }
+
+    fn remove_tc_stage(&self, w: &RuntimeWriter<'_>, stage: Receipt) -> Removal<Receipt> {
+        let result = (|| {
+            self.validate(w, &stage)?;
+            if let Resource::TcStage(key, _, _) = stage.resource {
+                if self
+                    .state
+                    .lock()
+                    .expect("state")
+                    .resources
+                    .keys()
+                    .any(|r| matches!(r, Resource::TcFilter(k, _, _) if *k == key))
+                {
+                    return Err(error(ErrorKind::InvalidData, "TC filter still active"));
+                }
+            }
+            Ok(())
+        })();
+        if let Err(cause) = result {
+            return Err(EffectFailure {
+                cause,
+                remaining: stage,
+            });
+        }
+        self.remove(w, Point::RemoveTcStage, stage)
     }
 }

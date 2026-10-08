@@ -12,7 +12,13 @@ use bpfman_store::*;
 
 pub(super) fn exercise<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     for unload_first in [false, true] {

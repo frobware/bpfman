@@ -12,7 +12,13 @@ use bpfman_store::{CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore};
 
 pub(super) fn exercise<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + UnloadStore + bpfman_store::XdpReplacementStore + LinkStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
+        + LinkStore
+        + Clone,
     S::Reader: LinkReader,
 {
     let c = Context::new();

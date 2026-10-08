@@ -368,8 +368,9 @@ kernel observations. `program get ID [-o text|json]` observes one managed progra
 including its maps, statistics, and links. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. `--all` and
 kernel link state filters remain unsupported. Unload supports a tracepoint with private maps and pending or finalised
-standalone links, an XDP extension, a detached TC extension, or a native DEVMAP
-egress program with private maps. Detach TC links explicitly before program unload.
+standalone links, an attached XDP or TC extension, or a native DEVMAP
+egress program with private maps. Dispatcher cleanup completes before program
+teardown.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
@@ -1341,7 +1342,7 @@ bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
 behavior, as do hash-backed broadcast, ingress exclusion, and ordinary/genuine
 multi-buffer egress. Array-map multi-buffer egress and multi-buffer fan-out remain
 separate library/kernel boundaries. TC ingress attachment is described below;
-attached-program unload is next, before dispatcher replacement.
+attached-program unload is supported, with dispatcher replacement next.
 
 The hash egress checkpoint passed `direnv exec . make rust-check`: formatting,
 Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
@@ -1389,7 +1390,7 @@ on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 
 
-## TC ingress attachment
+## TC ingress attachment and unload
 
 A managed TC classifier loads as EXT against an unpinned native TC dispatcher.
 The first ingress attachment stages a new dispatcher and slot-zero freplace link,
@@ -1421,6 +1422,17 @@ cancellable retry admission. Failed publication compensates the acquired filter,
 clsact and pins. A failed conditional store deletion retains only that record receipt.
 An in-flight commit decides publication even if cancellation arrives.
 
+`program unload PROGRAM_ID` also detaches all TC links. Admission validates every
+attachment before destructive effects, then consumes exact filter, dispatcher and
+conditional record receipts under the same writer lock. Failed prerequisites retain
+ownership and block program/map/bytecode removal; `UnloadReport::tc_attempts()`
+exposes each link's cleanup history. `retry_unload` resumes only unresolved work;
+completed links are not detached again. Retry admission may be cancelled without
+losing receipts, while an admitted pass finishes despite later cancellation. A new
+attachment created between passes blocks program teardown until explicitly handled.
+Retained reports can be retried using a reopened application; recovering a report
+lost on process exit remains future work.
+
 Clsact ownership lives in a confined, singly linked one-byte receipt at
 `<runtime>/tc/dispatcher_<nsid>_<ifindex>_1`, separate from operator metadata.
 Reopened detach preserves pre-existing empty clsact qdiscs. A created clsact is
@@ -1437,15 +1449,16 @@ the unchanged `TestTC_LoadAndGet` and `TestTC_LinkRoundTrip` scripts on both sto
 The lifecycle tests require exact marked-packet counts, preserve foreign filters
 at the same priority on both hooks, reopen before detach, cross publication and
 cleanup faults, retain retry/cancellation history, and verify empty inventories and
-runtime artifacts after detached-program unload.
+runtime artifacts after detached and attached-program unload.
 
-This checkpoint passed `direnv exec . make rust-check`: formatting, Clippy, all
-userspace and compile-fail contracts, 38 shared fake-kernel lifecycle tests, all
-140 real-kernel tests (none ignored), and documentation. The focused TC target,
-Makefile lint, shell checks, and C fixture formatting also passed. Userspace
-contracts run before the complete serial kernel suite in the normal gate.
+This attached-unload checkpoint passed `direnv exec . make rust-check`: formatting,
+Clippy, all userspace and compile-fail contracts, 50 shared fake-kernel lifecycle
+tests, all 142 real-kernel tests (none ignored), and documentation. The serial
+kernel suite completed in 1747.62 seconds. The focused TC target passed two store
+contracts and ten kernel/CLI/unchanged-script checks. Userspace contracts run
+before the complete serial kernel suite in the normal gate.
 
-Replacement, egress, automatic attached-program unload, TCX, outer-filter status,
-and deleted-namespace/orphan repair remain unsupported. Qdisc inspection/deletion
+Replacement, egress, TCX, outer-filter status, and deleted-namespace/orphan repair
+remain unsupported. Qdisc inspection/deletion
 uses separate netlink requests and is not atomic against privileged tools changing
 the same objects outside bpfman's writer lock.

@@ -1,12 +1,9 @@
 //! Dispatcher prerequisites for program teardown, sharing its writer and retry budget.
-use crate::{
-    Bpfman, LinkCause, UnloadCause, UnloadError, UnloadReport, XdpError, XdpReport, unload,
-    unload_error::{Cause, Failure},
-};
+use crate::{Bpfman, LinkCause, UnloadCause, XdpError, XdpReport, unload_error::Cause};
 use bpfman_fs::{RuntimeIdentity, RuntimeWriter};
-use bpfman_kernel::{ProgramResources, TracepointLinks, XdpReplacement};
+use bpfman_kernel::XdpReplacement;
 use bpfman_model::{LinkDetails, StoredLink};
-use bpfman_store::{LinkReader, LinkStore, OpenStore, UnloadStore, XdpReplacementStore, XdpStore};
+use bpfman_store::{LinkReader, OpenStore, XdpReplacementStore, XdpStore};
 use std::{
     collections::VecDeque,
     num::{NonZeroU32, NonZeroU64},
@@ -44,6 +41,14 @@ pub(super) struct Progress<S: XdpStore, K: XdpReplacement> {
 }
 
 impl<S: XdpStore, K: XdpReplacement> Progress<S, K> {
+    pub(super) fn program_id(&self) -> NonZeroU32 {
+        self.program_id
+    }
+
+    pub(super) fn blocked(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub(super) fn unresolved(&self) -> usize {
         self.pending.len()
             + self
@@ -132,67 +137,7 @@ fn same_member(a: &StoredLink, b: &StoredLink) -> bool {
         && a_details.proceed_on == b_details.proceed_on
 }
 
-pub(super) fn resume<S, K>(
-    app: &Bpfman<S, K>,
-    w: &RuntimeWriter<'_>,
-    mut report: UnloadReport<S, K>,
-) -> Result<UnloadReport<S, K>, UnloadError<S, K>>
-where
-    S: XdpReplacementStore + UnloadStore + LinkStore,
-    S::Reader: LinkReader,
-    K: XdpReplacement + ProgramResources + TracepointLinks,
-{
-    if let Err(cause) = advance(app, w, &mut report.xdp) {
-        return Err(UnloadError {
-            failure: Failure::RetryBlocked {
-                cause,
-                report: Box::new(report),
-            },
-        });
-    }
-    if !report.xdp.pending.is_empty() {
-        return Err(UnloadError {
-            failure: Failure::Incomplete(Box::new(report)),
-        });
-    }
-    // A later writer may have attached another member while recovery was retained.
-    // Refuse program teardown until that new prerequisite is handled explicitly.
-    if !report.xdp.attempts.is_empty() {
-        let checked = (|| -> Result<(), UnloadCause> {
-            if app
-                .store
-                .open(w)?
-                .read_links()?
-                .iter()
-                .any(|l| l.program_id == report.xdp.program_id)
-            {
-                return Err(Cause::Invalid(
-                    "program acquired new links during XDP unload recovery",
-                )
-                .into());
-            }
-            Ok(())
-        })();
-        if let Err(cause) = checked {
-            return Err(UnloadError {
-                failure: Failure::RetryBlocked {
-                    cause,
-                    report: Box::new(report),
-                },
-            });
-        }
-    }
-    unload::finish(
-        unload::drain(
-            w,
-            &mut unload::real::Effects(&app.store, &app.kernel),
-            report.report.retry(),
-        ),
-        report.xdp,
-    )
-}
-
-fn advance<S: XdpReplacementStore, K: XdpReplacement>(
+pub(super) fn advance<S: XdpReplacementStore, K: XdpReplacement>(
     app: &Bpfman<S, K>,
     w: &RuntimeWriter<'_>,
     progress: &mut Progress<S, K>,

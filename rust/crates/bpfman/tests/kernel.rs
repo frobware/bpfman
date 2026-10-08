@@ -816,3 +816,16 @@ fn sqlite_tc_ingress_unchanged_attach_dsl() {
 fn json_tc_ingress_unchanged_attach_dsl() {
     cli::dsl("json", "TestTC_LinkRoundTrip");
 }
+
+#[path = "kernel/tc_unload.rs"]
+mod tc_unload;
+
+#[test]
+fn sqlite_tc_ingress_attached_unload() {
+    tc_unload::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_tc_ingress_attached_unload() {
+    tc_unload::exercise(bpfman_store_json::Backend);
+}

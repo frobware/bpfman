@@ -25,6 +25,7 @@ pub(super) fn exercise<
         + CommitLoad
         + UnloadStore
         + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
         + bpfman_store::LinkStore
         + Clone
         + Sync,

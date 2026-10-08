@@ -74,13 +74,10 @@ where
         let mut links = Vec::new();
 
         for record in records {
-            if matches!(record.details, bpfman_model::LinkDetails::Tc(_)) {
-                return Err(Cause::Invalid(
-                    "detach TC ingress links before unloading their program",
-                )
-                .into());
-            }
-            if matches!(record.details, bpfman_model::LinkDetails::Xdp(_)) {
+            if matches!(
+                record.details,
+                bpfman_model::LinkDetails::Xdp(_) | bpfman_model::LinkDetails::Tc(_)
+            ) {
                 // The enclosing unload prerequisite stage handles dispatcher links.
                 continue;
             }

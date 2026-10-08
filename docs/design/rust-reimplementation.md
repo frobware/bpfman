@@ -3,9 +3,10 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds singleton legacy TC ingress load/attach/get/list/detach on both
-stores, with exact filter handles, durable clsact ownership, and consuming cleanup
-retries. TC replacement, egress, and attached-program unload remain unfinished.
+checkpoint adds attached TC program unload to the singleton legacy ingress
+lifecycle on both stores. Every attachment is validated before destructive effects;
+exact filter, dispatcher and record cleanup precede program removal, with consuming
+receipts and explicit retries. TC replacement and egress remain unfinished.
 The preceding XDP checkpoint added native DEVMAP_HASH egress PASS/DROP for ordinary and genuine
 multi-buffer frames in driver and generic SKB modes on both SQLite and JSON stores,
 building on hash/array unicast, broadcast, and ingress exclusion acceptance.
@@ -67,8 +68,8 @@ Unlike array DEVMAP, Linux 6.18.54 omits DEVMAP_HASH from the load-time owner ch
 the first native egress update initializes hash ownership with its fragment flag.
 This permits genuine jumbo egress through the existing public API. Later egress
 updates still require compatible flags. Array DEVMAP's Aya boundary remains.
-The next bounded slice is TC attached-program unload with retained dispatcher
-prerequisites and explicit retries, followed by multi-member TC replacement.
+The next bounded slice is multi-member TC ingress dispatcher replacement, followed
+by TC egress.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -86,7 +87,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
-| TC ingress | One member per interface/namespace; native TC dispatcher with EXT member; exact netlink filter handle; borrowed/owned clsact; atomic publication, compensation, conditional deletion, and explicit retries | Replacement, egress, attached-program unload, TCX, and orphan repair |
+| TC ingress | One member per interface/namespace; native TC dispatcher with EXT member; exact netlink filter handle; borrowed/owned clsact; atomic publication, compensation, conditional deletion, explicit retries, and attached-program unload | Replacement, egress, TCX, and orphan repair |
 | Persistence | Go-compatible SQLite schema 2; new JSON stores use format 7 for TC; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
@@ -95,19 +96,20 @@ dispatcher prerequisite succeeds. Failed restoration or revision retirement
 retains ownership for an explicit retry; earlier successful detachments remain
 complete. Foreign occupied attach points and unsupported commands/flags fail
 clearly. See
-[the workspace checkpoint](../../rust/README.md#xdp-attachment-and-replacement)
-for the supported command surface.
+[the XDP checkpoint](../../rust/README.md#xdp-attachment-and-replacement) and
+[TC ingress lifecycle](../../rust/README.md#tc-ingress-attachment-and-unload) for the
+supported command surface.
 
-The TC ingress checkpoint passed `direnv exec . make rust-check`:
-formatting, Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
-fake-kernel lifecycle tests, and all 140 real-kernel tests, with none ignored or
-skipped. `make rust-test-tc-ingress` passed two shared store contracts and eight
-kernel/CLI/unchanged-script checks. CLI admission, persistence contracts, Makefile
-lint, shell checks, and C fixture formatting also passed. The normal gate now runs
-all userspace contracts before the complete serial kernel binary; CLI test targets
-are discovered automatically. Existing unicast, broadcast, and all sixteen
-array/hash egress suites remain in that gate, including the four array-map jumbo
-rejection tests. Aya and Go's SQLite schema remain unchanged.
+The TC attached-program unload checkpoint passed `direnv exec . make rust-check`:
+formatting, Clippy, all userspace and compile-fail contracts, documentation, 50
+shared fake-kernel lifecycle tests, and all 142 real-kernel tests, with none ignored
+or skipped. The serial kernel run completed in 1747.62 seconds.
+`make rust-test-tc-ingress` passed two shared store contracts and ten
+kernel/CLI/unchanged-script checks. The normal gate runs all userspace contracts
+before the complete serial kernel binary; CLI test targets are discovered
+automatically. Existing unicast, broadcast, and all sixteen array/hash egress suites
+remain in that gate, including the four array-map jumbo rejection tests. Aya and
+Go's SQLite schema remain unchanged.
 
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
@@ -1611,7 +1613,9 @@ Completed checkpoint:
 - Singleton legacy TC ingress loading/attachment with its native dispatcher,
   exact kernel-assigned filter handles, atomic publication, durable clsact ownership,
   malformed/foreign identity refusal, cancellation, compensation, and explicit
-  cleanup retries on both stores. TC programs must be detached before unloading.
+  cleanup retries on both stores. Attached-program unload adopts every attachment
+  before effects, defers program teardown until all TC prerequisites finish, and
+  retains nested cleanup history across explicit retries.
 - Explicit XDP namespaces with retained descriptors, isolated worker threads,
   persisted paths, namespace identity refusal/retry, and unchanged namespace DSL
   scripts on both stores. Namespace-aware JSON snapshots use format 6.
@@ -1694,8 +1698,8 @@ replacement/restoration, and map-held lifetime through managed unload and retry.
 Its first native egress update initializes compatible hash ownership on Linux
 6.18.54; the array-map Aya boundary remains unchanged. Physical NIC packet
 execution and actual hardware offload remain unverified. TC ingress now has a
-singleton attachment lifecycle; the next slice integrates its detach/recovery
-prerequisites into attached-program unload before implementing replacement.
+singleton attachment lifecycle with attached-program unload; the next slice adds
+multi-member dispatcher replacement.
 
 
 TC ingress uses Go's 84-byte `CONFIG` ABI and a separate unpinned native TC verifier
@@ -1738,8 +1742,31 @@ malformed ownership evidence, publication/cleanup faults, explicit retry, and
 pre-admission/late-commit cancellation. `make rust-test-tc-ingress` also selects the
 unchanged `TestTC_LoadAndGet` and `TestTC_LinkRoundTrip` corpus on both stores.
 
-This TC slice follows capabilities already present in Go; the XDP advantages
-recorded earlier remain. TC egress, replacement, automatic attached-program unload,
+Attached TC unload shares one writer scope with program teardown. Admission adopts
+all exact filter, namespace, dispatcher-pin, clsact-ownership and conditional store
+receipts before removing anything. The existing TC cleanup interpreter consumes
+filter → stage → record ownership; a failure retains blocked dependencies and
+prevents program/map/bytecode removal. Independent attachments each receive one
+pass. `UnloadReport::tc_attempts()` exposes each link's nested cleanup history;
+`retry_unload` resumes only unresolved ownership, including after reopening the
+application. Cancelled lock admission retains all receipts; cancellation after
+teardown starts does not abandon the pass. A foreign runtime is refused. New links
+attached by a later writer block retained program teardown until explicitly handled.
+Program cleanup retries never repeat completed TC detaches. Reconstructing a lost
+in-memory cleanup report after process failure remains separate recovery work.
+
+The shared fake tests cover multiple interfaces, preflight failure on a later
+attachment, filter/stage/store failures, blocked program effects, history across
+repeated failures, cancellation, foreign-runtime/kernel retries, new attachments
+between passes, and program cleanup failures. Real veth acceptance exercises two
+namespaces per managed program, malformed later ownership before any detach,
+reopened cleanup and retry, exact packet counts, borrowed/owned clsact, preserved
+foreign ingress/egress filters, conditional deletion and program-record faults,
+new-attachment refusal, and final kernel reclamation. CLI acceptance now unloads
+an attached TC program as well as exercising explicit detach.
+
+This TC slice follows capabilities already present in Go, including attached-program
+unload; the XDP advantages recorded earlier remain. TC egress, replacement,
 outer-filter observations, deleted-namespace/orphan repair, the uprobe mount-namespace
 helper, and TCX ordering remain later work in this phase. Unsupported operations
 continue to fail clearly.

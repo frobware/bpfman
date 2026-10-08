@@ -96,8 +96,10 @@ The architecture and compatibility goals are in
   PIPE 3 is bit four, dispatcher-return 30 is bit 31. Its CONFIG is 84 bytes;
   do not reuse the XDP ABI or return-code mask.
 - New JSON stores use format 7 for TC; formats 1–6 never upgrade implicitly.
-  Detach TC links explicitly before program unload until attached-unload
-  prerequisites are integrated. `make rust-test-tc-ingress` runs both stores.
+  Attached unload must adopt all TC attachments before effects, finish exact
+  filter/stage/record prerequisites before program teardown, and retain blocked
+  ownership for explicit retry. Reject newly acquired links between retry passes.
+  `make rust-test-tc-ingress` runs both stores, including attached unload.
 
 ## Visibility and crate boundaries
 

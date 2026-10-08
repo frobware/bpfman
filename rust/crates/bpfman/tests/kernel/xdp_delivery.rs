@@ -24,7 +24,9 @@ pub(super) struct Network(String);
 
 impl Network {
     pub(super) fn new() -> Self {
-        let network = Self(format!("bpfman-delivery-{}", std::process::id()));
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let network = Self(format!("bpfman-delivery-{}-{sequence}", std::process::id()));
         ip(&["netns", "add", &network.0]);
         for (a, b) in [("in0", "source0"), ("out0", "sink0")] {
             ip(&[
@@ -227,7 +229,13 @@ fn scenario<S>(
     keep_action: bool,
     frames: Frames,
 ) where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     let c = Context::new();
@@ -407,7 +415,13 @@ fn scenario<S>(
 
 pub(super) fn exercise<S>(backend: S, mode: XdpMode, frames: Frames)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     for action_code in [3, 4] {

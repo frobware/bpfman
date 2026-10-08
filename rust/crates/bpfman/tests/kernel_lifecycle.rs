@@ -10,6 +10,9 @@ mod kernel;
 #[path = "lifecycle/xdp_unload.rs"]
 mod xdp_unload;
 
+#[path = "lifecycle/tc_unload.rs"]
+mod tc_unload;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -29,6 +32,7 @@ trait Store:
     + UnloadStore
     + LinkStore
     + XdpReplacementStore
+    + bpfman_store::TcStore
     + Copy
     + 'static
 {
@@ -39,6 +43,7 @@ impl<S> Store for S where
         + UnloadStore
         + LinkStore
         + XdpReplacementStore
+        + bpfman_store::TcStore
         + Copy
         + 'static
 {
@@ -823,6 +828,36 @@ macro_rules! backend_tests {
             #[test]
             fn xdp_unload_post_detach() {
                 super::xdp_unload::post_detach($backend);
+            }
+
+            #[test]
+            fn tc_unload_lifecycle() {
+                super::tc_unload::lifecycle($backend);
+            }
+
+            #[test]
+            fn tc_unload_preflight() {
+                super::tc_unload::preflight($backend);
+            }
+
+            #[test]
+            fn tc_unload_failures() {
+                super::tc_unload::failures($backend);
+            }
+
+            #[test]
+            fn tc_unload_cancellation_and_foreign_retry() {
+                super::tc_unload::cancellation_and_foreign_retry($backend);
+            }
+
+            #[test]
+            fn tc_unload_new_link() {
+                super::tc_unload::new_link($backend);
+            }
+
+            #[test]
+            fn tc_unload_post_detach() {
+                super::tc_unload::post_detach($backend);
             }
 
             #[test]

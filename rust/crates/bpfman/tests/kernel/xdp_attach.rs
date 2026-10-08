@@ -87,7 +87,13 @@ fn gone(id: NonZeroU32) {
 
 pub(super) fn exercise<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     let c = Context::new();

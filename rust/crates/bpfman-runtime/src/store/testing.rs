@@ -269,3 +269,40 @@ impl<S: bpfman_store::XdpReplacementStore> bpfman_store::XdpReplacementStore for
         self.backend.replace_xdp(w, receipt, request)
     }
 }
+
+impl<S: bpfman_store::TcStore> bpfman_store::TcStore for Faults<S> {
+    type TcReceipt = S::TcReceipt;
+
+    fn preflight_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+        program: NonZeroU32,
+    ) -> Result<(), Error> {
+        self.backend.preflight_tc(w, key, program)
+    }
+
+    fn commit_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        request: bpfman_store::TcCommit<'_>,
+    ) -> Result<bpfman_model::StoredLink, Error> {
+        self.backend.commit_tc(w, request)
+    }
+
+    fn observe_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::TcSnapshot, Self::TcReceipt)>, Error> {
+        self.backend.observe_tc(w, id)
+    }
+
+    fn delete_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::TcReceipt,
+    ) -> Result<(), EffectFailure<Self::TcReceipt, Error>> {
+        self.backend.delete_tc(w, receipt)
+    }
+}

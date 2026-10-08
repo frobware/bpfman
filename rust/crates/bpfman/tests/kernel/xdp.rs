@@ -43,7 +43,13 @@ fn dispatchers_released(baseline: &BTreeSet<u32>) {
 
 pub(super) fn exercise<S>(backend: S)
 where
-    S: OpenStore + CommitLoad + UnloadStore + bpfman_store::XdpReplacementStore + LinkStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
+        + LinkStore
+        + Clone,
     S::Reader: LinkReader,
 {
     let c = Context::new();

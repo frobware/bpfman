@@ -43,7 +43,13 @@ fn scenario<S>(
     keep_redirect: bool,
     kind: Kind,
 ) where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     let c = Context::new();
@@ -362,7 +368,13 @@ fn scenario<S>(
 
 pub(super) fn exercise<S>(backend: S, mode: XdpMode, frames: Frames)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     exercise_kind(backend, mode, frames, Kind::Array);
@@ -370,7 +382,13 @@ where
 
 pub(super) fn exercise_hash<S>(backend: S, mode: XdpMode, frames: Frames)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     exercise_kind(backend, mode, frames, Kind::Hash);
@@ -378,7 +396,13 @@ where
 
 fn exercise_kind<S>(backend: S, mode: XdpMode, frames: Frames, kind: Kind)
 where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + Clone,
+    S: OpenStore
+        + CommitLoad
+        + UnloadStore
+        + LinkStore
+        + XdpReplacementStore
+        + bpfman_store::TcStore
+        + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     for exclude in [false, true] {
