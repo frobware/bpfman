@@ -1,5 +1,5 @@
-//! Broadcast publication restoration and map lifetime; jumbo cloning/error evidence.
-//! Ordinary fan-out, updates, continuation and survivors live in delivery scripts.
+//! Broadcast publication restoration and map lifetime, including jumbo error evidence.
+//! Ordinary/jumbo forwarding, updates, continuation and survivors live in scripts.
 #![allow(clippy::panic)]
 
 use super::{
@@ -172,15 +172,9 @@ fn scenario<S>(
         );
     };
 
-    // Ordinary packet behaviour is covered once in parallel scripts, sharing
-    // the forwarding preamble for both survivor choices. Fault restoration still
-    // requires real packets here; jumbo cloning/error paths remain unchanged.
-    let jumbo_traffic = |execution, forward| {
-        if frames == Frames::MultiBuffer {
-            traffic(execution, forward);
-        }
-    };
-
+    // Successful packet behaviour runs once in parallel scripts, sharing the
+    // forwarding preamble for both survivors. Keep real packets after each
+    // publication failure, including fragment and exact cloning-error evidence.
     let request = |id, interface: &str, requested_mode, priority, proceed_on| XdpAttach {
         program_id: id,
         interface: interface.parse().expect("interface"),
@@ -220,26 +214,20 @@ fn scenario<S>(
     let returned = if exclude { 0 } else { 3 };
     let forward = [returned, 0, 3, 3];
 
-    // Broadcast ignores missing key 99 and PASS fallback: an empty map consumes packets.
-    jumbo_traffic([3, 0], [0; 4]);
+    // Retain exact map updates and identity through restoration and teardown.
     let input = targets.set_at(&network, keys[0], "in0");
-    jumbo_traffic([3, 0], [returned, 0, 0, 0]);
     let output0 = targets.set_at(&network, keys[1], "out0");
     let output1 = targets.set_at(&network, keys[2], "out1");
     let entries = [Some(input), Some(output0), Some(output1)];
     check(&entries);
-    jumbo_traffic([3, 0], forward);
 
     targets.delete_at(&network, keys[1]);
     check(&[Some(input), None, Some(output1)]);
-    jumbo_traffic([3, 0], [returned, 0, 0, 3]);
     targets.set_at(&network, keys[2], "out0");
     check(&[Some(input), None, Some(output0)]);
-    jumbo_traffic([3, 0], [returned, 0, 3, 0]);
     targets.delete_at(&network, keys[2]);
     targets.set_at(&network, keys[1], "out1");
     check(&[Some(input), Some(output1), None]);
-    jumbo_traffic([3, 0], [returned, 0, 0, 3]);
     targets.set_at(&network, keys[1], "out0");
     targets.set_at(&network, keys[2], "out1");
     assert_eq!(
@@ -273,13 +261,10 @@ fn scenario<S>(
     );
     assert_eq!(chain.members()[0].outer_link_id, outer_id);
     check(&entries);
-    jumbo_traffic([3, 0], forward);
     for key in keys {
         targets.delete_at(&network, key);
     }
     check(&[None; 3]);
-    // Even with no targets, REDIRECT terminates before the DROP member.
-    jumbo_traffic([3, 0], [0; 4]);
     for (key, iface) in keys.into_iter().zip(["in0", "out0", "out1"]) {
         targets.set_at(&network, key, iface);
     }
@@ -311,47 +296,12 @@ fn scenario<S>(
     assert_eq!(remaining.members()[0].outer_link_id, outer_id);
     check(&entries);
     if keep_redirect {
-        jumbo_traffic([3, 0], forward);
         targets.delete_at(&network, keys[2]);
-        jumbo_traffic([3, 0], [returned, 0, 3, 0]);
         targets.set_at(&network, keys[2], "out1");
-        jumbo_traffic([3, 0], forward);
-    } else {
-        jumbo_traffic([0, 3], [0; 4]);
     }
     app.detach_xdp(survivor).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
     check(&entries);
-    jumbo_traffic([0, 0], [0, 3, 0, 0]);
-
-    if frames == Frames::MultiBuffer {
-        // Explicit REDIRECT continuation suppresses all copies. An exhausted chain
-        // returns PASS; adding DROP must stop local delivery too, even with an empty map.
-        let mask = (XdpProceedOn::default().mask() | (1 << 4))
-            .try_into()
-            .expect("REDIRECT mask");
-        let continuing = app
-            .attach_xdp(request(redirect, "in0", mode, 50, mask))
-            .expect("continuing redirect");
-        jumbo_traffic([3, 0], [0, 3, 0, 0]);
-        let stopping = app
-            .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
-            .expect("stopping tail");
-        check(&entries);
-        jumbo_traffic([3, 3], [0; 4]);
-        for key in keys {
-            targets.delete_at(&network, key);
-        }
-        jumbo_traffic([3, 3], [0; 4]);
-        for (key, iface) in keys.into_iter().zip(["in0", "out0", "out1"]) {
-            targets.set_at(&network, key, iface);
-        }
-        app.detach_xdp(stopping.id).expect("remove stopping tail");
-        jumbo_traffic([3, 0], [0, 3, 0, 0]);
-        app.detach_xdp(continuing.id)
-            .expect("remove continuing redirect");
-        jumbo_traffic([0, 0], [0, 3, 0, 0]);
-    }
 
     for id in observers {
         app.detach_xdp(id).expect("remove receiving peer");

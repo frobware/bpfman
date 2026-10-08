@@ -1205,18 +1205,23 @@ discovery and the optional `KERNEL_DEV` override are documented in
 ### XDP DEVMAP broadcast and ingress exclusion
 
 Run `direnv exec . make rust-test-scripts rust-test-xdp-broadcast` for ordinary
-script acceptance plus sixteen real-kernel restoration/jumbo suites:
+and jumbo script acceptance plus sixteen real-kernel restoration/lifetime suites:
 DEVMAP/DEVMAP_HASH, SQLite/JSON, native/SKB ingress, and ordinary/genuine multi-buffer
 frames. `direnv exec . make rust-test-xdp-broadcast-hash` selects the eight hash-backed
-suites. Four parallel `TestXDP_{Devmap,DevmapHash}_Broadcast_{Drv,Skb}_Linear`
-scripts now own ordinary fan-out, ingress exclusion, live updates, continuation,
-both survivors and last detach, including zero redirect errors observed by a
-map/ifindex-filtered tracepoint. They passed on both stores.
-Both driver scripts also passed against Go and are shared; Go attached in
-driver mode for the requested SKB cases, so those two scripts are Rust-only.
-Rust retains two post-failure packet waves per ordinary scenario (72 to 8 captures
-per matrix invocation), exact map contents/identity, restoration and lifetime
-checks. Jumbo packet/error coverage remains in Rust unchanged.
+suites. Eight parallel `TestXDP_{Devmap,DevmapHash}_Broadcast_{Drv,Skb}_` scripts
+cover ordinary and 8014-byte frames, ingress exclusion, empty/sparse maps, live
+updates, continuation, both survivors and last detach. A map/ifindex-filtered
+tracepoint requires zero redirect errors except for exact jumbo cloning rejection;
+fragment/tail/boundary counters prove genuine non-linear input and intact forwarding.
+All eight passed on both stores. Ordinary driver scripts are shared with Go.
+The ordinary SKB scripts are Rust-only after Go attached in driver mode; the four
+jumbo scripts are Rust-only after Go failed to attach the receiving fragment-aware
+observer at MTU 9000 with `ERANGE` on both stores. These are tested topology
+boundaries, not a claim about all possible Go SKB/jumbo setups.
+Rust retains two post-failure packet waves per scenario, reducing jumbo captures
+from 72 to 8 per matrix invocation, just as for ordinary frames. Exact map
+contents/identity, restoration, stable outer identity and lifetime checks remain,
+including fragment and exact `EOPNOTSUPP` evidence after each publication failure.
 Each topology uses three veth pairs with map entries for `in0`, `out0`, and `out1`.
 Broadcast sends a copy
 to each eligible output. `BPF_F_EXCLUDE_INGRESS` suppresses the `in0` target and
@@ -1410,8 +1415,8 @@ kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 ## Script parity through the Go runner
 
 Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
-66 admitted scripts: 50 shared Go/Rust scripts and 16 Rust-only scripts,
-out of 153 scripts in total. A Rust-only script additionally declares:
+70 admitted scripts: 50 shared Go/Rust scripts and 20 Rust-only scripts,
+out of 157 scripts in total. A Rust-only script additionally declares:
 
 ```bpfman
 #pragma labels={"rust":"ok","rust-only":"true"}
@@ -1452,8 +1457,12 @@ Ordinary DEVMAP broadcast adds four parallel scripts: DEVMAP/DEVMAP_HASH in driv
 and SKB modes. They reuse the existing fourth-interface capture support and share
 the setup for both survivor choices. Both driver scripts are shared after Go
 comparison; the two SKB scripts are Rust-only because Go attached in driver mode.
-Jumbo broadcast and egress remain migration candidates. See the
-[broadcast follow-up](../docs/design/rust-reimplementation.md#ordinary-devmap-broadcast-follow-up)
+Four additional jumbo broadcast scripts now cover both map types and ingress
+modes with full 8014-byte payloads, fragment-read counters and exact filtered
+`EOPNOTSUPP` evidence for multi-target cloning. They passed on both Rust stores;
+Go failed receiving-observer attachment with `ERANGE` on both, so these wrappers
+are Rust-only. Egress is the next packet migration. See the
+[jumbo broadcast follow-up](../docs/design/rust-reimplementation.md#jumbo-devmap-broadcast-follow-up)
 for the assertion mapping and retained Rust guarantees.
 No production behaviour was changed for these testing slices.
 
@@ -1509,6 +1518,14 @@ gate: formatting, Clippy, userspace/compile-fail contracts, documentation and al
 scripts and empty final inventories/artifacts. The kernel stage took 1180.41 s
 (19m40s), compared with 1358.95 s (22m39s) at the CLI/delivery checkpoint. These are
 local timings, not a controlled benchmark. Makefile lint and DSL formatting passed.
+
+The jumbo broadcast follow-up passed the complete `direnv exec . make rust-check`
+gate: formatting, Clippy, userspace/compile-fail contracts, Rustdoc and 98 kernel
+tests, none failed or ignored. Both backend batches verified all 70 admitted
+scripts and empty final inventories/artifacts. The kernel stage took 1124.80 s
+(18m45s), compared with 1180.41 s (19m40s) at the ordinary broadcast checkpoint.
+These are local run measurements, not a controlled benchmark. Makefile lint and
+canonical DSL formatting also passed.
 
 `make rust-test-unit` runs library and binary unit targets without integration
 targets or doctests. Its 92 tests reported approximately 0.60 seconds of aggregate

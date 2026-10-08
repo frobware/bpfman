@@ -6,4 +6,4 @@
 
 import ../xdp-delivery.bpfman
 
-broadcast_behaviour testdata/bpf/xdp_devmap_broadcast.bpf.o drv
+broadcast_behaviour testdata/bpf/xdp_devmap_broadcast.bpf.o drv 64

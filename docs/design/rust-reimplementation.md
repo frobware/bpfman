@@ -156,6 +156,17 @@ not a controlled benchmark. Makefile lint and canonical DSL formatting also pass
 See the [broadcast follow-up](#ordinary-devmap-broadcast-follow-up) for coverage
 and the Go comparison.
 
+The jumbo DEVMAP broadcast migration passed the complete
+`direnv exec . make rust-check` gate: formatting, Clippy, userspace and compile-fail
+contracts, Rustdoc and all 98 real-kernel tests, with none failed or ignored.
+Both backend batches verified all 70 admitted scripts and empty final inventories
+and artifact collections. The kernel stage took 1124.80 s (18m45s), compared with
+1180.41 s (19m40s) at the ordinary broadcast checkpoint. These are local run
+measurements, not a controlled benchmark. Makefile lint and canonical DSL
+formatting also passed.
+See the [jumbo broadcast follow-up](#jumbo-devmap-broadcast-follow-up) for the
+coverage mapping and Go comparison.
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -1567,11 +1578,11 @@ The test-target inventory across the new workspace has been reviewed by family:
 | Real-kernel CLI helper | Ordinary file capture, record/get/list/quiet-list and unload assertions moved to shared scripts. Retain provenance ownership, input-before-effects, foreign pin/map refusal and output failure after commit. |
 | Real-kernel batch/TC CLI helpers and normal lifecycle paths mixed with faults | Reuse the admitted corpus first, extract any missing public assertions, then remove duplicate successful paths. Keep injected failures, cancellation and retained receipts. Remaining extraction is pending. |
 | TX/direct REDIRECT, ordinary and jumbo frames | Eight parallel scripts cover modes, continuation, both survivors and full payload/fragment evidence. Rust retains two post-failure captures per scenario, snapshot restoration, ownership and cleanup checks. Both stores passed. |
-| Ordinary DEVMAP/DEVMAP_HASH broadcast | Four parallel scripts cover driver/SKB fan-out, ingress exclusion, empty/sparse maps, live updates, continuation and both survivors. Rust retains post-publication-failure traffic, exact map contents, ownership and lifetime checks. Both stores passed. |
-| XDP attach/switch/runtime/unload/netns, jumbo PASS/mixed membership, jumbo broadcast and egress modules; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
+| Ordinary/jumbo DEVMAP/DEVMAP_HASH broadcast | Eight parallel scripts cover driver/SKB forwarding, ingress exclusion, empty/sparse maps, live updates, continuation and both survivors. Jumbo cases retain full payload/fragment counters and exact filtered `EOPNOTSUPP` rejection of cloning. Rust retains post-publication-failure traffic, exact map contents, ownership and lifetime checks. Both stores passed. |
+| XDP attach/switch/runtime/unload/netns, jumbo PASS/mixed membership and egress modules; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
 
 These are incremental migration slices, not a claim that all Rust behavioural
-tests have moved. Next: migrate jumbo broadcast, egress and jumbo PASS/mixed
+tests have moved. Next: migrate egress and jumbo PASS/mixed
 membership using the same runner, then remaining ordinary lifecycle/CLI scenarios. No new
 bpfman functionality is needed for that migration.
 
@@ -1660,8 +1671,8 @@ checkpoint validation; its result is recorded with the current checkpoint above.
 
 #### Ordinary DEVMAP broadcast follow-up
 
-The corpus now has 153 scripts, with 66 admitted against Rust: 50 shared Go/Rust
-scripts and 16 Rust-only scripts. Four new `TestXDP_{Devmap,DevmapHash}_Broadcast_`
+At this checkpoint the corpus had 153 scripts, with 66 admitted against Rust:
+50 shared Go/Rust scripts and 16 Rust-only scripts. Four new `TestXDP_{Devmap,DevmapHash}_Broadcast_`
 wrappers cover ordinary driver/SKB broadcast through the existing Go runner.
 Each script owns a pooled private namespace with three veth pairs; scripts run
 in parallel without serial/exclusive labels. The existing delivery probe already
@@ -1701,8 +1712,69 @@ survivor, map-held lifetime, final reclamation and empty inventories remain.
 The separate successful continuation lifecycle now runs in scripts for ordinary
 frames. Jumbo broadcast remains unchanged, including fragment/tail/boundary
 reads, single-target forwarding, filtered redirect-error observation and exact
-`EOPNOTSUPP` rejection of cloning on Linux 6.18.54. Jumbo broadcast and egress
-are the next packet migrations.
+`EOPNOTSUPP` rejection of cloning on Linux 6.18.54. The next follow-up migrates
+jumbo broadcast; egress remains pending.
+
+#### Jumbo DEVMAP broadcast follow-up
+
+The corpus now has 157 scripts, with 70 admitted against Rust: 50 shared Go/Rust
+and 20 Rust-only. Four new `TestXDP_{Devmap,DevmapHash}_Broadcast_{Drv,Skb}_MultiBuffer`
+wrappers extend the same helper to 8014-byte frames and MTU 9000. No runner,
+probe, production, persistence, dependency or Aya changes were needed. Each script
+uses a pooled private namespace; both survivor choices share their setup and all
+scripts remain parallel without serial/exclusive labels.
+
+The jumbo wrappers repeat the ordinary lifecycle: both ingress-exclusion flags,
+empty and ingress-only maps, ignored lookup key 99 and PASS fallback, full maps,
+delete/retarget/repopulate, unchanged revision during updates, ordered replacement,
+both survivors, last detach and explicit REDIRECT continuation. Single eligible
+targets receive complete payloads without duplicates. Every executing member and
+receiving observer independently proves genuine fragments, intact tail bytes and
+reads across the linear/fragment boundary. Local PASS and DROP-tail stopping remain
+explicit assertions rather than inferred from missing sink traffic.
+
+Linux 6.18.54 rejects multi-buffer cloning when more than one destination is
+eligible. Those waves require zero copies at all four capture points and exactly
+three filtered redirect errors, all `EOPNOTSUPP`; every other wave requires zero
+errors. The existing tracepoint fixture filters by the original map ID and ingress
+ifindex, with its field layout validated against tracefs, so other parallel scripts
+cannot satisfy or contaminate the evidence. Continuation cancels REDIRECT before
+execution and therefore requires no redirect errors, even with a full map.
+
+The initial eight-script ordinary/jumbo batches passed against Rust JSON and
+SQLite in 35.96 s and 38.63 s respectively, with empty program/link/dispatcher
+inventories. Go comparison on both stores passed the two ordinary driver scripts
+and failed all four jumbo scripts while attaching the receiving fragment-aware
+observer at MTU 9000: `numerical result out of range` (`ERANGE`). Jumbo wrappers
+therefore carry `rust-only=true`. This establishes the observed receiving-topology
+boundary; it does not establish whether Go could support jumbo broadcast with a
+different setup. The already Rust-only ordinary SKB wrappers were skipped in this
+comparison. No assertion was relaxed to admit Go. With final admission labels,
+both Go backend runs passed the two shared ordinary driver scripts and skipped
+the six Rust-only broadcast cases, with empty final inventories (20.86 s SQLite,
+21.56 s JSON).
+
+After both Rust stores passed, duplicate jumbo success captures and the separate
+successful continuation lifecycle were removed from Rust. Each jumbo matrix now
+uses eight packet waves instead of 72: two after injected attach/detach publication
+failures in each of four exclusion/survivor combinations. Across eight jumbo matrix
+invocations, that removes 512 serial captures (153.6 s of observation windows).
+The retained waves still require fragment evidence and exact cloning errors after
+restoration. Exact snapshots, restoration attempts, map keys/values and ID, ordered
+membership, stable outer identity, both survivors, map-held ownership, eventual
+reclamation and empty final inventories/artifacts remain Rust integration checks.
+
+The jumbo DEVMAP broadcast migration passed the complete
+`direnv exec . make rust-check` gate: formatting, Clippy, userspace and compile-fail
+contracts, Rustdoc and all 98 real-kernel tests, with none failed or ignored.
+Both backend batches verified all 70 admitted scripts and empty final inventories
+and artifact collections. The kernel stage took 1124.80 s (18m45s), compared with
+1180.41 s (19m40s) at the ordinary broadcast checkpoint. These are local run
+measurements, not a controlled benchmark. Makefile lint and canonical DSL
+formatting also passed.
+
+Egress behaviour is the next bounded packet migration, followed by jumbo PASS/mixed
+membership and remaining ordinary lifecycle/CLI scenarios.
 
 A matching XDP fill/drain/refill script took 10.95 s with Go, 14.26 s with Rust
 debug and 9.02 s with Rust release. These are single samples, not a benchmark;

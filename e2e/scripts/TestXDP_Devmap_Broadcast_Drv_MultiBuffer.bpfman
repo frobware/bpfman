@@ -1,0 +1,9 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"broadcast"}
+# Given: a private pooled namespace and an explicit drv fragment-aware dispatcher
+# When: jumbo broadcast, ingress exclusion, updates and both survivors run
+# Then: single-target frames stay intact and cloning reports exact EOPNOTSUPP
+
+import ../xdp-delivery.bpfman
+
+broadcast_behaviour testdata/bpf/xdp_devmap_broadcast_frags.bpf.o drv 8014

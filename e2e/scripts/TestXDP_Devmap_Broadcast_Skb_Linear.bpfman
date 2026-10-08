@@ -6,4 +6,4 @@
 
 import ../xdp-delivery.bpfman
 
-broadcast_behaviour testdata/bpf/xdp_devmap_broadcast.bpf.o skb
+broadcast_behaviour testdata/bpf/xdp_devmap_broadcast.bpf.o skb 64
