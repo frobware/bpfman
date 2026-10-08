@@ -22,6 +22,11 @@ The architecture and compatibility goals are in
   its exit status. Investigate failures; never skip or weaken a test to get a
   green result. Run relevant real-kernel acceptance tests when the implemented
   surface and environment support them; report untested boundaries accurately.
+- `rust-test-userspace` runs all nonprivileged workspace tests, including CLI
+  contracts and the stateful fake. The normal `rust-test`/`rust-check` gate runs
+  this stage before the complete serial real-kernel binary, so cheap admission
+  or persistence failures are found before the long packet suites. Keep automatic
+  CLI test discovery in `test-userspace.sh`; do not replace it with a partial list.
 - On NixOS, Go and Rust tests share `e2e-kmod-build` and
   `e2e/kmod/prepare-kdir.sh`. If `/lib/modules/$(uname -r)/build` is absent, the
   helper discovers the matching `kernel.dev` output from
@@ -70,6 +75,29 @@ The architecture and compatibility goals are in
   PASS/DROP, context/helper reads, rollback, and map-held lifetime in both stores
   and driver/SKB modes. Aya remains unchanged, and the array DEVMAP boundary is
   still tested explicitly. See [egress acceptance](README.md#xdp-devmap-egress-programs).
+
+## TC ingress ownership
+
+- Force `TcAttachOptions::Netlink` for legacy TC. Aya's ordinary `attach` selects
+  TCX on modern kernels. Use its public `handle()` result; never rediscover or
+  delete filters by priority alone. Validate the stored dispatcher program ID
+  at the exact interface/priority/handle, ETH_P_ALL protocol and chain zero before
+  deletion.
+- The Aya adapter owns safe `rustix::net` route-netlink dumps and exact deletes
+  that Aya's public API lacks. Managed filesystem mutations still belong in
+  `bpfman-fs`; runtime and pure crates must not acquire syscall dependencies.
+- Keep clsact ownership separate from operator metadata and Go schema 2. The
+  confined file `<runtime>/tc/dispatcher_<nsid>_<ifindex>_1` records borrowed (0)
+  or created (1) ownership. Preserve borrowed qdiscs after reopening; reclaim a
+  created clsact only if both ingress and egress are empty. A foreign filter
+  preserves the qdisc and relinquishes ownership. Refuse classic ingress qdiscs,
+  malformed ownership evidence, and changed filter identities before teardown.
+- TC proceed-on shifts signed return codes by one: UNSPEC -1 is bit zero,
+  PIPE 3 is bit four, dispatcher-return 30 is bit 31. Its CONFIG is 84 bytes;
+  do not reuse the XDP ABI or return-code mask.
+- New JSON stores use format 7 for TC; formats 1–6 never upgrade implicitly.
+  Detach TC links explicitly before program unload until attached-unload
+  prerequisites are integrated. `make rust-test-tc-ingress` runs both stores.
 
 ## Visibility and crate boundaries
 

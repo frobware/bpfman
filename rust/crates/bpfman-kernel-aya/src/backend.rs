@@ -31,6 +31,14 @@ impl ProgramObservations for Kernel {
 }
 
 impl LinkObservations for Kernel {
+    fn tc_pin(
+        &self,
+        runtime: &RuntimeDirectory,
+        link: &bpfman_model::TcLink,
+    ) -> Result<Option<KernelLink>, Error> {
+        runtime.read_tc_link_pin(self, link).map_err(filesystem)
+    }
+
     fn tracepoint_link(&self, id: NonZeroU32) -> Result<KernelLink, Error> {
         observe::observe_tracepoint_link(id)
     }

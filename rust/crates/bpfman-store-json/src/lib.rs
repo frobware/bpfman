@@ -8,6 +8,7 @@ mod backend;
 mod error;
 mod link;
 mod state;
+mod tc;
 mod xdp;
 
 use bpfman_fs::{RuntimeIdentity, RuntimeLayout, StoreSnapshot};
@@ -50,4 +51,12 @@ pub struct XdpReceipt {
     store: String,
     rows: Vec<xdp::Row>,
     programs: Vec<state::Program>,
+}
+
+/// Conditional evidence for one unchanged TC ingress snapshot.
+pub struct TcReceipt {
+    root: RuntimeIdentity,
+    store: String,
+    row: tc::Row,
+    program: state::Program,
 }

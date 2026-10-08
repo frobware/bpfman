@@ -117,6 +117,28 @@ impl XdpNamespace {
         Ok(())
     }
 
+    pub(super) fn duplicate(&self) -> io::Result<Self> {
+        Ok(Self {
+            fd: self.fd.try_clone()?,
+            selector: self.selector.clone(),
+            interface: self.interface.clone(),
+            device: self.device,
+            key: self.key,
+        })
+    }
+
+    pub(super) fn run_tc<T: Send>(
+        &self,
+        action: impl FnOnce() -> io::Result<T> + Send,
+    ) -> io::Result<T> {
+        // Always enter the retained namespace, including a caller-namespace selection.
+        run(self.fd.as_fd(), true, action)
+    }
+
+    pub(super) fn tc_interface(&self) -> &str {
+        self.interface.as_str()
+    }
+
     pub(super) fn attach(
         &self,
         program: BorrowedFd<'_>,

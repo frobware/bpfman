@@ -63,6 +63,7 @@ where
         + bpfman_store::UnloadStore
         + bpfman_store::LinkStore
         + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
         + 'static,
     S::Reader: bpfman_store::LinkReader + bpfman_store::XdpDispatcherReader,
 {

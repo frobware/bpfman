@@ -97,7 +97,10 @@ impl PreparedProgram {
         cancellation: &crate::Cancellation,
     ) -> Result<Self, LoadError<K>> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
-        if !matches!(spec, ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_)) {
+        if !matches!(
+            spec,
+            ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_) | ProgramSpec::Tc(_)
+        ) {
             return Err(LoadCause::Unsupported("program type").into());
         }
         let source_text = source

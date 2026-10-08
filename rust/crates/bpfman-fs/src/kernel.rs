@@ -13,6 +13,7 @@ pub type KernelResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub struct PinTarget<'a>(pub(crate) &'a Path);
 
 /// An opened or descriptor-relative pin source validated by this filesystem adapter.
+#[derive(Clone, Copy)]
 pub struct PinSource<'a>(pub(crate) &'a Path);
 
 /// Portable program types needed to validate managed pins.
@@ -24,6 +25,8 @@ pub enum PinProgramKind {
     Extension,
     /// XDP dispatcher.
     Xdp,
+    /// Legacy TC classifier dispatcher.
+    Tc,
     /// A foreign or unsupported program type.
     Other,
 }
@@ -187,4 +190,15 @@ impl PinSource<'_> {
     pub fn path(&self) -> &Path {
         self.0
     }
+}
+
+/// Adopt a TC dispatcher extension through a confined managed program pin.
+pub trait TcKernel: ProgramInspection + LinkInspection {
+    /// Owned TC extension, distinct from an XDP extension.
+    type Extension: ExtensionProgram;
+    /// Open the EXT program and its identity together.
+    fn tc_extension_at(
+        &self,
+        source: PinSource<'_>,
+    ) -> KernelResult<(PinnedProgram, Self::Extension)>;
 }

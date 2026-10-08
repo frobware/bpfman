@@ -57,3 +57,35 @@ pub(super) fn dispatcher_bytes(frags: bool) -> &'static [u8] {
         ))
     }
 }
+
+// TC uses its own dispatcher and skb context; verification never attaches traffic.
+pub(super) fn load_tc(program: &mut Program) -> Result<(), LoadCause> {
+    let config = bpfman_model::tc_config(bpfman_model::TcProceedOn::default());
+    let mut dispatcher = aya::EbpfLoader::new()
+        .override_global("CONFIG", config.as_slice(), true)
+        .load(tc_dispatcher_bytes())
+        .map_err(|e| LoadCause::Kernel(Box::new(e)))?;
+    let target: &mut aya::programs::SchedClassifier = dispatcher
+        .program_mut("tc_dispatcher")
+        .ok_or_else(|| LoadCause::Invalid("embedded TC dispatcher is missing".into()))?
+        .try_into()
+        .map_err(|e| LoadCause::Program(Box::new(e)))?;
+    target.load().map_err(|e| LoadCause::Program(Box::new(e)))?;
+    let fd = target
+        .fd()
+        .and_then(|fd| fd.try_clone().map_err(Into::into))
+        .map_err(|e| LoadCause::Program(Box::new(e)))?;
+    let extension: &mut Extension = program
+        .try_into()
+        .map_err(|e| LoadCause::Program(Box::new(e)))?;
+    extension
+        .load(fd, "prog0")
+        .map_err(|e| LoadCause::Program(Box::new(e)))
+}
+
+pub(super) fn tc_dispatcher_bytes() -> &'static [u8] {
+    aya::include_bytes_aligned!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../dispatcher/tc_dispatcher.bpf.o"
+    ))
+}

@@ -1,3 +1,4 @@
+//! Version 7 adds TC extension loads and singleton ingress attachments.
 //! Version 6 adds explicit XDP namespace paths. Version 5 adds multi-member XDP
 //! replacement; version 4 adds first attachment.
 //! Version 3 adds XDP extension loads; version 2 adds standalone tracepoint links.
@@ -23,6 +24,8 @@ use std::{
 #[serde(deny_unknown_fields)]
 pub(super) struct State {
     pub(super) version: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) tc: Vec<crate::tc::Row>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) xdp: Vec<crate::xdp::Row>,
     pub(super) identity: String,
@@ -90,7 +93,8 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 6,
+            version: 7,
+            tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
             next_generation: 1,
@@ -110,7 +114,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=6) {
+        if !matches!(header.version, 1..=7) {
             return Err(Failure::Version(header.version));
         }
 
@@ -149,6 +153,11 @@ impl State {
         let mut program_ids = BTreeSet::new();
 
         for row in &self.programs {
+            if self.version < 7 && row.kind == Kind::Tc {
+                return Err(Failure::Unsupported(
+                    "TC requires JSON format 7; no implicit upgrade",
+                ));
+            }
             if self.version < 3 && row.kind == Kind::Xdp {
                 return Err(Failure::XdpVersion);
             }
@@ -235,6 +244,29 @@ impl State {
             }
         }
 
+        if self.version < 7 && !self.tc.is_empty() {
+            return Err(Failure::Unsupported(
+                "TC requires JSON format 7; no implicit upgrade",
+            ));
+        }
+        let mut tc_keys = BTreeSet::new();
+        for row in &self.tc {
+            if !link_ids.insert(row.link_id)
+                || row.link_id.get() >= self.next_link_id
+                || !kernel_ids.insert(row.extension_link_id)
+                || !tc_keys.insert(row.key())
+                || !dispatchers.insert(row.dispatcher_id)
+                || !self
+                    .programs
+                    .iter()
+                    .any(|p| p.id == row.program_id && p.kind == Kind::Tc)
+            {
+                return Err(Failure::Invalid(
+                    "duplicate or invalid TC snapshot identity",
+                ));
+            }
+            row.details()?;
+        }
         for key in keys {
             let mut rows: Vec<_> = self.xdp.iter().filter(|r| r.key() == key).collect();
             rows.sort_by_key(|r| r.position);
@@ -277,6 +309,12 @@ impl State {
         let row = Program {
             kind: match record.spec {
                 ProgramSpec::Tracepoint(_) => Kind::Tracepoint,
+                ProgramSpec::Tc(_) if self.version >= 7 => Kind::Tc,
+                ProgramSpec::Tc(_) => {
+                    return Err(Failure::Unsupported(
+                        "TC requires JSON format 7; no implicit upgrade",
+                    ));
+                }
                 ProgramSpec::Xdp(_) if self.version >= 3 => Kind::Xdp,
                 ProgramSpec::Xdp(_) => return Err(Failure::XdpVersion),
                 _ => return Err(Failure::Unsupported("program type")),
@@ -327,6 +365,12 @@ impl State {
                 .filter(|row| row.program_id == program)
                 .map(|row| row.link_id),
         );
+        links.extend(
+            self.tc
+                .iter()
+                .filter(|r| r.program_id == program)
+                .map(|r| r.link_id),
+        );
         links.sort_unstable();
 
         links
@@ -359,6 +403,7 @@ impl Program {
                 match self.kind {
                     Kind::Tracepoint => ProgramSpec::Tracepoint(name),
                     Kind::Xdp => ProgramSpec::Xdp(name),
+                    Kind::Tc => ProgramSpec::Tc(name),
                 }
             },
             source: ProgramSource::File(Some(self.source.clone())),
@@ -451,6 +496,7 @@ pub(super) enum Kind {
     #[default]
     Tracepoint,
     Xdp,
+    Tc,
 }
 
 impl Kind {
@@ -462,6 +508,7 @@ impl Kind {
         match self {
             Self::Tracepoint => ProgramType::Tracepoint,
             Self::Xdp => ProgramType::Xdp,
+            Self::Tc => ProgramType::Tc,
         }
     }
 }

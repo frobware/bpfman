@@ -125,7 +125,7 @@ pub(super) enum ProgramCommand {
     /// Text/quiet output reads stored summaries without kernel privileges.
     /// --all and attachment-state filtering are not yet implemented.
     List(ListArgs),
-    /// Load a local tracepoint/XDP batch; other requests are explicitly rejected.
+    /// Load a local tracepoint/XDP/TC batch; other requests are explicitly rejected.
     Load {
         #[command(subcommand)]
         source: load::LoadCommand,

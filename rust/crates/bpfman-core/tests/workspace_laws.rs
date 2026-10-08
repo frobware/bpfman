@@ -246,9 +246,11 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
             let dependency = string(&package(meta, dep)["name"]);
 
             match dependency {
+                // Legacy TC inspection/deletion needs route-netlink sockets;
+                // Aya's public API supplies creation and the assigned handle.
                 "rustix" => assert!(
-                    matches!(name, "bpfman-lock" | "bpfman-fs"),
-                    "filesystem and lock syscalls belong in their adapters"
+                    matches!(name, "bpfman-lock" | "bpfman-fs" | "bpfman-kernel-aya"),
+                    "filesystem, lock, and route-netlink syscalls belong in their adapters"
                 ),
                 "aya" | "aya-obj" => assert_eq!(
                     name, "bpfman-kernel-aya",

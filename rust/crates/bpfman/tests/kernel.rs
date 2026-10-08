@@ -777,3 +777,42 @@ fn json_xdp_devmap_hash_frags_skb() {
         xdp_delivery::Frames::MultiBuffer,
     );
 }
+
+#[path = "kernel/tc.rs"]
+mod tc;
+#[test]
+fn sqlite_tc_ingress_lifecycle() {
+    tc::exercise(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_tc_ingress_lifecycle() {
+    tc::exercise(bpfman_store_json::Backend);
+}
+#[test]
+fn sqlite_tc_ingress_cli() {
+    tc::cli("sqlite");
+}
+#[test]
+fn json_tc_ingress_cli() {
+    tc::cli("json");
+}
+
+#[test]
+fn sqlite_tc_ingress_unchanged_load_dsl() {
+    cli::dsl("sqlite", "TestTC_LoadAndGet");
+}
+
+#[test]
+fn json_tc_ingress_unchanged_load_dsl() {
+    cli::dsl("json", "TestTC_LoadAndGet");
+}
+
+#[test]
+fn sqlite_tc_ingress_unchanged_attach_dsl() {
+    cli::dsl("sqlite", "TestTC_LinkRoundTrip");
+}
+
+#[test]
+fn json_tc_ingress_unchanged_attach_dsl() {
+    cli::dsl("json", "TestTC_LinkRoundTrip");
+}

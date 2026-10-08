@@ -57,10 +57,14 @@ impl LocalObject {
         let mut loader = aya::EbpfLoader::new();
         let selection = match spec {
             ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
+            ProgramSpec::Tc(_) => Selection::Tc,
             ProgramSpec::Xdp(_) => Selection::Xdp(xdp_role(&self.bytes, spec.name().as_str())?),
             _ => return Err(LoadCause::Unsupported("program type")),
         };
-        if matches!(selection, Selection::Xdp(XdpRole::Interface { .. })) {
+        if matches!(
+            selection,
+            Selection::Tc | Selection::Xdp(XdpRole::Interface { .. })
+        ) {
             // TODO: Upstream Aya 0.14's extension override drops BPF_F_XDP_HAS_FRAGS.
             // Fragment helpers still work against the verification target, but
             // DEVMAP ownership records a linear program and rejects frags egress
@@ -84,6 +88,7 @@ impl LocalObject {
             .program_mut(spec.name().as_str())
             .ok_or_else(|| LoadCause::Invalid("selected program disappeared during load".into()))?;
         match selection {
+            Selection::Tc => crate::verification::load_tc(program)?,
             Selection::Tracepoint => {
                 let program: &mut aya::programs::TracePoint = program
                     .try_into()
@@ -181,6 +186,10 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         ))
     })?;
     match (spec, &program.section) {
+        (ProgramSpec::Tc(_), ProgramSection::SchedClassifier) => Ok(()),
+        (ProgramSpec::Tc(_), _) => Err(LoadCause::Invalid(
+            "TC selection requires a classifier section".into(),
+        )),
         (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint) => Ok(()),
         (ProgramSpec::Xdp(_), section @ ProgramSection::Xdp { .. }) => {
             XdpRole::from_section(section).map(|_| ())
@@ -253,6 +262,7 @@ enum XdpRole {
 }
 
 enum Selection {
+    Tc,
     Tracepoint,
     Xdp(XdpRole),
 }

@@ -110,3 +110,15 @@ impl<S: bpfman_store::XdpStore + 'static>
         }
     }
 }
+
+impl<S: bpfman_store::TcStore + 'static> From<bpfman_runtime::TcError<S, bpfman_kernel_aya::Kernel>>
+    for Error
+{
+    fn from(cause: bpfman_runtime::TcError<S, bpfman_kernel_aya::Kernel>) -> Self {
+        let cancelled = cause.kind() == bpfman_runtime::LinkErrorKind::Cancelled;
+        Self {
+            cause: cause.into(),
+            cancelled,
+        }
+    }
+}

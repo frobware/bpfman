@@ -327,3 +327,6 @@ pub struct ObservationError {
 #[cfg(test)]
 #[path = "../../../tests/observation.rs"]
 mod sample;
+
+mod tc;
+pub use tc::{TcAttach, TcError, TcReport};

@@ -215,3 +215,7 @@ pub struct LinkPin {
     entry: Box<artifacts::Entry>,
     id: std::num::NonZeroU32,
 }
+
+mod tc;
+pub use kernel::TcKernel;
+pub use tc::{TcPins, TcProgram};

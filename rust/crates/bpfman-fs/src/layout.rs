@@ -133,3 +133,14 @@ impl RuntimeLayout {
             .join(format!("dispatcher_{}_{}_link", key.nsid, key.ifindex))
     }
 }
+
+impl RuntimeLayout {
+    /// Canonical first-member TC ingress freplace pin.
+    pub fn tc_extension_path(&self, key: bpfman_model::XdpKey) -> std::path::PathBuf {
+        self.root
+            .join("fs")
+            .join("tc-ingress")
+            .join(format!("dispatcher_{}_{}_1", key.nsid, key.ifindex))
+            .join("link_0")
+    }
+}

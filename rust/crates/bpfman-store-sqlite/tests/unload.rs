@@ -66,7 +66,7 @@ fn counts(db: &Connection) -> (usize, usize) {
 #[test]
 fn preflight_rejects_every_unsupported_relationship_and_noncanonical_path() -> Result {
     for sql in [
-        "UPDATE managed_programs SET program_type='tc'",
+        "UPDATE managed_programs SET program_type='kprobe'",
         "INSERT INTO shared_map_pins VALUES ('shared',42)",
         "INSERT INTO managed_programs(program_id,program_name,program_type,object_path,pin_path,map_set_id,created_at) VALUES (99,'borrower','tracepoint','unused','unused',42,'now')",
         "INSERT INTO map_sets VALUES(99,'unused','now'); UPDATE managed_programs SET map_set_id=99",

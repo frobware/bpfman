@@ -223,7 +223,7 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
     let runtime = temporary.path().join("runtime");
 
     for options in [
-        vec!["--programs", "tracepoint:a,tc:b"],
+        vec!["--programs", "tracepoint:a,fentry:b:do_open"],
         vec!["--programs", "tracepoint:a", "--map-owner-id", "1"],
     ] {
         assert_failure(
@@ -276,38 +276,33 @@ fn unknown_or_wrong_size_globals_fail_before_creating_runtime() -> Result {
 }
 
 #[test]
-fn local_tracepoint_validates_source_before_runtime_creation() -> Result {
+fn local_program_load_validates_source_before_runtime_creation() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
     let source = temporary.path().join("invalid.o");
     std::fs::write(&source, b"not an ELF file")?;
-    assert_failure(
-        command(&runtime)
-            .arg("file")
-            .arg(&source)
-            .args(["--programs", "tracepoint:a"])
-            .output()?,
-        1,
-        "parse local ELF",
-    )?;
-
-    assert!(!runtime.exists());
-
-    for format in ["text", "json"] {
+    for programs in ["tracepoint:a", "tc:a", "tracepoint:a,tc:b"] {
         assert_failure(
             command(&runtime)
-                .args([
-                    "file",
-                    "missing.o",
-                    "--programs",
-                    "tracepoint:a",
-                    "-o",
-                    format,
-                ])
+                .arg("file")
+                .arg(&source)
+                .args(["--programs", programs])
                 .output()?,
             1,
-            "read local ELF",
+            "parse local ELF",
         )?;
+
+        assert!(!runtime.exists());
+
+        for format in ["text", "json"] {
+            assert_failure(
+                command(&runtime)
+                    .args(["file", "missing.o", "--programs", programs, "-o", format])
+                    .output()?,
+                1,
+                "read local ELF",
+            )?;
+        }
     }
 
     assert!(!runtime.exists());

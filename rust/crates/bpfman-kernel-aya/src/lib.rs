@@ -12,6 +12,8 @@ mod pin_syscall;
 mod pinning;
 mod program;
 mod syscall;
+mod tc;
+mod tc_netlink;
 mod tracepoint;
 mod verification;
 mod xdp;
@@ -56,3 +58,32 @@ pub struct AyaOuter(std::os::fd::OwnedFd);
 
 /// Opaque retained dispatcher target for conditional switching and restoration.
 pub struct AyaXdpTarget(aya::programs::ProgramFd);
+
+/// Opaque adopted TC extension.
+pub struct TcExtension(aya::programs::Extension);
+
+/// Loaded native TC dispatcher; local handles do not own persistent attachments.
+pub struct TcDispatcher(aya::Ebpf);
+
+/// Adopted managed TC extension and retained namespace.
+pub struct PreparedTc {
+    program: bpfman_fs::TcProgram<TcExtension>,
+    namespace: XdpNamespace,
+}
+
+/// Owned TC revision, including partial pin acquisitions.
+pub struct TcStage {
+    pins: bpfman_fs::TcPins,
+    dispatcher: Option<TcDispatcher>,
+    namespace: XdpNamespace,
+    root: bpfman_fs::RuntimeIdentity,
+}
+
+/// Exact TC filter and clsact cleanup. Partial acquisition may own only clsact.
+pub struct TcFilter {
+    namespace: XdpNamespace,
+    root: bpfman_fs::RuntimeIdentity,
+    dispatcher: u32,
+    handle: Option<std::num::NonZeroU32>,
+    clsact_owned: bool,
+}

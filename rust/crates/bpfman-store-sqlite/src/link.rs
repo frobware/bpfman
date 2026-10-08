@@ -163,7 +163,7 @@ impl LinkReader for Store {
                 open::require_supported(open::schema_version(&tx)?)?;
                 let mut links = queries::stored_links(&tx, None)?
                     .iter()
-                    .filter(|row| row.kind != "xdp")
+                    .filter(|row| row.kind != "xdp" && row.kind != "tc")
                     .map(decode)
                     .collect::<Result<Vec<_>, _>>()?;
                 let rows = queries::xdp::rows(&tx, None, None)?;
@@ -179,6 +179,13 @@ impl LinkReader for Store {
                         links.extend(snapshot.members().iter().map(|s| s.member.clone()));
                     }
                 }
+                links.extend(
+                    queries::tc::rows(&tx, None, None)?
+                        .iter()
+                        .map(crate::tc::decode)
+                        .map(|s| s.map(|s| s.member))
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
                 links.sort_by_key(|l| l.id);
                 Ok(links)
             })

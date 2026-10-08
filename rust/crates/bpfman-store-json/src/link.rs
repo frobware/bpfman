@@ -26,6 +26,13 @@ impl LinkReader for Reader {
                 .map(|row| state.xdp_snapshot(row, &self.layout).map(|s| s.member))
                 .collect::<Result<Vec<_>, _>>()?,
         );
+        records.extend(
+            state
+                .tc
+                .iter()
+                .map(|r| r.snapshot(&state, &self.layout).map(|s| s.member))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
         records.sort_by_key(|link| link.id);
 
         Ok(records)
@@ -139,7 +146,9 @@ impl LinkStore for Backend {
     ) -> Result<LinkObservation<Self>, Error> {
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
         let (_, state) = read(&file)?;
-        if state.xdp.iter().any(|row| row.link_id == id) {
+        if state.tc.iter().any(|row| row.link_id == id)
+            || state.xdp.iter().any(|row| row.link_id == id)
+        {
             return Err(
                 Failure::Unsupported("XDP links require dispatcher snapshot operations").into(),
             );

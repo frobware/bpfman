@@ -42,6 +42,23 @@ impl LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
+    /// Attach a TC extension through a singleton legacy ingress dispatcher.
+    Tc {
+        program_id: NonZeroU32,
+        interface: bpfman_model::InterfaceName,
+        #[arg(value_parser = ["ingress"])]
+        direction: String,
+        #[arg(long, default_value = "")]
+        netns: bpfman_model::NetworkNamespace,
+        #[arg(short = 'p', long, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        priority: u32,
+        #[arg(long, value_delimiter = ',', default_value = "pipe,dispatcher_return", value_parser = tc_action)]
+        proceed_on: Vec<i32>,
+        #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
+        metadata: Vec<(String, String)>,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
     /// Attach an XDP extension to an interface in a selected network namespace.
     Xdp {
         program_id: NonZeroU32,
@@ -91,10 +108,46 @@ impl LinkCommand {
         S: bpfman_store::OpenStore
             + bpfman_store::LinkStore
             + bpfman_store::XdpReplacementStore
+            + bpfman_store::TcStore
             + 'static,
         S::Reader: bpfman_store::LinkReader,
     {
         match self {
+            Self::Attach {
+                target:
+                    AttachCommand::Tc {
+                        program_id,
+                        interface,
+                        direction: _,
+                        netns,
+                        priority,
+                        proceed_on,
+                        metadata,
+                        output,
+                    },
+            } => {
+                let mask = proceed_on
+                    .into_iter()
+                    .fold(0u32, |mask, code| mask | (1 << (code + 1)));
+                let record = app.attach_tc_with_cancellation(
+                    bpfman_runtime::TcAttach {
+                        program_id,
+                        interface,
+                        netns,
+                        priority,
+                        proceed_on: mask.try_into().map_err(anyhow::Error::from)?,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    cancellation,
+                )?;
+                let observed = app.get_link(record.id).map_err(|error| {
+                    anyhow::Error::from(error).context(format!(
+                        "link {} was committed but could not be observed; it remains attached",
+                        record.id
+                    ))
+                })?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+            }
             Self::Attach {
                 target:
                     AttachCommand::Xdp {
@@ -163,10 +216,16 @@ impl LinkCommand {
                     .list_link_records_with_cancellation(cancellation)?
                     .into_iter()
                     .find(|r| r.id == id);
-                if record.is_some_and(|r| matches!(r.details, bpfman_model::LinkDetails::Xdp(_))) {
-                    let _report = app.detach_xdp_with_cancellation(id, cancellation)?;
-                } else {
-                    let _report = app.detach_with_cancellation(id, cancellation)?;
+                match record.map(|r| r.details) {
+                    Some(bpfman_model::LinkDetails::Xdp(_)) => {
+                        let _report = app.detach_xdp_with_cancellation(id, cancellation)?;
+                    }
+                    Some(bpfman_model::LinkDetails::Tc(_)) => {
+                        let _report = app.detach_tc_with_cancellation(id, cancellation)?;
+                    }
+                    _ => {
+                        let _report = app.detach_with_cancellation(id, cancellation)?;
+                    }
                 }
             }
             Self::Get { id, output } => {
@@ -192,5 +251,22 @@ fn action(raw: &str) -> Result<u32, String> {
         "redirect" => Ok(4),
         "dispatcher_return" => Ok(31),
         _ => Err("expected aborted, drop, pass, tx, redirect, or dispatcher_return".into()),
+    }
+}
+
+fn tc_action(raw: &str) -> Result<i32, String> {
+    match raw {
+        "unspec" => Ok(-1),
+        "ok" => Ok(0),
+        "reclassify" => Ok(1),
+        "shot" => Ok(2),
+        "pipe" => Ok(3),
+        "stolen" => Ok(4),
+        "queued" => Ok(5),
+        "repeat" => Ok(6),
+        "redirect" => Ok(7),
+        "trap" => Ok(8),
+        "dispatcher_return" => Ok(30),
+        _ => Err("expected unspec, ok, reclassify, shot, pipe, stolen, queued, repeat, redirect, trap, or dispatcher_return".into()),
     }
 }

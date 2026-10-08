@@ -13,6 +13,7 @@ mod queries;
 mod read;
 mod reader;
 mod records;
+mod tc;
 mod unload;
 mod write;
 mod xdp;
@@ -72,4 +73,11 @@ pub struct XdpReceipt {
     root: bpfman_fs::RuntimeIdentity,
     database: (u64, u64),
     rows: Vec<queries::xdp::Row>,
+}
+
+/// Conditional evidence for one unchanged singleton TC ingress snapshot.
+pub struct TcReceipt {
+    root: bpfman_fs::RuntimeIdentity,
+    database: (u64, u64),
+    row: queries::tc::Row,
 }

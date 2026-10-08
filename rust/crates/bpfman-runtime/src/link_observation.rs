@@ -37,6 +37,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     cancellation: &Cancellation,
 ) -> Result<ObservedLink, LinkCause> {
     let path = match &record.details {
+        bpfman_model::LinkDetails::Tc(d) => runtime.layout().tc_extension_path(d.key),
         bpfman_model::LinkDetails::Tracepoint(_) => runtime.layout().link_pin_path(record.id),
         bpfman_model::LinkDetails::Xdp(details) => {
             runtime
@@ -55,7 +56,9 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     let kernel = match kernel_id
         .map(|id| match &record.details {
             bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_link(id),
-            bpfman_model::LinkDetails::Xdp(_) => backend.extension_link(id),
+            bpfman_model::LinkDetails::Xdp(_) | bpfman_model::LinkDetails::Tc(_) => {
+                backend.extension_link(id)
+            }
         })
         .transpose()
     {
@@ -65,6 +68,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     };
     let pin = match &record.details {
         bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_pin(runtime, record.id)?,
+        bpfman_model::LinkDetails::Tc(details) => backend.tc_pin(runtime, details)?,
         bpfman_model::LinkDetails::Xdp(details) => backend.extension_pin(runtime, details)?,
     };
     if kernel
@@ -83,6 +87,14 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
                 if target_obj_id == expected.dispatcher_id.get()
         ) {
             return Err(Cause::Invalid("extension target differs from stored dispatcher").into());
+        }
+    }
+    if let (bpfman_model::LinkDetails::Tc(expected), Some(observed)) = (&record.details, &kernel) {
+        if !matches!(observed.details, bpfman_model::KernelLinkDetails::Tracing { target_obj_id, .. } if target_obj_id == expected.dispatcher_id.get())
+        {
+            return Err(
+                Cause::Invalid("TC extension target differs from stored dispatcher").into(),
+            );
         }
     }
     cancellation.check().map_err(|_| Cause::Cancelled)?;

@@ -16,6 +16,11 @@ all select it explicitly. `rust-fmt` checks formatting; to apply formatting,
 run `make rust-fmt-fix`. `make rust-lock` refreshes the new lockfile.
 Development conventions live in [AGENTS.md](AGENTS.md).
 
+`rust-test` runs all userspace unit, integration, and documentation tests before
+the serial real-kernel binary. `make rust-test-userspace` selects that first stage,
+including the shared fake-kernel lifecycle tests. CLI integration targets are
+discovered automatically, so newly added contracts join the normal gate.
+
 If `.envrc` selects the Go-oriented `.#static` shell, clear its extra linker
 flags for Rust commands only:
 
@@ -40,7 +45,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Generic tracepoint/XDP lifecycle interpreters, compensation, and observations |
+| `bpfman-runtime` | 4 | Generic tracepoint/XDP/TC lifecycle interpreters, compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -165,8 +170,9 @@ tracepoint/XDP programs and standalone tracepoint links. Versions 1–3 retain
 their existing operations: tracepoint programs from version 1, tracepoint links
 from version 2, and XDP loads from version 3. XDP attachment requires a separately
 initialized version 4 or newer runtime. Version 5 adds multi-member XDP
-replacement. New stores use version 6, which also persists explicit network
-namespace paths. Versions 4 and 5 reject namespaced attachments without upgrading;
+replacement. Version 6 persists explicit network namespace paths. New stores use
+version 7, which also supports TC extension loads and singleton ingress attachments.
+Versions 1–6 refuse TC without upgrading. Versions 4 and 5 reject namespaced attachments without upgrading;
 version 4 also rejects replacement. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
 descriptor and atomically renames it into place under the runtime writer lock.
@@ -362,13 +368,14 @@ kernel observations. `program get ID [-o text|json]` observes one managed progra
 including its maps, statistics, and links. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. `--all` and
 kernel link state filters remain unsupported. Unload supports a tracepoint with private maps and pending or finalised
-standalone links, an XDP extension, or a native DEVMAP egress program with private maps.
+standalone links, an XDP extension, a detached TC extension, or a native DEVMAP
+egress program with private maps. Detach TC links explicitly before program unload.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint and XDP batches with private maps and
+exits with status 2. Local tracepoint, XDP, and TC batches with private maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads, other program types,
 and map-owner sharing exit with status 1 before source access or runtime effects.
@@ -824,7 +831,7 @@ Actual hardware offload is unverified.
 
 SQLite atomically publishes the dispatcher header, managed link, and member
 using Go schema version 2. JSON supports that snapshot from version 4; newly
-created JSON stores use version 6. Explicit namespaces require format 6.
+created JSON stores use version 7. Explicit XDP namespaces require format 6 or newer.
 A successful commit ends compensation, including when cancellation arrives late.
 
 Last-member `link detach LINK_ID` synchronously detaches the outer link before releasing
@@ -1333,8 +1340,8 @@ native DEVMAP egress is beyond that Go path. Go still supports more of the overa
 bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
 behavior, as do hash-backed broadcast, ingress exclusion, and ordinary/genuine
 multi-buffer egress. Array-map multi-buffer egress and multi-buffer fan-out remain
-separate library/kernel boundaries. The next bounded slice is TC ingress attachment
-with exact filter handles and clsact ownership, before dispatcher replacement.
+separate library/kernel boundaries. TC ingress attachment is described below;
+attached-program unload is next, before dispatcher replacement.
 
 The hash egress checkpoint passed `direnv exec . make rust-check`: formatting,
 Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
@@ -1351,7 +1358,7 @@ its real store. Reads, loading, tracepoint attachment, XDP attachment/replacemen
 unload, and explicit cleanup retries use that same instance. Operations require
 only the capabilities they use: `ProgramObservations`, `LinkObservations`,
 `ObjectLoader`, `ProgramResources`, `ProgramLoad`, `TracepointLinks`, or
-`XdpLifecycle`. Associated types keep live handles and cleanup receipts opaque;
+`XdpLifecycle`, or `TcLifecycle`. Associated types keep live handles and cleanup receipts opaque;
 failed acquisitions and removals return unresolved ownership.
 
 The CLI selects `bpfman_kernel_aya::Kernel`. `PreparedProgram::new(&kernel, ...)`
@@ -1377,6 +1384,68 @@ direnv exec . make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
-confinement tests, all 132 real-kernel tests, and the unchanged admitted DSL corpus
+confinement tests, the real-kernel tests, and the unchanged admitted DSL corpus
 on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.
+
+
+## TC ingress attachment
+
+A managed TC classifier loads as EXT against an unpinned native TC dispatcher.
+The first ingress attachment stages a new dispatcher and slot-zero freplace link,
+then installs a legacy netlink filter at priority 50. Member `--priority` remains a
+separate operator field. Aya remains unchanged; explicit netlink options avoid its
+modern-kernel TCX default. The public API returns the actual kernel-assigned filter
+handle, which is stored with the dispatcher and checked against its program ID
+before deletion.
+
+```sh
+bpfman program load file tc.o --programs tc:stats -o json
+bpfman link attach tc PROGRAM_ID eth0 ingress --priority 50 -o json
+bpfman link detach LINK_ID
+bpfman program unload PROGRAM_ID
+```
+
+`--netns /run/netns/NAME` selects an explicit namespace. Retained namespace
+handles and disposable synchronous worker threads keep mutation in the selected
+namespace. `--proceed-on` accepts signed TC actions by name, including `unspec`,
+`ok`, `shot`, `pipe`, and `dispatcher_return`; default continuation is `pipe` plus
+`dispatcher_return`. The dispatcher ABI shifts every code by one, so `unspec` (-1)
+uses bit zero and dispatcher-return (30) uses bit 31. An explicitly continued SHOT
+returns the dispatcher's final OK; a SHOT under the default mask drops the packet.
+
+`link get/list` report the stored TC attachment and actual freplace-link identity.
+A second member at the same ingress point is refused. Detach validates the complete
+snapshot before effects; failure retains ownership for `retry_tc_cleanup`, including
+cancellable retry admission. Failed publication compensates the acquired filter,
+clsact and pins. A failed conditional store deletion retains only that record receipt.
+An in-flight commit decides publication even if cancellation arrives.
+
+Clsact ownership lives in a confined, singly linked one-byte receipt at
+`<runtime>/tc/dispatcher_<nsid>_<ifindex>_1`, separate from operator metadata.
+Reopened detach preserves pre-existing empty clsact qdiscs. A created clsact is
+reclaimed only when ingress and egress filters are both empty; foreign filters
+preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
+malformed ownership evidence, and foreign programs replacing the exact stored
+filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
+across implementations is not supported yet: Go attachments lack Rust's ownership
+receipt. New JSON stores use format 7; older formats retain their operations without
+upgrading.
+
+`direnv exec . make rust-test-tc-ingress` selects real veth lifecycle/CLI tests and
+the unchanged `TestTC_LoadAndGet` and `TestTC_LinkRoundTrip` scripts on both stores.
+The lifecycle tests require exact marked-packet counts, preserve foreign filters
+at the same priority on both hooks, reopen before detach, cross publication and
+cleanup faults, retain retry/cancellation history, and verify empty inventories and
+runtime artifacts after detached-program unload.
+
+This checkpoint passed `direnv exec . make rust-check`: formatting, Clippy, all
+userspace and compile-fail contracts, 38 shared fake-kernel lifecycle tests, all
+140 real-kernel tests (none ignored), and documentation. The focused TC target,
+Makefile lint, shell checks, and C fixture formatting also passed. Userspace
+contracts run before the complete serial kernel suite in the normal gate.
+
+Replacement, egress, automatic attached-program unload, TCX, outer-filter status,
+and deleted-namespace/orphan repair remain unsupported. Qdisc inspection/deletion
+uses separate netlink requests and is not atomic against privileged tools changing
+the same objects outside bpfman's writer lock.

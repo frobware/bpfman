@@ -128,10 +128,12 @@ impl LoadRequest {
         let reason = if !std::iter::once(&first).chain(&remaining).all(|spec| {
             matches!(
                 spec,
-                bpfman_model::ProgramSpec::Tracepoint(_) | bpfman_model::ProgramSpec::Xdp(_)
+                bpfman_model::ProgramSpec::Tracepoint(_)
+                    | bpfman_model::ProgramSpec::Xdp(_)
+                    | bpfman_model::ProgramSpec::Tc(_)
             )
         }) {
-            Some("program types other than tracepoint and xdp")
+            Some("program types other than tracepoint, xdp, and tc")
         } else if map_owner_id.is_some() {
             Some("map-owner sharing")
         } else {

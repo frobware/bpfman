@@ -28,7 +28,7 @@ anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
-rustix = { version = "1", features = ["fs", "mount"] }
+rustix = { version = "1", features = ["fs", "mount", "net"] }
 libc = "0.2"
 humantime = "2"
 signal-hook = "0.3"

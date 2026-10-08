@@ -215,6 +215,7 @@ dependencies = [
  "bpfman-model",
  "chrono",
  "libc",
+ "rustix",
  "thiserror",
 ]
 

@@ -320,3 +320,45 @@ impl<S: bpfman_store::XdpReplacementStore> bpfman_store::XdpReplacementStore for
         self.backend.replace_xdp(w, receipt, request)
     }
 }
+
+impl<S: bpfman_store::TcStore> bpfman_store::TcStore for ActiveStore<S> {
+    type TcReceipt = S::TcReceipt;
+    fn preflight_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+        program: NonZeroU32,
+    ) -> Result<(), bpfman_store::Error> {
+        self.check_writer(w)?;
+        self.backend.preflight_tc(w, key, program)
+    }
+    fn commit_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: bpfman_store::TcCommit<'_>,
+    ) -> Result<bpfman_model::StoredLink, bpfman_store::Error> {
+        self.check_writer(w)?;
+        self.backend.commit_tc(w, r)
+    }
+    fn observe_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::TcSnapshot, Self::TcReceipt)>, bpfman_store::Error> {
+        self.check_writer(w)?;
+        self.backend.observe_tc(w, id)
+    }
+    fn delete_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: Self::TcReceipt,
+    ) -> Result<(), EffectFailure<Self::TcReceipt, bpfman_store::Error>> {
+        if let Err(cause) = self.check_writer(w) {
+            return Err(EffectFailure {
+                cause,
+                remaining: r,
+            });
+        }
+        self.backend.delete_tc(w, r)
+    }
+}

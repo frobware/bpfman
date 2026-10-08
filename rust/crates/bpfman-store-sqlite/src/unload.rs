@@ -38,9 +38,9 @@ fn invalid(id: NonZeroU32, reason: &str) -> Failure {
 }
 
 fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Result<(), Failure> {
-    if !matches!(row.kind.as_str(), "tracepoint" | "xdp") {
+    if !matches!(row.kind.as_str(), "tracepoint" | "xdp" | "tc") {
         return Err(Failure::Unsupported(
-            "only tracepoints and XDP programs are implemented",
+            "only tracepoint, XDP, and TC programs are implemented",
         ));
     }
 

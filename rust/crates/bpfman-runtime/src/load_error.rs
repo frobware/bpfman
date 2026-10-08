@@ -233,7 +233,7 @@ impl<K: bpfman_kernel::ProgramResources> fmt::Debug for LoadError<K> {
 
 impl<K: bpfman_kernel::ProgramResources> fmt::Display for LoadError<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "load local tracepoint")?;
+        write!(f, "load local program")?;
 
         if let Some(error) = &self.retry_lock_error {
             write!(f, "; cleanup lock: ")?;

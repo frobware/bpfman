@@ -10,6 +10,7 @@ use std::num::NonZeroU32;
 use rusqlite::{Connection, OptionalExtension, Transaction, named_params};
 
 use crate::LoadRecord;
+pub(crate) mod tc;
 pub(crate) mod xdp;
 
 #[derive(Clone, Eq, PartialEq)]

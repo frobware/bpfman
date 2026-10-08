@@ -11,6 +11,8 @@ use alloc::string::String;
 mod netns;
 pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
 
+mod tc;
+pub use tc::{InvalidTc, TcLink, TcProceedOn, TcSnapshot, tc_config};
 mod xdp;
 pub use xdp::{
     InterfaceName, InvalidXdp, InvalidXdpMode, InvalidXdpSnapshot, XdpDispatcherSnapshot, XdpKey,

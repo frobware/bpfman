@@ -29,6 +29,9 @@ pub(super) enum Point {
     FinaliseWithBlockedPin,
     ObserveLink,
     DeleteLink,
+    TcCommit,
+    TcCommitWithBlockedCleanup,
+    TcDelete,
     XdpCommit,
     XdpReplace,
     XdpDelete,
@@ -432,5 +435,56 @@ impl<R: bpfman_store::XdpDispatcherReader> bpfman_store::XdpDispatcherReader for
         key: bpfman_model::XdpKey,
     ) -> Result<Option<bpfman_model::XdpDispatcherSnapshot>, Error> {
         self.reader.read_xdp_dispatcher(key)
+    }
+}
+
+impl<S: bpfman_store::TcStore> bpfman_store::TcStore for Faults<S> {
+    type TcReceipt = S::TcReceipt;
+    fn preflight_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+        program: NonZeroU32,
+    ) -> Result<(), Error> {
+        self.backend.preflight_tc(w, key, program)
+    }
+    fn commit_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: bpfman_store::TcCommit<'_>,
+    ) -> Result<bpfman_model::StoredLink, Error> {
+        check(&self.state, Point::TcCommit)?;
+        if let Err(cause) = check(&self.state, Point::TcCommitWithBlockedCleanup) {
+            let revision = w
+                .layout()
+                .tc_extension_path(r.details.key)
+                .parent()
+                .expect("revision")
+                .to_owned();
+            std::fs::create_dir(revision.join("blocked_cleanup"))
+                .expect("inject directory cleanup failure");
+            return Err(cause);
+        }
+        self.backend.commit_tc(w, r)
+    }
+    fn observe_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::TcSnapshot, Self::TcReceipt)>, Error> {
+        self.backend.observe_tc(w, id)
+    }
+    fn delete_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: Self::TcReceipt,
+    ) -> Result<(), EffectFailure<Self::TcReceipt, Error>> {
+        if let Err(cause) = check(&self.state, Point::TcDelete) {
+            return Err(EffectFailure {
+                cause,
+                remaining: r,
+            });
+        }
+        self.backend.delete_tc(w, r)
     }
 }

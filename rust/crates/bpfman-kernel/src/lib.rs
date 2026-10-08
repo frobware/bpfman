@@ -4,6 +4,8 @@
 //! own resource reuse and synchronization; observations confer no removal authority.
 
 mod error;
+mod tc;
+pub use tc::TcLifecycle;
 mod lifecycle;
 mod xdp_replace;
 pub use lifecycle::{
@@ -35,6 +37,19 @@ pub trait ProgramObservations {
 
 /// Standalone and dispatcher-member link observations.
 pub trait LinkObservations {
+    /// Read a canonical legacy TC ingress freplace pin.
+    fn tc_pin(
+        &self,
+        _runtime: &RuntimeDirectory,
+        _link: &bpfman_model::TcLink,
+    ) -> Result<Option<KernelLink>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "TC pin inspection",
+            std::io::Error::other("TC is unsupported by this backend"),
+        ))
+    }
+
     /// Inspect a perf-event link by kernel identity.
     fn tracepoint_link(&self, id: NonZeroU32) -> Result<KernelLink, Error>;
 
