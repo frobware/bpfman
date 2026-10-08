@@ -1,4 +1,5 @@
-//! Public CLI checks, using returned observations rather than persistence queries.
+//! CLI effect boundaries, pin ownership and output failures.
+//! Ordinary load/get/list/unload behaviour runs through the shared script corpus.
 
 use super::support::*;
 use std::{
@@ -6,7 +7,7 @@ use std::{
     process::{Command, Stdio},
 };
 
-pub(super) fn behaviour(store: &'static str) {
+pub(super) fn effect_boundaries(store: &'static str) {
     let c = Context::with_store(store);
     let root = c.layout.root();
     let fifo = root.parent().expect("temporary parent").join("source.fifo");
@@ -65,18 +66,8 @@ pub(super) fn behaviour(store: &'static str) {
     c.present(pid);
     let source = fixture("tracepoint_counter.bpf.o");
 
-    assert_eq!(
-        fs::read(c.layout.bytecode_path(pid)).expect("bytecode"),
-        fs::read(&source).expect("source")
-    );
-    assert_eq!(
-        loaded["record"]["load"]["source_path"],
-        source.to_str().expect("path")
-    );
-    assert_eq!(loaded["record"]["load"]["program_name"], NAME);
-    assert_eq!(loaded["record"]["license"], "Dual BSD/GPL");
-    assert!(loaded["record"]["updated_at"].is_null());
-
+    // Rust's private provenance receipt is an ownership contract. The captured
+    // ELF, public record round trips and quiet listing are checked by scripts.
     let provenance: serde_json::Value = serde_json::from_slice(
         &fs::read(
             c.layout
@@ -91,31 +82,6 @@ pub(super) fn behaviour(store: &'static str) {
 
     assert_eq!(provenance["program_id"], pid.get());
     assert_eq!(provenance["source"], source.to_str().expect("path"));
-
-    let observation = c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]);
-
-    assert_eq!(loaded["record"], observation["record"]);
-    assert_eq!(loaded["status"]["kernel"], observation["status"]["kernel"]);
-    assert!(loaded["status"]["stats"].is_null());
-    assert!(
-        loaded["status"]["maps"]
-            .as_array()
-            .expect("maps")
-            .iter()
-            .all(|m| m["pin_path"] == "" && m["present"] == false)
-    );
-
-    let list = c.json(&rust(), &["program", "list", "-o", "json"]);
-    let programs = list["programs"].as_array().expect("programs");
-
-    assert_eq!(programs.len(), 1);
-    assert_eq!(programs[0]["record"], observation["record"]);
-    assert_eq!(
-        String::from_utf8(c.run(&rust(), &["program", "list", "-q"], true).stdout)
-            .expect("IDs")
-            .trim(),
-        pid_text
-    );
 
     let unrelated = id(&c.load_cli(&rust()));
 

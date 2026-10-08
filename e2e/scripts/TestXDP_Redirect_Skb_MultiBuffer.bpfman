@@ -1,0 +1,9 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"delivery"}
+# Given: a pooled private namespace and explicit skb XDP mode
+# When: Redirect, continuation and both survivor choices handle 8014-byte frames
+# Then: exact delivery, payload integrity and dispatcher identity are preserved
+
+import ../xdp-delivery.bpfman
+
+direct_delivery_behaviour skb 8014 4

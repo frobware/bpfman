@@ -1925,7 +1925,8 @@ rust-test-xdp-modes: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-frags: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_frags --nocapture
 
-# Native/SKB TX and direct REDIRECT packet delivery, continuation, and rollback.
+# Native/SKB TX/direct REDIRECT post-failure packet evidence. Ordinary behaviour
+# runs in the parallel corpus selected by rust-test-scripts.
 .PHONY: rust-test-xdp-delivery
 rust-test-xdp-delivery: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_packet_delivery --nocapture
@@ -1935,7 +1936,8 @@ rust-test-xdp-delivery: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-devmap: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_delivery --nocapture
 
-# Genuine multi-buffer TX/direct REDIRECT/DEVMAP forwarding and full payload capture.
+# Genuine multi-buffer TX/direct REDIRECT/DEVMAP restoration and full payload
+# capture after failed publication; ordinary forwarding runs in scripts.
 .PHONY: rust-test-xdp-multibuffer-forwarding
 rust-test-xdp-multibuffer-forwarding: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_multibuffer_forwarding --nocapture

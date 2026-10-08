@@ -1,4 +1,5 @@
-//! TX/REDIRECT delivery, proceed-on continuation, and restoration on private veths.
+//! TX/REDIRECT restoration after failed publication on private veths.
+//! Ordinary forwarding, continuation and both survivors live in delivery scripts.
 #![allow(clippy::panic)]
 
 use super::{
@@ -339,8 +340,6 @@ fn scenario<S>(
     };
     let old = app.get_xdp_dispatcher(details.key).expect("snapshot");
     let outer_id = old.members()[0].outer_link_id;
-    traffic([3, 0], single_delivery);
-
     faults.set(Some(Point::XdpReplace));
     let error = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
@@ -366,8 +365,6 @@ fn scenario<S>(
     );
     assert_eq!(chain.members()[0].outer_link_id, outer_id);
     let both_execution = [3, if proceed { 3 } else { 0 }];
-    traffic(both_execution, chain_delivery);
-
     let (removed, survivor) = if keep_action {
         (second.id, first.id)
     } else {
@@ -392,15 +389,8 @@ fn scenario<S>(
     assert_eq!(remaining.members().len(), 1);
     assert_eq!(remaining.members()[0].member.id, survivor);
     assert_eq!(remaining.members()[0].outer_link_id, outer_id);
-    let (execution, delivery) = if keep_action {
-        ([3, 0], single_delivery)
-    } else {
-        ([0, 3], [0, 0, 0])
-    };
-    traffic(execution, delivery);
     app.detach_xdp(survivor).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
-    traffic([0, 0], [0, 3, 0]);
 
     for id in observers {
         app.detach_xdp(id).expect("remove receiving peer");

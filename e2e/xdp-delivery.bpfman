@@ -194,3 +194,82 @@ def devmap_behaviour(object mode frame_size) {
         }
     }
 }
+
+# TX and direct bpf_redirect use the same topology, capture windows and fragment
+# evidence as DEVMAP. Both survivor choices share their forwarding preamble.
+def direct_delivery_scenario(mode size action proceed) {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    delivery_network $pair $size
+    let netns = "/var/run/netns/${pair.a.ns}"
+    guard config_dir <- tempdir xdp-delivery
+    defer exec rm -rf $config_dir.path
+    let config = "${config_dir.path}/bpfman.toml"
+    guard _ <- exec sh -c 'printf "[interfaces.in0]\nxdp_mode = \"%s\"\n" "$2" > "$1"' sh $config $mode
+    guard output <- net exec $pair.a ip -j link show dev out0
+    let out_index = $output.stdout |> jq "fromjson | .[0].ifindex"
+    let object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_delivery.bpf.o" else "testdata/bpf/xdp_delivery_frags.bpf.o" end'
+    guard loaded <- bpfman program load file $object --programs xdp:delivery -g "delivery_action=0x${u32le $action}" -g "delivery_ifindex=0x${u32le $out_index}"
+    let forward = $loaded.programs[0]
+    defer delivery_unload $forward
+    guard tail_load <- bpfman program load file $object --programs xdp:delivery_tail
+    let tail = $tail_load.programs[0]
+    defer delivery_unload $tail
+    let observer_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_pass.bpf.o" else "testdata/bpf/xdp_delivery_frags.bpf.o" end'
+    let observer_symbol = $size |> jq 'if . == 64 then "pass" else "delivery_observer" end'
+    guard observer_load <- bpfman program load file $observer_object --programs "xdp:${observer_symbol}"
+    let observer = $observer_load.programs[0]
+    defer bpfman program unload $observer
+    guard source_link <- bpfman link attach xdp $observer source0 --netns $netns --priority 50
+    defer bpfman link detach $source_link
+    guard sink_link <- bpfman link attach xdp $observer sink0 --netns $netns --priority 50
+    defer bpfman link detach $sink_link
+    let terminal = $proceed == "pass,dispatcher_return"
+    let returned = $terminal |> jq "if . then 3 else 0 end"
+    let tx_frames = $action |> jq "if . == 3 then ${returned} else 0 end"
+    let redirected = $action |> jq "if . == 4 then ${returned} else 0 end"
+    let local = $terminal |> jq "if . then 0 else 3 end"
+    let tail_ran = $local
+    guard first <- delivery_attach $forward in0 $netns $config 50 $proceed
+    guard interface <- net exec $pair.a ip -j -d link show dev in0
+    let interface_info = $interface.stdout |> jq fromjson
+    let expected_mode = $mode |> jq 'if . == "skb" then 2 else 1 end'
+    assert $interface_info[0].xdp.attached[0].mode == $expected_mode
+    let ifindex = $interface_info[0].ifindex
+    guard initial <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    let outer_id = $initial.runtime.kernel_link_id
+    delivery_traffic $pair $size $forward $tail $observer 3 0 $tx_frames $local $redirected
+
+    guard second <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+    guard chain <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert $chain.runtime.kernel_link_id == $outer_id
+    assert $chain.members[0].program_id == $forward.record.program_id
+    assert $chain.members[1].program_id == $tail.record.program_id
+    delivery_traffic $pair $size $forward $tail $observer 3 $tail_ran $tx_frames 0 $redirected
+
+    bpfman link detach $second.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $forward.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    delivery_traffic $pair $size $forward $tail $observer 3 0 $tx_frames $local $redirected
+
+    guard reattached <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+    bpfman link detach $first.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $tail.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    delivery_traffic $pair $size $forward $tail $observer 0 3 0 0 0
+    bpfman link detach $reattached.record.id
+    assert fail bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    delivery_traffic $pair $size $forward $tail $observer 0 0 0 3 0
+}
+
+def direct_delivery_behaviour(mode frame_size action_code) {
+    let size = $frame_size |> jq tonumber
+    let action = $action_code |> jq tonumber
+    let continuation = $action |> jq 'if . == 3 then "pass,tx,dispatcher_return" else "pass,redirect,dispatcher_return" end'
+    direct_delivery_scenario $mode $size $action pass,dispatcher_return
+    direct_delivery_scenario $mode $size $action $continuation
+}

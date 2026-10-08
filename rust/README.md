@@ -1054,8 +1054,11 @@ worker-entry failure test verifies that no effect runs or caller namespace chang
 
 ### XDP TX and REDIRECT packet delivery
 
-Run `direnv exec . make rust-test-xdp-delivery` for four real-kernel tests:
-SQLite and JSON, each with explicitly verified native and SKB ingress modes.
+Run `direnv exec . make rust-test-scripts rust-test-xdp-delivery` for script
+acceptance and four real-kernel restoration tests: SQLite and JSON, each with
+explicitly verified native and SKB ingress modes. Normal forwarding lives in the
+eight `TestXDP_TX_*` / `TestXDP_Redirect_*` scripts, including jumbo variants;
+the Rust matrix retains post-failure packet evidence.
 A private namespace contains two veth pairs. Marked Ethernet frames enter `in0`
 from `source0`; TX returns them to `source0`, while `bpf_redirect(ifindex, 0)`
 sends them through `out0` to `sink0`. Receiving peers have native PASS dispatchers
@@ -1068,7 +1071,7 @@ delivery location; per-member BPF counters independently prove execution. Go and
 its existing `x/sys` dependency are already part of the test toolchain; the fixture
 adds no Rust dependencies, unsafe blocks, or production commands.
 
-Each test covers both TX and direct REDIRECT, default stopping and explicit
+The scripts cover both TX and direct REDIRECT, default stopping and explicit
 proceed-on continuation into a DROP member, and removal of either member. When
 the final member permits continuation, exhausting the shared dispatcher returns
 PASS; the tests also capture this local delivery. Failed attach/detach publication
@@ -1077,8 +1080,8 @@ and survivor rebuilding retain the outer link ID. Last detach restores ordinary
 local delivery, and final teardown leaves empty inventories and no owned artifacts.
 No production changes were needed for this acceptance slice.
 
-This establishes normal-sized veth frames with direct interface redirects.
-The suites below cover map-based redirects and multi-buffer forwarding.
+This establishes ordinary and multi-buffer veth frames with direct interface
+redirects. The suites below also cover map-based redirects.
 CPUMAP/XSKMAP redirects, physical NICs, and actual hardware offload remain
 unverified. The kernel's
 [redirect documentation](https://docs.kernel.org/bpf/redirect.html) explains why
@@ -1165,9 +1168,10 @@ also passed. Aya and the lockfile remain unchanged.
 
 ### XDP multi-buffer forwarding
 
-Run `direnv exec . make rust-test-xdp-multibuffer-forwarding` for four combined
-real-kernel suites: SQLite/JSON with explicitly observed native/SKB ingress modes.
-Each runs the direct TX/REDIRECT and DEVMAP lifecycle scenarios above with three
+Run `direnv exec . make rust-test-scripts rust-test-xdp-multibuffer-forwarding`
+for ordinary script acceptance and four combined real-kernel restoration suites:
+SQLite/JSON with explicitly observed native/SKB ingress modes. Together they
+cover the direct TX/REDIRECT and DEVMAP lifecycle scenarios above with three
 8014-byte Ethernet frames (8000 bytes after the Ethernet header) and MTU 9000 on
 all four interfaces. Separate `xdp.frags` fixtures share the ordinary fixtures'
 actions and map definitions. Receiving peers use fragment-aware native PASS
@@ -1182,10 +1186,10 @@ and correct two-byte reads across the linear/fragment boundary. A jumbo frame
 that was linearized would fail this evidence check even if capture succeeded.
 Inactive members must leave all four counters unchanged.
 
-This repeats default stopping and explicit continuation into DROP, either
-survivor, stable outer-link identity, successful replacement, failed attach/detach
-publication restoration, last detach, and complete cleanup. DEVMAP additionally
-retains live target updates, PASS/DROP missing-entry fallback, original map identity
+Scripts check default stopping and explicit continuation into DROP, either
+survivor, stable outer-link identity, successful replacement, last detach and
+complete cleanup. Rust adds failed attach/detach publication restoration. DEVMAP also
+checks live target updates, PASS/DROP missing-entry fallback, original map identity
 and contents, and eventual reclamation. Neither the runtime nor the persisted
 schema needed changes, and no Rust dependency or unsafe code was added.
 
@@ -1395,8 +1399,8 @@ kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 ## Script parity through the Go runner
 
 Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
-50 admitted scripts: 42 shared Go/Rust scripts and eight Rust-only DEVMAP scripts,
-out of 140 scripts in total. A Rust-only script additionally declares:
+62 admitted scripts: 48 shared Go/Rust scripts and 14 Rust-only scripts,
+out of 149 scripts in total. A Rust-only script additionally declares:
 
 ```bpfman
 #pragma labels={"rust":"ok","rust-only":"true"}
@@ -1416,6 +1420,24 @@ both survivors and map identity. They passed concurrently in approximately
 pooled namespaces; no serial/exclusive label is needed. Both survivor choices
 share the forwarding preamble. Publication-failure restoration remains in Rust,
 with two packet probes per scenario instead of repeating the full matrix there.
+
+The next migration slice admits three unchanged metadata/global-data scripts,
+adds shared `TestProgram_FileLifecycle`, and moves TX/direct REDIRECT into eight
+parallel scripts using the same delivery helper. The nine new scripts passed
+in about 18 s per Rust backend. File capture, complete record/get/list round trips,
+quiet listing and ordinary unload replace duplicate Rust CLI assertions;
+preflight effects, provenance/foreign-pin ownership and post-commit output failures
+remain Rust integration contracts.
+
+Go also passed the file-lifecycle and ordinary driver TX/REDIRECT scripts. The
+other six delivery scripts are Rust-only after a direct comparison: the requested
+SKB mode attached as driver, and jumbo observer attachment failed on the receiving
+veth. Rust verified both modes and genuine multi-buffer forwarding. The earlier
+DEVMAP labels alone do not establish a Go incompatibility. Unload's missing-ID
+diagnostic and `--ignore-missing`, section-type mismatch diagnostics/unsupported
+families, and the kprobe verifier-log script remain recorded parity gaps in the
+[migration audit](../docs/design/rust-reimplementation.md#cli-loadunload-and-txdirect-redirect-follow-up).
+No production behaviour was changed for this testing slice.
 
 Build the binaries and fixtures as the invoking user:
 
@@ -1448,13 +1470,20 @@ wrappers have been removed. `make rust-test-scripts` runs these batches directly
 `rust-test-xdp-corpus` and `rust-test-observation` also select this acceptance gate.
 Corpus parity takes priority over further Rust-specific packet scenarios.
 
-The migration checkpoint passed `direnv exec . make rust-check`: formatting,
+The first migration checkpoint passed `direnv exec . make rust-check`: formatting,
 Clippy, userspace and compile-fail contracts, documentation, and all 98 kernel
 tests, with none failed or ignored. The kernel suite took 1420.39 seconds
 (23m40s), compared with 1834.78 seconds (30m35s) at the preceding checkpoint.
 The lower test count reflects replacing individual script wrappers with two
 batches, each verifying all 50 selected scripts and final cleanup. These local
 timings are not a controlled benchmark.
+
+The CLI/delivery follow-up also passed the complete `direnv exec . make rust-check`
+gate: formatting, Clippy, userspace/compile-fail contracts, Rustdoc and 98 kernel
+tests, none failed or ignored. Both backend batches verified all 62 admitted
+scripts and empty final inventories/artifacts. The kernel stage took 1358.95 s
+(22m39s), compared with 1420.39 s (23m40s) at the preceding checkpoint. These are
+local run timings. Makefile lint and formatting of the new DSL sources passed.
 
 `make rust-test-unit` runs library and binary unit targets without integration
 targets or doctests. Its 92 tests reported approximately 0.60 seconds of aggregate

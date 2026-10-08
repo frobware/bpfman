@@ -136,6 +136,15 @@ target separately passed 92 tests in 0.60 seconds of aggregate test execution.
 See the [migration audit](#testing-migration-audit-8-october-2026) for completed
 work and the remaining behavioural tests to move into scripts.
 
+The CLI load/unload and TX/direct REDIRECT migration follow-up passed the complete
+`direnv exec . make rust-check` gate: formatting, Clippy, all userspace and
+compile-fail contracts, documentation, and 98 real-kernel tests with none failed
+or ignored. Each backend batch verified all 62 admitted scripts and empty final
+inventories/artifact collections. The kernel stage took 1358.95 seconds (22m39s),
+compared with 1420.39 seconds (23m40s) at the preceding migration checkpoint.
+These remain local checkpoint timings, not a controlled benchmark. Makefile lint
+and canonical formatting of the new scripts/shared helper also passed.
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -1542,14 +1551,17 @@ The test-target inventory across the new workspace has been reviewed by family:
 | Existing tracepoint/XDP/TC DSL wrappers and XDP/TC corpus modules | Migrated to two backend-wide parallel script batches; obsolete wrappers removed. All 42 existing script bodies are unchanged. |
 | DEVMAP/DEVMAP_HASH unicast packet scenarios | Forwarding, fallback, continuation, live updates, both survivors, payload/fragment evidence and map identity moved to eight parallel Rust-only scripts. Rust retains publication-failure restoration and adapter-lifetime checks. Both stores passed. |
 | Process-signal policy formerly under the CLI unit module | Moved to `tests/signal_policy.rs`; still runs in the normal userspace integration gate. Deterministic in-flight/second-signal mechanics need internal access. |
-| `cli`, `load`, `unload`, `signals`, `telemetry`, `cancellation`, `kernel_observations`, `sqlite_compatibility`, `e2e_selection` integration targets | Review each remaining public CLI scenario against existing scripts, then migrate uncovered behaviour. Retain internal/process, cross-implementation persistence and wiring contracts separately. Migration is pending. |
-| Real-kernel CLI/batch/TC CLI helpers and normal lifecycle paths mixed with faults | Reuse the admitted corpus first, extract any missing public assertions, then remove duplicate successful paths. Keep injected failures, cancellation and retained receipts. Remaining extraction is pending. |
-| XDP attach/switch/runtime/unload/netns, jumbo fragments, TX/direct REDIRECT, broadcast and egress modules; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
+| `cli`, `load`, `unload` integration targets | Reviewed assertion groups against the corpus below. Retain process parsing, no-effects preflight, unsupported-surface, persistence and captured-input contracts. Public load/global-data/unload outcomes run in scripts. |
+| `signals`, `telemetry`, `cancellation`, `kernel_observations`, `sqlite_compatibility`, `e2e_selection` integration targets | Retain internal/process, cross-implementation persistence and wiring contracts separately; remaining public-scenario extraction is pending. |
+| Real-kernel CLI helper | Ordinary file capture, record/get/list/quiet-list and unload assertions moved to shared scripts. Retain provenance ownership, input-before-effects, foreign pin/map refusal and output failure after commit. |
+| Real-kernel batch/TC CLI helpers and normal lifecycle paths mixed with faults | Reuse the admitted corpus first, extract any missing public assertions, then remove duplicate successful paths. Keep injected failures, cancellation and retained receipts. Remaining extraction is pending. |
+| TX/direct REDIRECT, ordinary and jumbo frames | Eight parallel scripts cover modes, continuation, both survivors and full payload/fragment evidence. Rust retains two post-failure captures per scenario, snapshot restoration, ownership and cleanup checks. Both stores passed. |
+| XDP attach/switch/runtime/unload/netns, jumbo PASS/mixed membership, broadcast and egress modules; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
 
-This is the first completed migration slice, not a claim that all Rust behavioural
-tests have moved. Next: match the remaining CLI scenarios to the corpus, then
-migrate TX/direct REDIRECT, jumbo forwarding, broadcast and egress using the same
-runner. No new bpfman functionality is needed for that migration.
+These are incremental migration slices, not a claim that all Rust behavioural
+tests have moved. Next: migrate jumbo PASS/mixed membership, broadcast and egress
+using the same runner, then remaining ordinary lifecycle/CLI scenarios. No new
+bpfman functionality is needed for that migration.
 
 A representative pre-migration DEVMAP test took 40.83 s and performed 88 captures.
 Its 300 ms observation windows alone accounted for 26.4 s. The shared helper sends
@@ -1558,6 +1570,81 @@ duplicates and payload damage, and checks fragment reads through BPF counters.
 The new scripts share the setup for both survivor choices; Rust retains just the
 two post-failure packet checks per scenario. Observation windows have not been
 shortened. The eight scripts passed together in about 40 s per backend.
+
+#### CLI load/unload and TX/direct REDIRECT follow-up
+
+The corpus now has 149 scripts, of which 62 are admitted against Rust: 48 shared
+Go/Rust scripts and 14 Rust-only scripts. The three newly admitted existing
+scripts passed unchanged on both SQLite and JSON; only `rust=ok` header labels
+were added:
+
+- `TestLoadWithMetadataAndGlobalData`: metadata/global-data load, get and list.
+- `TestLoadGlobalData_UnknownKeyRejected`: real globals round-trip; unknown names fail.
+- `TestLinkMetadata_DispatcherRebuildPreservation`: independent link metadata
+  survives rebuilding an XDP dispatcher.
+
+The new shared `TestProgram_FileLifecycle` fills the remaining ordinary CLI gap:
+exact captured ELF bytes in file mode, complete record equality after get/list,
+quiet-list membership, unload and disappearance of the program pin/bytecode.
+It passed against Go (SQLite), and Rust with both stores. The existing exhaustive
+`TestTracepoint_LoadAndGet` and `TestXDP_LoadAndGet` cover load/get kernel status,
+map observation shapes, license and source/name fields. Duplicate assertions
+were removed from Rust's real-kernel CLI helper only after these scripts passed.
+
+The nonprivileged CLI assertions were reviewed as follows. A shared error outcome
+does not replace a check that invalid input caused no source/runtime effects.
+
+| Rust assertion group | Script coverage or reason to retain |
+| --- | --- |
+| `cli`: invalid flags, timeout, runtime roots, IDs, link requests and XDP config | Retain process-boundary checks, including stdout/exit classification and runtime noncreation. They do not require packet tests. |
+| `cli`: help, version, absent/unimplemented commands | Retain executable identity, experimental scope and unsupported-command contracts. |
+| `cli`: selected store reopens/refuses another format | Retain backend selection and persistence-format refusal; shared scripts select the backend rather than reinterpret another backend's files. |
+| `load`: malformed programs/options and unsupported program families/tracepoint options | Retain rejection before any source access or runtime setup. The mismatch corpus also needs unsupported probe/TCX families. |
+| `load`: registry credentials and native non-UTF-8 paths | Retain redaction and native-path process contracts; no network/kernel load is needed. |
+| `load`: unknown/wrong-size globals, malformed/missing local ELF | Unknown-key outcome is shared with `TestLoadGlobalData_UnknownKeyRejected`; retain no-runtime-effects checks and wrong-size cases. |
+| `load`: batch captured ELF and duplicate/missing selections | Retain `PreparedProgram` ownership: replacing the source after preparation must not change the captured batch. This is an API/input-lifetime contract. |
+| `unload`: malformed/unsupported operands | Retain parsing before runtime setup, including explicit rejection of unsupported `--ignore-missing`. |
+| `unload`: missing ID initializes an empty store without bpffs objects | Retain nonprivileged startup/effect-boundary evidence. Successful ordinary unload is covered by the file-lifecycle and existing load/get scripts. |
+| `unload`: unsupported persisted state unchanged | Retain the backend-specific fixture and byte-for-byte preservation check. |
+| Real-kernel CLI: provenance, foreign live program/map pins, `/dev/full` after load/attach | Retain private ownership receipts and post-commit output-failure contracts; ordinary success is now scripted. |
+
+Three additional existing scripts were executed unchanged against both Rust
+stores and remain **untagged**, with the same incompatibilities on each store:
+
+| Script | Observed gap |
+| --- | --- |
+| `TestUnload_IgnoreMissingIsIdempotent` | Rust says `managed program … not found` instead of `does not exist`, and rejects `--ignore-missing`. |
+| `TestLoad_RejectsSectionTypeMismatch` | Probe/TCX families are unsupported; the supported XDP mismatch says `selected ELF program is not XDP` rather than the expected `program type mismatch`. |
+| `TestLoad_SurfacesVerifierLog` | The fixture selects a kprobe, rejected as unsupported before verifier execution. This does not establish a verifier-log failure for supported Rust program types. |
+
+No flags, diagnostics or program families were implemented merely to admit those
+scripts, and their assertions were not changed.
+
+Eight new `TestXDP_TX_*` / `TestXDP_Redirect_*` scripts reuse
+`e2e/xdp-delivery.bpfman`: driver/SKB modes times 64/8014-byte frames times TX/direct
+REDIRECT. Each checks terminal versus continued action, a DROP tail, both survivor
+choices, stable outer link identity, and ordinary local delivery after last detach.
+Jumbo counters independently prove multi-buffer input plus tail and cross-buffer
+reads for every executing member and receiving observer. Captures retain exact
+delivery counts, duplicate detection, full payload checks and the 300 ms window.
+The eight ran concurrently alongside the file-lifecycle script in about 18 s per
+Rust backend. Final program/link/dispatcher inventories were empty.
+
+Unlike the earlier DEVMAP admission labels, these new delivery scripts were also
+compared with Go before choosing their labels. Ordinary driver TX and REDIRECT
+passed and are shared. The six SKB/jumbo cases are Rust-only: Go attached in driver
+mode despite the SKB configuration, and all jumbo cases failed to attach the
+fragment observer on the MTU-9000 receiving peer (`numerical result out of range`).
+This demonstrates Rust acceptance beyond the tested Go paths, without claiming
+Go cannot support other SKB or jumbo topologies. A final Go run passed the three
+shared new scripts and skipped all six Rust-only scripts.
+
+Rust's direct-delivery matrix still injects failed attach and non-last detach
+publication for both actions, continuation settings and survivor choices on each
+mode/store/frame size. Only the two post-failure packet waves remain there:
+48 to 16 captures per matrix invocation. No fault, restoration, ownership or
+cleanup assertion was removed. The full workspace/kernel gate is the final
+checkpoint validation; its result is recorded with the current checkpoint above.
 
 A matching XDP fill/drain/refill script took 10.95 s with Go, 14.26 s with Rust
 debug and 9.02 s with Rust release. These are single samples, not a benchmark;

@@ -33,13 +33,13 @@ fn json_lifecycle_store_failures() {
 }
 
 #[test]
-fn sqlite_cli_behaviour() {
-    cli::behaviour("sqlite");
+fn sqlite_cli_effect_boundaries() {
+    cli::effect_boundaries("sqlite");
 }
 
 #[test]
-fn json_cli_behaviour() {
-    cli::behaviour("json");
+fn json_cli_effect_boundaries() {
+    cli::effect_boundaries("json");
 }
 
 #[test]

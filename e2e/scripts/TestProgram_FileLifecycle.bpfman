@@ -1,0 +1,39 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
+# Given: a file-loaded tracepoint program with no attachments
+# When: load, get, list, quiet list and unload run in separate CLI processes
+# Then: the captured ELF and record survive reopening and teardown removes the pin
+
+def cleanup_file_program(prog) {
+    if path-exists $prog.record.handles.pin_path {
+        bpfman program unload $prog
+    }
+}
+
+guard loaded <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder
+let prog = $loaded.programs[0]
+let pid = $prog.record.program_id
+defer cleanup_file_program $prog
+
+# Image-brokered corpus runs have different source provenance. File mode must
+# retain the exact ELF supplied by the caller, not reconstruct it after loading.
+if $prog.record.load.image_source == null {
+    assert $prog.record.load.source_path == testdata/bpf/tracepoint_counter.bpf.o
+    guard _ <- exec cmp testdata/bpf/tracepoint_counter.bpf.o $prog.record.load.object_path
+}
+guard got <- bpfman program get $pid
+let record = $prog |> jq ".record | tojson"
+assert ($got |> jq ".record | tojson") == $record
+guard listed <- bpfman program list -o json
+let ours = $listed |> jq ".programs[] | select(.record.program_id == ${pid})"
+assert ($ours |> jq ".record | tojson") == $record
+guard quiet <- exec bpfman program list -q
+let ids = $quiet.stdout |> jq 'split("\n") | map(select(length > 0) | tonumber)'
+assert ($ids |> jq "index(${pid}) != null") == true
+
+bpfman program unload $pid
+assert fail bpfman program get $pid
+assert not path-exists $prog.record.handles.pin_path
+assert not path-exists $prog.record.load.object_path
+guard listed <- bpfman program list -o json
+assert ($listed |> jq ".programs | map(.record.program_id) | index(${pid})") == null
