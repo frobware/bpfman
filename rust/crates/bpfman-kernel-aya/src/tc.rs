@@ -1,5 +1,5 @@
 use crate::{
-    Kernel, PreparedTc, TcDispatcher, TcExtension, TcFilter, TcStage, XdpNamespace,
+    Kernel, PreparedTc, TcDispatcher, TcExtension, TcFilter, TcStage, TcSwitch, XdpNamespace,
     failure::{filesystem, map},
     tc_netlink,
 };
@@ -58,21 +58,32 @@ impl ExtensionProgram for TcExtension {
         dispatcher: &TcDispatcher,
         slot: bpfman_model::XdpSlot,
     ) -> KernelResult<Self::Link> {
-        if slot != bpfman_model::XdpSlot::FIRST {
-            return Err(invalid("only TC slot zero is supported").into());
-        }
         let target: &SchedClassifier = dispatcher
             .0
             .program("tc_dispatcher")
             .ok_or_else(|| invalid("TC dispatcher missing"))?
             .try_into()?;
-        let id = self.0.attach_to_program(target.fd()?, "prog0")?;
+        let id = self
+            .0
+            .attach_to_program(target.fd()?, &format!("prog{}", slot.index()))?;
         Ok(crate::AyaLink(self.0.take_link(id)?.into()))
     }
 }
 
 impl TcKernel for Kernel {
     type Extension = TcExtension;
+    type Target = SchedClassifier;
+
+    fn tc_target_at(
+        &self,
+        source: PinSource<'_>,
+    ) -> KernelResult<(bpfman_fs::PinnedProgram, SchedClassifier)> {
+        use bpfman_fs::ProgramInspection;
+        Ok((
+            self.program_at(source)?,
+            SchedClassifier::from_pin(source.path())?,
+        ))
+    }
 
     fn tc_extension_at(
         &self,
@@ -90,6 +101,7 @@ impl TcLifecycle for Kernel {
     type Prepared = PreparedTc;
     type Stage = TcStage;
     type Filter = TcFilter;
+    type Switch = TcSwitch;
 
     fn prepare_tc(
         &self,
@@ -107,16 +119,42 @@ impl TcLifecycle for Kernel {
     fn stage_tc(
         &self,
         w: &RuntimeWriter<'_>,
-        mut prepared: PreparedTc,
+        prepared: PreparedTc,
         actions: TcProceedOn,
     ) -> Acquisition<TcStage> {
-        prepared
+        self.stage_tc_revision(w, vec![prepared], NonZeroU32::MIN, &[actions], false)
+    }
+
+    fn stage_tc_revision(
+        &self,
+        w: &RuntimeWriter<'_>,
+        prepared: Vec<PreparedTc>,
+        revision: NonZeroU32,
+        actions: &[TcProceedOn],
+        clsact_owned: bool,
+    ) -> Acquisition<TcStage> {
+        let Some(first) = prepared.first() else {
+            return Err(before(kernel(invalid("empty TC revision"))));
+        };
+        let key = first.namespace.key();
+        if prepared.len() != actions.len() {
+            return Err(before(kernel(invalid("TC member count mismatch"))));
+        }
+        for p in &prepared {
+            p.namespace.validate().map_err(kernel).map_err(before)?;
+            if p.namespace.key() != key {
+                return Err(before(kernel(invalid("TC interface changed"))));
+            }
+        }
+        let namespace = first
             .namespace
-            .validate()
+            .duplicate()
             .map_err(kernel)
             .map_err(before)?;
         let root = w.identity().map_err(filesystem).map_err(before)?;
-        let config = bpfman_model::tc_config(actions);
+        let config = bpfman_model::tc_revision_config(actions)
+            .map_err(kernel)
+            .map_err(before)?;
         let mut bpf = aya::EbpfLoader::new()
             .override_global("CONFIG", config.as_slice(), true)
             .load(crate::verification::tc_dispatcher_bytes())
@@ -130,15 +168,21 @@ impl TcLifecycle for Kernel {
             .map_err(before)?;
         program.load().map_err(kernel).map_err(before)?;
         let mut dispatcher = TcDispatcher(bpf);
-        let result = prepared
-            .program
-            .stage(w, prepared.namespace.key(), &mut dispatcher)
-            .map_err(map);
-        match result {
+        let mut programs: Vec<_> = prepared.into_iter().map(|p| p.program).collect();
+        match bpfman_fs::TcProgram::stage_revision(
+            &mut programs,
+            w,
+            key,
+            revision,
+            &mut dispatcher,
+            clsact_owned,
+        )
+        .map_err(map)
+        {
             Ok(pins) => Ok(TcStage {
                 pins,
                 dispatcher: Some(dispatcher),
-                namespace: prepared.namespace,
+                namespace,
                 root,
             }),
             Err(f) => Err(EffectFailure {
@@ -146,11 +190,23 @@ impl TcLifecycle for Kernel {
                 remaining: f.remaining.map(|pins| TcStage {
                     pins,
                     dispatcher: Some(dispatcher),
-                    namespace: prepared.namespace,
+                    namespace,
                     root,
                 }),
             }),
         }
+    }
+
+    fn tc_revision_ids(stage: &TcStage) -> Result<(NonZeroU32, Vec<NonZeroU32>), Error> {
+        stage
+            .pins
+            .revision_ids()
+            .map(|(id, links)| (id, links.to_vec()))
+            .map_err(filesystem)
+    }
+
+    fn tc_clsact_owned(&self, w: &RuntimeWriter<'_>, stage: &TcStage) -> Result<bool, Error> {
+        stage.pins.clsact_owned(w).map_err(filesystem)
     }
 
     fn attach_tc_filter(&self, w: &RuntimeWriter<'_>, stage: &TcStage) -> Acquisition<TcFilter> {
@@ -260,7 +316,22 @@ impl TcLifecycle for Kernel {
         w: &RuntimeWriter<'_>,
         snapshot: &TcSnapshot,
     ) -> Result<(TcStage, TcFilter), Error> {
-        let d = &snapshot.details;
+        let full =
+            bpfman_model::TcDispatcherSnapshot::new(vec![snapshot.clone()]).map_err(kernel)?;
+        self.observe_tc_dispatcher(w, &full)
+    }
+
+    fn observe_tc_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &bpfman_model::TcDispatcherSnapshot,
+    ) -> Result<(TcStage, TcFilter), Error> {
+        let d = &snapshot
+            .members()
+            .first()
+            .ok_or_else(|| kernel(invalid("empty TC snapshot")))?
+            .details;
+
         if d.filter_priority != 50 {
             return Err(kernel(invalid("unsupported TC filter priority")));
         }
@@ -271,9 +342,11 @@ impl TcLifecycle for Kernel {
                 "TC namespace/interface differs from snapshot",
             )));
         }
-        let pins = w.observe_tc_pins(self, snapshot).map_err(filesystem)?;
+        let pins = w
+            .observe_tc_dispatcher_pins(self, snapshot)
+            .map_err(filesystem)?;
         let clsact_owned = pins.clsact_owned(w).map_err(filesystem)?;
-        namespace
+        let present = namespace
             .run_tc(|| {
                 tc_netlink::filter(
                     d.key.ifindex.get(),
@@ -286,7 +359,7 @@ impl TcLifecycle for Kernel {
             namespace: namespace.duplicate().map_err(kernel)?,
             root,
             dispatcher: d.dispatcher_id.get(),
-            handle: Some(d.filter_handle),
+            handle: present.then_some(d.filter_handle),
             clsact_owned,
         };
         Ok((
@@ -298,6 +371,127 @@ impl TcLifecycle for Kernel {
             },
             filter,
         ))
+    }
+
+    fn switch_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        filter: &TcFilter,
+        old: &TcStage,
+        new: &TcStage,
+    ) -> Acquisition<TcSwitch> {
+        let root = w.identity().map_err(filesystem).map_err(before)?;
+        if root != filter.root
+            || root != old.root
+            || root != new.root
+            || old.namespace.key() != new.namespace.key()
+            || old.namespace.key() != filter.namespace.key()
+        {
+            return Err(before(kernel(invalid("TC switch authority differs"))));
+        }
+        old.namespace.validate().map_err(kernel).map_err(before)?;
+        new.namespace.validate().map_err(kernel).map_err(before)?;
+        let (old_id, _) = old
+            .pins
+            .revision_ids()
+            .map_err(filesystem)
+            .map_err(before)?;
+        let (new_id, _) = new
+            .pins
+            .revision_ids()
+            .map_err(filesystem)
+            .map_err(before)?;
+        if old_id.get() != filter.dispatcher {
+            return Err(before(kernel(invalid("TC switch target mismatch"))));
+        }
+        let handle = filter
+            .handle
+            .ok_or_else(|| before(kernel(invalid("TC filter missing"))))?;
+        let mut receipt = TcSwitch {
+            namespace: filter
+                .namespace
+                .duplicate()
+                .map_err(kernel)
+                .map_err(before)?,
+            root,
+            handle,
+            old_id: old_id.get(),
+            new_id: new_id.get(),
+            old: old
+                .pins
+                .target(w, self)
+                .map_err(filesystem)
+                .map_err(before)?,
+            new: new
+                .pins
+                .target(w, self)
+                .map_err(filesystem)
+                .map_err(before)?,
+        };
+        // Route netlink has no expected-program CAS. Recheck the exact tuple just
+        // before Aya replaces it; concurrent privileged writers remain outside this lock.
+        receipt
+            .namespace
+            .run_tc(|| {
+                if !tc_netlink::filter(
+                    receipt.namespace.key().ifindex.get(),
+                    handle.get(),
+                    receipt.old_id,
+                )? {
+                    return Err(invalid("TC filter disappeared before replacement"));
+                }
+                Ok(())
+            })
+            .map_err(kernel)
+            .map_err(before)?;
+        let result = receipt
+            .namespace
+            .run_tc(|| replace_filter(&receipt.namespace, handle, &mut receipt.new));
+        match result {
+            Ok(()) => Ok(receipt),
+            Err(cause) => Err(EffectFailure {
+                cause: kernel(cause),
+                remaining: Some(receipt),
+            }),
+        }
+    }
+
+    fn restore_tc(&self, w: &RuntimeWriter<'_>, mut receipt: TcSwitch) -> Removal<TcSwitch> {
+        let result = (|| -> Result<(), Error> {
+            if w.identity().map_err(filesystem)? != receipt.root {
+                return Err(kernel(invalid("TC restoration belongs to another runtime")));
+            }
+            receipt.namespace.validate().map_err(kernel)?;
+            receipt
+                .namespace
+                .run_tc(|| {
+                    // An uncertain failed switch can already be on the original target.
+                    match tc_netlink::filter(
+                        receipt.namespace.key().ifindex.get(),
+                        receipt.handle.get(),
+                        receipt.old_id,
+                    ) {
+                        Ok(true) => return Ok(()),
+                        Ok(false) => {
+                            return Err(invalid("TC filter disappeared before restoration"));
+                        }
+                        Err(_) => {}
+                    }
+                    if !tc_netlink::filter(
+                        receipt.namespace.key().ifindex.get(),
+                        receipt.handle.get(),
+                        receipt.new_id,
+                    )? {
+                        return Err(invalid("TC replacement filter missing"));
+                    }
+                    replace_filter(&receipt.namespace, receipt.handle, &mut receipt.old)
+                })
+                .map_err(kernel)
+        })();
+        result.map_err(|cause| EffectFailure {
+            cause,
+            remaining: receipt,
+        })
     }
 
     fn remove_tc_filter(&self, w: &RuntimeWriter<'_>, mut filter: TcFilter) -> Removal<TcFilter> {
@@ -344,4 +538,27 @@ impl TcLifecycle for Kernel {
             },
         })
     }
+}
+
+fn replace_filter(
+    namespace: &XdpNamespace,
+    handle: NonZeroU32,
+    program: &mut SchedClassifier,
+) -> io::Result<()> {
+    use aya::programs::tc::{SchedClassifierLink, TcHandle};
+    if crate::pin_syscall::interface(namespace.tc_interface())? != namespace.key().ifindex.get() {
+        return Err(invalid("TC interface changed before switch"));
+    }
+    let link = SchedClassifierLink::attached(
+        namespace.tc_interface(),
+        TcAttachType::Ingress,
+        50,
+        TcHandle::from(handle.get()),
+        None,
+    )?;
+    let id = program.attach_to_link(link).map_err(io::Error::other)?;
+    let link = program.take_link(id).map_err(io::Error::other)?;
+    // Descriptor-free netlink ownership transfers to the retained switch/filter receipt.
+    std::mem::forget(link);
+    Ok(())
 }

@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: three XDP programs attached at distinct priorities under
 # default proceed-on

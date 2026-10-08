@@ -87,7 +87,7 @@ The architecture and compatibility goals are in
   that Aya's public API lacks. Managed filesystem mutations still belong in
   `bpfman-fs`; runtime and pure crates must not acquire syscall dependencies.
 - Keep clsact ownership separate from operator metadata and Go schema 2. The
-  confined file `<runtime>/tc/dispatcher_<nsid>_<ifindex>_1` records borrowed (0)
+  confined file `<runtime>/tc/dispatcher_<nsid>_<ifindex>_<revision>` records borrowed (0)
   or created (1) ownership. Preserve borrowed qdiscs after reopening; reclaim a
   created clsact only if both ingress and egress are empty. A foreign filter
   preserves the qdisc and relinquishes ownership. Refuse classic ingress qdiscs,
@@ -95,11 +95,22 @@ The architecture and compatibility goals are in
 - TC proceed-on shifts signed return codes by one: UNSPEC -1 is bit zero,
   PIPE 3 is bit four, dispatcher-return 30 is bit 31. Its CONFIG is 84 bytes;
   do not reuse the XDP ABI or return-code mask.
-- New JSON stores use format 7 for TC; formats 1–6 never upgrade implicitly.
+- Use Aya's public `SchedClassifierLink::attached` and `attach_to_link` for legacy
+  filter replacement. Stage the complete revision first; validate the exact old
+  target before switching, and retain both native handles if restoration fails.
+  Never clean staged pins until restoration succeeds, or restore after publication.
+  Copy clsact ownership into fresh revision evidence; retire only the old revision.
+- New JSON stores use format 8 for TC replacement; format 7 retains singleton TC.
+  Formats 1–7 never upgrade implicitly.
   Attached unload must adopt all TC attachments before effects, finish exact
   filter/stage/record prerequisites before program teardown, and retain blocked
   ownership for explicit retry. Reject newly acquired links between retry passes.
-  `make rust-test-tc-ingress` runs both stores, including attached unload.
+  `make rust-test-tc-ingress` runs both stores, including replacement and attached
+  unload. Members of one dispatcher use its latest revision; a failed member blocks
+  later members of that dispatcher while independent interfaces continue one pass.
+- The unchanged Go clsact script has a production-policy guard. Rust's test harness
+  explicitly sets `BPFMAN_E2E_CLSACT_RECLAIM=true`, forwarded by Make, to run its
+  assertions against Rust without changing Go's reclaim policy.
 
 ## Visibility and crate boundaries
 
@@ -316,6 +327,11 @@ The architecture and compatibility goals are in
 - Reuse the unchanged `e2e/scripts/*.bpfman` corpus via the Go shell runner.
   Select a CLI using `BPFMAN_UNDER_TEST`, which sets both `BPFMAN_BIN` and `PATH`.
   Do not claim parity from decoding alone or weaken scripts for Rust.
+  Passing file-bytecode scripts carry `#pragma labels={"rust":"ok"}`; add the label
+  only after execution against Rust with both stores. Preserve other labels and
+  assertions. Use `BPFMAN_E2E_SCRIPT_SELECTOR='rust=ok,!external'` to batch the set
+  through the existing Go runner and its pooled interfaces/parallel scheduler.
+  Run backend batches sequentially because separate runners share a suite lock.
 - Make each vertical slice's supported command surface explicit. Unsupported
   commands and flags fail clearly; never invent successful observations for
   functionality not yet implemented.

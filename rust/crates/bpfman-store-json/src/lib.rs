@@ -57,6 +57,6 @@ pub struct XdpReceipt {
 pub struct TcReceipt {
     root: RuntimeIdentity,
     store: String,
-    row: tc::Row,
-    program: state::Program,
+    rows: Vec<tc::Row>,
+    programs: Vec<state::Program>,
 }

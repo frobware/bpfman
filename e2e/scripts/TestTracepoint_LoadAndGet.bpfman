@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: a tracepoint program loaded with user metadata, with no attach,
 # traffic, or detach activity

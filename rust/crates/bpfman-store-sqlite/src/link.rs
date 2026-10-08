@@ -155,6 +155,17 @@ fn check(
 }
 
 impl LinkReader for Store {
+    fn read_tc_dispatchers(&mut self) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, Error> {
+        self.reader
+            .read(|c| {
+                let tx = c.transaction()?;
+                open::require_supported(open::schema_version(&tx)?)?;
+                crate::tc::snapshots(&tx)
+            })
+            .map_err(crate::Error::from)
+            .map_err(Into::into)
+    }
+
     #[tracing::instrument(name = "store.read_links", level = "debug", skip_all, err)]
     fn read_links(&mut self) -> Result<Vec<StoredLink>, Error> {
         self.reader
@@ -179,13 +190,9 @@ impl LinkReader for Store {
                         links.extend(snapshot.members().iter().map(|s| s.member.clone()));
                     }
                 }
-                links.extend(
-                    queries::tc::rows(&tx, None, None)?
-                        .iter()
-                        .map(crate::tc::decode)
-                        .map(|s| s.map(|s| s.member))
-                        .collect::<Result<Vec<_>, _>>()?,
-                );
+                for snapshot in crate::tc::snapshots(&tx)? {
+                    links.extend(snapshot.members().iter().map(|m| m.member.clone()));
+                }
                 links.sort_by_key(|l| l.id);
                 Ok(links)
             })

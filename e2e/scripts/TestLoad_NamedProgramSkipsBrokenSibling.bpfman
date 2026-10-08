@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: an object holding one good XDP program alongside an
 # unverifiable sibling

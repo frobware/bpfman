@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: an XDP dispatcher whose interface lives in a requested network
 # namespace

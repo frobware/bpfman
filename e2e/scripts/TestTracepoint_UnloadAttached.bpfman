@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 # Unloading an attached program removes its links before its program and maps.
 
 import ../lib.bpfman

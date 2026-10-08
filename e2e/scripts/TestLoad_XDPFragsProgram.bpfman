@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: an XDP program compiled into the "xdp.frags" section (so it
 # carries BPF_F_XDP_HAS_FRAGS) that counts packets, and a normal-MTU

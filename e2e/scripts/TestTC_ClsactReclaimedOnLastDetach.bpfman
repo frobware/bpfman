@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #pragma labels={"requires-clsact-reclaim":"true"}
 #
 # Given: clsact reclaim is enabled (tcpolicy.ReclaimClsactOnDetach; the

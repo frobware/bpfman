@@ -3,7 +3,7 @@ use bpfman_fs::RuntimeWriter;
 use bpfman_model::{InterfaceName, NetworkNamespace, TcProceedOn, TcSnapshot, XdpKey};
 use std::num::NonZeroU32;
 
-/// First-member legacy TC ingress ownership; deliberately separate from TCX.
+/// Legacy TC ingress ownership; deliberately separate from TCX.
 pub trait TcLifecycle {
     /// Adopted extension and retained namespace/interface evidence.
     type Prepared;
@@ -11,6 +11,37 @@ pub trait TcLifecycle {
     type Stage: Send + Sync + 'static;
     /// Owned exact filter and clsact cleanup, including partial acquisitions.
     type Filter: Send + Sync + 'static;
+    /// Retained exact filter and both native targets for restoration.
+    type Switch: Send + Sync + 'static;
+    /// Stage a complete fresh revision using adopted programs in execution order.
+    fn stage_tc_revision(
+        &self,
+        w: &RuntimeWriter<'_>,
+        prepared: Vec<Self::Prepared>,
+        revision: NonZeroU32,
+        actions: &[TcProceedOn],
+        clsact_owned: bool,
+    ) -> Acquisition<Self::Stage>;
+    /// Complete staged native and extension identities in slot order.
+    fn tc_revision_ids(stage: &Self::Stage) -> Result<(NonZeroU32, Vec<NonZeroU32>), Error>;
+    /// Validate complete active ownership before replacement or member removal.
+    fn observe_tc_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &bpfman_model::TcDispatcherSnapshot,
+    ) -> Result<(Self::Stage, Self::Filter), Error>;
+    /// Read retained durable clsact ownership for the next revision.
+    fn tc_clsact_owned(&self, w: &RuntimeWriter<'_>, stage: &Self::Stage) -> Result<bool, Error>;
+    /// Replace the exact old filter, retaining restoration on any possible mutation.
+    fn switch_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        filter: &Self::Filter,
+        old: &Self::Stage,
+        new: &Self::Stage,
+    ) -> Acquisition<Self::Switch>;
+    /// Restore the original target once; retain both handles on failure.
+    fn restore_tc(&self, w: &RuntimeWriter<'_>, receipt: Self::Switch) -> Removal<Self::Switch>;
     /// Resolve the namespace/interface and adopt the managed EXT pin.
     fn prepare_tc(
         &self,

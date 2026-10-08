@@ -11,6 +11,25 @@ use bpfman_store::{Error, LinkObservation, LinkReader, LinkStore, PendingTracepo
 use std::num::{NonZeroU32, NonZeroU64};
 
 impl LinkReader for Reader {
+    fn read_tc_dispatchers(&mut self) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, Error> {
+        let (_, state) = read(&self.file)?;
+        let keys: std::collections::BTreeSet<_> = state.tc.iter().map(|r| r.key()).collect();
+        keys.into_iter()
+            .map(|key| {
+                bpfman_model::TcDispatcherSnapshot::new(
+                    state
+                        .tc
+                        .iter()
+                        .filter(|r| r.key() == key)
+                        .map(|r| r.snapshot(&state, &self.layout))
+                        .collect::<Result<_, _>>()?,
+                )
+                .map_err(|_| Failure::Invalid("invalid TC dispatcher"))
+            })
+            .collect::<Result<_, _>>()
+            .map_err(Into::into)
+    }
+
     #[tracing::instrument(name = "store.read_links", level = "debug", skip_all, err)]
     fn read_links(&mut self) -> Result<Vec<StoredLink>, Error> {
         let (_, state) = read(&self.file)?;

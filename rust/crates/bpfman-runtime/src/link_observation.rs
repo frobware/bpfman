@@ -37,7 +37,9 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     cancellation: &Cancellation,
 ) -> Result<ObservedLink, LinkCause> {
     let path = match &record.details {
-        bpfman_model::LinkDetails::Tc(d) => runtime.layout().tc_extension_path(d.key),
+        bpfman_model::LinkDetails::Tc(d) => {
+            runtime.layout().tc_slot_path(d.key, d.revision, d.slot)
+        }
         bpfman_model::LinkDetails::Tracepoint(_) => runtime.layout().link_pin_path(record.id),
         bpfman_model::LinkDetails::Xdp(details) => {
             runtime

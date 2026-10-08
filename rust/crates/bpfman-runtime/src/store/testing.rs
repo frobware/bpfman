@@ -172,6 +172,10 @@ impl<S: UnloadStore> UnloadStore for Faults<S> {
 }
 
 impl<R: bpfman_store::LinkReader> bpfman_store::LinkReader for Reader<R> {
+    fn read_tc_dispatchers(&mut self) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, Error> {
+        self.reader.read_tc_dispatchers()
+    }
+
     fn read_links(&mut self) -> Result<Vec<bpfman_model::StoredLink>, Error> {
         self.reader.read_links()
     }
@@ -296,6 +300,36 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for Faults<S> {
         id: std::num::NonZeroU64,
     ) -> Result<Option<(bpfman_model::TcSnapshot, Self::TcReceipt)>, Error> {
         self.backend.observe_tc(w, id)
+    }
+
+    fn observe_tc_member_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
+    {
+        self.backend.observe_tc_member_dispatcher(w, id)
+    }
+
+    fn observe_tc_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
+    {
+        self.backend.observe_tc_dispatcher(w, key)
+    }
+
+    fn replace_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::TcReceipt,
+        request: bpfman_store::TcReplace<'_>,
+    ) -> Result<
+        bpfman_model::TcDispatcherSnapshot,
+        EffectFailure<Self::TcReceipt, bpfman_store::Error>,
+    > {
+        self.backend.replace_tc(w, receipt, request)
     }
 
     fn delete_tc(

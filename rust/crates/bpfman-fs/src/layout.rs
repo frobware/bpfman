@@ -135,12 +135,31 @@ impl RuntimeLayout {
 }
 
 impl RuntimeLayout {
+    /// Canonical TC ingress revision container.
+    pub fn tc_revision_path(
+        &self,
+        key: bpfman_model::XdpKey,
+        revision: std::num::NonZeroU32,
+    ) -> PathBuf {
+        self.root.join("fs/tc-ingress").join(format!(
+            "dispatcher_{}_{}_{}",
+            key.nsid, key.ifindex, revision
+        ))
+    }
+
+    /// Canonical TC freplace pin for one execution slot.
+    pub fn tc_slot_path(
+        &self,
+        key: bpfman_model::XdpKey,
+        revision: std::num::NonZeroU32,
+        slot: bpfman_model::XdpSlot,
+    ) -> PathBuf {
+        self.tc_revision_path(key, revision)
+            .join(format!("link_{}", slot.index()))
+    }
+
     /// Canonical first-member TC ingress freplace pin.
     pub fn tc_extension_path(&self, key: bpfman_model::XdpKey) -> std::path::PathBuf {
-        self.root
-            .join("fs")
-            .join("tc-ingress")
-            .join(format!("dispatcher_{}_{}_1", key.nsid, key.ifindex))
-            .join("link_0")
+        self.tc_slot_path(key, std::num::NonZeroU32::MIN, bpfman_model::XdpSlot::FIRST)
     }
 }

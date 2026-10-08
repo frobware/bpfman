@@ -194,6 +194,10 @@ impl PinSource<'_> {
 
 /// Adopt a TC dispatcher extension through a confined managed program pin.
 pub trait TcKernel: ProgramInspection + LinkInspection {
+    /// Retained native dispatcher target for live replacement and restoration.
+    type Target;
+    /// Open native identity and its retained program handle through a confined pin.
+    fn tc_target_at(&self, source: PinSource<'_>) -> KernelResult<(PinnedProgram, Self::Target)>;
     /// Owned TC extension, distinct from an XDP extension.
     type Extension: ExtensionProgram;
     /// Open the EXT program and its identity together.

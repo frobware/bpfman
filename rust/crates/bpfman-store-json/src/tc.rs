@@ -6,7 +6,9 @@ use crate::{
 };
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeLayout, RuntimeWriter};
-use bpfman_model::{LinkDetails, LinkState, StoredLink, TcLink, TcSnapshot, XdpKey};
+use bpfman_model::{
+    LinkDetails, LinkState, StoredLink, TcDispatcherSnapshot, TcLink, TcSnapshot, XdpKey,
+};
 use bpfman_store::{Error, TcCommit, TcStore};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -24,6 +26,10 @@ pub(super) struct Row {
     ifindex: NonZeroU32,
     interface: String,
     netns: String,
+    #[serde(default = "first_revision", skip_serializing_if = "is_first_revision")]
+    revision: NonZeroU32,
+    #[serde(default, skip_serializing_if = "is_first_slot")]
+    position: usize,
     priority: u32,
     proceed_on: u32,
     pub(super) dispatcher_id: NonZeroU32,
@@ -31,6 +37,18 @@ pub(super) struct Row {
     filter_priority: u16,
     metadata: BTreeMap<String, String>,
     created_at: String,
+}
+
+fn first_revision() -> NonZeroU32 {
+    NonZeroU32::MIN
+}
+
+fn is_first_revision(r: &NonZeroU32) -> bool {
+    *r == NonZeroU32::MIN
+}
+
+fn is_first_slot(slot: &usize) -> bool {
+    *slot == 0
 }
 
 impl Row {
@@ -47,6 +65,11 @@ impl Row {
         }
         crate::state::timestamp(&self.created_at)?;
         Ok(TcLink {
+            revision: self.revision,
+            slot: self
+                .position
+                .try_into()
+                .map_err(|_| Failure::Invalid("invalid TC slot"))?,
             netns: self
                 .netns
                 .parse()
@@ -94,11 +117,11 @@ impl Row {
             member: StoredLink {
                 id: self.link_id,
                 program_id: self.program_id,
-                details: LinkDetails::Tc(details),
+                details: LinkDetails::Tc(details.clone()),
                 state: LinkState::Attached {
                     kernel_id: self.extension_link_id,
                 },
-                pin_path: path(layout.tc_extension_path(self.key()))?,
+                pin_path: path(layout.tc_slot_path(self.key(), self.revision, details.slot))?,
                 metadata: self.metadata.clone(),
                 created_at: crate::state::timestamp(&self.created_at)?,
             },
@@ -113,9 +136,7 @@ fn preflight(state: &State, key: XdpKey, program: NonZeroU32) -> Result<(), Fail
         ));
     }
     if state.tc.iter().any(|r| r.key() == key) {
-        return Err(Failure::Unsupported(
-            "TC dispatcher replacement is not implemented; attach point is occupied",
-        ));
+        return Err(Failure::Unsupported("TC ingress attach point is occupied"));
     }
     if !state
         .programs
@@ -150,6 +171,9 @@ impl TcStore for Backend {
             .ok_or(Failure::Invalid("link ID exhausted"))?;
         state.next_link_id += 1;
         let d = request.details;
+        if d.revision != NonZeroU32::MIN || d.slot != bpfman_model::XdpSlot::FIRST {
+            return Err(Failure::Invalid("invalid first TC revision").into());
+        }
         let row = Row {
             link_id: id,
             program_id: request.program_id,
@@ -158,6 +182,8 @@ impl TcStore for Backend {
             ifindex: d.key.ifindex,
             interface: d.interface.as_str().into(),
             netns: d.netns.as_str().into(),
+            revision: d.revision,
+            position: d.slot.index(),
             priority: d.priority,
             proceed_on: d.proceed_on.mask(),
             dispatcher_id: d.dispatcher_id,
@@ -183,6 +209,9 @@ impl TcStore for Backend {
         let Some(row) = state.tc.iter().find(|r| r.link_id == id) else {
             return Ok(None);
         };
+        if state.tc.iter().filter(|r| r.key() == row.key()).count() != 1 {
+            return Err(Failure::Unsupported("use complete TC dispatcher observation").into());
+        }
         let program = state
             .programs
             .iter()
@@ -194,10 +223,168 @@ impl TcStore for Backend {
             TcReceipt {
                 root: w.identity().map_err(Failure::from)?,
                 store: state.identity.clone(),
-                row: row.clone(),
-                program,
+                rows: vec![row.clone()],
+                programs: vec![program],
             },
         )))
+    }
+
+    fn observe_tc_member_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+    ) -> Result<Option<(TcDispatcherSnapshot, TcReceipt)>, Error> {
+        let file = w.open_store_snapshot().map_err(Failure::from)?;
+        let (_, state) = read(&file)?;
+        match state.tc.iter().find(|r| r.link_id == id) {
+            Some(row) => self.observe_tc_dispatcher(w, row.key()),
+            None => Ok(None),
+        }
+    }
+
+    fn observe_tc_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: XdpKey,
+    ) -> Result<Option<(TcDispatcherSnapshot, TcReceipt)>, Error> {
+        let file = w.open_store_snapshot().map_err(Failure::from)?;
+        let (_, state) = read(&file)?;
+        let rows: Vec<_> = state
+            .tc
+            .iter()
+            .filter(|r| r.key() == key)
+            .cloned()
+            .collect();
+        if rows.is_empty() {
+            return Ok(None);
+        }
+        let snapshot = TcDispatcherSnapshot::new(
+            rows.iter()
+                .map(|r| r.snapshot(&state, w.layout()))
+                .collect::<Result<_, _>>()?,
+        )
+        .map_err(|_| Failure::Invalid("invalid TC dispatcher"))?;
+        let programs = state
+            .programs
+            .iter()
+            .filter(|p| rows.iter().any(|r| r.program_id == p.id))
+            .cloned()
+            .collect();
+        Ok(Some((
+            snapshot,
+            TcReceipt {
+                root: w.identity().map_err(Failure::from)?,
+                store: state.identity,
+                rows,
+                programs,
+            },
+        )))
+    }
+
+    fn replace_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: TcReceipt,
+        request: bpfman_store::TcReplace<'_>,
+    ) -> Result<TcDispatcherSnapshot, EffectFailure<TcReceipt, Error>> {
+        let result = (|| -> Result<_, Error> {
+            let file = w.open_store_snapshot().map_err(Failure::from)?;
+            let (previous, mut state) = read(&file)?;
+            if state.version < 8 {
+                return Err(Failure::Unsupported(
+                    "TC replacement requires JSON format 8; no implicit upgrade",
+                )
+                .into());
+            }
+            let key = receipt
+                .rows
+                .first()
+                .ok_or(Failure::Invalid("empty TC receipt"))?
+                .key();
+            let programs: Vec<_> = state
+                .programs
+                .iter()
+                .filter(|p| receipt.rows.iter().any(|r| r.program_id == p.id))
+                .cloned()
+                .collect();
+            if w.identity().map_err(Failure::from)? != receipt.root
+                || state.identity != receipt.store
+                || programs != receipt.programs
+                || state
+                    .tc
+                    .iter()
+                    .filter(|r| r.key() == key)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    != receipt.rows
+            {
+                return Err(Failure::Invalid(
+                    "TC receipt belongs to another runtime/store or changed snapshot",
+                )
+                .into());
+            }
+            let old = TcDispatcherSnapshot::new(
+                receipt
+                    .rows
+                    .iter()
+                    .map(|r| r.snapshot(&state, w.layout()))
+                    .collect::<Result<_, _>>()?,
+            )
+            .map_err(|_| Failure::Invalid("invalid TC dispatcher"))?;
+            request.validate(&old)?;
+            crate::state::timestamp(request.updated_at)?;
+            let mut desired = Vec::new();
+            for m in request.members {
+                let a = &m.attachment;
+                let d = a.details;
+                let link_id = match m.identity {
+                    bpfman_store::XdpMemberId::Existing(id) => id,
+                    bpfman_store::XdpMemberId::New => {
+                        let id = NonZeroU64::new(state.next_link_id)
+                            .filter(|id| id.get() <= i64::MAX as u64)
+                            .ok_or(Failure::Invalid("link ID exhausted"))?;
+                        state.next_link_id += 1;
+                        id
+                    }
+                };
+                desired.push(Row {
+                    link_id,
+                    program_id: a.program_id,
+                    extension_link_id: a.extension_link_id,
+                    nsid: key.nsid,
+                    ifindex: key.ifindex,
+                    interface: d.interface.as_str().into(),
+                    netns: d.netns.as_str().into(),
+                    revision: d.revision,
+                    position: d.slot.index(),
+                    priority: d.priority,
+                    proceed_on: d.proceed_on.mask(),
+                    dispatcher_id: d.dispatcher_id,
+                    filter_handle: d.filter_handle,
+                    filter_priority: d.filter_priority,
+                    metadata: a.metadata.clone(),
+                    created_at: a.created_at.into(),
+                });
+            }
+            state.tc.retain(|r| r.key() != key);
+            state.tc.extend(desired);
+            state.validate()?;
+            let result = TcDispatcherSnapshot::new(
+                state
+                    .tc
+                    .iter()
+                    .filter(|r| r.key() == key)
+                    .map(|r| r.snapshot(&state, w.layout()))
+                    .collect::<Result<_, _>>()?,
+            )
+            .map_err(|_| Failure::Invalid("invalid TC dispatcher"))?;
+            publish(w, &file, Some(&previous), &state)?;
+            Ok(result)
+        })();
+        result.map_err(|cause| EffectFailure {
+            cause,
+            remaining: receipt,
+        })
     }
 
     fn delete_tc(
@@ -210,14 +397,28 @@ impl TcStore for Backend {
             let (previous, mut state) = read(&file)?;
             if w.identity()? != receipt.root
                 || state.identity != receipt.store
-                || !state.tc.contains(&receipt.row)
-                || !state.programs.contains(&receipt.program)
+                || receipt.rows.len() != 1
+                || !receipt.programs.iter().all(|p| state.programs.contains(p))
             {
                 return Err(Failure::Invalid(
                     "TC receipt belongs to another runtime/store or changed snapshot",
                 ));
             }
-            state.tc.retain(|r| r.link_id != receipt.row.link_id);
+            let row = receipt
+                .rows
+                .first()
+                .ok_or(Failure::Invalid("empty TC receipt"))?;
+            if state
+                .tc
+                .iter()
+                .filter(|r| r.key() == row.key())
+                .cloned()
+                .collect::<Vec<_>>()
+                != receipt.rows
+            {
+                return Err(Failure::Invalid("TC snapshot changed"));
+            }
+            state.tc.retain(|r| r.link_id != row.link_id);
             publish(w, &file, Some(&previous), &state)
         })();
         result.map_err(|cause| EffectFailure {

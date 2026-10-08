@@ -79,6 +79,17 @@ pub struct TcStage {
     root: bpfman_fs::RuntimeIdentity,
 }
 
+/// Retained exact TC filter and both native targets across restoration attempts.
+pub struct TcSwitch {
+    namespace: XdpNamespace,
+    root: bpfman_fs::RuntimeIdentity,
+    handle: std::num::NonZeroU32,
+    old_id: u32,
+    new_id: u32,
+    old: aya::programs::SchedClassifier,
+    new: aya::programs::SchedClassifier,
+}
+
 /// Exact TC filter and clsact cleanup. Partial acquisition may own only clsact.
 pub struct TcFilter {
     namespace: XdpNamespace,

@@ -275,6 +275,10 @@ fn run_dsl(store: &'static str, script: &str, binary: &std::path::Path) {
         .env("BPFMAN_RUNTIME_DIR", c.layout.root())
         .env("BPFMAN_STORE", store)
         .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
+        .env(
+            "BPFMAN_E2E_CLSACT_RECLAIM",
+            if binary == rust() { "true" } else { "" },
+        )
         .current_dir(repository())
         .output()
         .expect("DSL runner");

@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: three TC programs returning OK, attached with a custom
 # proceed-on mask that includes ok

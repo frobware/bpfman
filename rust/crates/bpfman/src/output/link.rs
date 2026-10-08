@@ -13,8 +13,8 @@ fn record(link: &StoredLink) -> Value {
             "tc",
             json!({
                 "interface":d.interface.as_str(), "ifindex":d.key.ifindex.get(), "direction":"ingress", "priority":d.priority,
-                "position":0, "proceed_on":(-1..=30).filter(|code| d.proceed_on.mask() & (1 << (code+1)) != 0).collect::<Vec<i32>>(),
-                "netns":d.netns.as_str(), "nsid":d.key.nsid.get(), "dispatcher_id":d.dispatcher_id.get(), "revision":1,
+                "position":d.slot.index(), "proceed_on":(-1..=30).filter(|code| d.proceed_on.mask() & (1 << (code+1)) != 0).collect::<Vec<i32>>(),
+                "netns":d.netns.as_str(), "nsid":d.key.nsid.get(), "dispatcher_id":d.dispatcher_id.get(), "revision":d.revision.get(),
                 "filter_priority":d.filter_priority, "filter_handle":d.filter_handle.get(),
             }),
         ),

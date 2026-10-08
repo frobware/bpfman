@@ -12,7 +12,10 @@ mod netns;
 pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
 
 mod tc;
-pub use tc::{InvalidTc, TcLink, TcProceedOn, TcSnapshot, tc_config};
+pub use tc::{
+    InvalidTc, InvalidTcSnapshot, TcDispatcherSnapshot, TcLink, TcProceedOn, TcSnapshot, tc_config,
+    tc_revision_config,
+};
 mod xdp;
 pub use xdp::{
     InterfaceName, InvalidXdp, InvalidXdpMode, InvalidXdpSnapshot, XdpDispatcherSnapshot, XdpKey,

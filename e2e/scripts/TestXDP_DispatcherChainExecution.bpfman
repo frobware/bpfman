@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: all ten XDP dispatcher slots filled with independent counter
 # programs under default proceed-on

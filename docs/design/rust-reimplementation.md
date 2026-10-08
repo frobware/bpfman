@@ -3,10 +3,12 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The current
-checkpoint adds attached TC program unload to the singleton legacy ingress
-lifecycle on both stores. Every attachment is validated before destructive effects;
-exact filter, dispatcher and record cleanup precede program removal, with consuming
-receipts and explicit retries. TC replacement and egress remain unfinished.
+checkpoint adds complete multi-member legacy TC ingress replacement on both stores.
+One to ten EXT members are rebuilt in priority order around a native TC dispatcher,
+using the same exact legacy filter handle. Publication failures restore the old
+chain before staged cleanup; restoration and retirement failures retain consuming
+receipts for explicit retries. Attached-program unload rebuilds surviving members,
+including repeated attachments of the same program. TC egress remains unfinished.
 The preceding XDP checkpoint added native DEVMAP_HASH egress PASS/DROP for ordinary and genuine
 multi-buffer frames in driver and generic SKB modes on both SQLite and JSON stores,
 building on hash/array unicast, broadcast, and ingress exclusion acceptance.
@@ -68,8 +70,12 @@ Unlike array DEVMAP, Linux 6.18.54 omits DEVMAP_HASH from the load-time owner ch
 the first native egress update initializes hash ownership with its fragment flag.
 This permits genuine jumbo egress through the existing public API. Later egress
 updates still require compatible flags. Array DEVMAP's Aya boundary remains.
-The next bounded slice is multi-member TC ingress dispatcher replacement, followed
-by TC egress.
+Script parity now has an in-corpus manifest: passing scripts carry
+`#pragma labels={"rust":"ok"}`. Run that selection through the existing Go runner,
+using its interface pool and scheduling machinery, once per store. Grow this set
+before expanding Rust-specific packet scenarios; corpus failures should drive
+subsequent implementation. TC egress remains one known gap. Compare performance
+on the same scripts after behavior matches.
 Full behavioural parity remains unfinished.
 
 The runtime uses pure membership planning and consuming ownership transitions to
@@ -87,8 +93,8 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
-| TC ingress | One member per interface/namespace; native TC dispatcher with EXT member; exact netlink filter handle; borrowed/owned clsact; atomic publication, compensation, conditional deletion, explicit retries, and attached-program unload | Replacement, egress, TCX, and orphan repair |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 7 for TC; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| TC ingress | One to ten members per interface/namespace; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, dispatcher get/list | Egress, TCX, outer-filter status and orphan repair |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 8 for TC replacement; format 7 retains singleton TC; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -100,16 +106,23 @@ clearly. See
 [TC ingress lifecycle](../../rust/README.md#tc-ingress-attachment-and-unload) for the
 supported command surface.
 
-The TC attached-program unload checkpoint passed `direnv exec . make rust-check`:
-formatting, Clippy, all userspace and compile-fail contracts, documentation, 50
-shared fake-kernel lifecycle tests, and all 142 real-kernel tests, with none ignored
-or skipped. The serial kernel run completed in 1747.62 seconds.
-`make rust-test-tc-ingress` passed two shared store contracts and ten
-kernel/CLI/unchanged-script checks. The normal gate runs all userspace contracts
+The TC ingress replacement checkpoint passed `direnv exec . make rust-check`:
+formatting, Clippy, all userspace and compile-fail contracts, documentation, 60
+shared fake-kernel lifecycle tests, and all 168 real-kernel tests, with none ignored.
+The serial kernel run completed in 1834.78 seconds.
+`make rust-test-tc-ingress` passed two shared store contracts and 36
+kernel/CLI/script checks. Makefile lint and the Go runner's clsact capability
+unit check also passed. The normal gate runs all userspace contracts
 before the complete serial kernel binary; CLI test targets are discovered
 automatically. Existing unicast, broadcast, and all sixteen array/hash egress suites
 remain in that gate, including the four array-map jumbo rejection tests. Aya and
 Go's SQLite schema remain unchanged.
+
+The label-selected Go runner also passed all 42 `rust=ok` scripts in parallel
+against Rust on each store: approximately 52 seconds for SQLite and 52 seconds
+for JSON, with backend batches run sequentially. Both final inventories and all
+managed artifact collections were empty. Script changes add only header labels;
+the assertions and existing scheduling pragmas are preserved.
 
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
@@ -830,8 +843,10 @@ complete single-member XDP dispatcher snapshots. Older JSON formats retain their
 existing operations: tracepoint programs from version 1, tracepoint links from
 version 2, and XDP loads from version 3. XDP attachment requires a separately
 initialized version 4 or newer runtime. Format 5 adds multi-member replacement;
-format 6 adds explicit network-namespace paths. New stores use format 7, which
-also supports TC extension loads and singleton TC ingress snapshots. Formats 1–6
+format 6 adds explicit network-namespace paths; format 7 adds TC extension loads
+and singleton ingress snapshots. New stores use format 8, which adds complete TC
+revisions. Format 7 retains its singleton operations and refuses replacement;
+it never upgrades implicitly. Formats 1–6
 retain their existing operations and refuse TC without upgrading. Formats 4 and 5
 refuse namespaced attachments; format 4 also refuses replacement. Neither backend
 implicitly migrates or repairs existing state. The implementation does not use sled.
@@ -960,7 +975,7 @@ Implementation and validation checkpoints:
    failure. Surviving links preserve managed IDs, programs, metadata, timestamps,
    priorities, and proceed-on masks; their slots, kernel extension links, and
    revision change together. SQLite uses schema 2 transactions; new JSON stores
-   use format 7; format 6 retains namespace-aware XDP; format 5 retains current-namespace replacement support, with no
+   use format 8; format 7 retains singleton TC; format 6 retains namespace-aware XDP; format 5 retains current-namespace replacement support, with no
    implicit upgrade of older stores. Run
    `direnv exec . make rust-test-xdp-store` for shared contracts and backend faults.
    Kernel portion implemented: `bpfman_kernel::XdpReplacement` loads the complete
@@ -995,7 +1010,8 @@ use temporary files for the shared lifecycle's reopening, locking, and receipt
 identity checks. Fake-kernel tests establish orchestration and simulated resource
 ownership; real-kernel traffic and lifetime tests establish execution behaviour.
 
-Later TC replacement must persist and use the exact kernel-assigned filter handle.
+TC replacement now persists and reuses the exact kernel-assigned filter handle.
+Its signed 84-byte CONFIG remains separate from XDP configuration.
 
 ## Filesystem and locking capabilities
 
@@ -1469,6 +1485,22 @@ for this migration.
 
 ### Compatibility and differential tests
 
+Prioritize binary behavior against the unchanged `.bpfman` corpus before expanding
+Rust-specific packet scenarios or tuning execution speed. At this checkpoint there
+are 132 scripts; 42 carry `#pragma labels={"rust":"ok"}`, matching the Rust kernel
+gate's current selection on both stores. The remaining 90 are unselected, not
+established failures. These labels are the parity manifest; add one only after the
+script passes against Rust with both SQLite and JSON in file-bytecode mode.
+Preserve existing scheduling labels and assertions. Record failures, unsupported
+capabilities and unavailable prerequisites without marking those scripts `rust=ok`.
+
+Run admitted scripts in batched Go-runner invocations, one backend batch at a time.
+Reuse its pooled interface leases, parallel scheduler, serial/exclusive pragmas,
+cleanup and failure reporting. Select the Rust binary with `BPFMAN_UNDER_TEST`;
+preserve the script assertions. A direct Rust library test complements this
+binary-behavior contract but does not establish script parity. Measure matching
+Go/Rust scripts once this acceptance path is in place.
+
 Golden fixtures should cover:
 
 - protobuf and JSON output;
@@ -1562,6 +1594,20 @@ handling.
 The implementation remains synchronous. Do not introduce async/await, an async
 runtime, or synchronous wrappers around async libraries. Scoped threads are
 appropriate where required for namespace-sensitive kernel operations.
+
+Prioritize the existing Go runner for packet acceptance and reduce kernel-gate
+duration without reducing coverage. Its pooled interface leases and scheduler
+already support concurrent scripts. The current Rust runner
+forces `--test-threads=1`: several fixtures use PID-only interface/namespace names,
+and each DSL test launches a separate Go runner that takes the system-wide
+`/tmp/bpfman-e2e.lock`. Simply enabling test threads would introduce name collisions
+and competing runner locks. Batch admitted scripts into one Go runner per backend,
+running the backend batches sequentially, so its existing parallel scheduler and
+serial/exclusive pragmas apply. Prefer this harness for future packet scenarios;
+keep Rust-specific ownership and fault tests separate. Give remaining Rust fixtures
+independent names or process isolation, then enable bounded parallel execution and
+measure per-test timings.
+Keep packet assertions, cleanup checks and both-store coverage intact.
 
 ## Delivery sequence
 
@@ -1698,8 +1744,10 @@ replacement/restoration, and map-held lifetime through managed unload and retry.
 Its first native egress update initializes compatible hash ownership on Linux
 6.18.54; the array-map Aya boundary remains unchanged. Physical NIC packet
 execution and actual hardware offload remain unverified. TC ingress now has a
-singleton attachment lifecycle with attached-program unload; the next slice adds
-multi-member dispatcher replacement.
+complete one-to-ten-member ingress replacement lifecycle with attached-program
+unload. The next slice grows the `rust=ok` script set and makes batched Go-runner
+acceptance the normal binary-behavior gate; corpus gaps then determine the next
+capability work.
 
 
 TC ingress uses Go's 84-byte `CONFIG` ABI and a separate unpinned native TC verifier
@@ -1719,7 +1767,9 @@ belong in `bpfman-fs`, and runtime/pure crates remain free of syscall dependenci
 
 Clsact ownership is separate from operator metadata and Go's SQLite schema.
 `bpfman-fs` creates a confined, singly linked one-byte file at
-`<runtime>/tc/dispatcher_<nsid>_<ifindex>_1`: zero means borrowed, one means created.
+`<runtime>/tc/dispatcher_<nsid>_<ifindex>_<revision>`: zero means borrowed, one means created.
+Each staged replacement copies that evidence into its fresh revision; retiring or
+compensating a revision removes only its own evidence.
 The receipt is written before publication and retained with the revision's pins.
 Reopened detach preserves a borrowed empty clsact; a created clsact is reclaimed
 only after both ingress and egress filter dumps are empty. Foreign filters cause
@@ -1731,8 +1781,9 @@ privileged tools changing the same qdisc/filter outside bpfman's writer lock.
 
 SQLite still uses Go schema 2, including its existing `priority` and `filter_handle`
 dispatcher columns. TC teardown across Go and Rust is not yet supported: Go-created
-attachments lack Rust's clsact ownership receipt. New JSON stores use format 7;
-formats 1–6 retain their previous operations without implicit upgrade. Shared store
+attachments lack Rust's clsact ownership receipt. New JSON stores use format 8;
+format 7 retains singleton TC and refuses replacement. Formats 1–6 retain their
+previous operations without implicit upgrade. Shared store
 contracts prove atomic publication,
 signed proceed-on actions, vacant-point refusal, stale-receipt refusal, and
 wrong-runtime retry ownership. Real veth tests prove exact marked-packet drops and
@@ -1765,8 +1816,40 @@ foreign ingress/egress filters, conditional deletion and program-record faults,
 new-attachment refusal, and final kernel reclamation. CLI acceptance now unloads
 an attached TC program as well as exercising explicit detach.
 
-This TC slice follows capabilities already present in Go, including attached-program
-unload; the XDP advantages recorded earlier remain. TC egress, replacement,
+TC replacement stages every desired member in fresh revision/slot pins before
+switching traffic. It reuses the pure consuming replacement/publication protocol:
+failed restoration hides both revisions from cleanup, and successful publication
+allows only retirement of the old revision. `TcError` and `TcReport` expose actual
+restoration history and committed snapshots when retirement requires a retry.
+Opaque cleanup receipts remain bound to their original runtime and kernel.
+Retirement attempts every independent old extension pin once, collecting all
+failures; native dispatcher, ownership evidence and revision-directory removal
+wait for those extension removals. Real fault acceptance replaces two old pin
+entries and proves a later independent pin is removed while the native pin remains,
+then repairs only the injected entries and retries the retained ownership.
+
+Aya's public `SchedClassifierLink::attached` and `SchedClassifier::attach_to_link`
+replace the program at the existing filter tuple without changing Aya. Retained
+native program handles support restoration after a failed store publication.
+Safe route-netlink checks verify the exact program identity before switching or
+restoring; they are separate requests, not an expected-program CAS against an
+external privileged writer. Member IDs, metadata, creation times and requested
+priorities remain stable while native/EXT IDs, slots and revision change together.
+`dispatcher get tc-ingress` and dispatcher listing expose complete stored membership.
+
+The shared replacement tests exercise capacity, ordering, repeated-program unload,
+pre/post-switch faults, failed restoration, retirement, cancellation and foreign
+retry authority on both stores. Real veth tests prove UNSPEC continuation into SHOT,
+higher-priority OK stopping, exact per-program counters, rollback to the old chain,
+reopened survivor unload and non-last detach, with owned/borrowed clsact and foreign
+filters. Twelve unchanged Go scripts cover chain stop/continue, ten-slot execution,
+priority zero/name ordering, fill/drain/refill, signed encoding, namespace rebuild,
+survivor unload and clsact reclamation on both stores. The script runner's explicit
+`BPFMAN_E2E_CLSACT_RECLAIM=true` capability setting runs the unchanged reclaim script
+against Rust; Go's production reclaim policy remains unchanged.
+
+This TC slice follows capabilities already present in Go, including replacement
+and attached-program unload; the XDP advantages recorded earlier remain. TC egress,
 outer-filter observations, deleted-namespace/orphan repair, the uprobe mount-namespace
 helper, and TCX ordering remain later work in this phase. Unsupported operations
 continue to fail clearly.

@@ -10,6 +10,9 @@ mod kernel;
 #[path = "lifecycle/xdp_unload.rs"]
 mod xdp_unload;
 
+#[path = "lifecycle/tc_replace.rs"]
+mod tc_replace;
+
 #[path = "lifecycle/tc_unload.rs"]
 mod tc_unload;
 
@@ -853,6 +856,31 @@ macro_rules! backend_tests {
             #[test]
             fn tc_unload_new_link() {
                 super::tc_unload::new_link($backend);
+            }
+
+            #[test]
+            fn tc_replacement_lifecycle() {
+                super::tc_replace::lifecycle($backend);
+            }
+
+            #[test]
+            fn tc_replacement_failures() {
+                super::tc_replace::failures($backend);
+            }
+
+            #[test]
+            fn tc_replacement_restoration() {
+                super::tc_replace::restoration($backend);
+            }
+
+            #[test]
+            fn tc_replacement_cancellation() {
+                super::tc_replace::cancellation($backend);
+            }
+
+            #[test]
+            fn tc_replacement_attached_unload() {
+                super::tc_replace::unload($backend);
             }
 
             #[test]

@@ -54,8 +54,9 @@ pub(crate) fn dispatcher(out: &mut impl Write, snapshot: &XdpDispatcherSnapshot)
 pub(crate) fn dispatchers(
     out: &mut impl Write,
     snapshots: &[XdpDispatcherSnapshot],
+    tc: &[bpfman_model::TcDispatcherSnapshot],
 ) -> io::Result<()> {
-    let entries: Vec<_> = snapshots
+    let mut entries: Vec<_> = snapshots
         .iter()
         .map(|s| {
             let first = s
@@ -79,5 +80,67 @@ pub(crate) fn dispatchers(
             }))
         })
         .collect::<io::Result<_>>()?;
+    for s in tc {
+        let mut entry = tc_value(s)?;
+        entry["member_count"] = serde_json::json!(s.members().len());
+        entry
+            .as_object_mut()
+            .ok_or_else(|| io::Error::other("TC dispatcher object"))?
+            .remove("members");
+        entries.push(entry);
+    }
     super::write_json(out, &serde_json::json!({"dispatchers": entries}))
+}
+
+pub(crate) fn tc_dispatcher(
+    out: &mut impl Write,
+    snapshot: &bpfman_model::TcDispatcherSnapshot,
+) -> io::Result<()> {
+    super::write_json(out, &tc_value(snapshot)?)
+}
+
+fn tc_value(snapshot: &bpfman_model::TcDispatcherSnapshot) -> io::Result<serde_json::Value> {
+    let first = snapshot
+        .members()
+        .first()
+        .ok_or_else(|| io::Error::other("empty TC snapshot"))?;
+    let d = &first.details;
+    let members: Vec<_> = snapshot
+        .members()
+        .iter()
+        .map(|s| {
+            let kernel = match s.member.state {
+                LinkState::Attached { kernel_id } => Some(kernel_id.get()),
+                LinkState::Pending => None,
+            };
+            serde_json::json!({
+                "program_id": s.member.program_id.get(),
+                "program_name": s.program_name.as_str(),
+                "prog_pin_path": s.program_pin_path,
+                "link_id": s.member.id.get(),
+                "kernel_link_id": kernel,
+                "link_pin_path": s.member.pin_path,
+                "position": s.details.slot.index(),
+                "priority": s.details.priority,
+                "proceed_on": s.details.proceed_on.mask(),
+                "ifname": s.details.interface.as_str(),
+                "metadata": s.member.metadata,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({
+        "key": {
+            "type": "tc-ingress",
+            "nsid": d.key.nsid.get(),
+            "ifindex": d.key.ifindex.get(),
+        },
+        "revision": d.revision.get(),
+        "runtime": {
+            "program_id": d.dispatcher_id.get(),
+            "filter_handle": d.filter_handle.get(),
+            "priority": d.filter_priority,
+            "netns_path": d.netns.as_str(),
+        },
+        "members": members,
+    }))
 }

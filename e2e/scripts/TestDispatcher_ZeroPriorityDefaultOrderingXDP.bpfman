@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: XDP dispatcher members attached with priority zero alongside
 # positive priorities

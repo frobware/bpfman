@@ -3,7 +3,7 @@
 //! No connections, transaction callbacks, schema versions, or serialized data escape.
 
 mod tc;
-pub use tc::{TcCommit, TcStore};
+pub use tc::{TcCommit, TcMemberCommit, TcReplace, TcStore};
 mod xdp;
 pub use xdp::{XdpCommit, XdpReader, XdpStore};
 mod xdp_replace;

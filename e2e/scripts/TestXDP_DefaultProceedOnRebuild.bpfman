@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: an existing XDP member and an incoming same-priority, same-name
 # program under default proceed-on

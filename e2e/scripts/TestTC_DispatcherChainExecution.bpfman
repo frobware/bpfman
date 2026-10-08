@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: five TC ingress programs attached at scrambled priorities, each
 # with proceed-on that lets an OK verdict continue

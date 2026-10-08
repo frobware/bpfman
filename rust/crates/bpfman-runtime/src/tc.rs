@@ -1,4 +1,4 @@
-//! Singleton TC ingress publication and consuming recovery under one writer lock.
+//! TC ingress publication and consuming recovery under one writer lock.
 use crate::{Bpfman, Cancellation, LinkCause, link_error::Cause};
 use bpfman_core::{
     EffectFailure, XdpCleanup, XdpCleanupKind, XdpCleanupReport, XdpCleanupStep, XdpResource,
@@ -14,7 +14,7 @@ use std::{
     num::{NonZeroU32, NonZeroU64},
 };
 
-/// First-member legacy TC ingress attachment. Replacement and TCX are unsupported.
+/// Legacy TC ingress attachment through a complete dispatcher revision.
 pub struct TcAttach {
     /// Managed classifier extension.
     pub program_id: NonZeroU32,
@@ -29,6 +29,8 @@ pub struct TcAttach {
     /// Operator labels, kept separate from qdisc ownership evidence.
     pub metadata: BTreeMap<String, String>,
 }
+
+mod replacement;
 
 enum Resource<S: TcStore, K: TcLifecycle> {
     Filter(K::Filter),
@@ -47,7 +49,12 @@ impl<S: TcStore, K: TcLifecycle> XdpResource for Resource<S, K> {
 }
 
 /// Validated, unattempted detach ownership. Observation has no destructive effects.
-pub(super) struct Teardown<S: TcStore, K: TcLifecycle>(Vec<Resource<S, K>>);
+pub(super) struct Teardown<S: TcStore, K: TcLifecycle>(Detach<S, K>);
+
+enum Detach<S: TcStore, K: TcLifecycle> {
+    Last(Vec<Resource<S, K>>),
+    Replace(replacement::Removal<S, K>),
+}
 
 impl<S: TcStore, K: TcLifecycle> Teardown<S, K> {
     pub(super) fn run(
@@ -55,34 +62,58 @@ impl<S: TcStore, K: TcLifecycle> Teardown<S, K> {
         app: &Bpfman<S, K>,
         w: &RuntimeWriter<'_>,
     ) -> Result<TcReport<S, K>, TcError<S, K>> {
-        finish(None, cleanup(app, w, XdpCleanup::new(self.0)))
+        match self.0 {
+            Detach::Last(resources) => finish(None, cleanup(app, w, XdpCleanup::new(resources))),
+            Detach::Replace(removal) => replacement::remove(app, w, removal),
+        }
     }
 
     pub(super) fn unresolved(&self) -> usize {
-        self.0.len()
+        match &self.0 {
+            Detach::Last(resources) => resources.len(),
+            Detach::Replace(_) => 1,
+        }
     }
+}
+
+enum Recovery<S: TcStore, K: TcLifecycle> {
+    Cleanup(Box<XdpCleanupReport<Resource<S, K>, LinkCause>>),
+    Restore(Box<replacement::RestoreFailure<S, K>>),
 }
 
 /// TC failure retaining all unresolved ownership and every actual cleanup attempt.
 pub struct TcError<S: TcStore, K: TcLifecycle> {
     cause: Option<LinkCause>,
-    cleanup: Option<XdpCleanupReport<Resource<S, K>, LinkCause>>,
+    recovery: Option<Recovery<S, K>>,
     admission: Option<LinkCause>,
+    restorations: Vec<Result<(), LinkCause>>,
+    committed: Option<bpfman_model::TcDispatcherSnapshot>,
 }
 
 /// Completed TC cleanup, including original forward failure and retry history.
 pub struct TcReport<S: TcStore, K: TcLifecycle> {
     cause: Option<LinkCause>,
     cleanup: XdpCleanupReport<Resource<S, K>, LinkCause>,
+    restorations: Vec<Result<(), LinkCause>>,
+    committed: Option<bpfman_model::TcDispatcherSnapshot>,
 }
 
 impl<S: TcStore, K: TcLifecycle> TcError<S, K> {
     pub(super) fn primary(&self) -> Option<&LinkCause> {
-        self.admission.as_ref().or(self.cause.as_ref()).or_else(|| {
-            self.attempts()
-                .iter()
-                .find_map(|a| a.outcome.as_ref().err())
-        })
+        self.admission
+            .as_ref()
+            .or(self.cause.as_ref())
+            .or_else(|| {
+                self.recovery.as_ref().and_then(|r| match r {
+                    Recovery::Restore(f) => Some(f.primary()),
+                    Recovery::Cleanup(_) => None,
+                })
+            })
+            .or_else(|| {
+                self.attempts()
+                    .iter()
+                    .find_map(|a| a.outcome.as_ref().err())
+            })
     }
 
     /// Portable application category.
@@ -93,14 +124,32 @@ impl<S: TcStore, K: TcLifecycle> TcError<S, K> {
 
     /// Remaining dependent effects; blocked effects are retained without attempted cleanup.
     pub fn unresolved(&self) -> usize {
-        self.cleanup
-            .as_ref()
-            .map_or(0, XdpCleanupReport::unresolved)
+        match &self.recovery {
+            Some(Recovery::Cleanup(r)) => r.unresolved(),
+            Some(Recovery::Restore(_)) => 3,
+            None => 0,
+        }
+    }
+
+    /// Every actual restoration attempt; blocked pin removal is not an attempt.
+    pub fn restoration_attempts(&self) -> &[Result<(), LinkCause>] {
+        match &self.recovery {
+            Some(Recovery::Restore(r)) => r.attempts(),
+            _ => &self.restorations,
+        }
+    }
+
+    /// Successful publication retained when only retirement failed.
+    pub fn committed_snapshot(&self) -> Option<&bpfman_model::TcDispatcherSnapshot> {
+        self.committed.as_ref()
     }
 
     /// Actual cleanup attempts across explicit retry passes.
     pub fn attempts(&self) -> &[bpfman_core::XdpAttempt<LinkCause>] {
-        self.cleanup.as_ref().map_or(&[], |c| c.attempts())
+        match &self.recovery {
+            Some(Recovery::Cleanup(r)) => r.attempts(),
+            _ => &[],
+        }
     }
 }
 
@@ -108,19 +157,29 @@ impl<S: TcStore, K: TcLifecycle> From<LinkCause> for TcError<S, K> {
     fn from(cause: LinkCause) -> Self {
         Self {
             cause: Some(cause),
-            cleanup: None,
+            recovery: None,
             admission: None,
+            restorations: Vec::new(),
+            committed: None,
         }
     }
 }
 
 impl<S: TcStore, K: TcLifecycle> fmt::Display for TcError<S, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "TC ingress operation failed; {} unresolved cleanup effects",
-            self.unresolved()
-        )
+        if self.committed.is_some() {
+            write!(
+                f,
+                "TC replacement committed; {} unresolved retirement effects",
+                self.unresolved()
+            )
+        } else {
+            write!(
+                f,
+                "TC ingress operation failed; {} unresolved recovery effects",
+                self.unresolved()
+            )
+        }
     }
 }
 
@@ -129,6 +188,8 @@ impl<S: TcStore, K: TcLifecycle> fmt::Debug for TcError<S, K> {
         f.debug_struct("TcError")
             .field("cause", &self.primary())
             .field("attempts", &self.attempts())
+            .field("restorations", &self.restoration_attempts())
+            .field("committed", &self.committed)
             .field("unresolved", &self.unresolved())
             .finish()
     }
@@ -141,6 +202,16 @@ impl<S: TcStore, K: TcLifecycle> std::error::Error for TcError<S, K> {
 }
 
 impl<S: TcStore, K: TcLifecycle> TcReport<S, K> {
+    /// Successful publication retained across retirement recovery passes.
+    pub fn committed_snapshot(&self) -> Option<&bpfman_model::TcDispatcherSnapshot> {
+        self.committed.as_ref()
+    }
+
+    /// Every restoration attempt, including earlier failed passes.
+    pub fn restoration_attempts(&self) -> &[Result<(), LinkCause>] {
+        &self.restorations
+    }
+
     /// Remaining cleanup after this completed pass.
     pub fn unresolved(&self) -> usize {
         self.cleanup.unresolved()
@@ -161,6 +232,8 @@ impl<S: TcStore, K: TcLifecycle> fmt::Debug for TcReport<S, K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("TcReport")
             .field("attempts", &self.attempts())
+            .field("restorations", &self.restoration_attempts())
+            .field("committed", &self.committed)
             .field("cause", &self.cause)
             .finish()
     }
@@ -213,18 +286,22 @@ fn finish<S: TcStore, K: TcLifecycle>(
         Ok(TcReport {
             cause,
             cleanup: report,
+            restorations: Vec::new(),
+            committed: None,
         })
     } else {
         Err(TcError {
             cause,
-            cleanup: Some(report),
+            recovery: Some(Recovery::Cleanup(Box::new(report))),
             admission: None,
+            restorations: Vec::new(),
+            committed: None,
         })
     }
 }
 
 impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
-    /// Attach only to a vacant TC ingress dispatcher point.
+    /// Attach a member, rebuilding an occupied dispatcher in priority order.
     pub fn attach_tc(&self, r: TcAttach) -> Result<StoredLink, TcError<S, K>> {
         self.attach_tc_with_cancellation(r, &Cancellation::new())
     }
@@ -242,93 +319,87 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
                     timeout: self.lock_timeout,
                     cancelled: Some(c.flag()),
                 },
-                |w| {
-                    let mut resources = Vec::new();
-                    let result = (|| -> Result<StoredLink, LinkCause> {
-                        check(c)?;
-                        if r.priority > i32::MAX as u32 {
-                            return Err(Cause::Invalid("priority exceeds i32::MAX").into());
-                        }
-                        let program = self
-                            .store
-                            .open(&w)?
-                            .read_records()?
-                            .into_iter()
-                            .find(|p| p.id == r.program_id)
-                            .ok_or(Cause::NotFound)?;
-                        if !matches!(program.spec, ProgramSpec::Tc(_)) {
-                            return Err(Cause::Unsupported.into());
-                        }
-                        if w.layout().program_pin_path(program.id).to_str()
-                            != Some(program.pin_path.as_str())
-                        {
-                            return Err(Cause::Invalid("noncanonical managed TC pin").into());
-                        }
-                        let (key, prepared) =
-                            self.kernel
-                                .prepare_tc(&w, r.program_id, &r.interface, &r.netns)?;
-                        self.store.preflight_tc(&w, key, r.program_id)?;
-                        check(c)?;
-                        let stage = match self.kernel.stage_tc(&w, prepared, r.proceed_on) {
-                            Ok(v) => v,
-                            Err(f) => {
-                                resources.extend(f.remaining.map(Resource::Stage));
-                                return Err(f.cause.into());
-                            }
-                        };
-                        resources.push(Resource::Stage(stage));
-                        check(c)?;
-                        let Some(Resource::Stage(stage)) = resources.first() else {
-                            return Err(Cause::Invalid("missing TC stage").into());
-                        };
-                        let filter = match self.kernel.attach_tc_filter(&w, stage) {
-                            Ok(v) => v,
-                            Err(f) => {
-                                resources.extend(f.remaining.map(Resource::Filter));
-                                return Err(f.cause.into());
-                            }
-                        };
-                        resources.push(Resource::Filter(filter));
-                        check(c)?;
-                        let [Resource::Stage(stage), Resource::Filter(filter)] =
-                            resources.as_slice()
-                        else {
-                            return Err(Cause::Invalid("incomplete TC acquisitions").into());
-                        };
-                        let (dispatcher_id, extension_link_id) = K::tc_ids(stage)?;
-                        let (filter_priority, filter_handle) = K::tc_filter(filter)?;
-                        let details = TcLink {
-                            netns: r.netns.clone(),
-                            key,
-                            interface: r.interface.clone(),
-                            priority: r.priority,
-                            proceed_on: r.proceed_on,
-                            dispatcher_id,
-                            filter_priority,
-                            filter_handle,
-                        };
-                        self.store
-                            .commit_tc(
-                                &w,
-                                TcCommit {
-                                    program_id: r.program_id,
-                                    details: &details,
-                                    extension_link_id,
-                                    metadata: &r.metadata,
-                                    created_at: &chrono::Utc::now()
-                                        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
-                                },
-                            )
-                            .map_err(Into::into)
-                    })();
-                    result.map_err(|cause| TcError {
-                        cause: Some(cause),
-                        cleanup: Some(cleanup(self, &w, XdpCleanup::new(resources))),
-                        admission: None,
-                    })
-                },
+                |w| replacement::attach(self, &w, &r, c),
             )
             .map_err(|e| TcError::from(LinkCause::from(e)))?
+    }
+
+    fn attach_tc_first(
+        &self,
+        w: &RuntimeWriter<'_>,
+        r: &TcAttach,
+        c: &Cancellation,
+        key: bpfman_model::XdpKey,
+        prepared: K::Prepared,
+    ) -> Result<StoredLink, TcError<S, K>> {
+        let mut resources = Vec::new();
+        let result = (|| -> Result<StoredLink, LinkCause> {
+            check(c)?;
+            self.store.preflight_tc(w, key, r.program_id)?;
+            check(c)?;
+            let stage = match self.kernel.stage_tc(w, prepared, r.proceed_on) {
+                Ok(v) => v,
+                Err(f) => {
+                    resources.extend(f.remaining.map(Resource::Stage));
+                    return Err(f.cause.into());
+                }
+            };
+            resources.push(Resource::Stage(stage));
+            check(c)?;
+            let Some(Resource::Stage(stage)) = resources.first() else {
+                return Err(Cause::Invalid("missing TC stage").into());
+            };
+            let filter = match self.kernel.attach_tc_filter(w, stage) {
+                Ok(v) => v,
+                Err(f) => {
+                    resources.extend(f.remaining.map(Resource::Filter));
+                    return Err(f.cause.into());
+                }
+            };
+            resources.push(Resource::Filter(filter));
+            check(c)?;
+            let [Resource::Stage(stage), Resource::Filter(filter)] = resources.as_slice() else {
+                return Err(Cause::Invalid("incomplete TC acquisitions").into());
+            };
+            let (dispatcher_id, extension_link_id) = K::tc_ids(stage)?;
+            let (filter_priority, filter_handle) = K::tc_filter(filter)?;
+            let details = TcLink {
+                revision: NonZeroU32::MIN,
+                slot: bpfman_model::XdpSlot::FIRST,
+                netns: r.netns.clone(),
+                key,
+                interface: r.interface.clone(),
+                priority: r.priority,
+                proceed_on: r.proceed_on,
+                dispatcher_id,
+                filter_priority,
+                filter_handle,
+            };
+            self.store
+                .commit_tc(
+                    w,
+                    TcCommit {
+                        program_id: r.program_id,
+                        details: &details,
+                        extension_link_id,
+                        metadata: &r.metadata,
+                        created_at: &chrono::Utc::now()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+                    },
+                )
+                .map_err(Into::into)
+        })();
+        result.map_err(|cause| TcError {
+            cause: Some(cause),
+            recovery: Some(Recovery::Cleanup(Box::new(cleanup(
+                self,
+                w,
+                XdpCleanup::new(resources),
+            )))),
+            admission: None,
+            restorations: Vec::new(),
+            committed: None,
+        })
     }
 
     /// Detach the exact stored TC filter and preserve unrelated ingress/egress filters.
@@ -401,16 +472,7 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
         w: &RuntimeWriter<'_>,
         id: NonZeroU64,
     ) -> Result<(StoredLink, Teardown<S, K>), LinkCause> {
-        let (snapshot, record) = self.store.observe_tc(w, id)?.ok_or(Cause::NotFound)?;
-        let (stage, filter) = self.kernel.observe_tc(w, &snapshot)?;
-        Ok((
-            snapshot.member,
-            Teardown(vec![
-                Resource::Record(record),
-                Resource::Stage(stage),
-                Resource::Filter(filter),
-            ]),
-        ))
+        replacement::observe_removal(self, w, id)
     }
 
     pub(super) fn retry_tc_locked(
@@ -418,9 +480,63 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
         w: &RuntimeWriter<'_>,
         mut error: TcError<S, K>,
     ) -> Result<TcReport<S, K>, TcError<S, K>> {
-        let Some(report) = error.cleanup.take() else {
-            return Err(error);
+        let report = match error.recovery.take() {
+            Some(Recovery::Restore(restoration)) => {
+                let mut error = replacement::restore(self, w, restoration.retry());
+                if error.unresolved() == 0 {
+                    if let Some(Recovery::Cleanup(cleanup)) = error.recovery.take() {
+                        return Ok(TcReport {
+                            cause: error.cause,
+                            cleanup: *cleanup,
+                            restorations: error.restorations,
+                            committed: error.committed,
+                        });
+                    }
+                }
+                return Err(error);
+            }
+            Some(Recovery::Cleanup(report)) => report,
+            None => return Err(error),
         };
-        finish(error.cause, cleanup(self, w, report.retry()))
+        let result = finish(error.cause, cleanup(self, w, report.retry()));
+        match result {
+            Ok(mut report) => {
+                report.restorations = error.restorations;
+                report.committed = error.committed;
+                Ok(report)
+            }
+            Err(mut failure) => {
+                failure.restorations = error.restorations;
+                failure.committed = error.committed;
+                Err(failure)
+            }
+        }
+    }
+}
+
+impl<S: OpenStore, K> Bpfman<S, K>
+where
+    S::Reader: bpfman_store::LinkReader,
+{
+    /// Read complete committed TC ingress dispatchers without a writer lock.
+    pub fn list_tc_dispatchers(
+        &self,
+    ) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, LinkCause> {
+        use bpfman_store::LinkReader;
+        self.store
+            .reader()
+            .read_tc_dispatchers()
+            .map_err(Into::into)
+    }
+
+    /// Read one complete TC ingress dispatcher without acquiring the writer lock.
+    pub fn get_tc_dispatcher(
+        &self,
+        key: bpfman_model::XdpKey,
+    ) -> Result<bpfman_model::TcDispatcherSnapshot, LinkCause> {
+        self.list_tc_dispatchers()?
+            .into_iter()
+            .find(|s| s.members().first().is_some_and(|m| m.details.key == key))
+            .ok_or_else(|| Cause::NotFound.into())
     }
 }

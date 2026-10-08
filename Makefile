@@ -184,6 +184,7 @@ BPFMAN_LOCK_TIMEOUT ?=
 # BPFMAN_E2E_SCRIPT_TIMEOUT widens the per-script deadline. The test
 # binary carries the actual defaults.
 BPFMAN_E2E_BYTECODE_SOURCE ?=
+BPFMAN_E2E_CLSACT_RECLAIM ?=
 BPFMAN_E2E_IMAGE_REGISTRY ?=
 BPFMAN_E2E_POLICY_RULE_PREF ?=
 BPFMAN_E2E_SCRIPT_SELECTOR ?=
@@ -917,10 +918,10 @@ test-e2e-grpc: build-e2e-grpc
 
 # Run every .bpfman script under e2e/scripts/ against the built
 # bpfman binary. Each script executes from e2e/ so
-# testdata paths match the Go e2e tests. The target runs them
-# sequentially, reports failures as it goes, and exits non-zero
-# at the end if any script failed. Pass TEST=<name> to restrict
-# to scripts whose filename contains <name>.
+# testdata paths match the Go e2e tests. Eligible scripts run in
+# parallel using pooled interfaces; serial/exclusive pragmas retain
+# their scheduling rules. Any failure makes the target fail.
+# Pass TEST=<regex> or BPFMAN_E2E_SCRIPT_SELECTOR=<labels> to select scripts.
 # Split into build + run so CI can extract pre-built artefacts
 # from a hermetic container build (Dockerfile.ci's e2e-export
 # stage) and invoke `run-e2e-scripts` directly on the runner
@@ -963,6 +964,8 @@ endif
 # (each script registered N times, wave-diverse dispatch);
 # BPFMAN_E2E_SCRIPT_SELECTOR selects scripts with matching #pragma
 # labels; BPFMAN_LOG threads through to bpfman-shell when set.
+# BPFMAN_E2E_CLSACT_RECLAIM=true admits reclaim assertions for an external
+# CLI with that capability independently of Go's current policy.
 # BPFMAN_LOCK_TIMEOUT is set directly in run-e2e-scripts below:
 # high-parallel stress runs can leave many short-lived bpfman
 # invocations queued behind the global writer lock, so the script
@@ -974,6 +977,7 @@ E2E_SCRIPTS_FORWARD_VARS := \
 	BPFMAN_STORE \
 	BPFMAN_CONFIG \
 	BPFMAN_E2E_BYTECODE_SOURCE \
+	BPFMAN_E2E_CLSACT_RECLAIM \
 	BPFMAN_E2E_IMAGE_REGISTRY \
 	BPFMAN_E2E_POLICY_RULE_PREF \
 	BPFMAN_E2E_SCRIPT_REPEATS \
@@ -1950,7 +1954,7 @@ rust-test-xdp-broadcast-hash: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-egress-hash: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_egress_hash --nocapture
 
-# Singleton legacy TC ingress, exact filter handles, clsact ownership and recovery.
+# Legacy TC ingress revisions, exact filter handles, clsact ownership and recovery.
 .PHONY: rust-test-tc-ingress
 rust-test-tc-ingress: rust-build $(RUST_TEST_INPUTS)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test tc_store --locked

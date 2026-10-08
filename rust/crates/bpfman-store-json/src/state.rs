@@ -1,3 +1,4 @@
+//! Version 8 adds complete TC ingress revisions.
 //! Version 7 adds TC extension loads and singleton ingress attachments.
 //! Version 6 adds explicit XDP namespace paths. Version 5 adds multi-member XDP
 //! replacement; version 4 adds first attachment.
@@ -93,7 +94,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 7,
+            version: 8,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -114,7 +115,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=7) {
+        if !matches!(header.version, 1..=8) {
             return Err(Failure::Version(header.version));
         }
 
@@ -254,8 +255,6 @@ impl State {
             if !link_ids.insert(row.link_id)
                 || row.link_id.get() >= self.next_link_id
                 || !kernel_ids.insert(row.extension_link_id)
-                || !tc_keys.insert(row.key())
-                || !dispatchers.insert(row.dispatcher_id)
                 || !self
                     .programs
                     .iter()
@@ -265,7 +264,33 @@ impl State {
                     "duplicate or invalid TC snapshot identity",
                 ));
             }
+            tc_keys.insert(row.key());
             row.details()?;
+        }
+        for key in tc_keys {
+            let members = self
+                .tc
+                .iter()
+                .filter(|r| r.key() == key)
+                .map(|r| {
+                    r.snapshot(
+                        self,
+                        &RuntimeLayout::try_from(std::path::PathBuf::from(
+                            bpfman_fs::DEFAULT_RUNTIME_ROOT,
+                        ))
+                        .map_err(|_| Failure::Invalid("invalid default runtime layout"))?,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let snapshot = bpfman_model::TcDispatcherSnapshot::new(members)
+                .map_err(|_| Failure::Invalid("invalid TC dispatcher membership"))?;
+            let d = &snapshot.members()[0].details;
+            if !dispatchers.insert(d.dispatcher_id)
+                || (self.version < 8
+                    && (snapshot.members().len() != 1 || d.revision != NonZeroU32::MIN))
+            {
+                return Err(Failure::Invalid("TC replacement requires format 8"));
+            }
         }
         for key in keys {
             let mut rows: Vec<_> = self.xdp.iter().filter(|r| r.key() == key).collect();

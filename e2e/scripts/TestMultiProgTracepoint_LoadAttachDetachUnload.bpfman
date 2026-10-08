@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: three tracepoint programs attached to the e2e kmod tracepoint
 #

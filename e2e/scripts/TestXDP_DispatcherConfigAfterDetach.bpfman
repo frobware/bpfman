@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: a full XDP dispatcher with the final link deferred to cleanup
 #

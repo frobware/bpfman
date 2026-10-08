@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: two same-priority XDP programs with distinct names -- pass
 # (non-counting) and xdp_stats (counting) -- attached in reverse

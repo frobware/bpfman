@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: ten TC ingress members attached at deliberately scrambled
 # priorities

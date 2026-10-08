@@ -185,7 +185,12 @@ where
     let observed = app.get_link(record.id).expect("observed TC link");
     assert!(observed.kernel.is_some() && observed.pin_present);
     assert_eq!(observed.record, record);
-    assert!(app.attach_tc(request(id, &network)).is_err());
+    let cancelled = bpfman_runtime::Cancellation::new();
+    cancelled.cancel();
+    assert!(
+        app.attach_tc_with_cancellation(request(id, &network), &cancelled)
+            .is_err()
+    );
     assert_eq!(
         app.list_link_records().expect("links"),
         vec![record.clone()]

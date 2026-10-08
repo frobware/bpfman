@@ -177,8 +177,8 @@ func TestBPFManScripts(t *testing.T) {
 				skipReason = scriptSelectorSkipReason(selector, meta.mode.Labels)
 				if skipReason == "" &&
 					meta.mode.Labels.Get("requires-clsact-reclaim") == "true" &&
-					!tcpolicy.ReclaimClsactOnDetach {
-					skipReason = "tcpolicy.ReclaimClsactOnDetach is false; flip it to true to run this"
+					!clsactReclaimEnabled() {
+					skipReason = "clsact reclaim is disabled; an external CLI can advertise it with BPFMAN_E2E_CLSACT_RECLAIM=true"
 				}
 				if skipReason == "" &&
 					meta.mode.Labels.Get("requires-bpf-lsm") == "true" &&
@@ -472,4 +472,19 @@ func runScriptCommand(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 		return bytes.Clone(out.Bytes()), context.Cause(ctx)
 	}
 	return bytes.Clone(out.Bytes()), err
+}
+
+// An external CLI can implement clsact reclamation independently of Go's policy.
+// This opt-in runs the unchanged assertions; it does not bypass their outcome.
+func clsactReclaimEnabled() bool {
+	return tcpolicy.ReclaimClsactOnDetach || os.Getenv("BPFMAN_E2E_CLSACT_RECLAIM") == "true"
+}
+
+func TestClsactReclaimCapabilityOverride(t *testing.T) {
+	t.Setenv("BPFMAN_E2E_CLSACT_RECLAIM", "")
+	require.Equal(t, tcpolicy.ReclaimClsactOnDetach, clsactReclaimEnabled())
+	t.Setenv("BPFMAN_E2E_CLSACT_RECLAIM", "true")
+	require.True(t, clsactReclaimEnabled())
+	t.Setenv("BPFMAN_E2E_CLSACT_RECLAIM", "false")
+	require.Equal(t, tcpolicy.ReclaimClsactOnDetach, clsactReclaimEnabled())
 }

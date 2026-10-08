@@ -118,14 +118,18 @@ pub(crate) fn insert(
     pin: &str,
     metadata: &str,
     actions: &str,
+    existing: Option<i64>,
+    header: bool,
 ) -> rusqlite::Result<i64> {
     let d = request.details;
-    tx.prepare_cached(
+    if header {
+        tx.prepare_cached(
         "INSERT INTO dispatchers(type,nsid,ifindex,revision,program_id,priority,filter_handle,
             netns,created_at,updated_at)
-         VALUES('tc-ingress',:nsid,:ifindex,1,:program,:filter_priority,:filter_handle,:netns,:created,:created)",
+         VALUES('tc-ingress',:nsid,:ifindex,:revision,:program,:filter_priority,:filter_handle,:netns,:created,:created)",
     )?
     .execute(named_params! {
+        ":revision": d.revision.get(),
         ":nsid": d.key.nsid.get(),
         ":ifindex": d.key.ifindex.get(),
         ":program": d.dispatcher_id.get(),
@@ -134,11 +138,13 @@ pub(crate) fn insert(
         ":netns": d.netns.as_str(),
         ":created": request.created_at,
     })?;
+    }
     tx.prepare_cached(
-        "INSERT INTO links(kind,kernel_prog_id,kernel_link_id,pin_path,metadata_json,created_at)
-         VALUES('tc',:program,:kernel,:pin,:metadata,:created)",
+        "INSERT INTO links(id,kind,kernel_prog_id,kernel_link_id,pin_path,metadata_json,created_at)
+         VALUES(:id,'tc',:program,:kernel,:pin,:metadata,:created)",
     )?
     .execute(named_params! {
+        ":id": existing,
         ":program": request.program_id.get(),
         ":kernel": request.extension_link_id.get(),
         ":pin": pin,
@@ -150,13 +156,14 @@ pub(crate) fn insert(
     tx.prepare_cached(
         "INSERT INTO link_tc_details(id,interface,ifindex,direction,priority,position,proceed_on,
             netns,nsid,dispatcher_program_id)
-         VALUES(:id,:interface,:ifindex,'ingress',:priority,0,:actions,:netns,:nsid,:dispatcher)",
+         VALUES(:id,:interface,:ifindex,'ingress',:priority,:position,:actions,:netns,:nsid,:dispatcher)",
     )?
     .execute(named_params! {
         ":id": id,
         ":interface": d.interface.as_str(),
         ":ifindex": d.key.ifindex.get(),
         ":priority": d.priority,
+        ":position": d.slot.index(),
         ":actions": actions,
         ":netns": d.netns.as_str(),
         ":nsid": d.key.nsid.get(),
@@ -191,5 +198,10 @@ pub(crate) fn remove_dispatcher(tx: &Transaction<'_>, row: &Row) -> rusqlite::Re
         return Err(rusqlite::Error::QueryReturnedNoRows);
     }
 
+    Ok(())
+}
+
+pub(crate) fn updated(tx: &Transaction<'_>, key: XdpKey, timestamp: &str) -> rusqlite::Result<()> {
+    tx.prepare_cached("UPDATE dispatchers SET updated_at=:updated WHERE type='tc-ingress' AND nsid=:nsid AND ifindex=:ifindex")?.execute(named_params! { ":updated": timestamp, ":nsid": key.nsid.get(), ":ifindex": key.ifindex.get() })?;
     Ok(())
 }

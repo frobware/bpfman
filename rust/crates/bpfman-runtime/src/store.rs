@@ -348,6 +348,44 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for ActiveStore<S> {
         self.check_writer(w)?;
         self.backend.observe_tc(w, id)
     }
+    fn observe_tc_member_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
+    {
+        self.check_writer(w)?;
+        self.backend.observe_tc_member_dispatcher(w, id)
+    }
+
+    fn observe_tc_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
+    {
+        self.check_writer(w)?;
+        self.backend.observe_tc_dispatcher(w, key)
+    }
+
+    fn replace_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::TcReceipt,
+        request: bpfman_store::TcReplace<'_>,
+    ) -> Result<
+        bpfman_model::TcDispatcherSnapshot,
+        EffectFailure<Self::TcReceipt, bpfman_store::Error>,
+    > {
+        if let Err(cause) = self.check_writer(w) {
+            return Err(EffectFailure {
+                cause,
+                remaining: receipt,
+            });
+        }
+        self.backend.replace_tc(w, receipt, request)
+    }
+
     fn delete_tc(
         &self,
         w: &RuntimeWriter<'_>,

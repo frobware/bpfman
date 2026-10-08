@@ -22,6 +22,8 @@ pub struct PendingTracepoint<'a> {
 
 /// Consistent observations of standalone links without the runtime writer lock.
 pub trait LinkReader {
+    /// Read complete TC ingress dispatchers from one validated snapshot.
+    fn read_tc_dispatchers(&mut self) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, Error>;
     /// Read links from one fresh, validated snapshot, sorted by managed ID.
     /// Unsupported attachment types fail explicitly instead of being omitted.
     fn read_links(&mut self) -> Result<Vec<StoredLink>, Error>;

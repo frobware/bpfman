@@ -18,6 +18,7 @@ pub(super) enum Point {
     Validate,
     ReadSummaries,
     ReadRecords,
+    ReadLinks,
     Commit,
     CommitWithBlockedCleanup,
     ReadAfterCommit,
@@ -31,6 +32,8 @@ pub(super) enum Point {
     DeleteLink,
     TcCommit,
     TcCommitWithBlockedCleanup,
+    TcReplace,
+    TcReplaceWithBlockedRetirement,
     TcDelete,
     XdpCommit,
     XdpReplace,
@@ -253,7 +256,12 @@ impl<S: UnloadStore> UnloadStore for Faults<S> {
 }
 
 impl<R: bpfman_store::LinkReader> bpfman_store::LinkReader for Reader<R> {
+    fn read_tc_dispatchers(&mut self) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, Error> {
+        self.reader.read_tc_dispatchers()
+    }
+
     fn read_links(&mut self) -> Result<Vec<bpfman_model::StoredLink>, Error> {
+        check(&self.state, Point::ReadLinks)?;
         self.reader.read_links()
     }
 }
@@ -474,6 +482,60 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for Faults<S> {
     ) -> Result<Option<(bpfman_model::TcSnapshot, Self::TcReceipt)>, Error> {
         self.backend.observe_tc(w, id)
     }
+    fn observe_tc_member_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: std::num::NonZeroU64,
+    ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
+    {
+        self.backend.observe_tc_member_dispatcher(w, id)
+    }
+
+    fn observe_tc_dispatcher(
+        &self,
+        w: &RuntimeWriter<'_>,
+        key: bpfman_model::XdpKey,
+    ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
+    {
+        self.backend.observe_tc_dispatcher(w, key)
+    }
+
+    fn replace_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::TcReceipt,
+        request: bpfman_store::TcReplace<'_>,
+    ) -> Result<
+        bpfman_model::TcDispatcherSnapshot,
+        EffectFailure<Self::TcReceipt, bpfman_store::Error>,
+    > {
+        if let Err(cause) = check(&self.state, Point::TcReplace) {
+            return Err(EffectFailure {
+                cause,
+                remaining: receipt,
+            });
+        }
+        let block_retirement = check(&self.state, Point::TcReplaceWithBlockedRetirement).is_err();
+        let previous = request
+            .members
+            .first()
+            .map(|m| (m.attachment.details.key, m.attachment.details.revision));
+        let committed = self.backend.replace_tc(w, receipt, request)?;
+        if block_retirement {
+            let (key, revision) = previous.expect("replacement member");
+            let revision =
+                std::num::NonZeroU32::new(revision.get() - 1).expect("previous revision");
+            let directory = w.layout().tc_revision_path(key, revision);
+            for slot in 0..2 {
+                let pin = directory.join(format!("link_{slot}"));
+                std::fs::rename(&pin, directory.join(format!("held_link_{slot}")))
+                    .expect("retain old pin for fault repair");
+                std::fs::create_dir(&pin).expect("inject replaced cleanup entry");
+            }
+        }
+        Ok(committed)
+    }
+
     fn delete_tc(
         &self,
         w: &RuntimeWriter<'_>,

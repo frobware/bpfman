@@ -42,7 +42,7 @@ impl LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
-    /// Attach a TC extension through a singleton legacy ingress dispatcher.
+    /// Attach a TC extension through a legacy ingress dispatcher.
     Tc {
         program_id: NonZeroU32,
         interface: bpfman_model::InterfaceName,

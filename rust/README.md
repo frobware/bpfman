@@ -171,7 +171,8 @@ their existing operations: tracepoint programs from version 1, tracepoint links
 from version 2, and XDP loads from version 3. XDP attachment requires a separately
 initialized version 4 or newer runtime. Version 5 adds multi-member XDP
 replacement. Version 6 persists explicit network namespace paths. New stores use
-version 7, which also supports TC extension loads and singleton ingress attachments.
+version 8, which adds complete TC ingress revisions. Version 7 retains TC loads
+and singleton ingress attachments without implicit upgrade.
 Versions 1–6 refuse TC without upgrading. Versions 4 and 5 reject namespaced attachments without upgrading;
 version 4 also rejects replacement. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
@@ -1342,7 +1343,7 @@ bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
 behavior, as do hash-backed broadcast, ingress exclusion, and ordinary/genuine
 multi-buffer egress. Array-map multi-buffer egress and multi-buffer fan-out remain
 separate library/kernel boundaries. TC ingress attachment is described below;
-attached-program unload is supported, with dispatcher replacement next.
+multi-member replacement and attached-program unload are supported.
 
 The hash egress checkpoint passed `direnv exec . make rust-check`: formatting,
 Clippy, workspace tests, compile-fail contracts, documentation, 38 shared
@@ -1390,6 +1391,44 @@ on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 
 
+## Script parity through the Go runner
+
+Passing scripts carry `#pragma labels={"rust":"ok"}` in their header. The 42
+currently marked scripts pass against the Rust binary with both SQLite and JSON
+in file-bytecode mode. Add this label as more of the 132-script corpus passes;
+preserve assertions and existing scheduling labels. The scripts themselves are
+the parity manifest.
+
+The tagged selection passed through the parallel Go runner in approximately
+52 seconds per backend, with empty final inventories and managed artifacts.
+
+Build the binaries and fixtures as the invoking user:
+
+```sh
+direnv exec . make rust-build build-e2e-scripts e2e-kmod-insmod
+```
+
+Run the tagged set in one Go-runner invocation, with its existing interface pool
+and parallel scheduling, in a private mount namespace and fresh runtime:
+
+```sh
+direnv exec . sudo -n unshare --mount --propagation private -- \
+  make run-e2e-scripts \
+  BPFMAN_UNDER_TEST=rust/target/debug/bpfman \
+  BPFMAN_RUNTIME_DIR="$(mktemp -d)" \
+  BPFMAN_STORE=sqlite \
+  BPFMAN_E2E_BYTECODE_SOURCE=file \
+  BPFMAN_E2E_CLSACT_RECLAIM=true \
+  BPFMAN_E2E_SCRIPT_SELECTOR='rust=ok,!external'
+```
+
+Repeat with `BPFMAN_STORE=json` and a fresh runtime. Backend batches run one after
+the other because each runner holds the shared suite lock. Scripts within each
+batch run concurrently, subject to their serial/exclusive pragmas.
+The current full Rust gate also runs these scripts through individual kernel-test
+wrappers; replacing those wrappers with label-selected batches is the next harness
+change. Corpus parity takes priority over further Rust-specific packet scenarios.
+
 ## TC ingress attachment and unload
 
 A managed TC classifier loads as EXT against an unpinned native TC dispatcher.
@@ -1415,16 +1454,27 @@ namespace. `--proceed-on` accepts signed TC actions by name, including `unspec`,
 uses bit zero and dispatcher-return (30) uses bit 31. An explicitly continued SHOT
 returns the dispatcher's final OK; a SHOT under the default mask drops the packet.
 
-`link get/list` report the stored TC attachment and actual freplace-link identity.
-A second member at the same ingress point is refused. Detach validates the complete
-snapshot before effects; failure retains ownership for `retry_tc_cleanup`, including
-cancellable retry admission. Failed publication compensates the acquired filter,
-clsact and pins. A failed conditional store deletion retains only that record receipt.
-An in-flight commit decides publication even if cancellation arrives.
+`link get/list` report stored TC attachments and actual freplace identities.
+An ingress point supports one to ten members, ordered by priority, unattached
+before attached, then program name. Attach and non-last detach stage a complete
+new revision and replace the native dispatcher at the existing filter handle.
+Survivors retain managed link IDs and operator fields; slots and kernel IDs change
+together. `dispatcher get tc-ingress NSID IFINDEX` and dispatcher list expose full
+stored membership. Aya's public `SchedClassifierLink::attached` and
+`SchedClassifier::attach_to_link` perform the filter replacement without patches.
+
+Failed publication restores the old chain before staged cleanup. Failed
+restoration retains both revisions and native target handles; retirement errors
+expose the committed snapshot. `retry_tc_cleanup` performs one explicit recovery
+pass and retains every actual restoration/cleanup attempt. Cancellation before
+publication compensates acquisitions; an in-flight commit decides its own outcome.
 
 `program unload PROGRAM_ID` also detaches all TC links. Admission validates every
 attachment before destructive effects, then consumes exact filter, dispatcher and
-conditional record receipts under the same writer lock. Failed prerequisites retain
+conditional record receipts under the same writer lock. Non-last removal rebuilds
+survivors; repeated attachments of one program use the latest committed revision.
+A failed member blocks later members of that dispatcher, while independent
+interfaces each receive one pass. Failed prerequisites retain
 ownership and block program/map/bytecode removal; `UnloadReport::tc_attempts()`
 exposes each link's cleanup history. `retry_unload` resumes only unresolved work;
 completed links are not detached again. Retry admission may be cancelled without
@@ -1434,31 +1484,36 @@ Retained reports can be retried using a reopened application; recovering a repor
 lost on process exit remains future work.
 
 Clsact ownership lives in a confined, singly linked one-byte receipt at
-`<runtime>/tc/dispatcher_<nsid>_<ifindex>_1`, separate from operator metadata.
+`<runtime>/tc/dispatcher_<nsid>_<ifindex>_<revision>`, separate from operator metadata.
+Fresh revisions copy established ownership, and cleanup removes only its own receipt.
 Reopened detach preserves pre-existing empty clsact qdiscs. A created clsact is
 reclaimed only when ingress and egress filters are both empty; foreign filters
 preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 7; older formats retain their operations without
-upgrading.
+receipt. New JSON stores use format 8 for replacement; format 7 retains singleton
+TC. Older formats retain their operations without upgrading.
 
 `direnv exec . make rust-test-tc-ingress` selects real veth lifecycle/CLI tests and
-the unchanged `TestTC_LoadAndGet` and `TestTC_LinkRoundTrip` scripts on both stores.
+the unchanged `TestTC_LoadAndGet`, `TestTC_LinkRoundTrip`, and twelve Go chain,
+ordering, signed-encoding, namespace, survivor-unload and clsact scripts on both
+stores. The Rust runner advertises `BPFMAN_E2E_CLSACT_RECLAIM=true` so the reclaim
+script executes independently of Go's disabled production policy.
 The lifecycle tests require exact marked-packet counts, preserve foreign filters
 at the same priority on both hooks, reopen before detach, cross publication and
 cleanup faults, retain retry/cancellation history, and verify empty inventories and
 runtime artifacts after detached and attached-program unload.
 
-This attached-unload checkpoint passed `direnv exec . make rust-check`: formatting,
-Clippy, all userspace and compile-fail contracts, 50 shared fake-kernel lifecycle
-tests, all 142 real-kernel tests (none ignored), and documentation. The serial
-kernel suite completed in 1747.62 seconds. The focused TC target passed two store
-contracts and ten kernel/CLI/unchanged-script checks. Userspace contracts run
+This ingress replacement checkpoint passed `direnv exec . make rust-check`:
+formatting, Clippy, all userspace and compile-fail contracts, 60 shared fake-kernel
+lifecycle tests, all 168 real-kernel tests (none ignored), and documentation. The
+serial kernel suite completed in 1834.78 seconds. The focused TC target passed two
+store contracts and 36 kernel/CLI/script checks. Makefile lint and the Go runner's
+clsact capability unit check also passed. Userspace contracts run
 before the complete serial kernel suite in the normal gate.
 
-Replacement, egress, TCX, outer-filter status, and deleted-namespace/orphan repair
+Egress, TCX, outer-filter status, and deleted-namespace/orphan repair
 remain unsupported. Qdisc inspection/deletion
 uses separate netlink requests and is not atomic against privileged tools changing
 the same objects outside bpfman's writer lock.

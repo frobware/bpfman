@@ -829,3 +829,18 @@ fn sqlite_tc_ingress_attached_unload() {
 fn json_tc_ingress_attached_unload() {
     tc_unload::exercise(bpfman_store_json::Backend);
 }
+
+#[path = "kernel/tc_corpus.rs"]
+mod tc_corpus;
+#[path = "kernel/tc_replace.rs"]
+mod tc_replace;
+
+#[test]
+fn sqlite_tc_ingress_replacement() {
+    tc_replace::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_tc_ingress_replacement() {
+    tc_replace::exercise(bpfman_store_json::Backend);
+}
