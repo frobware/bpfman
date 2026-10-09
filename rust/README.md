@@ -1430,11 +1430,37 @@ on both stores. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 
 
+## Measuring privileged test time
+
+Set `BPFMAN_KERNEL_TIMINGS=1` through the normal Make targets:
+
+```sh
+direnv exec . env BPFMAN_KERNEL_TIMINGS=1 make rust-check > /tmp/bpfman-rust-check.log 2>&1
+rg 'kernel-timing' /tmp/bpfman-rust-check.log
+```
+
+Every kernel test has a monotonic timer covering its complete body and teardown.
+Opt-in TSV records contain `kernel-timing`, test name, elapsed seconds and
+`completed`/`failed`; they bypass libtest's captured success output. Timings do
+not enable concurrent Rust fixtures. The two backend-wide script batches still
+use the Go runner's parallel scheduler; remaining kernel contracts run serially.
+The corpus also emits `script-timing` rows with backend and the Go runner's
+existing per-script elapsed results. Those overlap because scripts run in parallel;
+do not sum them as batch wall time. Build and userspace time are outside the
+per-kernel-test records. A failing
+process that aborts rather than unwinds cannot emit its final timing.
+
+Ordinary XDP restoration now sends three marked Ethernet frames and waits for
+all three intact frames at its private veth receiver, with a one-second failure
+bound. This removes the unanswered ping timeout. Delivery, broadcast and egress
+captures retain their 300 ms windows for unexpected or duplicate traffic.
+
+
 ## Script parity through the Go runner
 
 Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
-80 admitted scripts: 50 shared Go/Rust scripts and 30 Rust-only scripts,
-out of 167 scripts in total. A Rust-only script additionally declares:
+84 admitted scripts: 52 shared Go/Rust scripts and 32 Rust-only scripts,
+out of 171 scripts in total. A Rust-only script additionally declares:
 
 ```bpfman
 #pragma labels={"rust":"ok","rust-only":"true"}
@@ -1571,6 +1597,25 @@ artifacts; all four retained PASS restoration/ABI contracts passed. The kernel
 stage took 978.34 s (16m18s), compared with 986.98 s (16m27s) at the egress
 checkpoint. These are local timings, not a controlled benchmark. Makefile lint
 and canonical DSL formatting also passed.
+
+The ordinary lifecycle/timing follow-up passed the full
+`direnv exec . env BPFMAN_KERNEL_TIMINGS=1 make rust-check lint-make` gate:
+formatting, Clippy, userspace/compile-fail contracts, Rustdoc, Makefile lint and
+all 96 kernel tests, none failed or ignored. Each backend batch verified all 84
+admitted scripts and empty final inventories/artifacts. Four parallel scripts
+replace ordinary XDP mode/continuation/survivor traffic and TC lifecycle/CLI
+acceptance. Two duplicate TC CLI kernel wrappers are removed; fault, ownership,
+foreign-filter coexistence and retry contracts remain.
+
+The kernel stage took 782.36 s (13m02s), versus this session's 1138.08 s (18m58s)
+baseline. Serial contracts fell from 751.592 s to 472.738 s. Batch times were
+159.025 s (JSON) / 150.447 s (SQLite), reversing their baseline ordering. An
+identical isolated script took about 14.1 s / 14.5 s, while its concurrent-batch
+elapsed time was 127.39 s / 133.34 s. This suggests profiling shared writer and
+process/scheduling costs next; it does not establish one backend as uniformly
+faster. Local timings are not a controlled benchmark. Full coverage mapping,
+per-group timings and Go comparison are in the
+[ordinary lifecycle follow-up](../docs/design/rust-reimplementation.md#ordinary-lifecycle-and-timing-follow-up).
 
 `make rust-test-unit` runs library and binary unit targets without integration
 targets or doctests. Its 92 tests reported approximately 0.60 seconds of aggregate

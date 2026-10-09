@@ -298,6 +298,19 @@ fn run_dsl(store: &'static str, script: Option<&str>, binary: &std::path::Path) 
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    if timings_enabled() {
+        use std::io::Write;
+
+        // Go already reports per-script elapsed time. Preserve only those
+        // result rows, rather than dumping captured CLI/packet output.
+        let mut stderr = std::io::stderr().lock();
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let line = line.trim();
+            if line.starts_with("--- PASS: TestBPFManScripts/scripts/") {
+                let _ = writeln!(stderr, "script-timing\t{store}\t{line}");
+            }
+        }
+    }
     for script in expected {
         assert!(
             String::from_utf8_lossy(&output.stdout)

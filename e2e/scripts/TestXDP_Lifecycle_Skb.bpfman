@@ -1,0 +1,10 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"lifecycle"}
+# Given: ordinary PASS members in skb mode on a pooled private veth
+# When: stopping and continuing chains rebuild either survivor
+# Then: packet execution, actual mode and outer link identity remain correct
+
+import ../xdp-delivery.bpfman
+import ../lifecycle.bpfman
+
+lifecycle_xdp skb

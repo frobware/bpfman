@@ -530,34 +530,22 @@ pub(super) fn traffic(c: &Context, active: &[NonZeroU32], inactive: &[NonZeroU32
         .map(|id| count(c, *id))
         .collect();
     let peer = format!("bxb{}", std::process::id());
-    for args in [
-        vec!["address", "replace", "198.18.0.2/24", "dev", &peer],
-        vec!["neigh", "flush", "dev", &peer],
-    ] {
-        assert!(
-            std::process::Command::new("ip")
-                .args(args)
-                .output()
-                .expect("configure test peer")
-                .status
-                .success()
-        );
-    }
-    // The unanswered ARP request crosses only this private veth pair. Its ingress
-    // executes the dispatcher even though ping cannot reach a configured peer IP.
-    let output = std::process::Command::new("ping")
-        .args(["-n", "-I", &peer, "-c", "1", "-W", "1", "198.18.0.3"])
+    let receiver = format!("bxa{}", std::process::id());
+    let output = std::process::Command::new(repository().join("bin/xdp-delivery-probe"))
+        .args(["stimulus", &peer, &receiver])
         .output()
-        .expect("send test traffic");
+        .expect("send marked test frames");
     assert!(
-        matches!(output.status.code(), Some(0 | 1)),
+        output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let counts: Vec<u32> = serde_json::from_slice(&output.stdout).expect("delivery counts");
+    assert_eq!(counts, [0, 3], "all frames delivered intact through PASS");
     for (index, id) in active.iter().chain(inactive).enumerate() {
         if index < active.len() {
             assert!(
-                count(c, *id) > before[index],
+                count(c, *id) >= before[index] + 3,
                 "active member {id} did not execute"
             );
         } else {

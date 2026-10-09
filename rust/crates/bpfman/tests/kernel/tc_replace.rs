@@ -1,4 +1,5 @@
-//! Actual legacy filter replacement, signed continuation and reopened member unload.
+//! Filter restoration, retirement and reopened qdisc ownership.
+//! Ordinary continuation and survivor execution run in lifecycle scripts.
 #![allow(clippy::panic)]
 use super::{
     faults::{Faults, Point},
@@ -90,16 +91,18 @@ where
         let s = app.get_tc_dispatcher(key).expect("snapshot");
         assert_eq!(s.members().len(), 2);
         assert_eq!(s.members()[0].details.filter_handle, handle);
-        let before = [count(&c, a), count(&c, b), count(&c, d)];
-        traffic(&network, 0);
-        assert_eq!(
-            [
-                count(&c, a) - before[0],
-                count(&c, b) - before[1],
-                count(&c, d) - before[2]
-            ],
-            [3, 3, 0]
-        );
+        if ownership == "foreign" {
+            let before = [count(&c, a), count(&c, b), count(&c, d)];
+            traffic(&network, 0);
+            assert_eq!(
+                [
+                    count(&c, a) - before[0],
+                    count(&c, b) - before[1],
+                    count(&c, d) - before[2]
+                ],
+                [3, 3, 0]
+            );
+        }
         let old_dir = c
             .layout
             .tc_revision_path(key, s.members()[0].details.revision);
@@ -129,16 +132,18 @@ where
             .attach_tc(request(d, &network))
             .expect("higher priority OK stops chain");
         assert!(!old_dir.exists(), "retired revision removed");
-        let before = [count(&c, a), count(&c, b), count(&c, d)];
-        traffic(&network, 3);
-        assert_eq!(
-            [
-                count(&c, a) - before[0],
-                count(&c, b) - before[1],
-                count(&c, d) - before[2]
-            ],
-            [0, 0, 3]
-        );
+        if ownership == "foreign" {
+            let before = [count(&c, a), count(&c, b), count(&c, d)];
+            traffic(&network, 3);
+            assert_eq!(
+                [
+                    count(&c, a) - before[0],
+                    count(&c, b) - before[1],
+                    count(&c, d) - before[2]
+                ],
+                [0, 0, 3]
+            );
+        }
         if ownership == "owned" {
             // Retirement tries independent extension removals even after earlier
             // failures, and retains the native dispatcher until every EXT pin is gone.
@@ -188,13 +193,17 @@ where
         );
         assert_eq!(app.unload(d).expect("unload stops member").unresolved(), 0);
         assert!(app.get_link(stop.id).is_err());
-        let before = [count(&c, a), count(&c, b)];
-        traffic(&network, 0);
-        assert_eq!([count(&c, a) - before[0], count(&c, b) - before[1]], [3, 3]);
+        if ownership == "foreign" {
+            let before = [count(&c, a), count(&c, b)];
+            traffic(&network, 0);
+            assert_eq!([count(&c, a) - before[0], count(&c, b) - before[1]], [3, 3]);
+        }
         app.detach_tc(first.id).expect("non-last detach");
-        let before = [count(&c, a), count(&c, b)];
-        traffic(&network, 0);
-        assert_eq!([count(&c, a) - before[0], count(&c, b) - before[1]], [0, 3]);
+        if ownership == "foreign" {
+            let before = [count(&c, a), count(&c, b)];
+            traffic(&network, 0);
+            assert_eq!([count(&c, a) - before[0], count(&c, b) - before[1]], [0, 3]);
+        }
         assert_eq!(app.unload(a).expect("detached a").unresolved(), 0);
         drop(app);
         let app = Bpfman::new(

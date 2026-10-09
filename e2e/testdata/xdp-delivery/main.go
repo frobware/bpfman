@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func run(size int, captures []string) error {
+func run(size int, captures []string, source string, observeAll bool) error {
 	protocol := int(binary.NativeEndian.Uint16([]byte{0x88, 0xb5}))
 	var sockets []int
 	defer func() {
@@ -44,13 +44,27 @@ func run(size int, captures []string) error {
 			return err
 		}
 		polls = append(polls, unix.PollFd{Fd: int32(fd), Events: unix.POLLIN})
-		if name == "source0" {
+		if name == source {
 			sourceIndex = iface.Index
 		}
 	}
 	frame := make([]byte, size)
 	copy(frame[:6], []byte{2, 0, 0, 0, 0, 2})   // in0
 	copy(frame[6:12], []byte{2, 0, 0, 0, 0, 1}) // source0
+	if !observeAll {
+		// The standalone restoration fixtures use kernel-assigned MACs. Address
+		// the receiver itself so protocol-specific capture sees host packets.
+		receiver, err := net.InterfaceByName(captures[1])
+		if err != nil {
+			return err
+		}
+		sender, err := net.InterfaceByName(source)
+		if err != nil {
+			return err
+		}
+		copy(frame[:6], receiver.HardwareAddr)
+		copy(frame[6:12], sender.HardwareAddr)
+	}
 	binary.BigEndian.PutUint16(frame[12:14], 0x88b5)
 	binary.BigEndian.PutUint32(frame[14:18], 0xb9f00001)
 	// An offset-dependent pattern detects loss, reordering, and corruption of
@@ -66,7 +80,11 @@ func run(size int, captures []string) error {
 	}
 	counts := make([]uint32, len(captures))
 	seen := make([][3]bool, len(captures))
-	deadline := time.Now().Add(300 * time.Millisecond)
+	window := 300 * time.Millisecond
+	if !observeAll {
+		window = time.Second
+	}
+	deadline := time.Now().Add(window)
 	buffer := make([]byte, size+1)
 	for time.Now().Before(deadline) {
 		remaining := max(1, int(time.Until(deadline).Milliseconds()))
@@ -103,6 +121,15 @@ func run(size int, captures []string) error {
 				counts[index]++
 			}
 		}
+		// A PASS stimulus waits for all three intact frames at the receiver. It
+		// needs positive delivery evidence, rather than a silence window for
+		// unexpected TX/REDIRECT copies. Full captures keep their 300 ms window.
+		if !observeAll && counts[1] == 3 {
+			return json.NewEncoder(os.Stdout).Encode(counts)
+		}
+	}
+	if !observeAll {
+		return fmt.Errorf("stimulus delivery timed out: %v", counts)
 	}
 	return json.NewEncoder(os.Stdout).Encode(counts)
 }
@@ -170,7 +197,13 @@ func updateTarget(args []string) error {
 func main() {
 	var err error
 	if len(os.Args) == 1 {
-		err = run(64, []string{"source0", "in0", "sink0"})
+		err = run(64, []string{"source0", "in0", "sink0"}, "source0", true)
+	} else if os.Args[1] == "stimulus" {
+		if len(os.Args) != 4 {
+			err = fmt.Errorf("usage: stimulus SENDER RECEIVER (a private veth pair)")
+		} else {
+			err = run(64, []string{os.Args[2], os.Args[3]}, os.Args[2], false)
+		}
 	} else if os.Args[1] == "packets" {
 		if len(os.Args) < 3 {
 			err = fmt.Errorf("usage: packets SIZE [EXTRA_CAPTURE_INTERFACE...] (64 through 9014 bytes)")
@@ -181,7 +214,7 @@ func main() {
 				if size < 64 || size > 9014 {
 					err = fmt.Errorf("frame size must be between 64 and 9014 bytes")
 				} else {
-					err = run(size, append([]string{"source0", "in0", "sink0"}, os.Args[3:]...))
+					err = run(size, append([]string{"source0", "in0", "sink0"}, os.Args[3:]...), "source0", true)
 				}
 			}
 		}

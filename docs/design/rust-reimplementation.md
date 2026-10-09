@@ -188,6 +188,16 @@ egress checkpoint. These are local measurements, not a controlled benchmark.
 Makefile lint and canonical DSL formatting also passed. See the
 [PASS follow-up](#jumbo-pass-and-mixed-fragment-testing-follow-up).
 
+The ordinary lifecycle/timing follow-up passed the full
+`direnv exec . env BPFMAN_KERNEL_TIMINGS=1 make rust-check lint-make` gate:
+formatting, Clippy, userspace/compile-fail contracts, Rustdoc, Makefile lint and
+all 96 kernel tests, none failed or ignored. Each backend batch checked all 84
+admitted scripts and empty final inventories/artifacts. The kernel stage took
+782.36 s (13m02s), versus this session's fresh 1138.08 s (18m58s) baseline.
+Serial contract time fell from 751.592 s to 472.738 s; script-batch variation
+is reported separately. These are local samples, not a controlled benchmark.
+See the [coverage and timing follow-up](#ordinary-lifecycle-and-timing-follow-up).
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -1597,12 +1607,13 @@ The test-target inventory across the new workspace has been reviewed by family:
 | `cli`, `load`, `unload` integration targets | Reviewed assertion groups against the corpus below. Retain process parsing, no-effects preflight, unsupported-surface, persistence and captured-input contracts. Public load/global-data/unload outcomes run in scripts. |
 | `signals`, `telemetry`, `cancellation`, `kernel_observations`, `sqlite_compatibility`, `e2e_selection` integration targets | Retain internal/process, cross-implementation persistence and wiring contracts separately; remaining public-scenario extraction is pending. |
 | Real-kernel CLI helper | Ordinary file capture, record/get/list/quiet-list and unload assertions moved to shared scripts. Retain provenance ownership, input-before-effects, foreign pin/map refusal and output failure after commit. |
-| Real-kernel batch/TC CLI helpers and normal lifecycle paths mixed with faults | Reuse the admitted corpus first, extract any missing public assertions, then remove duplicate successful paths. Keep injected failures, cancellation and retained receipts. Remaining extraction is pending. |
+| Real-kernel TC CLI and ordinary XDP/TC replacement paths | Four parallel lifecycle scripts cover XDP modes/fallback, stopping/continuation and either survivor, plus TC signed continuation, stop, detach, attached unload and CLI output. Two duplicate TC CLI kernel wrappers are removed. Kernel publication, retirement, ownership, cancellation, foreign-filter coexistence and retry contracts remain. |
+| Real-kernel batch CLI and remaining normal lifecycle paths mixed with faults | Reuse the admitted corpus first, extract any missing public assertions, then remove duplicates. Keep injected failures, cancellation and retained receipts. Remaining extraction is pending. |
 | TX/direct REDIRECT, ordinary and jumbo frames | Eight parallel scripts cover modes, continuation, both survivors and full payload/fragment evidence. Rust retains two post-failure captures per scenario, snapshot restoration, ownership and cleanup checks. Both stores passed. |
 | Ordinary/jumbo DEVMAP/DEVMAP_HASH broadcast | Eight parallel scripts cover driver/SKB forwarding, ingress exclusion, empty/sparse maps, live updates, continuation and both survivors. Jumbo cases retain full payload/fragment counters and exact filtered `EOPNOTSUPP` rejection of cloning. Rust retains post-publication-failure traffic, exact map contents, ownership and lifetime checks. Both stores passed. |
 | Native DEVMAP/DEVMAP_HASH egress | Eight parallel scripts cover ordinary PASS/DROP, hash jumbo PASS/DROP, array jumbo rejection, exact context/fragment counters, live updates, replacement/survival and forwarding after managed unload. Rust keeps publication/teardown failures, restoration and map-held lifetime checks. Both stores passed. |
 | Jumbo PASS and mixed-fragment membership | Two parallel driver/SKB scripts cover single/two-member execution, stopping, normal-MTU mixed membership, restored jumbo operation, both survivors and native jumbo rejection. Rust retains post-publication-failure traffic and internal dispatcher ABI flags. Both stores passed. |
-| XDP attach/switch/runtime/unload/netns and TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
+| XDP attach/switch/unload/netns and TC unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
 
 These are incremental migration slices, not a claim that all Rust behavioural
 tests have moved. Next: migrate remaining ordinary lifecycle/CLI scenarios using
@@ -1865,7 +1876,7 @@ canonical DSL formatting also passed.
 
 ### Jumbo PASS and mixed-fragment testing follow-up
 
-The corpus now has 167 scripts, with 80 admitted against Rust: 50 shared Go/Rust
+At the jumbo PASS checkpoint the corpus had 167 scripts, with 80 admitted against Rust: 50 shared Go/Rust
 and 30 Rust-only. `TestXDP_PASS_{Drv,Skb}_MultiBuffer` uses the existing pooled
 namespaces, parallel scheduler, delivery probe and fragment-aware PASS fixture.
 The shared `xdp-frags.bpfman` helper adds assertions, without runner, probe,
@@ -1915,8 +1926,137 @@ The kernel stage took 978.34 s (16m18s), compared with 986.98 s (16m27s) at the
 egress checkpoint. These are local run measurements, not a controlled benchmark.
 Makefile lint and canonical DSL formatting passed too.
 
-Next: remaining ordinary lifecycle/CLI scenarios, reusing admitted corpus
-coverage before adding scripts for any missing public assertions.
+### Ordinary lifecycle and timing follow-up
+
+Per-test timing is opt-in with `BPFMAN_KERNEL_TIMINGS=1` through the normal
+`direnv exec . make rust-test` or `make rust-check` gate. Each complete test body,
+including setup and teardown, reports monotonic elapsed seconds. The timer writes
+TSV to stderr independently of libtest capture and reports unwinding failures.
+This separates each backend-wide parallel script batch from the retained serial
+contracts without adding a dependency or changing scheduling. The corpus also
+emits the Go runner's per-script result/duration rows, prefixed with the backend;
+parallel script durations overlap and must not be added as batch wall time.
+
+Three `TestXDP_Lifecycle_{Drv,Skb,Hw}` scripts cover actual driver/SKB mode and
+hardware-request fallback on private veths, same-priority incoming ordering,
+PASS stopping/continuation, both survivor choices, stable outer-link identity,
+and last-detach delivery with inactive counters unchanged. Default continuation
+already has unchanged shared-corpus coverage. The stopping script excludes PASS;
+the previous runtime test used a literal zero mask, whose representation remains
+covered by the internal configuration/validation tests.
+
+`TestTC_IngressLifecycle` covers signed UNSPEC continuation into SHOT, higher
+priority OK stopping, attached unload restoring two members, non-last detach,
+explicit SHOT continuation, link metadata/status/proceed-on output and last
+attached-program unload. Exact counters and intact local/drop packet delivery
+replace duplicate TC CLI acceptance. The admitted clsact-reclamation script
+covers Rust's reclaim policy separately. Kernel TC tests retain publication
+rollback, cancellation, malformed/foreign identity refusal, reopened owned or
+borrowed qdiscs, independent retirement and cleanup retries. Traffic alongside
+foreign filters remains a distinct coexistence contract.
+
+The delivery probe gains `stimulus SENDER RECEIVER`: it sends three marked
+64-byte Ethernet frames on a private veth and returns after observing all three
+intact frames at the receiver, bounded by one second on failure. The ordinary
+Rust XDP traffic helper uses this positive delivery evidence instead of configuring
+addresses, flushing neighbours and waiting for unanswered ping. Its active
+members must count at least three frames; inactive counters remain unchanged.
+All existing forwarding captures retain their full 300 ms silence window.
+
+The DEVMAP restoration matrix no longer repeats DROP/PASS missing-key fallback.
+Every retained restoration wave has a populated target, so that choice cannot
+change the observed path. Four scenarios still cross both REDIRECT continuation
+choices with both removed members for every backend, map kind, mode and frame
+shape. Scripts keep both fallback actions on empty maps. This removes 64 complete
+setup/teardown scenarios and 128 captures across the sixteen matrix invocations.
+TX/direct REDIRECT action choices, continuation choices, broadcast ingress
+exclusion, both removal choices and native egress lifetime remain distinct
+kernel contracts and are retained.
+
+The corpus now has 171 scripts, with 84 admitted against Rust: 52 shared Go/Rust
+and 32 Rust-only; the 87 remaining scripts are unselected, not established
+failures. Initial actual four-script runs passed all four on Rust JSON/SQLite
+in 5.84 s / 5.81 s, with empty inventories. Go passed TC and driver XDP on both
+stores. Requested SKB and hardware-request fallback cases failed actual-mode
+assertions because Go attached in driver mode (1 rather than 2). Those two
+wrappers therefore carry `rust-only=true`; the driver and TC wrappers are shared.
+No Go assertion was relaxed.
+
+The timed baseline passed all 98 kernel tests in 1138.08 s (18m58s). The prior
+checkpoint's 978.34 s (16m18s) was a separate local run; this variation is why
+before/after samples need the same measurement method. The two baseline script
+batches took 169.316 s (JSON) and 217.026 s (SQLite), 386.342 s combined.
+The final changed gate passed all 96 kernel tests in 782.36 s (13m02s), with no
+failures or ignored tests. Formatting, Clippy, userspace/compile-fail contracts,
+Rustdoc and Makefile lint passed. Both batches required all 84 selected scripts
+to pass and final inventories/artifacts to be empty. All 96 per-test timing
+records completed. Canonical formatting of the new DSL sources passed too.
+
+| Test group | Baseline seconds | Changed seconds |
+| --- | ---: | ---: |
+| Parallel script batches | 386.342 | 309.472 |
+| Standalone DEVMAP unicast (ordinary array, ordinary/jumbo hash) | 184.834 | 84.238 |
+| Broadcast restoration/lifetime | 136.538 | 130.351 |
+| Jumbo TX/REDIRECT + array DEVMAP | 131.238 | 84.858 |
+| Ordinary XDP runtime restoration | 73.469 | 9.802 |
+| Ordinary TX/REDIRECT | 62.770 | 55.327 |
+| Other kernel contracts | 46.823 | 28.396 |
+| TC contracts | 46.061 | 36.207 |
+| Native egress | 42.304 | 39.768 |
+| Ordinary XDP switch/restoration | 27.555 | 3.791 |
+
+Serial contract time sums to 751.592 s before and 472.738 s after; whole-test
+records sum to 1137.934 s and 782.210 s, with the small remainder belonging to
+harness overhead. Timers include setup, traffic and teardown; they do not isolate
+backend CPU or sync costs. The two deleted TC CLI wrappers moved to script
+acceptance; 36 ordinary XDP traffic waves and 24 TC captures were removed. The
+shared stimulus also accelerates retained XDP switch and unload contracts.
+The DEVMAP matrix removes a further 128 captures, as described above.
+These local before/after runs are not a controlled benchmark. Improvements in
+unchanged groups and script batches must not be attributed wholly to the edits.
+
+SQLite and JSON did not show a uniform performance ordering. The full SQLite
+script batch was slower, while representative retained SQLite forwarding tests
+were faster (28.440 s versus JSON's 37.301 s for driver jumbo forwarding).
+The SQLite reader caches an idle connection inside an opened process; scripts
+start fresh CLI processes. JSON decodes and validates whole snapshots, while
+SQLite opens connections and validates schema. These are plausible workload
+explanations, not a measured causal breakdown.
+
+An alternating JSON/SQLite/SQLite/JSON run of the unchanged
+`TestXDP_DispatcherFillDrainRefill` used the same Rust debug binary and fresh
+runtimes. All four passed and left empty inventories. Go-reported script durations
+were 14.18 / 14.61 / 14.47 / 14.10 s respectively (Make wall times 14.24 / 14.67 /
+14.53 / 14.17 s). This small isolated gap does not account for the full-batch
+difference. Concurrent workload, writer serialization and run variation need
+separate profiling before assigning the difference to a backend mechanism.
+These are local samples, not a controlled performance benchmark.
+
+Final labelled four-script batches passed on Rust JSON/SQLite in 6.18 s / 7.00 s;
+Go passed driver XDP and TC and correctly skipped SKB/hardware-request fallback
+on each store, with empty inventories. The focused ordinary runtime restoration
+tests passed in 4.503 s (JSON) / 5.002 s (SQLite), versus baseline 37.947 s /
+35.522 s; switch/restoration passed in 1.794 s / 1.918 s, versus 14.064 s /
+13.491 s. In the final full gate, runtime restoration took 4.660 s / 5.142 s,
+and switch/restoration took 1.802 s / 1.989 s.
+
+Final batch timings were 159.025 s (JSON) and 150.447 s (SQLite), reversing the
+baseline ordering. Per-script elapsed time exposes the concurrent workload:
+fill/drain/refill took 127.39 s / 133.34 s inside those batches, versus roughly
+14 s alone. Jumbo driver DEVMAP took 108.39 s in the JSON batch, and jumbo SKB
+DEVMAP took 87.74 s in SQLite. These overlapping script durations are not added
+to kernel totals. Shared runtime writer serialization, larger concurrent
+inventories and host CPU scheduling are candidates for the next timing profile;
+these measurements alone do not assign each its share.
+
+Evidence: `/tmp/bpfman-kernel-timing-{before,after}.log`,
+`/tmp/bpfman-lifecycle-{probe,admission}-summary.log`,
+`/tmp/bpfman-lifecycle-focused.log` and `/tmp/bpfman-store-comparison-summary.log`.
+The measurements and coverage decisions above are recorded here so the checkpoint
+does not depend on retaining those temporary logs.
+
+Next: remaining ordinary batch, attach/switch/unload and namespace lifecycle
+scenarios, keeping genuine kernel recovery and ownership evidence.
 
 A matching XDP fill/drain/refill script took 10.95 s with Go, 14.26 s with Rust
 debug and 9.02 s with Rust release. These are single samples, not a benchmark;

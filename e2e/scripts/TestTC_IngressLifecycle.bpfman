@@ -1,0 +1,10 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","program":"tc","area":"lifecycle"}
+# Given: ordinary TC ingress members in a pooled private namespace
+# When: signed continuation, stopping, detach and attached unload rebuild the chain
+# Then: exact packet delivery and counters agree with each surviving membership
+
+import ../xdp-delivery.bpfman
+import ../lifecycle.bpfman
+
+lifecycle_tc

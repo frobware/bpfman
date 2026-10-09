@@ -1915,7 +1915,8 @@ rust-test-xdp-netns: rust-build $(RUST_TEST_INPUTS)
 .PHONY: rust-test-observation
 rust-test-observation: rust-test-scripts
 
-# Configured driver/SKB modes and hardware-to-SKB fallback, with real traffic.
+# Driver/SKB and hardware-to-SKB publication restoration with marked frames.
+# Ordinary mode, continuation and survivor execution runs in rust-test-scripts.
 .PHONY: rust-test-xdp-modes
 rust-test-xdp-modes: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_runtime_replacement --nocapture
@@ -1931,7 +1932,8 @@ rust-test-xdp-frags: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-delivery: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_packet_delivery --nocapture
 
-# DEVMAP lookup, forwarding, fallback, and map lifetime on both stores and modes.
+# DEVMAP publication restoration and map lifetime on both stores and modes.
+# Missing-key fallback and ordinary forwarding run in rust-test-scripts.
 .PHONY: rust-test-xdp-devmap
 rust-test-xdp-devmap: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_delivery --nocapture

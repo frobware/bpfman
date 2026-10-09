@@ -14,6 +14,46 @@ pub(super) const TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const NAME: &str = "tracepoint_kill_recorder";
 pub(super) const SELECTION: &str = "tracepoint:tracepoint_kill_recorder";
 
+pub(super) fn timings_enabled() -> bool {
+    std::env::var_os("BPFMAN_KERNEL_TIMINGS").as_deref() == Some(std::ffi::OsStr::new("1"))
+}
+
+// Direct stderr bypasses libtest's success-output capture. Opt in through the
+// Make environment; one guard covers the whole scenario, including teardown.
+pub(super) struct TestTiming {
+    name: &'static str,
+    started: Option<std::time::Instant>,
+}
+
+impl TestTiming {
+    pub(super) fn start(name: &'static str) -> Self {
+        Self {
+            name,
+            started: timings_enabled().then(std::time::Instant::now),
+        }
+    }
+}
+
+impl Drop for TestTiming {
+    fn drop(&mut self) {
+        use std::io::Write;
+
+        if let Some(started) = self.started {
+            let outcome = if std::thread::panicking() {
+                "failed"
+            } else {
+                "completed"
+            };
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "kernel-timing\t{}\t{:.3}\t{outcome}",
+                self.name,
+                started.elapsed().as_secs_f64(),
+            );
+        }
+    }
+}
+
 pub(super) fn repository() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")

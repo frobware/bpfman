@@ -86,7 +86,6 @@ where
     let loaded = app.load(prepared).expect("load TC");
     let id = loaded.record.id;
     assert!(!clsact(&network));
-    traffic(&network, 3);
     assert_eq!(count(&c, id), 0);
 
     // A conflicting classic ingress qdisc is never adopted or deleted.
@@ -382,83 +381,6 @@ where
     let report = app.unload(id).expect("unload detached TC");
     assert_eq!(report.unresolved(), 0);
     c.absent(id);
-    c.no_artifacts();
-}
-
-pub(super) fn cli(store: &'static str) {
-    let c = Context::with_store(store);
-    let network = Network::new();
-    let loaded = c.json(
-        &rust(),
-        &[
-            "program",
-            "load",
-            "file",
-            fixture("tc_ingress.bpf.o").to_str().expect("fixture"),
-            "--programs",
-            "tc:tc_ingress",
-            "-o",
-            "json",
-        ],
-    );
-    let id = loaded["programs"][0]["record"]["program_id"]
-        .as_u64()
-        .expect("id")
-        .to_string();
-    let namespace = network.namespace();
-    let attached = c.json(
-        &rust(),
-        &[
-            "link",
-            "attach",
-            "tc",
-            &id,
-            "in0",
-            "ingress",
-            "--netns",
-            namespace.as_str(),
-            "--priority",
-            "10",
-            "--proceed-on",
-            "shot",
-            "-m",
-            "owner=acceptance",
-            "-o",
-            "json",
-        ],
-    );
-    let link = attached["record"]["id"].as_u64().expect("link").to_string();
-    assert_eq!(attached["record"]["kind"], "tc");
-    assert_eq!(
-        attached["record"]["details"]["proceed_on"],
-        serde_json::json!([2])
-    );
-    assert_eq!(attached["record"]["metadata"]["owner"], "acceptance");
-    assert_eq!(attached["status"]["kernel_seen"], true);
-    // SHOT continues to final OK when explicitly requested; default SHOT drops above.
-    traffic(&network, 3);
-    c.run(&rust(), &["link", "detach", &link], true);
-    assert!(!clsact(&network));
-    c.run(
-        &rust(),
-        &[
-            "link",
-            "attach",
-            "tc",
-            &id,
-            "in0",
-            "ingress",
-            "--netns",
-            namespace.as_str(),
-            "--priority",
-            "25",
-        ],
-        true,
-    );
-    traffic(&network, 0);
-    c.run(&rust(), &["program", "unload", &id], true);
-    assert!(!clsact(&network));
-    traffic(&network, 3);
     c.no_artifacts();
 }
 

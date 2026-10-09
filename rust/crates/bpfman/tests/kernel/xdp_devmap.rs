@@ -322,7 +322,6 @@ fn map_released(id: u32) {
 fn scenario<S>(
     backend: S,
     mode: XdpMode,
-    fallback: u32,
     proceed: bool,
     keep_redirect: bool,
     frames: Frames,
@@ -365,7 +364,7 @@ fn scenario<S>(
     let redirect = load(
         kind.object(frames),
         "devmap_delivery",
-        [("devmap_fallback".into(), fallback.to_ne_bytes().to_vec())].into(),
+        [("devmap_fallback".into(), 2u32.to_ne_bytes().to_vec())].into(),
     );
     let tail = load(
         frames.delivery_object(),
@@ -572,19 +571,13 @@ where
         + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
-    for fallback in [1, 2] {
-        for proceed in [false, true] {
-            for keep_redirect in [false, true] {
-                scenario(
-                    backend.clone(),
-                    mode,
-                    fallback,
-                    proceed,
-                    keep_redirect,
-                    frames,
-                    kind,
-                );
-            }
+    // Every restoration probe uses a populated target. The missing-key
+    // fallback is therefore unobservable here; DROP/PASS fallback execution
+    // belongs to the parallel scripts. Keep both masks and removal choices,
+    // plus every store, mode, frame shape and map kind in this kernel contract.
+    for proceed in [false, true] {
+        for keep_redirect in [false, true] {
+            scenario(backend.clone(), mode, proceed, keep_redirect, frames, kind);
         }
     }
 }

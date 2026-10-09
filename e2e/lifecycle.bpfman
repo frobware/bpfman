@@ -1,0 +1,148 @@
+# -*- mode: bpfman -*-
+# Ordinary lifecycle acceptance uses pooled namespaces, so fixed local names
+# remain safe under the existing runner's parallel scheduler.
+
+def lifecycle_count(prog map filter) {
+    guard dump <- bpftool map dump pinned "${prog.record.handles.map_pin_path}/${map}" -j
+    return $dump.stdout |> jq $filter
+}
+
+def lifecycle_xdp_traffic(pair a b ran_a ran_b) {
+    let filter = "fromjson | [.[] | select(.formatted.key == 2) | .formatted.values[].value.rx_packets | tonumber] | add"
+    guard before_a <- lifecycle_count $a xdp_stats_map $filter
+    guard before_b <- lifecycle_count $b xdp_stats_map $filter
+    guard capture <- net exec $pair.a xdp-delivery-probe stimulus source0 in0
+    assert (($capture.stdout |> jq fromjson) |> jq tojson) == "[0,3]"
+    guard after_a <- lifecycle_count $a xdp_stats_map $filter
+    guard after_b <- lifecycle_count $b xdp_stats_map $filter
+    let expected = jq fromjson "[${ran_a},${ran_b}]"
+    if $expected[0] == 0 {
+        assert $after_a == $before_a
+    } else {
+        assert ($after_a - $before_a) >= $expected[0]
+    }
+    if $expected[1] == 0 {
+        assert $after_b == $before_b
+    } else {
+        assert ($after_b - $before_b) >= $expected[1]
+    }
+}
+
+def lifecycle_xdp(mode) {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    let frame_size = 64
+    delivery_network $pair $frame_size
+    let netns = "/var/run/netns/${pair.a.ns}"
+    guard config_dir <- tempdir xdp-lifecycle
+    defer exec rm -rf $config_dir.path
+    let config = "${config_dir.path}/bpfman.toml"
+    guard _ <- exec sh -c 'printf "[interfaces.in0]\nxdp_mode = \"%s\"\n" "$2" > "$1"' sh $config $mode
+    guard load_a <- bpfman program load file testdata/bpf/xdp_counter.bpf.o --programs xdp:xdp_stats
+    let a = $load_a.programs[0]
+    defer delivery_unload $a
+    guard load_b <- bpfman program load file testdata/bpf/xdp_counter.bpf.o --programs xdp:xdp_stats
+    let b = $load_b.programs[0]
+    defer delivery_unload $b
+    guard first <- delivery_attach $a in0 $netns $config 50 pass,dispatcher_return
+    guard interface <- net exec $pair.a ip -j -d link show dev in0
+    let info = $interface.stdout |> jq fromjson
+    let expected_mode = $mode |> jq 'if . == "drv" then 1 else 2 end'
+    assert $info[0].xdp.attached[0].mode == $expected_mode
+    let ifindex = $info[0].ifindex
+    guard initial <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    let outer = $initial.runtime.kernel_link_id
+    lifecycle_xdp_traffic $pair $a $b 3 0
+    guard stop <- delivery_attach $b in0 $netns $config 50 dispatcher_return
+    guard stopping <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert $stopping.members[0].program_id == $b.record.program_id
+    assert $stopping.members[1].program_id == $a.record.program_id
+    assert $stopping.runtime.kernel_link_id == $outer
+    lifecycle_xdp_traffic $pair $a $b 0 3
+    bpfman link detach $stop.record.id
+    guard second <- delivery_attach $b in0 $netns $config 50 pass,dispatcher_return
+    lifecycle_xdp_traffic $pair $a $b 3 3
+    bpfman link detach $second.record.id
+    guard survivor_a <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor_a |> jq ".members | length") == 1
+    assert $survivor_a.members[0].program_id == $a.record.program_id
+    assert $survivor_a.runtime.kernel_link_id == $outer
+    lifecycle_xdp_traffic $pair $a $b 3 0
+    guard second <- delivery_attach $b in0 $netns $config 50 pass,dispatcher_return
+    bpfman link detach $first.record.id
+    guard survivor_b <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor_b |> jq ".members | length") == 1
+    assert $survivor_b.members[0].program_id == $b.record.program_id
+    assert $survivor_b.runtime.kernel_link_id == $outer
+    lifecycle_xdp_traffic $pair $a $b 0 3
+    bpfman link detach $second.record.id
+    let absent <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert not $absent.ok
+    lifecycle_xdp_traffic $pair $a $b 0 0
+}
+
+def lifecycle_tc_traffic(pair progs expected local) {
+    let filter = "fromjson | [.[] | .formatted.values[].value | tonumber] | add"
+    guard before <- foreach prog in $progs {
+        lifecycle_count $prog tc_stats $filter
+    }
+    guard capture <- net exec $pair.a xdp-delivery-probe packets 64
+    let counts = $capture.stdout |> jq fromjson
+    let want_local = $local |> jq tonumber
+    assert $counts[0] == 0
+    assert $counts[1] == $want_local
+    assert $counts[2] == 0
+    guard after <- foreach prog in $progs {
+        lifecycle_count $prog tc_stats $filter
+    }
+    let n = $progs |> jq length
+    foreach i in range $n {
+        assert ($after[$i] - $before[$i]) == $expected[$i]
+    }
+}
+
+def lifecycle_tc() {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    let frame_size = 64
+    delivery_network $pair $frame_size
+    let netns = "/var/run/netns/${pair.a.ns}"
+    guard load_a <- bpfman program load file testdata/bpf/tc_ingress.bpf.o --programs tc:tc_ingress -g tc_action=0xffffffff
+    let a = $load_a.programs[0]
+    defer delivery_unload $a
+    guard load_b <- bpfman program load file testdata/bpf/tc_ingress.bpf.o --programs tc:tc_ingress
+    let b = $load_b.programs[0]
+    defer delivery_unload $b
+    guard load_d <- bpfman program load file testdata/bpf/tc_ingress.bpf.o --programs tc:tc_ingress -g tc_action=0x00000000
+    let d = $load_d.programs[0]
+    defer delivery_unload $d
+    lifecycle_tc_traffic $pair [$a $b $d] [0 0 0] 3
+    guard first <- bpfman link attach tc $a in0 ingress --netns $netns --priority 50 --proceed-on unspec
+    guard second <- bpfman link attach tc $b in0 ingress --netns $netns --priority 60
+    lifecycle_tc_traffic $pair [$a $b $d] [3 3 0] 0
+    guard stop <- bpfman link attach tc $d in0 ingress --netns $netns --priority 25
+    lifecycle_tc_traffic $pair [$a $b $d] [0 0 3] 3
+    bpfman program unload $d
+    guard interface <- net exec $pair.a ip -j link show dev in0
+    let ifindex = $interface.stdout |> jq "fromjson | .[0].ifindex"
+    guard rebuilt <- bpfman dispatcher get tc-ingress $pair.a.nsid $ifindex
+    assert ($rebuilt |> jq ".members | length") == 2
+    lifecycle_tc_traffic $pair [$a $b] [3 3] 0
+    bpfman link detach $first
+    lifecycle_tc_traffic $pair [$a $b] [0 3] 0
+    bpfman link detach $second
+    guard continued <- bpfman link attach tc $b in0 ingress --netns $netns --priority 10 --proceed-on shot -m owner=acceptance
+    assert $continued.record.kind == tc
+    assert ($continued.record.details.proceed_on |> jq tojson) == "[2]"
+    assert $continued.record.metadata.owner == acceptance
+    assert $continued.status.kernel_seen
+    lifecycle_tc_traffic $pair [$a $b] [0 3] 3
+    bpfman link detach $continued
+    guard final <- bpfman link attach tc $b in0 ingress --netns $netns --priority 25
+    lifecycle_tc_traffic $pair [$a $b] [0 3] 0
+    bpfman program unload $b
+    let absent <- bpfman dispatcher get tc-ingress $pair.a.nsid $ifindex
+    assert not $absent.ok
+    guard capture <- net exec $pair.a xdp-delivery-probe packets 64
+    assert (($capture.stdout |> jq fromjson) |> jq tojson) == "[0,3,0]"
+}

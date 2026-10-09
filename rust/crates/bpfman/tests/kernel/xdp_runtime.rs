@@ -1,4 +1,5 @@
-//! Public runtime replacement with real packet counters and atomic store failures.
+//! Atomic publication restoration with real packet counters.
+//! Ordinary mode, ordering, continuation and survivor traffic run in lifecycle scripts.
 #![allow(clippy::panic)]
 use super::{
     faults::{Faults, Point},
@@ -120,12 +121,6 @@ where
         assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
         traffic(&c, &[a], &[b]);
         faults.set(None);
-        // New members win same-priority ties, and a zero mask must stop the chain.
-        let stopped = app
-            .attach_xdp(request(b, 0.try_into().expect("mask")))
-            .expect("stopping member");
-        traffic(&c, &[b], &[a]);
-        app.detach_xdp(stopped.id).expect("remove stopping member");
         let second = app
             .attach_xdp(request(b, Default::default()))
             .expect("second");
@@ -142,11 +137,10 @@ where
             chain.members()[0].outer_link_id,
             old.members()[0].outer_link_id
         );
-        traffic(&c, &[a, b], &[]);
-        let (removed, survivor, active, inactive) = if keep_first {
-            (second.id, first.id, a, b)
+        let (removed, survivor) = if keep_first {
+            (second.id, first.id)
         } else {
-            (first.id, second.id, b, a)
+            (first.id, second.id)
         };
         faults.set(Some(Point::XdpReplace));
         let error = app
@@ -168,11 +162,11 @@ where
             remaining.members()[0].outer_link_id,
             old.members()[0].outer_link_id
         );
-        traffic(&c, &[active], &[inactive]);
         app.detach_xdp(survivor).expect("last detach");
         assert!(app.get_xdp_dispatcher(details.key).is_err());
         for id in [a, b] {
             assert_eq!(app.unload(id).expect("unload").unresolved(), 0);
         }
+        c.no_artifacts();
     }
 }
