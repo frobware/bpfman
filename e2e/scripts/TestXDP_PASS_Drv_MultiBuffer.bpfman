@@ -1,0 +1,10 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"frags"}
+# Given: pooled namespaces and explicitly requested driver XDP mode
+# When: jumbo PASS chains stop, mix at normal MTU and rebuild either survivor
+# Then: payloads, fragment reads and dispatcher identity survive each transition
+
+import ../xdp-delivery.bpfman
+import ../xdp-frags.bpfman
+
+frags_pass_behaviour drv

@@ -178,6 +178,16 @@ canonical DSL formatting also passed.
 See the [egress follow-up](#native-egress-testing-follow-up) for the coverage
 mapping and Go comparison.
 
+The jumbo PASS/mixed-fragment migration passed the complete
+`direnv exec . make rust-check` gate: formatting, Clippy, userspace/compile-fail
+contracts, Rustdoc and all 98 kernel tests, with none failed or ignored.
+Both backend batches verified all 80 admitted scripts and empty final inventories
+and artifacts. The four retained PASS restoration/ABI contracts passed.
+The kernel stage took 978.34 s (16m18s), compared with 986.98 s (16m27s) at the
+egress checkpoint. These are local measurements, not a controlled benchmark.
+Makefile lint and canonical DSL formatting also passed. See the
+[PASS follow-up](#jumbo-pass-and-mixed-fragment-testing-follow-up).
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -1540,9 +1550,9 @@ for this migration.
 ### Compatibility and differential tests
 
 Prioritize binary behavior against the unchanged `.bpfman` corpus before expanding
-Rust-specific packet scenarios or tuning execution speed. There are 140 scripts:
-42 shared scripts and eight new Rust-only DEVMAP scripts carry `rust=ok`, admitting
-50 scripts against Rust on each store. The remaining 90 are unselected, not
+Rust-specific packet scenarios or tuning execution speed. There are 167 scripts:
+50 shared scripts and 30 Rust-only scripts carry `rust=ok`, admitting
+80 scripts against Rust on each store. The remaining 87 are unselected, not
 established failures. Add `rust=ok` only after the script passes against Rust with
 both SQLite and JSON in file-bytecode mode. Preserve existing assertions and
 scheduling labels.
@@ -1591,11 +1601,12 @@ The test-target inventory across the new workspace has been reviewed by family:
 | TX/direct REDIRECT, ordinary and jumbo frames | Eight parallel scripts cover modes, continuation, both survivors and full payload/fragment evidence. Rust retains two post-failure captures per scenario, snapshot restoration, ownership and cleanup checks. Both stores passed. |
 | Ordinary/jumbo DEVMAP/DEVMAP_HASH broadcast | Eight parallel scripts cover driver/SKB forwarding, ingress exclusion, empty/sparse maps, live updates, continuation and both survivors. Jumbo cases retain full payload/fragment counters and exact filtered `EOPNOTSUPP` rejection of cloning. Rust retains post-publication-failure traffic, exact map contents, ownership and lifetime checks. Both stores passed. |
 | Native DEVMAP/DEVMAP_HASH egress | Eight parallel scripts cover ordinary PASS/DROP, hash jumbo PASS/DROP, array jumbo rejection, exact context/fragment counters, live updates, replacement/survival and forwarding after managed unload. Rust keeps publication/teardown failures, restoration and map-held lifetime checks. Both stores passed. |
-| XDP attach/switch/runtime/unload/netns and jumbo PASS/mixed membership; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
+| Jumbo PASS and mixed-fragment membership | Two parallel driver/SKB scripts cover single/two-member execution, stopping, normal-MTU mixed membership, restored jumbo operation, both survivors and native jumbo rejection. Rust retains post-publication-failure traffic and internal dispatcher ABI flags. Both stores passed. |
+| XDP attach/switch/runtime/unload/netns and TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
 
 These are incremental migration slices, not a claim that all Rust behavioural
-tests have moved. Next: migrate jumbo PASS/mixed
-membership using the same runner, then remaining ordinary lifecycle/CLI scenarios. No new
+tests have moved. Next: migrate remaining ordinary lifecycle/CLI scenarios using
+the same runner. No new
 bpfman functionality is needed for that migration.
 
 A representative pre-migration DEVMAP test took 40.83 s and performed 88 captures.
@@ -1788,7 +1799,7 @@ formatting also passed.
 
 ### Native egress testing follow-up
 
-The corpus now has 165 scripts, with 78 admitted against Rust: 50 shared Go/Rust
+At the egress checkpoint the corpus had 165 scripts, with 78 admitted against Rust: 50 shared Go/Rust
 and 28 Rust-only. Eight new
 `TestXDP_{Devmap,DevmapHash}_Egress_{Drv,Skb}_{Linear,MultiBuffer}`
 wrappers use the existing pooled namespace, scheduler, DSL and `devmap-egress`
@@ -1852,7 +1863,60 @@ sixteen retained egress contracts passed. The kernel stage took 986.98 s
 These are local run measurements, not a controlled benchmark. Makefile lint and
 canonical DSL formatting also passed.
 
-Next: jumbo PASS/mixed membership, then remaining ordinary lifecycle/CLI scenarios.
+### Jumbo PASS and mixed-fragment testing follow-up
+
+The corpus now has 167 scripts, with 80 admitted against Rust: 50 shared Go/Rust
+and 30 Rust-only. `TestXDP_PASS_{Drv,Skb}_MultiBuffer` uses the existing pooled
+namespaces, parallel scheduler, delivery probe and fragment-aware PASS fixture.
+The shared `xdp-frags.bpfman` helper adds assertions, without runner, probe,
+fixture, production, persistence, dependency or Aya changes.
+
+Both scripts verify the actual requested attachment mode, single-member PASS,
+equal-priority incoming-member ordering, stopping when PASS is excluded from
+proceed-on, and two-member execution. Every jumbo wave requires three intact
+8014-byte frames locally, no duplicates or unexpected TX/redirected delivery,
+and exact execution, non-linear-buffer, tail-byte and boundary-read counters
+for each active member. Inactive members must remain unchanged. At MTU 1500,
+an ordinary counter program joins ahead of the two fragment-aware members;
+all three execute on ordinary frames, with no fragment-read increments.
+Removing the ordinary member and restoring MTU 9000 proves jumbo operation
+again. Both survivor choices preserve outer-link identity, and last detach
+restores local delivery with no managed-program execution.
+
+Driver mode also rejects adding the ordinary member at jumbo MTU. The complete
+dispatcher snapshot remains unchanged, the rejected program has no links, and
+the existing fragment-aware chain still delivers intact jumbo frames. This is
+a native-veth restriction, not a requirement for SKB mode.
+
+Before admission labels, the two-script batches passed on Rust JSON and SQLite
+in 5.76 s and 5.53 s, with empty final inventories. Actual Go comparison failed
+the first jumbo attachment in both modes and both stores with `ERANGE`
+(`numerical result out of range`). Both scripts therefore carry
+`rust-only=true`; the comparison does not establish which later transitions
+Go could perform if the initial attachment succeeded. Final labelled batches
+passed on Rust JSON/SQLite in 5.34 s / 5.42 s, while Go correctly skipped both
+scripts on each store. All final inventories were empty.
+
+Rust retains two jumbo traffic waves per survivor scenario: after failed attach
+publication restores the single member and after failed detach publication
+restores both members. Exact snapshots, successful restoration attempts,
+unresolved-ownership counts, actual attachment mode, native jumbo rejection,
+mixed-dispatcher ABI flags, stable outer identity and residue-free teardown
+remain integration contracts. Across both stores/modes and survivor choices,
+44 duplicate jumbo ping waves and eight ordinary ping waves were removed.
+These used ICMP rather than the delivery probe's 300 ms capture windows; no
+fixed-window time reduction is claimed for this slice.
+
+The complete `direnv exec . make rust-check` gate passed: formatting, Clippy,
+userspace/compile-fail contracts, Rustdoc and all 98 kernel tests, none failed or
+ignored. Each backend batch checked all 80 admitted scripts and empty final
+inventories/artifacts. All four retained PASS restoration/ABI contracts passed.
+The kernel stage took 978.34 s (16m18s), compared with 986.98 s (16m27s) at the
+egress checkpoint. These are local run measurements, not a controlled benchmark.
+Makefile lint and canonical DSL formatting passed too.
+
+Next: remaining ordinary lifecycle/CLI scenarios, reusing admitted corpus
+coverage before adding scripts for any missing public assertions.
 
 A matching XDP fill/drain/refill script took 10.95 s with Go, 14.26 s with Rust
 debug and 9.02 s with Rust release. These are single samples, not a benchmark;

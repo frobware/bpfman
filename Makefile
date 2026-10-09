@@ -1920,7 +1920,7 @@ rust-test-observation: rust-test-scripts
 rust-test-xdp-modes: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_runtime_replacement --nocapture
 
-# xdp.frags load and native/SKB multi-buffer packet-path acceptance on both stores.
+# xdp.frags load, restoration and mixed ABI; parallel PASS scripts cover behaviour.
 .PHONY: rust-test-xdp-frags
 rust-test-xdp-frags: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_frags --nocapture

@@ -884,19 +884,23 @@ recovery protocol are required. Mixed chains work at normal MTU; if the native
 driver rejects a non-fragment dispatcher at jumbo MTU, replacement leaves the
 old fragment-aware chain active.
 
-Run `direnv exec . make rust-test-xdp-frags` for six tests on both stores: the
-unchanged `TestLoad_XDPFragsProgram` normal-MTU script and shared veth acceptance
-in separate sender/receiver namespaces with explicitly requested driver and SKB
-modes. Interface observations assert the selected mode before traffic. The
-multi-buffer tests send 8 KB ICMP payloads with IP fragmentation prohibited.
-Probe counters prove total XDP length exceeds the
-linear buffer, and `bpf_xdp_load_bytes` reads both the final payload byte and
-across the linear/fragment boundary. Tests cover two-member execution, proceed-on
-stopping, attach/detach publication rollback, incompatible jumbo membership,
-mixed-chain ABI flags, re-enabling fragments, either survivor, stable outer
-identity, last detach, and residue-free unload. These are XDP multi-buffer
-packets, not IP fragments. This acceptance covers native and generic SKB veth
-with PASS, including replacement, rollback, mixed membership, and either survivor.
+Two parallel `TestXDP_PASS_{Drv,Skb}_MultiBuffer` scripts cover public PASS
+behaviour on both stores, using pooled namespaces and the existing packet probe.
+They require complete 8014-byte payloads, no duplicates, exact member execution
+and fragment/tail/boundary-read evidence. They verify single/two-member execution,
+equal-priority ordering, proceed-on stopping, mixed membership at MTU 1500,
+restored jumbo operation, both survivors, stable outer identity and last detach.
+Actual Go comparison on both stores failed initial jumbo attachment with `ERANGE`
+in both modes, so both scripts are Rust-only.
+
+Run `direnv exec . make rust-test-xdp-frags` for four retained kernel contracts
+on both stores and explicitly requested driver/SKB modes. Two jumbo ping waves
+per survivor scenario prove execution after attach/detach publication restoration;
+the 8 KB ICMP payloads prohibit IP fragmentation and retain fragment/tail/boundary
+counter evidence. Rust also checks exact snapshots, unresolved ownership,
+mixed-chain ABI flags, native jumbo rejection, stable outer identity and cleanup.
+The unchanged `TestLoad_XDPFragsProgram` normal-MTU script runs in the backend-wide
+script batches. These are XDP multi-buffer packets, not IP fragments.
 Jumbo mixed-chain refusal is asserted for native veth; it is a driver constraint,
 not a generic SKB requirement. Physical NICs remain unverified.
 
@@ -1429,8 +1433,8 @@ kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 ## Script parity through the Go runner
 
 Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
-78 admitted scripts: 50 shared Go/Rust scripts and 28 Rust-only scripts,
-out of 165 scripts in total. A Rust-only script additionally declares:
+80 admitted scripts: 50 shared Go/Rust scripts and 30 Rust-only scripts,
+out of 167 scripts in total. A Rust-only script additionally declares:
 
 ```bpfman
 #pragma labels={"rust":"ok","rust-only":"true"}
@@ -1475,10 +1479,19 @@ Four additional jumbo broadcast scripts now cover both map types and ingress
 modes with full 8014-byte payloads, fragment-read counters and exact filtered
 `EOPNOTSUPP` evidence for multi-target cloning. They passed on both Rust stores;
 Go failed receiving-observer attachment with `ERANGE` on both, so these wrappers
-are Rust-only. Egress is the next packet migration. See the
+are Rust-only. Native egress and jumbo PASS/mixed membership have also migrated. See the
 [jumbo broadcast follow-up](../docs/design/rust-reimplementation.md#jumbo-devmap-broadcast-follow-up)
 for the assertion mapping and retained Rust guarantees.
 No production behaviour was changed for these testing slices.
+
+Jumbo PASS adds two parallel driver/SKB scripts for stopping, mixed membership,
+restored jumbo operation and both survivors. Both passed in about six seconds
+per backend; Go failed first jumbo attachment with `ERANGE` on both stores.
+The scripts are Rust-only. Rust retains publication-restoration traffic and
+internal dispatcher flags; 44 duplicate jumbo ping waves and eight ordinary
+ping waves moved out of the serial contracts. See the
+[PASS follow-up](../docs/design/rust-reimplementation.md#jumbo-pass-and-mixed-fragment-testing-follow-up)
+for the assertion mapping and comparison limits.
 
 Build the binaries and fixtures as the invoking user:
 
@@ -1549,6 +1562,15 @@ sixteen retained egress contracts passed. The kernel stage took 986.98 s
 (16m27s), compared with 1124.80 s (18m45s) at the jumbo broadcast checkpoint.
 These are local run measurements, not a controlled benchmark. Makefile lint and
 canonical DSL formatting also passed.
+
+The jumbo PASS/mixed-fragment follow-up passed the complete
+`direnv exec . make rust-check` gate: formatting, Clippy, userspace/compile-fail
+contracts, Rustdoc and all 98 kernel tests, none failed or ignored.
+Both backend batches verified all 80 admitted scripts and empty inventories and
+artifacts; all four retained PASS restoration/ABI contracts passed. The kernel
+stage took 978.34 s (16m18s), compared with 986.98 s (16m27s) at the egress
+checkpoint. These are local timings, not a controlled benchmark. Makefile lint
+and canonical DSL formatting also passed.
 
 `make rust-test-unit` runs library and binary unit targets without integration
 targets or doctests. Its 92 tests reported approximately 0.60 seconds of aggregate

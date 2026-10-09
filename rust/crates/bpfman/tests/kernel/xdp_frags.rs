@@ -1,4 +1,6 @@
-//! Jumbo packets must really span XDP buffers, including through freplace chains.
+//! Fragment-aware publication restoration and the mixed dispatcher ABI.
+//! Ordinary PASS, stopping, mixed membership and survivor traffic run in the
+//! parallel TestXDP_PASS_{Drv,Skb}_MultiBuffer scripts.
 #![allow(clippy::panic)]
 use super::{
     faults::{Faults, Point},
@@ -232,7 +234,6 @@ where
         );
         let old = app.get_xdp_dispatcher(details.key).expect("snapshot");
         let outer_id = old.members()[0].outer_link_id;
-        packets(&c, peer, &[a], &[b]);
 
         // Successful switching followed by failed publication restores a fragment-aware target.
         faults.set(Some(Point::XdpReplace));
@@ -244,15 +245,9 @@ where
         assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
         packets(&c, peer, &[a], &[b]);
         faults.set(None);
-        let stopped = app
-            .attach_xdp(request(b, 0.try_into().expect("mask")))
-            .expect("stop chain");
-        packets(&c, peer, &[b], &[a]);
-        app.detach_xdp(stopped.id).expect("remove stop member");
         let second = app
             .attach_xdp(request(b, Default::default()))
             .expect("two frags members");
-        packets(&c, peer, &[a, b], &[]);
         let chain = app.get_xdp_dispatcher(details.key).expect("chain");
 
         // Native veth rejects a non-fragment dispatcher while the peer has jumbo MTU.
@@ -265,7 +260,6 @@ where
                 app.get_xdp_dispatcher(details.key).expect("unchanged"),
                 chain
             );
-            packets(&c, peer, &[a, b], &[]);
         }
 
         // On a normal-MTU interface mixed membership is valid and disables fragments.
@@ -307,38 +301,14 @@ where
             };
             assert_eq!(&bytes[offset..offset + 4], &expected.to_ne_bytes());
         }
-        let before_a = counters(&c, a)[0];
-        let before_b = counters(&c, b)[0];
-        let output = Command::new("ip")
-            .args([
-                "netns",
-                "exec",
-                peer,
-                "ping",
-                "-I",
-                "frags1",
-                "-c",
-                "3",
-                "-i",
-                "0.05",
-                "-W",
-                "1",
-                "198.19.0.1",
-            ])
-            .output()
-            .expect("small ping");
-        assert!(output.status.success());
-        assert!(counters(&c, a)[0] >= before_a + 3);
-        assert!(counters(&c, b)[0] >= before_b + 3);
         app.detach_xdp(mixed.id)
             .expect("return to frags-only chain");
         network.mtu("9000");
-        packets(&c, peer, &[a, b], &[]);
 
-        let (removed, survivor, active, inactive) = if keep_first {
-            (second.id, first.id, a, b)
+        let (removed, survivor) = if keep_first {
+            (second.id, first.id)
         } else {
-            (first.id, second.id, b, a)
+            (first.id, second.id)
         };
         let before = app.get_xdp_dispatcher(details.key).expect("before detach");
         faults.set(Some(Point::XdpReplace));
@@ -361,7 +331,6 @@ where
                 .outer_link_id,
             outer_id
         );
-        packets(&c, peer, &[active], &[inactive]);
         app.detach_xdp(survivor).expect("last detach");
         assert!(app.get_xdp_dispatcher(details.key).is_err());
         for id in [a, b, normal] {

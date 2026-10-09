@@ -1,0 +1,129 @@
+# -*- mode: bpfman -*-
+
+def frags_pass_traffic(pair frame_size a b normal ran_a ran_b ran_normal) {
+    let size = $frame_size |> jq tonumber
+    let expected = jq fromjson "[${ran_a},${ran_b},${ran_normal}]"
+    guard before_a <- delivery_stats $a
+    guard before_b <- delivery_stats $b
+    guard before_normal <- bpftool map dump pinned "${normal.record.handles.map_pin_path}/xdp_stats_map" -j
+    let normal_count = $before_normal.stdout |> jq "fromjson | [.[] | select(.formatted.key == 2) | .formatted.values[].value.rx_packets | tonumber] | add"
+    guard capture <- net exec $pair.a xdp-delivery-probe packets $size
+    let counts = $capture.stdout |> jq fromjson
+    assert $counts[0] == 0
+    assert $counts[1] == 3
+    assert $counts[2] == 0
+    guard after_a <- delivery_stats $a
+    guard after_b <- delivery_stats $b
+    foreach key in range 4 {
+        let want_a = $expected[0]
+        let want_b = $expected[1]
+        if ($size == 64) and ($key > 0) {
+            assert ($after_a[$key] - $before_a[$key]) == 0
+            assert ($after_b[$key] - $before_b[$key]) == 0
+        } else {
+            assert ($after_a[$key] - $before_a[$key]) == $want_a
+            assert ($after_b[$key] - $before_b[$key]) == $want_b
+        }
+    }
+    guard after_normal <- bpftool map dump pinned "${normal.record.handles.map_pin_path}/xdp_stats_map" -j
+    let after_count = $after_normal.stdout |> jq "fromjson | [.[] | select(.formatted.key == 2) | .formatted.values[].value.rx_packets | tonumber] | add"
+    if $expected[2] == 0 {
+        assert $after_count == $normal_count
+    } else {
+        assert ($after_count - $normal_count) >= $expected[2]
+    }
+}
+
+def frags_pass_behaviour(mode) {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    delivery_network $pair 8014
+    let netns = "/var/run/netns/${pair.a.ns}"
+    guard config_dir <- tempdir xdp-frags
+    defer exec rm -rf $config_dir.path
+    let config = "${config_dir.path}/bpfman.toml"
+    guard _ <- exec sh -c 'printf "[interfaces.in0]\nxdp_mode = \"%s\"\n" "$2" > "$1"' sh $config $mode
+    guard load_a <- bpfman program load file testdata/bpf/xdp_delivery_frags.bpf.o --programs xdp:delivery_observer
+    let a = $load_a.programs[0]
+    defer delivery_unload $a
+    guard load_b <- bpfman program load file testdata/bpf/xdp_delivery_frags.bpf.o --programs xdp:delivery_observer
+    let b = $load_b.programs[0]
+    defer delivery_unload $b
+    guard load_normal <- bpfman program load file testdata/bpf/xdp_counter.bpf.o --programs xdp:xdp_stats
+    let normal = $load_normal.programs[0]
+    defer delivery_unload $normal
+    guard first <- delivery_attach $a in0 $netns $config 50 pass,dispatcher_return
+    guard interface <- net exec $pair.a ip -j -d link show dev in0
+    let info = $interface.stdout |> jq fromjson
+    let expected_mode = $mode |> jq 'if . == "skb" then 2 else 1 end'
+    assert $info[0].xdp.attached[0].mode == $expected_mode
+    let ifindex = $info[0].ifindex
+    guard initial <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    let outer_id = $initial.runtime.kernel_link_id
+    frags_pass_traffic $pair 8014 $a $b $normal 3 0 0
+
+    # Equal-priority incoming members lead the chain. Excluding PASS from
+    # proceed-on stops here while still delivering the intact packet locally.
+    guard stopped <- delivery_attach $b in0 $netns $config 50 dispatcher_return
+    guard stopping <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert $stopping.members[0].program_id == $b.record.program_id
+    assert $stopping.members[1].program_id == $a.record.program_id
+    assert $stopping.runtime.kernel_link_id == $outer_id
+    frags_pass_traffic $pair 8014 $a $b $normal 0 3 0
+    bpfman link detach $stopped.record.id
+    guard second <- delivery_attach $b in0 $netns $config 50 pass,dispatcher_return
+    guard chain <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($chain |> jq ".members | length") == 2
+    assert $chain.members[0].program_id == $b.record.program_id
+    assert $chain.members[1].program_id == $a.record.program_id
+    assert $chain.runtime.kernel_link_id == $outer_id
+    frags_pass_traffic $pair 8014 $a $b $normal 3 3 0
+
+    # Native veth rejects a linear dispatcher while its peer has jumbo MTU.
+    # SKB is not subject to this driver restriction.
+    if $mode == drv {
+        let rejected <- exec bpfman --config $config link attach xdp $normal.record.program_id in0 --netns $netns --priority 40 -o json
+        assert not $rejected.ok
+        guard unchanged <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+        assert ($unchanged |> jq tojson) == ($chain |> jq tojson)
+        guard normal_record <- bpfman program get $normal.record.program_id
+        assert ($normal_record |> jq ".status.links | type") == array
+        assert ($normal_record |> jq ".status.links | length") == 0
+        frags_pass_traffic $pair 8014 $a $b $normal 3 3 0
+    }
+
+    foreach name in [source0 in0 sink0 out0] {
+        guard _ <- net exec $pair.a ip link set dev $name mtu 1500
+    }
+    guard mixed <- delivery_attach $normal in0 $netns $config 40 pass,dispatcher_return
+    guard mixed_chain <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($mixed_chain |> jq ".members | length") == 3
+    assert $mixed_chain.members[0].program_id == $normal.record.program_id
+    assert $mixed_chain.members[1].program_id == $b.record.program_id
+    assert $mixed_chain.members[2].program_id == $a.record.program_id
+    assert $mixed_chain.runtime.kernel_link_id == $outer_id
+    frags_pass_traffic $pair 64 $a $b $normal 3 3 3
+    bpfman link detach $mixed.record.id
+    foreach name in [source0 in0 sink0 out0] {
+        guard _ <- net exec $pair.a ip link set dev $name mtu 9000
+    }
+    frags_pass_traffic $pair 8014 $a $b $normal 3 3 0
+
+    # Both survivor choices share the preamble above.
+    bpfman link detach $second.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $a.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    frags_pass_traffic $pair 8014 $a $b $normal 3 0 0
+    guard reattached <- delivery_attach $b in0 $netns $config 50 pass,dispatcher_return
+    bpfman link detach $first.record.id
+    guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    assert ($survivor |> jq ".members | length") == 1
+    assert $survivor.members[0].program_id == $b.record.program_id
+    assert $survivor.runtime.kernel_link_id == $outer_id
+    frags_pass_traffic $pair 8014 $a $b $normal 0 3 0
+    bpfman link detach $reattached.record.id
+    assert fail bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    frags_pass_traffic $pair 8014 $a $b $normal 0 0 0
+}
