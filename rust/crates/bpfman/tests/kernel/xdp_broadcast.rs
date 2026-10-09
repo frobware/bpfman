@@ -36,14 +36,8 @@ impl Kind {
     }
 }
 
-fn scenario<S>(
-    backend: S,
-    mode: XdpMode,
-    frames: Frames,
-    exclude: bool,
-    keep_redirect: bool,
-    kind: Kind,
-) where
+fn scenario<S>(backend: S, mode: XdpMode, frames: Frames, exclude: bool, kind: Kind)
+where
     S: OpenStore
         + CommitLoad
         + UnloadStore
@@ -53,6 +47,7 @@ fn scenario<S>(
         + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    let setup_timing = TestTiming::phase("broadcast.setup");
     let c = Context::new();
     let network = Network::broadcast(frames);
     let faults = Faults::new(backend);
@@ -235,6 +230,8 @@ fn scenario<S>(
         old
     );
 
+    drop(setup_timing);
+    let attach_timing = TestTiming::phase("broadcast.attach_restoration");
     faults.set(Some(Point::XdpReplace));
     let error = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
@@ -246,60 +243,77 @@ fn scenario<S>(
     check(&entries);
     traffic([3, 0], forward);
     faults.set(None);
+    drop(attach_timing);
 
-    let second = app
+    // Reuse loaded programs, network and retained map for both survivor
+    // choices. Reattach the removed member before the second choice so each
+    // detach fault still starts from the same ordered two-member chain.
+    let mut redirect_link = first.id;
+    let mut tail_link = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
-        .expect("tail attachment");
-    let chain = app.get_xdp_dispatcher(details.key).expect("chain");
-    assert_eq!(
-        chain
-            .members()
-            .iter()
-            .map(|m| m.member.id)
-            .collect::<Vec<_>>(),
-        [first.id, second.id]
-    );
-    assert_eq!(chain.members()[0].outer_link_id, outer_id);
-    check(&entries);
-    for key in keys {
-        targets.delete_at(&network, key);
-    }
-    check(&[None; 3]);
-    for (key, iface) in keys.into_iter().zip(["in0", "out0", "out1"]) {
-        targets.set_at(&network, key, iface);
-    }
+        .expect("tail attachment")
+        .id;
+    for keep_redirect in [false, true] {
+        let _detach_timing = TestTiming::phase("broadcast.detach_restoration_and_survivor");
+        let chain = app.get_xdp_dispatcher(details.key).expect("chain");
+        assert_eq!(
+            chain
+                .members()
+                .iter()
+                .map(|m| m.member.id)
+                .collect::<Vec<_>>(),
+            [redirect_link, tail_link]
+        );
+        assert_eq!(chain.members()[0].outer_link_id, outer_id);
+        check(&entries);
+        for key in keys {
+            targets.delete_at(&network, key);
+        }
+        check(&[None; 3]);
+        for (key, iface) in keys.into_iter().zip(["in0", "out0", "out1"]) {
+            targets.set_at(&network, key, iface);
+        }
 
-    let (removed, survivor) = if keep_redirect {
-        (second.id, first.id)
-    } else {
-        (first.id, second.id)
-    };
-    faults.set(Some(Point::XdpReplace));
-    let error = app
-        .detach_xdp(removed)
-        .expect_err("detach publication failure");
-    assert_eq!(error.unresolved(), 0);
-    assert_eq!(error.restoration_attempts().len(), 1);
-    assert!(error.restoration_attempts()[0].is_ok());
-    assert_eq!(
-        app.get_xdp_dispatcher(details.key).expect("restored"),
-        chain
-    );
-    check(&entries);
-    traffic([3, 0], forward);
-    faults.set(None);
+        let (removed, survivor) = if keep_redirect {
+            (tail_link, redirect_link)
+        } else {
+            (redirect_link, tail_link)
+        };
+        faults.set(Some(Point::XdpReplace));
+        let error = app
+            .detach_xdp(removed)
+            .expect_err("detach publication failure");
+        assert_eq!(error.unresolved(), 0);
+        assert_eq!(error.restoration_attempts().len(), 1);
+        assert!(error.restoration_attempts()[0].is_ok());
+        assert_eq!(
+            app.get_xdp_dispatcher(details.key).expect("restored"),
+            chain
+        );
+        check(&entries);
+        traffic([3, 0], forward);
+        faults.set(None);
 
-    app.detach_xdp(removed).expect("remove member");
-    let remaining = app.get_xdp_dispatcher(details.key).expect("survivor");
-    assert_eq!(remaining.members().len(), 1);
-    assert_eq!(remaining.members()[0].member.id, survivor);
-    assert_eq!(remaining.members()[0].outer_link_id, outer_id);
-    check(&entries);
-    if keep_redirect {
-        targets.delete_at(&network, keys[2]);
-        targets.set_at(&network, keys[2], "out1");
+        app.detach_xdp(removed).expect("remove member");
+        let remaining = app.get_xdp_dispatcher(details.key).expect("survivor");
+        assert_eq!(remaining.members().len(), 1);
+        assert_eq!(remaining.members()[0].member.id, survivor);
+        assert_eq!(remaining.members()[0].outer_link_id, outer_id);
+        check(&entries);
+        if keep_redirect {
+            targets.delete_at(&network, keys[2]);
+            targets.set_at(&network, keys[2], "out1");
+        } else {
+            redirect_link = app
+                .attach_xdp(request(redirect, "in0", mode, 50, Default::default()))
+                .expect("restore redirect member for second survivor choice")
+                .id;
+            // Retain the surviving tail's link identity across reconstruction.
+            tail_link = survivor;
+        }
     }
-    app.detach_xdp(survivor).expect("last detach");
+    let _teardown_timing = TestTiming::phase("broadcast.managed_teardown");
+    app.detach_xdp(redirect_link).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
     check(&entries);
 
@@ -369,8 +383,6 @@ where
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     for exclude in [false, true] {
-        for keep_redirect in [false, true] {
-            scenario(backend.clone(), mode, frames, exclude, keep_redirect, kind);
-        }
+        scenario(backend.clone(), mode, frames, exclude, kind);
     }
 }

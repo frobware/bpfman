@@ -5,7 +5,7 @@ set -eu
 case "${1##*/}" in
     kernel-*)
         exec sudo -n \
-            --preserve-env=BPFMAN_GO_BIN,BPFMAN_DSL_TEST_BIN,BPFMAN_SHELL_BIN_DIR,BPFMAN_KERNEL_TIMINGS \
+            --preserve-env=BPFMAN_GO_BIN,BPFMAN_DSL_TEST_BIN,BPFMAN_SHELL_BIN_DIR,BPFMAN_KERNEL_TIMINGS,BPFMAN_E2E_SCRIPT_TIMELINE,RUST_LOG \
             unshare --mount --propagation private -- "$@" --test-threads=1
         ;;
     *)

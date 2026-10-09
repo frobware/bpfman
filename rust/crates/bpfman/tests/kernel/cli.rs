@@ -215,14 +215,33 @@ pub(super) fn go_dsl(script: &str) {
     let binary = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin/bpfman"));
-    run_dsl("sqlite", Some(script), &binary);
+    run_dsl("sqlite", Some(&[script]), &binary, false);
 }
 
 pub(super) fn corpus(store: &'static str) {
-    run_dsl(store, None, &rust());
+    run_dsl(store, None, &rust(), true);
+    // Keep concurrent cross-script mutations on one writer/store in the gate.
+    // This covers file loading and both dispatcher types, including a full
+    // fill/drain/refill chain, without unrelated inventory in every acceptance.
+    run_dsl(
+        store,
+        Some(&[
+            "TestProgram_FileLifecycle",
+            "TestXDP_DispatcherFillDrainRefill",
+            "TestXDP_Lifecycle_Drv",
+            "TestTC_IngressLifecycle",
+        ]),
+        &rust(),
+        false,
+    );
 }
 
-fn run_dsl(store: &'static str, script: Option<&str>, binary: &std::path::Path) {
+fn run_dsl(
+    store: &'static str,
+    scripts: Option<&[&str]>,
+    binary: &std::path::Path,
+    isolated: bool,
+) {
     let c = Context::with_store(store);
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -230,13 +249,16 @@ fn run_dsl(store: &'static str, script: Option<&str>, binary: &std::path::Path) 
     let shell_dir = std::env::var_os("BPFMAN_SHELL_BIN_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin"));
-    let selector = if script.is_some() {
+    let selector = if scripts.is_some() {
         "!external"
     } else {
         "rust=ok,!external"
     };
-    let expected = if let Some(script) = script {
-        vec![format!("{script}.bpfman")]
+    let expected = if let Some(scripts) = scripts {
+        scripts
+            .iter()
+            .map(|script| format!("{script}.bpfman"))
+            .collect::<Vec<_>>()
     } else {
         let listing = Command::new(shell_dir.join("bpfman-shell"))
             .args(["--list-scripts", "--selector", selector, "e2e/scripts"])
@@ -264,10 +286,11 @@ fn run_dsl(store: &'static str, script: Option<&str>, binary: &std::path::Path) 
         !expected.is_empty(),
         "script acceptance must not select an empty corpus"
     );
-    let filter = script.map_or_else(
+    let filter = scripts.map_or_else(
         || "TestBPFManScripts".to_owned(),
-        |name| format!("TestBPFManScripts/scripts/{name}[.]bpfman$"),
+        |names| format!("TestBPFManScripts/scripts/({})[.]bpfman$", names.join("|")),
     );
+    let started = timings_enabled().then(std::time::Instant::now);
     let output = Command::new("timeout")
         .arg("300s")
         .arg("make")
@@ -282,6 +305,10 @@ fn run_dsl(store: &'static str, script: Option<&str>, binary: &std::path::Path) 
         .arg(format!("TEST={filter}"))
         .arg(format!("BPFMAN_E2E_SCRIPT_SELECTOR={selector}"))
         .env("BPFMAN_RUNTIME_DIR", c.layout.root())
+        .env(
+            "BPFMAN_E2E_ISOLATED_RUNTIME",
+            if isolated { "1" } else { "0" },
+        )
         .env("BPFMAN_STORE", store)
         .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
         .env(
@@ -304,10 +331,22 @@ fn run_dsl(store: &'static str, script: Option<&str>, binary: &std::path::Path) 
         // Go already reports per-script elapsed time. Preserve only those
         // result rows, rather than dumping captured CLI/packet output.
         let mut stderr = std::io::stderr().lock();
+        let scope = if isolated { "isolated" } else { "shared" };
+        let implementation = if binary == rust() { "rust" } else { "go" };
+        if let Some(started) = started {
+            let _ = writeln!(
+                stderr,
+                "script-batch-timing\t{store}\t{scope}\t{implementation}\t{:.3}",
+                started.elapsed().as_secs_f64()
+            );
+        }
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             let line = line.trim();
             if line.starts_with("--- PASS: TestBPFManScripts/scripts/") {
-                let _ = writeln!(stderr, "script-timing\t{store}\t{line}");
+                let _ = writeln!(
+                    stderr,
+                    "script-timing\t{store}\t{scope}\t{implementation}\t{line}"
+                );
             }
         }
     }

@@ -91,6 +91,9 @@ import (
 // diversity per dispatched wave. Unset or N=1 keeps the
 // default one-pass behaviour and the unsuffixed subtest names.
 func TestBPFManScripts(t *testing.T) {
+	if err := emitScriptTimelineMarker("suite_start", t.Name()); err != nil {
+		t.Fatalf("write suite timeline: %v", err)
+	}
 	timeout := scriptTimeout()
 	repeats := scriptRepeats()
 	e2eDir := e2ePackageDir(t)
@@ -198,6 +201,9 @@ func TestBPFManScripts(t *testing.T) {
 				if skipReason != "" {
 					t.Skip(skipReason)
 				}
+				if err := emitScriptTimelineMarker("script_queued", t.Name()); err != nil {
+					t.Fatalf("write script timeline queue marker: %v", err)
+				}
 				if !runExclusive {
 					t.Parallel()
 				}
@@ -209,21 +215,24 @@ func TestBPFManScripts(t *testing.T) {
 					if abortCtx.Err() != nil {
 						t.Skip("failfast: skipped after an earlier failure")
 					}
-					defer func() {
+					cancelIfFailed := func() {
 						if t.Failed() {
 							abortCancel()
 						}
-					}()
+					}
+					defer cancelIfFailed()
+					// Residue verification can fail after the script body returns.
+					t.Cleanup(cancelIfFailed)
 				}
 				if err := emitScriptTimelineMarker("script_start", t.Name()); err != nil {
 					t.Fatalf("write script timeline start marker: %v", err)
 				}
 
-				defer func() {
+				t.Cleanup(func() {
 					if err := emitScriptTimelineMarker("script_end", t.Name()); err != nil {
 						t.Errorf("write script timeline end marker: %v", err)
 					}
-				}()
+				})
 				runBPFManScript(t, e2eDir, rel, timeout, failfast, abortCtx)
 			})
 		}
@@ -290,13 +299,49 @@ var scriptTimelineMu sync.Mutex
 var scriptSerialMu sync.Mutex
 
 type scriptTimelineMarker struct {
-	Time    time.Time `json:"Time"`
-	Action  string    `json:"Action"`
-	Package string    `json:"Package"`
-	Test    string    `json:"Test"`
+	Time         time.Time `json:"Time"`
+	Action       string    `json:"Action"`
+	Package      string    `json:"Package"`
+	Test         string    `json:"Test"`
+	RuntimeScope string    `json:"RuntimeScope,omitempty"`
+	WallMillis   float64   `json:"WallMillis,omitempty"`
+	UserMillis   float64   `json:"UserMillis,omitempty"`
+	SystemMillis float64   `json:"SystemMillis,omitempty"`
+	OutputBytes  int       `json:"OutputBytes,omitempty"`
+	ExitCode     *int      `json:"ExitCode,omitempty"`
+	Parallelism  int       `json:"Parallelism,omitempty"`
+	GOMAXPROCS   int       `json:"GOMAXPROCS,omitempty"`
 }
 
 func emitScriptTimelineMarker(action, testName string) error {
+	marker := scriptTimelineMarker{Time: time.Now(), Action: action, Package: bpfmanShellTestPackage, Test: testName}
+	if action == "suite_start" {
+		marker.GOMAXPROCS = runtime.GOMAXPROCS(0)
+		if parallel := flag.Lookup("test.parallel"); parallel != nil {
+			marker.Parallelism, _ = strconv.Atoi(parallel.Value.String())
+		}
+	}
+	return writeScriptTimelineMarker(marker)
+}
+
+func emitScriptProcessMarker(testName string, cmd *exec.Cmd, wall time.Duration, outputBytes int) error {
+	if os.Getenv(bpfmanShellTimelineEnv) == "" {
+		return nil
+	}
+	marker := scriptTimelineMarker{Time: time.Now(), Action: "script_process", Package: bpfmanShellTestPackage, Test: testName, RuntimeScope: "shared", WallMillis: float64(wall) / float64(time.Millisecond), OutputBytes: outputBytes}
+	if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") == "1" {
+		marker.RuntimeScope = "isolated"
+	}
+	if cmd.ProcessState != nil {
+		code := cmd.ProcessState.ExitCode()
+		marker.ExitCode = &code
+		marker.UserMillis = float64(cmd.ProcessState.UserTime()) / float64(time.Millisecond)
+		marker.SystemMillis = float64(cmd.ProcessState.SystemTime()) / float64(time.Millisecond)
+	}
+	return writeScriptTimelineMarker(marker)
+}
+
+func writeScriptTimelineMarker(marker scriptTimelineMarker) error {
 	path := os.Getenv(bpfmanShellTimelineEnv)
 	if path == "" {
 		return nil
@@ -311,12 +356,7 @@ func emitScriptTimelineMarker(action, testName string) error {
 
 	defer func() { _ = f.Close() }()
 
-	if err := json.NewEncoder(f).Encode(scriptTimelineMarker{
-		Time:    time.Now(),
-		Action:  action,
-		Package: bpfmanShellTestPackage,
-		Test:    testName,
-	}); err != nil {
+	if err := json.NewEncoder(f).Encode(marker); err != nil {
 		return err
 	}
 
@@ -457,7 +497,16 @@ func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration,
 	// invoked from. PATH is already set up at TestMain (BIN_DIR
 	// prepended once, before any exec.Command).
 	cmd.Dir = e2eDir
+	cmd.Env = append(os.Environ(), "BPFMAN_E2E_SCRIPT_NAME="+t.Name())
+	if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") == "1" {
+		root := isolatedScriptRuntime(t, cmd.Env)
+		cmd.Env = append(cmd.Env, "BPFMAN_RUNTIME_DIR="+root)
+	}
+	started := time.Now()
 	out, err := runScriptCommand(ctx, cmd)
+	if timelineErr := emitScriptProcessMarker(t.Name(), cmd, time.Since(started), len(out)); timelineErr != nil {
+		t.Errorf("write script process timeline: %v", timelineErr)
+	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatalf("%s timed out after %s: %v\n\n%s", script, timeout, context.Cause(ctx), out)
 	}
@@ -487,6 +536,29 @@ func TestRunScriptCommand_AllowsInterruptHandlerToFinish(t *testing.T) {
 		_, statErr := os.Stat(ack)
 		return statErr == nil
 	}, time.Second, 20*time.Millisecond)
+}
+
+func TestScriptProcessTimelinePreservesFailureAndOmitsOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "timeline.jsonl")
+	t.Setenv(bpfmanShellTimelineEnv, path)
+	t.Setenv("BPFMAN_E2E_ISOLATED_RUNTIME", "1")
+	cmd := exec.CommandContext(t.Context(), "sh", "-c", "echo private-output; exit 3")
+	started := time.Now()
+	out, err := runScriptCommand(t.Context(), cmd)
+	require.Error(t, err)
+	require.Equal(t, "private-output\n", string(out))
+	require.NoError(t, emitScriptProcessMarker(t.Name(), cmd, time.Since(started), len(out)))
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "private-output")
+	var marker scriptTimelineMarker
+	require.NoError(t, json.Unmarshal(data, &marker))
+	require.Equal(t, "script_process", marker.Action)
+	require.Equal(t, "isolated", marker.RuntimeScope)
+	require.NotNil(t, marker.ExitCode)
+	require.Equal(t, 3, *marker.ExitCode)
+	require.Equal(t, len(out), marker.OutputBytes)
+	require.Greater(t, marker.WallMillis, float64(0))
 }
 
 func runScriptCommand(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {

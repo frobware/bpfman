@@ -106,6 +106,7 @@ impl State {
         })
     }
 
+    #[tracing::instrument(name = "store.decode", level = "debug", skip_all, fields(bytes = bytes.len()), err)]
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, Failure> {
         // Check version before decoding version-specific fields.
         #[derive(Deserialize)]
@@ -125,6 +126,7 @@ impl State {
         Ok(state)
     }
 
+    #[tracing::instrument(name = "store.validate_state", level = "debug", skip_all, fields(programs = self.programs.len(), map_sets = self.map_sets.len(), links = self.links.len()), err)]
     pub(super) fn validate(&self) -> Result<(), Failure> {
         if self.version == 1 && (!self.links.is_empty() || self.next_link_id != 1) {
             return Err(Failure::LinkVersion);

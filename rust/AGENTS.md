@@ -342,8 +342,17 @@ The architecture and compatibility goals are in
   explicitly with `BPFMAN_E2E_IMPLEMENTATION=rust` alongside `BPFMAN_UNDER_TEST`.
   The runner defaults to Go and skips Rust-only scripts even when selected.
   `rust=ok,!rust-only,!external` selects shared parity; `rust=ok,!external`
-  selects all admitted Rust acceptance. The normal gate runs one batch per
-  backend, verifying every selected script passed and final residue is empty.
+  selects all admitted Rust acceptance. The normal gate runs all admitted scripts
+  per backend with `BPFMAN_E2E_ISOLATED_RUNTIME=1`: fresh per-script stores/bpffs,
+  unchanged pooled interfaces and parallel scheduling. The Go runner checks each
+  script's inventories/artifacts before unmounting, including after failure.
+  Each backend additionally runs file lifecycle, XDP fill/drain/refill, XDP
+  lifecycle and TC lifecycle together on a shared runtime. Keep this explicit
+  concurrent-store coverage; normal Go Make runs remain shared by default.
+  Leave isolation unset for full-corpus shared-store stress. `BPFMAN_KERNEL_TIMINGS=1`
+  reports whole tests, runner batches and broadcast phases. The optional
+  `BPFMAN_E2E_SCRIPT_TIMELINE` JSONL records scheduler queue/start/end, CPU and
+  command completion; both it and `RUST_LOG` survive the privileged runner.
   Run backend batches sequentially because separate runners share a suite lock.
 - Make each vertical slice's supported command surface explicit. Unsupported
   commands and flags fail clearly; never invent successful observations for

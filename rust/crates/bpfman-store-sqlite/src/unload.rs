@@ -112,6 +112,7 @@ impl UnloadRecord {
     }
 }
 
+#[tracing::instrument(name = "store.connection.open_writer", level = "debug", skip_all, err)]
 fn connection(writer: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
     let connection =
         Connection::open_with_flags(writer.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE)?;

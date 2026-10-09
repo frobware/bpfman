@@ -132,6 +132,7 @@ fn canonical(row: &queries::Row, layout: &RuntimeLayout) -> Result<TcSnapshot, F
     Ok(s)
 }
 
+#[tracing::instrument(name = "store.connection.open_writer", level = "debug", skip_all, err)]
 fn connection(w: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
     let c = Connection::open_with_flags(w.database_path(), OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;

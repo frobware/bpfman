@@ -198,6 +198,16 @@ Serial contract time fell from 751.592 s to 472.738 s; script-batch variation
 is reported separately. These are local samples, not a controlled benchmark.
 See the [coverage and timing follow-up](#ordinary-lifecycle-and-timing-follow-up).
 
+The contention/isolation follow-up passed the complete timed `rust-check
+lint-make` gate: all 96 kernel tests, userspace/compile-fail contracts, formatting,
+Clippy, Rustdoc and Makefile lint. Every backend executed all 84 admitted scripts
+in isolated runtimes plus four concurrent shared-runtime scripts, with empty
+inventories/artifacts. Kernel time fell from 782.36 s (13m02s) to 540.19 s
+(9m00s). Acceptance time fell from 309.472 s to 126.418 s; retained serial
+contracts fell from 472.738 s to 413.631 s, including broadcast's 130.351 s to
+82.874 s. These are local samples, not a controlled benchmark. See the
+[contention and fixture-reuse follow-up](#script-contention-isolation-and-broadcast-fixture-reuse-9-october-2026).
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -2089,6 +2099,117 @@ The shell suite should be the acceptance gate for each vertical slice. It must
 not wait for all adapters or public surfaces to be complete. Outside-in runs
 execute each implementation independently and may additionally compare
 normalized store, kernel, and filesystem observations.
+
+### Script contention, isolation and broadcast fixture reuse (9 October 2026)
+
+The parallel runner was sharing one runtime/store across every admitted script.
+The first profile enabled the existing `bpfman_lock=trace` spans: ordinary debug
+tracing does not include them. Completed CLI processes spent most of the batch
+waiting behind unrelated mutations. These waits overlap and are not suite wall
+time. The actual runner settings were `-test.parallel=16`, `GOMAXPROCS=16`.
+
+All 84 admitted scripts passed in each profiled run, with unchanged assertions:
+
+| Store/runtime scope | Make wall seconds | Accumulated lock-wait seconds | Longest lock wait seconds | XDP fill/drain/refill seconds |
+| --- | ---: | ---: | ---: | ---: |
+| JSON shared | 162.28 | 1817.112 | 9.264 | 126.47 |
+| JSON isolated | 67.41 | 0.202 | 0.002 | 26.00 |
+| SQLite shared | 157.85 | 1677.301 | 10.166 | 123.46 |
+| SQLite isolated | 58.55 | 0.206 | 0.003 | 24.81 |
+
+Shared lock-ownership spans totalled 154.048 s (JSON) and 146.159 s (SQLite),
+close to each batch's wall time. Isolated ownership spans overlap across stores
+and totalled approximately 209/211 s; they must not be interpreted as serial
+wall time. Make's aggregate user/system CPU increased from 190.95/73.07 s to
+281.84/112.05 s for JSON, and 183.50/75.09 s to 268.94/108.55 s for SQLite.
+Isolation therefore improves parallel elapsed time; it is not a demonstrated
+CPU reduction. Profiling used fresh runtimes, a temporary per-command Python
+wrapper collecting the existing structured stderr spans and child CPU usage,
+and debug binaries. Wrapper/logging overhead and sequential local-run variation
+are present; this is not a controlled performance benchmark. The new telemetry
+was added during this investigation. The measurements establish the severe
+cross-script writer contention; they do not apportion every remaining cost.
+
+`BPFMAN_E2E_ISOLATED_RUNTIME=1` now works in the existing Go script runner.
+Each script receives its own runtime, store and bpffs mount, while pooled
+interfaces and parallel scheduling remain unchanged. Cleanup explicitly checks
+empty program/link/dispatcher inventories and artifact collections, even on
+failure, then unmounts before temporary-directory removal. The Rust acceptance
+gate uses this lane for all 84 scripts on each backend. It additionally runs
+four scripts concurrently on a shared runtime per backend: file lifecycle,
+XDP fill/drain/refill, XDP lifecycle and TC lifecycle. The shared lane retains
+cross-script writer/store/dispatcher coverage. Go Make runs remain shared by
+default; leaving isolation unset still exercises the complete corpus on one
+store. Backend runners remain sequential under the existing suite lock.
+
+The same isolated runner passed the Go shared selection on both stores:
+51 scripts each, with the existing `requires-clsact-reclaim` capability skip
+for `TestTC_ClsactReclaimedOnLastDetach`. No Go assertion or admission label
+changed. Make wall times were 20.80 s (JSON) and 24.16 s (SQLite). Runner
+implementation admission, capability override, interrupt cleanup and the new
+telemetry failure/output-privacy contract also passed.
+
+Optional `BPFMAN_E2E_SCRIPT_TIMELINE` JSONL now records configured parallelism,
+queue/start/end markers, shell-process wall/user/system CPU milliseconds,
+output byte count and exit code. End markers include residue checks and
+unmounting. `BPFMAN_E2E_SCRIPT_NAME` identifies child commands for external
+profilers. `BPFMAN_KERNEL_TIMINGS=1` also records runner-batch runtime scope and
+implementation, preventing shared/isolated and Go/Rust timing confusion.
+JSON spans separate read/decode/state validation/encoding, exposing byte lengths
+and record counts without contents; SQLite dispatcher/link/unload writer
+connections have a separate opening span. Existing lock and kernel spans remain
+available through `RUST_LOG`, which is now forwarded through privileged runners.
+No subscriber, clock or logging dependency was added to pure crates.
+
+Broadcast fault tests reuse one loaded network/map fixture for both survivor
+choices at each ingress-exclusion value. Failed attach restoration runs once,
+then both failed-detach restorations and successful survivor transitions run
+against the retained map and stable outer link. Reattaching the removed redirect
+member reconstructs the ordered two-member chain between choices. This halves
+network/program setup and removes duplicate attach-failure captures, retaining
+both detach choices, exact map updates/identity, fragment reads, filtered
+`EOPNOTSUPP` evidence and map-held kernel lifetime on final unload. All 300 ms
+packet observation windows remain. The eight focused DEVMAP_HASH contracts
+passed in 42.61 s. Opt-in `kernel-phase-timing` records setup, attach restoration,
+each detach-restoration/survivor choice and managed teardown; these are portions
+of the whole-test time, not additional test duration.
+
+The complete timed `direnv exec . make rust-check lint-make` passed with 96
+kernel tests, none failed or ignored, plus formatting, Clippy, all
+userspace/compile-fail contracts, Rustdoc and Makefile lint. Each backend ran
+84 isolated scripts and four concurrent shared-runtime scripts. Every selected
+script passed and each isolated runtime plus the shared runtimes had empty
+inventories/artifacts. No scripts were newly admitted or relabelled.
+
+| Group | Previous checkpoint seconds | This full gate seconds |
+| --- | ---: | ---: |
+| Acceptance (both stores, including shared subset) | 309.472 | 126.418 |
+| Broadcast restoration/lifetime | 130.351 | 82.874 |
+| Other retained serial contracts | 342.387 | 330.757 |
+| Complete kernel stage | 782.36 | 540.19 |
+
+The full gate's ordinary JSON/SQLite batches took 46.384/47.890 s; their shared
+subsets took 15.677/16.398 s. Complete backend tests took 62.097/64.321 s.
+The broadcast phase totals were setup 24.005 s, attach restoration 14.546 s,
+detach-restoration/survivors 37.083 s and managed teardown 4.776 s. Unmeasured
+transitions and outer unmount/directory cleanup account for the remainder.
+The whole kernel stage is approximately four minutes (31%) shorter than the
+previous checkpoint. Unchanged groups also vary between runs; not every second
+of the difference is attributed to the edits.
+
+Post-gate focused checks rebuilt the runner/kernel suite after small phase-timer
+and cleanup fail-fast corrections. Both backends again passed all 84 isolated
+scripts and four shared scripts; eight DEVMAP_HASH contracts passed in 42.41 s.
+The corrected output contained exactly ten whole-test timing records and 80
+broadcast phase records, without duplicate zero-duration timers. Formatting,
+Clippy, Makefile lint and the four runner admission/cancellation/telemetry
+contracts passed. Evidence is in `/tmp/bpfman-contention-focused.log` and
+`/tmp/bpfman-contention-runner-contracts.log`.
+
+Evidence: `/tmp/bpfman-batch-{shared,isolated}-{json,sqlite}-summary.log`,
+the corresponding `/tmp/bpfman-batch-profile.*` process records,
+`/tmp/bpfman-go-isolation-summary.log`, `/tmp/bpfman-broadcast-reuse.log` and
+`/tmp/bpfman-contention-rust-check.log`.
 
 ### Workspace-law tests
 

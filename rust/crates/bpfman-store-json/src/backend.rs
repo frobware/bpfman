@@ -7,6 +7,7 @@ use bpfman_store::{
 };
 use std::num::NonZeroU32;
 
+#[tracing::instrument(name = "store.read", level = "debug", skip_all, err)]
 pub(super) fn read(file: &StoreSnapshot) -> Result<(Vec<u8>, State), Failure> {
     let bytes = file.read()?.ok_or(Failure::Invalid("store disappeared"))?;
     let state = State::decode(&bytes)?;
@@ -21,7 +22,10 @@ pub(super) fn publish(
     previous: Option<&[u8]>,
     state: &State,
 ) -> Result<(), Failure> {
-    let bytes = serde_json::to_vec_pretty(state)?;
+    let bytes = {
+        let _encoding = tracing::debug_span!("store.encode").entered();
+        serde_json::to_vec_pretty(state)?
+    };
     writer.publish_store_snapshot(file, previous, &bytes)?;
 
     Ok(())

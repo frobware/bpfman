@@ -164,6 +164,8 @@ BPFMAN_GRPC_PROGRESS_INTERVAL ?=
 # subprocess spawned by test-e2e-grpc. See the logging package's
 # component-level spec format (e.g. info,lock=debug,store=debug).
 BPFMAN_LOG ?=
+# Optional Rust CLI telemetry; the script runner forwards it through sudo.
+RUST_LOG ?=
 # SQLite tuning knobs forwarded to the daemon. See
 # platform/store/sqlite/doc.go for the full descriptions. Empty
 # leaves the daemon on its package-level defaults; CI uses these
@@ -191,6 +193,7 @@ BPFMAN_E2E_POLICY_RULE_PREF ?=
 BPFMAN_E2E_SCRIPT_SELECTOR ?=
 BPFMAN_E2E_SCRIPT_TIMEOUT ?=
 BPFMAN_E2E_SCRIPT_REPEATS ?=
+BPFMAN_E2E_SCRIPT_TIMELINE ?=
 BPFMAN_E2E_SCRIPT_STRESS_REPEATS ?= 16
 BPFMAN_E2E_SCRIPT_STRESS_PARALLEL ?= 128
 
@@ -260,6 +263,8 @@ override RACE := $(filter 1,$(RACE))
 # feature where orthogonal cross-test contention would muddy
 # attribution; CI exercises both lanes, so the default just decides
 # which one a developer hits first when they type `make test-e2e`.
+# The script runner also accepts this opt-in: every script gets a fresh store
+# and bpffs mount, checked for residue and unmounted before temporary cleanup.
 # The Go side checks for the literal string "1", so any other value
 # collapses to empty here and matches the env-unset (= shared)
 # behaviour. The Make variable name is intentionally the same as
@@ -983,11 +988,14 @@ E2E_SCRIPTS_FORWARD_VARS := \
 	BPFMAN_E2E_CLSACT_RECLAIM \
 	BPFMAN_E2E_IMAGE_REGISTRY \
 	BPFMAN_E2E_IMPLEMENTATION \
+	BPFMAN_E2E_ISOLATED_RUNTIME \
 	BPFMAN_E2E_POLICY_RULE_PREF \
 	BPFMAN_E2E_SCRIPT_REPEATS \
 	BPFMAN_E2E_SCRIPT_SELECTOR \
 	BPFMAN_E2E_SCRIPT_TIMEOUT \
-	BPFMAN_LOG
+	BPFMAN_E2E_SCRIPT_TIMELINE \
+	BPFMAN_LOG \
+	RUST_LOG
 
 .PHONY: $(BIN_DIR)/e2e-scripts.test
 # This cgo test binary needs the platform C linker: Go's internal linker can
@@ -1886,7 +1894,8 @@ ci-test-e2e-grpc:
 ci: ci-check-vendor ci-check-fmt ci-check-goimports ci-check-vet ci-check-gofix ci-check-bpfman-shell-fmt ci-build ci-lint ci-test ci-test-e2e ci-test-e2e-scripts ci-test-e2e-grpc
 
 # Focused subsets of the kernel suite also run by rust-test and rust-check.
-# Script acceptance uses backend-wide Go-runner batches, parallel within each batch.
+# Script acceptance isolates ordinary scripts and retains a concurrent shared
+# runtime subset per backend; the Go runner parallelizes scripts within each batch.
 .PHONY: rust-test-scripts
 rust-test-scripts: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- script_corpus --nocapture

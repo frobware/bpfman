@@ -23,6 +23,7 @@ pub(super) fn timings_enabled() -> bool {
 pub(super) struct TestTiming {
     name: &'static str,
     started: Option<std::time::Instant>,
+    phase: bool,
 }
 
 impl TestTiming {
@@ -30,7 +31,14 @@ impl TestTiming {
         Self {
             name,
             started: timings_enabled().then(std::time::Instant::now),
+            phase: false,
         }
+    }
+
+    pub(super) fn phase(name: &'static str) -> Self {
+        let mut timer = Self::start(name);
+        timer.phase = true;
+        timer
     }
 }
 
@@ -44,12 +52,23 @@ impl Drop for TestTiming {
             } else {
                 "completed"
             };
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "kernel-timing\t{}\t{:.3}\t{outcome}",
-                self.name,
-                started.elapsed().as_secs_f64(),
-            );
+            if self.phase {
+                let thread = std::thread::current();
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "kernel-phase-timing\t{}\t{}\t{:.3}\t{outcome}",
+                    thread.name().unwrap_or("unnamed"),
+                    self.name,
+                    started.elapsed().as_secs_f64()
+                );
+            } else {
+                let _ = writeln!(
+                    std::io::stderr().lock(),
+                    "kernel-timing\t{}\t{:.3}\t{outcome}",
+                    self.name,
+                    started.elapsed().as_secs_f64(),
+                );
+            }
         }
     }
 }

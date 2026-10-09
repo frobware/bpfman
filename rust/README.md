@@ -292,6 +292,12 @@ span records actual read-connection opening; `reader acquired` events include
 `reused` so connection reuse is visible. No record contents or credentials
 are logged. Model/core crates remain uninstrumented and pure.
 
+JSON now separates `store.read`, `store.decode`, `store.validate_state` and
+`store.encode`; fields contain byte lengths and record counts, never contents.
+SQLite dispatcher/link/unload writer openings emit `store.connection.open_writer`.
+These spans separate adapter work from existing writer wait/ownership and kernel
+operation spans; nested span durations must not be blindly added together.
+
 ## CLI parity harness
 
 The production Go CLI remains the default under test. Build the new CLI with
@@ -1444,8 +1450,10 @@ Opt-in TSV records contain `kernel-timing`, test name, elapsed seconds and
 `completed`/`failed`; they bypass libtest's captured success output. Timings do
 not enable concurrent Rust fixtures. The two backend-wide script batches still
 use the Go runner's parallel scheduler; remaining kernel contracts run serially.
-The corpus also emits `script-timing` rows with backend and the Go runner's
-existing per-script elapsed results. Those overlap because scripts run in parallel;
+The corpus also emits `script-timing` rows with backend, runtime scope,
+implementation and the Go runner's existing per-script elapsed results.
+`script-batch-timing` records each complete runner invocation separately.
+Script durations overlap because scripts run in parallel;
 do not sum them as batch wall time. Build and userspace time are outside the
 per-kernel-test records. A failing
 process that aborts rather than unwinds cannot emit its final timing.
@@ -1454,6 +1462,31 @@ Ordinary XDP restoration now sends three marked Ethernet frames and waits for
 all three intact frames at its private veth receiver, with a one-second failure
 bound. This removes the unanswered ping timeout. Delivery, broadcast and egress
 captures retain their 300 ms windows for unexpected or duplicate traffic.
+
+Set `BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-scripts.jsonl` to append the Go
+runner's optional JSONL timeline through Make or the Rust gate. `suite_start`
+records actual `-test.parallel` and `GOMAXPROCS`; `script_queued`, `script_start`
+and `script_end` separate scheduler waiting, execution and cleanup. End markers
+follow residue checks and unmounting. `script_process` records runtime scope,
+wall milliseconds, OS-reported user/system CPU milliseconds, output byte count
+and exit code. It does not record command arguments or captured output. CPU
+includes waited-for descendants on Linux; it is not a count of blocked time.
+CLI tracing remains separately opt-in with `RUST_LOG` and `--trace-file`.
+Broadcast contracts additionally emit `kernel-phase-timing` records with test
+name, phase, seconds and outcome for setup, attach restoration, each detach
+restoration/survivor choice and managed teardown. These phases are portions of
+the whole-test timer; do not add them to that timer again. Managed teardown
+excludes the outer context's final unmount/temporary-directory cleanup.
+
+The contention/isolation checkpoint's complete timed `rust-check lint-make`
+gate passed all 96 kernel tests in 540.19 s (9m00s), versus 782.36 s (13m02s)
+previously. Acceptance across both stores, including the explicit shared subset,
+took 126.418 s versus 309.472 s. Broadcast contracts took 82.874 s versus
+130.351 s. All 84 scripts passed per isolated backend, and four shared-runtime
+scripts passed per backend; every runtime's inventories/artifacts were checked.
+These are local samples, not a controlled benchmark. The
+[design follow-up](../docs/design/rust-reimplementation.md#script-contention-isolation-and-broadcast-fixture-reuse-9-october-2026)
+records lock/CPU profiles, phase timings and the Go comparison.
 
 
 ## Script parity through the Go runner
@@ -1543,9 +1576,18 @@ direnv exec . sudo -n unshare --mount --propagation private -- \
 Repeat with `BPFMAN_STORE=json` and a fresh runtime. Backend batches run one after
 the other because each runner holds the shared suite lock. Scripts within each
 batch run concurrently, subject to their serial/exclusive pragmas.
-The full `rust-check` gate now runs two `script_corpus` tests: one Go-runner
-batch per backend, checking that every selected script actually passed and that
-managed inventories and artifacts are empty. The old individual Rust script
+The full `rust-check` gate runs two `script_corpus` tests, one per backend.
+Each runs all 84 admitted scripts with `BPFMAN_E2E_ISOLATED_RUNTIME=1`, using
+fresh per-script stores and bpffs mounts. The runner checks every script's empty
+program/link/dispatcher inventories and artifact collections before unmounting,
+including on script failure. Script assertions and pooled network parallelism
+remain unchanged. Each backend then runs four scripts together on a shared
+runtime: file lifecycle, XDP fill/drain/refill, XDP lifecycle and TC lifecycle.
+This retains concurrent writer/store/dispatcher coverage in the gate.
+Normal Go `make run-e2e-scripts` remains shared by default; the same isolation
+opt-in is available for either implementation. Leave it unset to stress the full
+corpus on one store. Backend batches still run sequentially.
+The old individual Rust script
 wrappers have been removed. `make rust-test-scripts` runs these batches directly;
 `rust-test-xdp-corpus` and `rust-test-observation` also select this acceptance gate.
 Corpus parity takes priority over further Rust-specific packet scenarios.
