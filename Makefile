@@ -1949,7 +1949,7 @@ RUST_XDP_BROADCAST_FILTER ?= xdp_devmap_broadcast
 rust-test-xdp-broadcast: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- $(RUST_XDP_BROADCAST_FILTER) --nocapture
 
-# DEVMAP/DEVMAP_HASH egress PASS/DROP, native/frags loading, rollback, and program references.
+# Native/frags egress rollback and program references; parallel Egress scripts cover behaviour.
 RUST_XDP_EGRESS_FILTER ?= xdp_devmap_egress
 .PHONY: rust-test-xdp-egress
 rust-test-xdp-egress: rust-build $(RUST_TEST_INPUTS)
@@ -1965,7 +1965,7 @@ rust-test-xdp-devmap-hash: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-broadcast-hash: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_broadcast_hash --nocapture
 
-# DEVMAP_HASH egress PASS/DROP, sparse-key preservation, and program references.
+# DEVMAP_HASH egress restoration, sparse-key preservation, and program references.
 .PHONY: rust-test-xdp-egress-hash
 rust-test-xdp-egress-hash: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_egress_hash --nocapture

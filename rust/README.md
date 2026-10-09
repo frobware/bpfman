@@ -1298,15 +1298,27 @@ map-editing command is needed. The managed kind remains `xdp`; the kernel kind i
 native egress programs before creating a dispatcher revision, including after
 store reopen. Unsupported CPUMAP sections fail preparation before runtime effects.
 
-Run `direnv exec . make rust-test-xdp-egress` for sixteen real-kernel suites.
-`direnv exec . make rust-test-xdp-egress-hash` selects the eight hash-backed suites;
-`RUST_XDP_EGRESS_FILTER` optionally selects one suite. Four array-map and four
-hash-map ordinary-frame suites cross SQLite/JSON and driver/SKB ingress. They verify
-PASS/DROP delivery, exact egress execution counts and ingress/output interface context, live replacement
-of the entry's program, rejection of interface extensions as egress, successful
-dispatcher replacement, failed attach/detach publication restoration, survivor
-rebuilding, and last detach. Updating a map takes a program FD; reading it returns
-the program ID. The namespace-local Go fixture keeps that distinction explicit.
+Eight parallel `TestXDP_{Devmap,DevmapHash}_Egress_{Drv,Skb}_{Linear,MultiBuffer}`
+scripts cover observable egress behaviour on both stores. Six positive scripts
+prove ordinary PASS/DROP on both map types and genuine jumbo hash egress; two
+array-jumbo scripts preserve the current rejection boundary. They check native
+XDP type/ID, refusal of interface attachment after CLI/store reopening, empty-map
+fallback, exact packet/counter/context evidence, live updates, invalid-update
+preservation, replacement, survivor rebuilding, last detach and continued egress
+after managed unload. Existing syntax and the packet probe are reused, with no
+serial/exclusive pragmas. Temporary counter-map pins allow post-unload execution
+counts without retaining program FDs; cleanup removes them explicitly.
+
+Run `direnv exec . make rust-test-xdp-egress` for sixteen retained kernel
+contracts. `direnv exec . make rust-test-xdp-egress-hash` selects the eight
+hash-backed suites; `RUST_XDP_EGRESS_FILTER` optionally selects one suite.
+The twelve positive suites retain five packet waves each: attach/detach
+publication restoration, failed record deletion, explicit unload retry and
+map-held DROP lifetime. The four array-jumbo contracts retain role/compatibility,
+map contents, dispatcher identity and reclamation checks; their successful
+unicast captures now run in scripts. This removes 120 serial captures across the
+sixteen contracts. Updating a map takes a program FD; reading it returns the
+program ID. The namespace-local Go fixture keeps that distinction explicit.
 
 Map entries retain kernel program references independently of managed pins.
 Unload removes the egress program's owned pins and store record while forwarding
@@ -1358,9 +1370,11 @@ entry survives. Retaining the map descriptor keeps an unpinned DROP program aliv
 after map-owner unload; closing it releases both map and program. Final inventories
 and managed artifacts must be empty.
 
-Go's current loader forces all managed XDP to EXT and clears its attach type, so
-native DEVMAP egress is beyond that Go path. Go still supports more of the overall
-bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
+Go's current loader forces all managed XDP to EXT and clears its attach type.
+Actual comparison on both stores rejects native egress loading at the context
+read (`invalid bpf_context access off=20 size=4`), so all eight new scripts carry
+`rust-only=true`. Native DEVMAP egress is beyond that Go path. Go still supports
+more of the overall bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
 behavior, as do hash-backed broadcast, ingress exclusion, and ordinary/genuine
 multi-buffer egress. Array-map multi-buffer egress and multi-buffer fan-out remain
 separate library/kernel boundaries. TC ingress attachment is described below;
@@ -1415,8 +1429,8 @@ kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 ## Script parity through the Go runner
 
 Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
-70 admitted scripts: 50 shared Go/Rust scripts and 20 Rust-only scripts,
-out of 157 scripts in total. A Rust-only script additionally declares:
+78 admitted scripts: 50 shared Go/Rust scripts and 28 Rust-only scripts,
+out of 165 scripts in total. A Rust-only script additionally declares:
 
 ```bpfman
 #pragma labels={"rust":"ok","rust-only":"true"}
@@ -1524,6 +1538,15 @@ gate: formatting, Clippy, userspace/compile-fail contracts, Rustdoc and 98 kerne
 tests, none failed or ignored. Both backend batches verified all 70 admitted
 scripts and empty final inventories/artifacts. The kernel stage took 1124.80 s
 (18m45s), compared with 1180.41 s (19m40s) at the ordinary broadcast checkpoint.
+These are local run measurements, not a controlled benchmark. Makefile lint and
+canonical DSL formatting also passed.
+
+The egress testing migration passed the complete `direnv exec . make rust-check`
+gate: formatting, Clippy, userspace/compile-fail contracts, Rustdoc and all 98
+real-kernel tests, with none failed or ignored. Both backend batches verified
+all 78 admitted scripts and empty final inventories/artifact collections. All
+sixteen retained egress contracts passed. The kernel stage took 986.98 s
+(16m27s), compared with 1124.80 s (18m45s) at the jumbo broadcast checkpoint.
 These are local run measurements, not a controlled benchmark. Makefile lint and
 canonical DSL formatting also passed.
 

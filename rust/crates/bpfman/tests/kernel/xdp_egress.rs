@@ -1,4 +1,5 @@
-//! Native DEVMAP/DEVMAP_HASH egress loading, packet execution, and kernel-held references.
+//! Native egress publication recovery and kernel-held references.
+//! Ordinary packet behaviour lives in the parallel Egress .bpfman scripts.
 #![allow(clippy::panic)]
 
 use super::{
@@ -278,10 +279,8 @@ where
         }
     };
     check(None);
-    traffic([3, 0], [0, 3, 0], 0, 0);
     assert_eq!(targets.set_egress(&c, &network, pass), out_index);
     check(Some(pass));
-    traffic([3, 0], [0, 0, 3], 3, 0);
     targets.reject_egress(&c, &network, tail);
     check(Some(pass));
     // The first native egress initializes hash ownership. Later updates must
@@ -289,10 +288,8 @@ where
     // DEVMAP_HASH on Linux 6.18.54 (include/linux/bpf.h: map_type_contains_progs).
     targets.reject_egress(&c, &network, incompatible);
     check(Some(pass));
-    traffic([3, 0], [0, 0, 3], 3, 0);
     targets.set_egress(&c, &network, drop);
     check(Some(drop));
-    traffic([3, 0], [0, 0, 0], 0, 3);
     assert_eq!(
         app.get_xdp_dispatcher(details.key)
             .expect("unchanged revision"),
@@ -323,10 +320,8 @@ where
         original.members()[0].outer_link_id
     );
     check(Some(drop));
-    traffic([3, 0], [0, 0, 0], 0, 3);
     targets.set_egress(&c, &network, pass);
     check(Some(pass));
-    traffic([3, 0], [0, 0, 3], 3, 0);
     faults.set(Some(Point::XdpReplace));
     let failure = app.detach_xdp(second.id).expect_err("detach rollback");
     assert_eq!(failure.unresolved(), 0);
@@ -341,7 +336,6 @@ where
     faults.set(None);
     app.detach_xdp(second.id).expect("surviving redirect");
     check(Some(pass));
-    traffic([3, 0], [0, 0, 3], 3, 0);
 
     // Unload removes owned pins/record, but the DEVMAP keeps its program alive.
     faults.set(Some(Point::DeleteProgram));
@@ -367,7 +361,6 @@ where
     targets.delete_at(&network, kind.key());
     check(None);
     program_released(pass);
-    traffic([3, 0], [0, 3, 0], 0, 0);
 
     targets.set_egress(&c, &network, drop);
     check(Some(drop));
@@ -377,7 +370,6 @@ where
     traffic([3, 0], [0, 0, 0], 0, 3);
     app.detach_xdp(first.id).expect("last detach");
     check(Some(drop));
-    traffic([0, 0], [0, 3, 0], 0, 0);
     assert_eq!(
         app.unload(redirect).expect("unload map owner").unresolved(),
         0
@@ -407,7 +399,8 @@ where
     c.no_artifacts();
 }
 
-/// Preserve the upstream-Aya boundary while proving jumbo unicast still works.
+/// Preserve the upstream-Aya boundary and map ownership.
+/// Parallel array-jumbo egress scripts prove unchanged full-payload unicast.
 pub(super) fn fragments_boundary<S>(backend: S, mode: XdpMode)
 where
     S: OpenStore
@@ -443,9 +436,6 @@ where
         .id
     };
     let redirect = load(frames.devmap_object(), "devmap_delivery");
-    let tail = load(frames.delivery_object(), "delivery_tail");
-    let (object, symbol) = frames.observer();
-    let observer = load(object, symbol);
     let egress = load("xdp_devmap_egress_frags.bpf.o", "devmap_egress");
     let counters = Counters::open(&c, egress);
     assert_eq!(
@@ -469,9 +459,6 @@ where
             .unresolved(),
         0
     );
-    let receiver = app
-        .attach_xdp(request(observer, "sink0", XdpMode::Drv))
-        .expect("receiver");
     let link = app
         .attach_xdp(request(redirect, "in0", mode))
         .expect("redirect");
@@ -489,16 +476,13 @@ where
     // substitute a linear egress program: it cannot safely receive jumbo frames.
     targets.reject_egress(&c, &network, egress);
     targets.check_entries(&[None]);
-    frames.traffic(&c, &network, [redirect, tail, observer], [3, 0], [0, 3, 0]);
     let index = targets.set_at(&network, 0, "out0");
-    frames.traffic(&c, &network, [redirect, tail, observer], [3, 0], [0, 0, 3]);
     targets.reject_egress(&c, &network, egress);
     targets.check_entries(&[Some(index)]);
     assert_eq!(
         app.get_xdp_dispatcher(details.key).expect("unchanged"),
         before
     );
-    frames.traffic(&c, &network, [redirect, tail, observer], [3, 0], [0, 0, 3]);
     assert!(
         counters.values(frames).iter().all(|&count| count == 0),
         "rejected egress never executes"
@@ -513,12 +497,6 @@ where
         0
     );
     targets.assert_unloaded();
-    assert_eq!(app.unload(tail).expect("tail cleanup").unresolved(), 0);
-    app.detach_xdp(receiver.id).expect("receiver detach");
-    assert_eq!(
-        app.unload(observer).expect("observer cleanup").unresolved(),
-        0
-    );
     assert!(app.list(&Default::default()).expect("programs").is_empty());
     assert!(app.list_link_records().expect("links").is_empty());
     assert!(app.list_xdp_dispatchers().expect("dispatchers").is_empty());

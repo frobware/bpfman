@@ -167,6 +167,17 @@ formatting also passed.
 See the [jumbo broadcast follow-up](#jumbo-devmap-broadcast-follow-up) for the
 coverage mapping and Go comparison.
 
+The egress testing migration passed the complete `direnv exec . make rust-check`
+gate: formatting, Clippy, userspace/compile-fail contracts, Rustdoc and all 98
+real-kernel tests, with none failed or ignored. Both backend batches verified
+all 78 admitted scripts and empty final inventories/artifact collections. All
+sixteen retained egress contracts passed. The kernel stage took 986.98 s
+(16m27s), compared with 1124.80 s (18m45s) at the jumbo broadcast checkpoint.
+These are local run measurements, not a controlled benchmark. Makefile lint and
+canonical DSL formatting also passed.
+See the [egress follow-up](#native-egress-testing-follow-up) for the coverage
+mapping and Go comparison.
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -1579,10 +1590,11 @@ The test-target inventory across the new workspace has been reviewed by family:
 | Real-kernel batch/TC CLI helpers and normal lifecycle paths mixed with faults | Reuse the admitted corpus first, extract any missing public assertions, then remove duplicate successful paths. Keep injected failures, cancellation and retained receipts. Remaining extraction is pending. |
 | TX/direct REDIRECT, ordinary and jumbo frames | Eight parallel scripts cover modes, continuation, both survivors and full payload/fragment evidence. Rust retains two post-failure captures per scenario, snapshot restoration, ownership and cleanup checks. Both stores passed. |
 | Ordinary/jumbo DEVMAP/DEVMAP_HASH broadcast | Eight parallel scripts cover driver/SKB forwarding, ingress exclusion, empty/sparse maps, live updates, continuation and both survivors. Jumbo cases retain full payload/fragment counters and exact filtered `EOPNOTSUPP` rejection of cloning. Rust retains post-publication-failure traffic, exact map contents, ownership and lifetime checks. Both stores passed. |
-| XDP attach/switch/runtime/unload/netns, jumbo PASS/mixed membership and egress modules; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
+| Native DEVMAP/DEVMAP_HASH egress | Eight parallel scripts cover ordinary PASS/DROP, hash jumbo PASS/DROP, array jumbo rejection, exact context/fragment counters, live updates, replacement/survival and forwarding after managed unload. Rust keeps publication/teardown failures, restoration and map-held lifetime checks. Both stores passed. |
+| XDP attach/switch/runtime/unload/netns and jumbo PASS/mixed membership; TC replacement/unload modules | Remaining packet/lifecycle migration candidates. Separate ordinary externally observable scenarios from real-kernel recovery evidence. Do not remove coverage or label migration complete until equivalent scripts pass on both stores. |
 
 These are incremental migration slices, not a claim that all Rust behavioural
-tests have moved. Next: migrate egress and jumbo PASS/mixed
+tests have moved. Next: migrate jumbo PASS/mixed
 membership using the same runner, then remaining ordinary lifecycle/CLI scenarios. No new
 bpfman functionality is needed for that migration.
 
@@ -1717,8 +1729,9 @@ jumbo broadcast; egress remains pending.
 
 #### Jumbo DEVMAP broadcast follow-up
 
-The corpus now has 157 scripts, with 70 admitted against Rust: 50 shared Go/Rust
-and 20 Rust-only. Four new `TestXDP_{Devmap,DevmapHash}_Broadcast_{Drv,Skb}_MultiBuffer`
+At the jumbo broadcast checkpoint the corpus had 157 scripts, with 70 admitted
+against Rust: 50 shared Go/Rust and 20 Rust-only. Four new
+`TestXDP_{Devmap,DevmapHash}_Broadcast_{Drv,Skb}_MultiBuffer`
 wrappers extend the same helper to 8014-byte frames and MTU 9000. No runner,
 probe, production, persistence, dependency or Aya changes were needed. Each script
 uses a pooled private namespace; both survivor choices share their setup and all
@@ -1773,8 +1786,73 @@ and artifact collections. The kernel stage took 1124.80 s (18m45s), compared wit
 measurements, not a controlled benchmark. Makefile lint and canonical DSL
 formatting also passed.
 
-Egress behaviour is the next bounded packet migration, followed by jumbo PASS/mixed
-membership and remaining ordinary lifecycle/CLI scenarios.
+### Native egress testing follow-up
+
+The corpus now has 165 scripts, with 78 admitted against Rust: 50 shared Go/Rust
+and 28 Rust-only. Eight new
+`TestXDP_{Devmap,DevmapHash}_Egress_{Drv,Skb}_{Linear,MultiBuffer}`
+wrappers use the existing pooled namespace, scheduler, DSL and `devmap-egress`
+packet-probe command. No runner, probe, production, persistence, dependency or
+Aya changes were needed. Backend batches remain sequential; these scripts run
+in parallel without serial/exclusive pragmas.
+
+Six positive scenarios cover ordinary native egress on both map types and genuine
+8014-byte DEVMAP_HASH egress. They require native XDP program IDs, no managed
+interface links, rejection of interface attachment after CLI/store reopening,
+empty-map fallback, PASS delivery, DROP consumption, live PASS/DROP replacement,
+and unchanged dispatcher revision during map updates. Invalid extension and
+fragment-incompatible updates must return `EINVAL` and leave the complete map
+unchanged. Hash maps retain their unrelated `0xffffffff` entry at full capacity;
+lookups return the exact output ifindex and program ID rather than the update FD.
+Ordered dispatcher replacement and surviving redirect retain outer-link identity
+and all map entries. Last detach restores local PASS.
+
+Every wave validates complete payloads without duplicates and exact ingress,
+tail and egress execution counts. Egress counters also prove input/output
+interface context. Jumbo receiving/executing counters independently require genuine fragments,
+intact tail bytes and successful reads across the linear/fragment boundary.
+Managed PASS/DROP unload removes program pins and records while map-held egress
+continues executing. Temporary pins retain only counter maps for observation;
+they do not retain program FDs and are removed before map-owner cleanup.
+
+Two array-map jumbo scenarios preserve the current Aya extension-flag boundary:
+fragment-aware egress insertion returns `EINVAL` in empty and populated maps,
+with unchanged entries/revision and zero egress execution. Complete jumbo unicast
+without egress remains successful. These are rejection tests, not evidence of
+array jumbo egress execution.
+
+The initial eight-script batch passed on Rust JSON and SQLite in 11.95 s and
+11.85 s, with empty final program/link/dispatcher inventories. Actual Go runs on
+both stores failed native egress loading: the verifier rejects the egress-ifindex
+context read (`invalid bpf_context access off=20 size=4`). This agrees with Go's
+managed XDP loader forcing extension type and clearing expected attach type.
+All eight wrappers therefore carry `rust-only=true`; no assertion was weakened
+for Go. This is an observed native-egress capability difference, distinct from
+Go's broader support elsewhere. Final admission runs passed all eight scripts
+on Rust JSON/SQLite (12.53 s / 12.35 s), with empty inventories. Go correctly
+skipped all eight Rust-only scripts on each store, with empty inventories.
+
+After both Rust stores passed, positive Rust suites were reduced from fourteen
+packet waves to five: two after attach/detach publication restoration and three
+around failed record deletion, explicit unload retry and map-held DROP lifetime.
+Array-jumbo boundary suites retain native role/map compatibility, exact entries,
+unchanged dispatcher identity and eventual reclamation, while their three
+ordinary unicast waves and unused receiving/tail setup moved to scripts.
+Across twelve positive and four boundary invocations, 120 serial captures were
+removed (36 s of observation windows). Exact snapshots, restoration attempts,
+unresolved ownership, unload retries, retained map descriptors, bounded kernel
+program/map reclamation and empty inventories/artifacts remain Rust contracts.
+
+The egress testing migration passed the complete `direnv exec . make rust-check`
+gate: formatting, Clippy, userspace/compile-fail contracts, Rustdoc and all 98
+real-kernel tests, with none failed or ignored. Both backend batches verified
+all 78 admitted scripts and empty final inventories/artifact collections. All
+sixteen retained egress contracts passed. The kernel stage took 986.98 s
+(16m27s), compared with 1124.80 s (18m45s) at the jumbo broadcast checkpoint.
+These are local run measurements, not a controlled benchmark. Makefile lint and
+canonical DSL formatting also passed.
+
+Next: jumbo PASS/mixed membership, then remaining ordinary lifecycle/CLI scenarios.
 
 A matching XDP fill/drain/refill script took 10.95 s with Go, 14.26 s with Rust
 debug and 9.02 s with Rust release. These are single samples, not a benchmark;

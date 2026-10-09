@@ -1,0 +1,9 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"egress"}
+# Given: a private, pooled namespace and explicit skb XDP mode
+# When: native egress PASS/DROP, updates and managed unload are exercised
+# Then: delivery, map identity, payload and interface-context evidence agree
+
+import ../xdp-delivery.bpfman
+
+egress_behaviour testdata/bpf/xdp_devmap_hash.bpf.o skb 64 false

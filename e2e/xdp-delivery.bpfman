@@ -93,6 +93,7 @@ def devmap_scenario(object mode size fallback proceed) {
     let key = $hash |> jq "if . then 2147483649 else 0 end"
     if $hash {
         assert ($map_info.stdout |> jq "fromjson | .max_entries") == 2
+        assert ($map_info.stdout |> jq "fromjson | .max_entries") == 2
         guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 4294967295
     }
     let delivery_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_delivery.bpf.o" else "testdata/bpf/xdp_delivery_frags.bpf.o" end'
@@ -472,4 +473,195 @@ def broadcast_behaviour(object mode frame_size) {
     let size = $frame_size |> jq tonumber
     broadcast_scenario $object $mode $size 8 3
     broadcast_scenario $object $mode $size 24 0
+}
+
+
+# Native egress uses the existing map-update probe. Counter zero records every
+# execution; ordinary key 1 / fragment key 7 proves both interface indices.
+def egress_stats(redirect name) {
+    guard dump <- bpftool map dump pinned "${redirect.record.handles.map_pin_path}/${name}_stats" -j
+    return $dump.stdout |> jq "fromjson | sort_by(.formatted.key) | map([.formatted.values[].value | tonumber] | add)"
+}
+
+def egress_traffic(pair size redirect tail observer ran_redirect ran_tail local forwarded pass_runs drop_runs) {
+    let expected = jq fromjson "[${pass_runs},${drop_runs}]"
+    guard before_pass <- egress_stats $redirect pass
+    guard before_drop <- egress_stats $redirect drop
+    delivery_traffic $pair $size $redirect $tail $observer $ran_redirect $ran_tail 0 $local $forwarded
+    guard after_pass <- egress_stats $redirect pass
+    guard after_drop <- egress_stats $redirect drop
+    let keys = $size |> jq "if . == 64 then [0,1] else [0,1,2,3,7] end"
+    foreach key in $keys {
+        assert ($after_pass[$key] - $before_pass[$key]) == $expected[0]
+        assert ($after_drop[$key] - $before_drop[$key]) == $expected[1]
+    }
+}
+
+def egress_entries(targets id) {
+    delivery_map_identity $targets $id
+    guard dump <- bpftool map dump pinned $targets -j
+    return $dump.stdout |> jq 'fromjson | map({key:(.key | map(ltrimstr("0x")) | join("")),value:(.value | map(ltrimstr("0x")) | join(""))}) | sort_by(.key) | tojson'
+}
+
+def egress_check(targets id key ifindex program ingress) {
+    guard entries <- egress_entries $targets $id
+    let key_bytes = u32le $key
+    let value_bytes = "${u32le $ifindex}${u32le $program}"
+    assert ($entries |> jq "fromjson | map(select(.key == \"${key_bytes}\")) | length") == 1
+    assert ($entries |> jq "fromjson | map(select(.key == \"${key_bytes}\"))[0].value") == $value_bytes
+    if $key != 0 {
+        assert ($entries |> jq "fromjson | length") == 2
+        let spare = "${u32le $ingress}00000000"
+        assert ($entries |> jq 'fromjson | map(select(.key == "ffffffff"))[0].value') == $spare
+    }
+}
+
+def egress_reject(pair targets id key prog) {
+    guard before <- egress_entries $targets $id
+    let rejected <- net exec $pair.a xdp-delivery-probe devmap-egress $targets out0 $prog.record.handles.pin_path $key
+    assert not $rejected.ok
+    assert contains $rejected.stderr "invalid argument"
+    guard after <- egress_entries $targets $id
+    assert $after == $before
+}
+
+def egress_behaviour(object mode frame_size boundary) {
+    let size = $frame_size |> jq tonumber
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    delivery_network $pair $size
+    let netns = "/var/run/netns/${pair.a.ns}"
+    guard config_dir <- tempdir xdp-egress
+    defer exec rm -rf $config_dir.path
+    let config = "${config_dir.path}/bpfman.toml"
+    guard _ <- exec sh -c 'printf "[interfaces.in0]\nxdp_mode = \"%s\"\n" "$2" > "$1"' sh $config $mode
+    guard ingress <- net exec $pair.a ip -j link show dev in0
+    let ifindex = $ingress.stdout |> jq "fromjson | .[0].ifindex"
+    guard output <- net exec $pair.a ip -j link show dev out0
+    let out_index = $output.stdout |> jq "fromjson | .[0].ifindex"
+    guard loaded <- bpfman program load file $object --programs xdp:devmap_delivery
+    let redirect = $loaded.programs[0]
+    defer delivery_unload $redirect
+    let targets = "${redirect.record.handles.map_pin_path}/delivery_targets"
+    guard map_info <- bpftool map show pinned $targets -j
+    let target_id = $map_info.stdout |> jq "fromjson | .id"
+    assert ($map_info.stdout |> jq "fromjson | .bytes_value") == 8
+    let hash = ($map_info.stdout |> jq "fromjson | .type") == devmap_hash
+    let key = $hash |> jq "if . then 2147483649 else 0 end"
+    if $hash {
+        assert ($map_info.stdout |> jq "fromjson | .max_entries") == 2
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets in0 4294967295
+    }
+    let delivery_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_delivery.bpf.o" else "testdata/bpf/xdp_delivery_frags.bpf.o" end'
+    guard tail_load <- bpfman program load file $delivery_object --programs xdp:delivery_tail
+    let tail = $tail_load.programs[0]
+    defer delivery_unload $tail
+    let observer_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_pass.bpf.o" else "testdata/bpf/xdp_delivery_frags.bpf.o" end'
+    let observer_symbol = $size |> jq 'if . == 64 then "pass" else "delivery_observer" end'
+    guard observer_load <- bpfman program load file $observer_object --programs "xdp:${observer_symbol}"
+    let observer = $observer_load.programs[0]
+    defer delivery_unload $observer
+    let egress_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_devmap_egress.bpf.o" else "testdata/bpf/xdp_devmap_egress_frags.bpf.o" end'
+    guard pass_load <- bpfman program load file $egress_object --programs xdp:devmap_egress -g "egress_action=0x${u32le 2}" -g "expected_ingress=0x${u32le $ifindex}" -g "expected_egress=0x${u32le $out_index}"
+    let pass = $pass_load.programs[0]
+    defer delivery_unload $pass
+    guard drop_load <- bpfman program load file $egress_object --programs xdp:devmap_egress -g "egress_action=0x${u32le 1}" -g "expected_ingress=0x${u32le $ifindex}" -g "expected_egress=0x${u32le $out_index}"
+    let drop = $drop_load.programs[0]
+    defer delivery_unload $drop
+    # Keep counters observable after managed unload without retaining program FDs.
+    let pass_stats = "${redirect.record.handles.map_pin_path}/pass_stats"
+    let drop_stats = "${redirect.record.handles.map_pin_path}/drop_stats"
+    guard _ <- exec bpftool map pin pinned "${pass.record.handles.map_pin_path}/delivery_stats" $pass_stats
+    guard _ <- exec bpftool map pin pinned "${drop.record.handles.map_pin_path}/delivery_stats" $drop_stats
+    defer exec rm -f $pass_stats $drop_stats
+    foreach prog in [$pass $drop] {
+        guard native <- bpftool prog show pinned $prog.record.handles.pin_path -j
+        assert ($native.stdout |> jq "fromjson | .type") == xdp
+        assert ($native.stdout |> jq "fromjson | .id") == $prog.record.program_id
+        guard record <- bpfman program get $prog
+        assert ($record |> jq '(.status.links | type == "array") and (.status.links | length == 0)') == true
+        # Each CLI invocation reopens the store, proving the role survives reopening.
+        assert fail bpfman link attach xdp $prog in0 --netns $netns --priority 50
+    }
+    guard sink_link <- bpfman link attach xdp $observer sink0 --netns $netns --priority 50
+    defer bpfman link detach $sink_link
+    guard first <- delivery_attach $redirect in0 $netns $config 50 pass,dispatcher_return
+    guard interface <- net exec $pair.a ip -j -d link show dev in0
+    let expected_mode = $mode |> jq 'if . == "skb" then 2 else 1 end'
+    assert ($interface.stdout |> jq "fromjson | .[0].xdp.attached[0].mode") == $expected_mode
+    guard initial <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    let outer_id = $initial.runtime.kernel_link_id
+    egress_reject $pair $targets $target_id $key $redirect
+    egress_traffic $pair $size $redirect $tail $observer 3 0 3 0 0 0
+
+    # Array jumbo rejection is a verified Aya extension-flag boundary. Its
+    # ordinary jumbo unicast remains intact, without executing native egress.
+    if $boundary == "true" {
+        egress_reject $pair $targets $target_id $key $pass
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-set $targets out0 $key
+        egress_check $targets $target_id $key $out_index 0 $ifindex
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 3 0 0
+        egress_reject $pair $targets $target_id $key $pass
+        guard unchanged <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+        assert $unchanged.revision == $initial.revision
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 3 0 0
+    } else {
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-egress $targets out0 $pass.record.handles.pin_path $key
+        egress_check $targets $target_id $key $out_index $pass.record.program_id $ifindex
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 3 3 0
+        egress_reject $pair $targets $target_id $key $tail
+        let incompatible_object = $size |> jq 'if . == 64 then "testdata/bpf/xdp_devmap_egress_frags.bpf.o" else "testdata/bpf/xdp_devmap_egress.bpf.o" end'
+        guard incompatible_load <- bpfman program load file $incompatible_object --programs xdp:devmap_egress
+        let incompatible = $incompatible_load.programs[0]
+        defer delivery_unload $incompatible
+        egress_reject $pair $targets $target_id $key $incompatible
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 3 3 0
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-egress $targets out0 $drop.record.handles.pin_path $key
+        egress_check $targets $target_id $key $out_index $drop.record.program_id $ifindex
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 0 0 3
+        guard unchanged <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+        assert $unchanged.revision == $initial.revision
+        guard entries <- egress_entries $targets $target_id
+        guard second <- delivery_attach $tail in0 $netns $config 60 pass,dispatcher_return
+        guard chain <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+        assert $chain.runtime.kernel_link_id == $outer_id
+        assert $chain.members[0].program_id == $redirect.record.program_id
+        assert $chain.members[1].program_id == $tail.record.program_id
+        guard current <- egress_entries $targets $target_id
+        assert $current == $entries
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 0 0 3
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-egress $targets out0 $pass.record.handles.pin_path $key
+        egress_check $targets $target_id $key $out_index $pass.record.program_id $ifindex
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 3 3 0
+        guard entries <- egress_entries $targets $target_id
+        bpfman link detach $second.record.id
+        guard survivor <- bpfman dispatcher get xdp $pair.a.nsid $ifindex
+        assert ($survivor |> jq ".members | length") == 1
+        assert $survivor.members[0].program_id == $redirect.record.program_id
+        assert $survivor.runtime.kernel_link_id == $outer_id
+        guard current <- egress_entries $targets $target_id
+        assert $current == $entries
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 3 3 0
+        # Public behaviour after unpinning belongs here; retained descriptors,
+        # kernel ID reclamation and teardown retries stay in Rust contracts.
+        bpfman program unload $pass
+        assert not path-exists $pass.record.handles.pin_path
+        assert fail bpfman program get $pass
+        egress_check $targets $target_id $key $out_index $pass.record.program_id $ifindex
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 3 3 0
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-delete $targets $key
+        egress_traffic $pair $size $redirect $tail $observer 3 0 3 0 0 0
+        guard _ <- net exec $pair.a xdp-delivery-probe devmap-egress $targets out0 $drop.record.handles.pin_path $key
+        bpfman program unload $drop
+        assert not path-exists $drop.record.handles.pin_path
+        assert fail bpfman program get $drop
+        egress_check $targets $target_id $key $out_index $drop.record.program_id $ifindex
+        egress_traffic $pair $size $redirect $tail $observer 3 0 0 0 0 3
+    }
+    bpfman link detach $first.record.id
+    assert fail bpfman dispatcher get xdp $pair.a.nsid $ifindex
+    egress_traffic $pair $size $redirect $tail $observer 0 0 3 0 0 0
+    guard _ <- exec rm -f $pass_stats $drop_stats
+    bpfman program unload $redirect
+    assert not path-exists $targets
 }
