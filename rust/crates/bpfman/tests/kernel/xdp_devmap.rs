@@ -319,14 +319,8 @@ fn map_released(id: u32) {
     }
 }
 
-fn scenario<S>(
-    backend: S,
-    mode: XdpMode,
-    proceed: bool,
-    keep_redirect: bool,
-    frames: Frames,
-    kind: Kind,
-) where
+fn scenario<S>(backend: S, mode: XdpMode, proceed: bool, frames: Frames, kind: Kind)
+where
     S: OpenStore
         + CommitLoad
         + UnloadStore
@@ -336,6 +330,7 @@ fn scenario<S>(
         + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    let setup_timing = TestTiming::phase("devmap.setup");
     let c = Context::new();
     let network = Network::new();
     frames.configure(&network);
@@ -374,7 +369,10 @@ fn scenario<S>(
     let (object, symbol) = frames.observer();
     let observer = load(object, symbol, Default::default());
     let ids = [redirect, tail, observer];
-    let traffic = |execution, delivery| frames.traffic(&c, &network, ids, execution, delivery);
+    let traffic = |execution, delivery| {
+        let _timing = TestTiming::phase("devmap.packet_observation");
+        frames.traffic(&c, &network, ids, execution, delivery);
+    };
     let targets = match kind {
         Kind::Array => Targets::open(&c, redirect),
         Kind::Hash => Targets::open_hash(&c, redirect, 2),
@@ -456,6 +454,9 @@ fn scenario<S>(
         targets.check_at(7, None);
         check(Some(out_index));
     }
+    drop(setup_timing);
+
+    let attach_timing = TestTiming::phase("devmap.attach_restoration");
     faults.set(Some(Point::XdpReplace));
     let error = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
@@ -465,50 +466,75 @@ fn scenario<S>(
     assert!(error.restoration_attempts()[0].is_ok());
     assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
     check(Some(out_index));
+    drop(attach_timing);
     traffic([3, 0], single_delivery);
     faults.set(None);
 
-    let second = app
+    let chain_timing = TestTiming::phase("devmap.chain_reconstruction");
+    let mut redirect_link = first.id;
+    let tail_link = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
-        .expect("tail");
-    let chain = app.get_xdp_dispatcher(details.key).expect("chain");
-    assert_eq!(
-        chain
-            .members()
-            .iter()
-            .map(|member| member.member.id)
-            .collect::<Vec<_>>(),
-        [first.id, second.id]
-    );
-    assert_eq!(chain.members()[0].outer_link_id, outer_id);
-    check(Some(out_index));
-    let (removed, survivor) = if keep_redirect {
-        (second.id, first.id)
-    } else {
-        (first.id, second.id)
-    };
-    faults.set(Some(Point::XdpReplace));
-    let error = app
-        .detach_xdp(removed)
-        .expect_err("detach publication failure");
-    assert_eq!(error.unresolved(), 0);
-    assert_eq!(error.restoration_attempts().len(), 1);
-    assert!(error.restoration_attempts()[0].is_ok());
-    assert_eq!(
-        app.get_xdp_dispatcher(details.key).expect("restored"),
-        chain
-    );
-    check(Some(out_index));
-    traffic(chain_execution, chain_delivery);
-    faults.set(None);
+        .expect("tail")
+        .id;
+    drop(chain_timing);
 
-    app.detach_xdp(removed).expect("remove member");
-    let remaining = app.get_xdp_dispatcher(details.key).expect("survivor");
-    assert_eq!(remaining.members().len(), 1);
-    assert_eq!(remaining.members()[0].member.id, survivor);
-    assert_eq!(remaining.members()[0].outer_link_id, outer_id);
-    check(Some(out_index));
-    app.detach_xdp(survivor).expect("last detach");
+    // Reuse the map and loaded programs for both detach choices. Reattach
+    // redirect with its original continuation mask, preserving the surviving
+    // tail and checking exact entries/map identity through reconstruction.
+    for keep_redirect in [false, true] {
+        let detach_timing = TestTiming::phase("devmap.detach_restoration");
+        let chain = app.get_xdp_dispatcher(details.key).expect("chain");
+        assert_eq!(
+            chain
+                .members()
+                .iter()
+                .map(|member| member.member.id)
+                .collect::<Vec<_>>(),
+            [redirect_link, tail_link]
+        );
+        assert_eq!(chain.members()[0].outer_link_id, outer_id);
+        check(Some(out_index));
+        let (removed, survivor) = if keep_redirect {
+            (tail_link, redirect_link)
+        } else {
+            (redirect_link, tail_link)
+        };
+        faults.set(Some(Point::XdpReplace));
+        let error = app
+            .detach_xdp(removed)
+            .expect_err("detach publication failure");
+        assert_eq!(error.unresolved(), 0);
+        assert_eq!(error.restoration_attempts().len(), 1);
+        assert!(error.restoration_attempts()[0].is_ok());
+        assert_eq!(
+            app.get_xdp_dispatcher(details.key).expect("restored"),
+            chain
+        );
+        check(Some(out_index));
+        drop(detach_timing);
+        traffic(chain_execution, chain_delivery);
+        faults.set(None);
+
+        let survivor_timing = TestTiming::phase("devmap.survivor_transition");
+        app.detach_xdp(removed).expect("remove member");
+        let remaining = app.get_xdp_dispatcher(details.key).expect("survivor");
+        assert_eq!(remaining.members().len(), 1);
+        assert_eq!(remaining.members()[0].member.id, survivor);
+        assert_eq!(remaining.members()[0].outer_link_id, outer_id);
+        check(Some(out_index));
+        drop(survivor_timing);
+        if !keep_redirect {
+            let _timing = TestTiming::phase("devmap.chain_reconstruction");
+            redirect_link = app
+                .attach_xdp(request(redirect, "in0", mode, 50, mask))
+                .expect("restore redirect member for second survivor choice")
+                .id;
+            check(Some(out_index));
+        }
+    }
+
+    let teardown_timing = TestTiming::phase("devmap.managed_teardown");
+    app.detach_xdp(redirect_link).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
     check(Some(out_index));
 
@@ -530,6 +556,12 @@ fn scenario<S>(
     assert!(app.list_link_records().expect("links").is_empty());
     assert!(app.list_xdp_dispatchers().expect("dispatchers").is_empty());
     c.no_artifacts();
+    drop(teardown_timing);
+
+    let _timing = TestTiming::phase("devmap.fixture_teardown");
+    drop(app);
+    drop(network);
+    drop(c);
 }
 
 pub(super) fn exercise<S>(backend: S, mode: XdpMode, frames: Frames)
@@ -576,8 +608,6 @@ where
     // belongs to the parallel scripts. Keep both masks and removal choices,
     // plus every store, mode, frame shape and map kind in this kernel contract.
     for proceed in [false, true] {
-        for keep_redirect in [false, true] {
-            scenario(backend.clone(), mode, proceed, keep_redirect, frames, kind);
-        }
+        scenario(backend.clone(), mode, proceed, frames, kind);
     }
 }

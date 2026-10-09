@@ -1472,11 +1472,16 @@ wall milliseconds, OS-reported user/system CPU milliseconds, output byte count
 and exit code. It does not record command arguments or captured output. CPU
 includes waited-for descendants on Linux; it is not a count of blocked time.
 CLI tracing remains separately opt-in with `RUST_LOG` and `--trace-file`.
-Broadcast contracts additionally emit `kernel-phase-timing` records with test
-name, phase, seconds and outcome for setup, attach restoration, each detach
-restoration/survivor choice and managed teardown. These phases are portions of
-the whole-test timer; do not add them to that timer again. Managed teardown
-excludes the outer context's final unmount/temporary-directory cleanup.
+Forwarding and broadcast contracts additionally emit `kernel-phase-timing`
+records with test name, phase, seconds and outcome. TX/direct REDIRECT
+(`delivery.*`) and DEVMAP unicast (`devmap.*`) separate setup, attach/detach
+restoration, packet observation, survivor transitions, chain reconstruction,
+managed teardown and fixture teardown. Packet observation includes counter reads
+and the unchanged 300 ms capture window; fixture teardown includes namespace
+deletion and the outer context's unmount/temporary-directory cleanup. These
+phases do not overlap on successful runs. Broadcast phases retain their combined
+restoration/survivor measurements and exclude outer fixture teardown. All phases
+are portions of the whole-test timer; do not add them to that timer again.
 
 The contention/isolation checkpoint's complete timed `rust-check lint-make`
 gate passed all 96 kernel tests in 540.19 s (9m00s), versus 782.36 s (13m02s)
@@ -1487,6 +1492,17 @@ scripts passed per backend; every runtime's inventories/artifacts were checked.
 These are local samples, not a controlled benchmark. The
 [design follow-up](../docs/design/rust-reimplementation.md#script-contention-isolation-and-broadcast-fixture-reuse-9-october-2026)
 records lock/CPU profiles, phase timings and the Go comparison.
+
+The subsequent TX/direct REDIRECT and DEVMAP unicast fixture-reuse gate passed
+the same complete checks and all 96 kernel tests in 467.88 s (7m48s).
+All 84 isolated scripts and four concurrent shared-runtime scripts passed per
+store. The 20 affected forwarding contracts took 144.647 s, versus 216.462 s;
+setup is shared across both survivor choices with unchanged restoration
+assertions and capture windows. Final forwarding phases attributed 69.806 s to
+packet observation, 36.931 s to setup, 6.619 s to managed teardown and 0.187 s to
+outer fixture teardown. These are local samples. The
+[forwarding follow-up](../docs/design/rust-reimplementation.md#txdirect-redirect-and-devmap-unicast-fixture-reuse-9-october-2026)
+records the complete matrix and validation evidence.
 
 
 ## Script parity through the Go runner
@@ -1512,7 +1528,11 @@ both survivors and map identity. They passed concurrently in approximately
 40 seconds per backend, with empty final inventories. Private topologies reuse
 pooled namespaces; no serial/exclusive label is needed. Both survivor choices
 share the forwarding preamble. Publication-failure restoration remains in Rust,
-with two packet probes per scenario instead of repeating the full matrix there.
+with one attach-restoration probe and both detach-restoration probes per shared
+fixture. TX/direct REDIRECT contracts use the same fixture reuse. Every action,
+continuation mask, store, ingress mode, frame shape and map kind remains covered.
+The removed first member is reattached between survivor choices while retaining
+the surviving tail, outer link and, for DEVMAP, exact map identity/contents.
 
 The CLI/delivery migration admitted three unchanged metadata/global-data scripts,
 added shared `TestProgram_FileLifecycle`, and moved TX/direct REDIRECT into eight

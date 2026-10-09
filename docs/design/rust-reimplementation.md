@@ -208,6 +208,15 @@ contracts fell from 472.738 s to 413.631 s, including broadcast's 130.351 s to
 82.874 s. These are local samples, not a controlled benchmark. See the
 [contention and fixture-reuse follow-up](#script-contention-isolation-and-broadcast-fixture-reuse-9-october-2026).
 
+The TX/direct REDIRECT and DEVMAP unicast fixture-reuse follow-up passed the same
+complete gate, including all 96 kernel tests and both backend script batches.
+Both survivor choices share loaded programs and networks while preserving
+continuation masks, restoration assertions and 300 ms packet capture windows.
+Kernel time fell from 540.19 s (9m00s) to 467.88 s (7m48s); the 20 affected
+contracts fell from 216.462 s to 144.647 s. Separate packet-observation and
+fixture-teardown phases identify the remaining cost. See the
+[forwarding fixture-reuse follow-up](#txdirect-redirect-and-devmap-unicast-fixture-reuse-9-october-2026).
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -2210,6 +2219,94 @@ Evidence: `/tmp/bpfman-batch-{shared,isolated}-{json,sqlite}-summary.log`,
 the corresponding `/tmp/bpfman-batch-profile.*` process records,
 `/tmp/bpfman-go-isolation-summary.log`, `/tmp/bpfman-broadcast-reuse.log` and
 `/tmp/bpfman-contention-rust-check.log`.
+
+### TX/direct REDIRECT and DEVMAP unicast fixture reuse (9 October 2026)
+
+The retained forwarding fault contracts now share one network and set of loaded
+programs across both survivor choices. TX/direct REDIRECT still crosses both
+actions and both continuation masks; DEVMAP/DEVMAP_HASH still crosses both masks
+and map kinds. Every backend, requested ingress mode and frame shape remains in
+the matrix. Each fixture first proves failed attach publication restores the
+complete singleton snapshot and packet path. It then proves failed detach
+publication restores each removal choice and its packet path. After the first
+successful removal, reattaching the action/redirect member with its original
+priority and mask reconstructs the chain for the second choice. The surviving
+tail's managed link ID and the outer link remain stable.
+
+DEVMAP checks retain exact map ID, entries and descriptor observations throughout
+reconstruction, restoration and both survivors. Hash cases retain their sparse
+key set, unused target and full-capacity rejection. Final unload still consumes
+the retained map descriptor and waits for actual kernel reclamation. The existing
+300 ms capture windows, exact frame/payload counts, counter deltas and genuine
+fragment/helper-read evidence are unchanged. Shared setup removes the duplicate
+attach-failure probe; both detach-failure probes remain. Each fixture performs
+three post-failure packet observations. External successful forwarding and
+survivor traffic remain in the unchanged parallel `.bpfman` scripts.
+
+Opt-in `BPFMAN_KERNEL_TIMINGS=1` records non-overlapping successful-run phases
+under `delivery.*` and `devmap.*`: setup, attach restoration, packet observation,
+chain reconstruction, detach restoration, survivor transition, managed teardown
+and fixture teardown. Packet observation includes counter reads and captures;
+restoration timings exclude packet observation. Fixture teardown explicitly drops
+the application, deletes the network namespace and unmounts/removes the temporary
+runtime. All phases belong to the enclosing whole-test duration; they are not
+additional wall time.
+
+Formatting, Clippy and all 20 focused kernel contracts passed. The focused
+timing output contained 832 completed forwarding phase records: 32 fixtures each
+for direct and map-backed forwarding, with one attach-failure and two
+detach-failure observations per fixture. A local analysis checked the expected
+per-test phase counts and that phase totals fit within each whole-test duration.
+
+| Affected group | Previous full gate seconds | Focused run seconds |
+| --- | ---: | ---: |
+| Ordinary TX/direct REDIRECT | 53.561 | 36.062 |
+| Jumbo TX/direct REDIRECT and array DEVMAP | 81.768 | 53.861 |
+| Ordinary array DEVMAP | 26.968 | 18.443 |
+| Ordinary/jumbo DEVMAP_HASH unicast | 54.165 | 36.216 |
+| All 20 affected contracts | 216.462 | 144.582 |
+
+These local samples indicate approximately 72 seconds (33%) less elapsed time
+in the affected contracts; they are not a controlled benchmark. The focused
+phases attribute 69.725 s to packet observation, 36.980 s to fixture setup,
+and only 0.190 s to outer fixture teardown. Managed teardown took 6.688 s,
+including kernel map reclamation. Remaining phase time covers restoration,
+reconstruction and survivor transitions. The capture windows remain the largest
+measured cost after setup reuse; no shorter windows or skipped combinations were
+introduced. No production behaviour, dependencies, Aya code, script assertions
+or admission labels changed.
+
+Focused evidence: `/tmp/bpfman-forwarding-fixtures-focused.log` and
+`/tmp/bpfman-forwarding-fixtures-focused-summary.json`.
+
+The final complete timed `direnv exec . make rust-check lint-make` exited
+successfully: formatting, Clippy, userspace/compile-fail contracts, Rustdoc and
+Makefile lint passed, alongside all 96 kernel tests with none failed or ignored.
+Each backend passed all 84 isolated scripts and its four concurrent shared-runtime
+scripts, retaining empty final inventories/artifacts. The final log contains
+exactly 96 whole-test timing records and the same 832 completed forwarding phases
+with the expected per-test counts.
+
+| Group | Previous full gate seconds | Final full gate seconds |
+| --- | ---: | ---: |
+| Ordinary TX/direct REDIRECT | 53.561 | 35.763 |
+| Jumbo TX/direct REDIRECT and array DEVMAP | 81.768 | 54.599 |
+| Ordinary array DEVMAP | 26.968 | 18.061 |
+| Ordinary/jumbo DEVMAP_HASH unicast | 54.165 | 36.224 |
+| All 20 affected contracts | 216.462 | 144.647 |
+| Acceptance (both stores, including shared subset) | 126.418 | 125.531 |
+| Other retained contracts | 197.169 | 197.554 |
+| Complete kernel stage | 540.19 | 467.88 |
+
+The complete kernel stage is approximately 72 seconds (13%) shorter; the affected
+contracts are approximately 33% shorter. Acceptance and other retained contracts
+are nearly unchanged in this local comparison. Final forwarding phases total
+69.806 s for packet observation, 36.931 s for setup, 6.619 s for managed teardown
+and 0.187 s for outer fixture teardown. The remaining phase time covers
+restoration, reconstruction and survivor transitions. Evidence:
+`/tmp/bpfman-forwarding-fixtures-rust-check.log`,
+`/tmp/bpfman-forwarding-fixtures-gate-summary.json` and
+`/tmp/bpfman-forwarding-fixtures-gate-timeline.jsonl`.
 
 ### Workspace-law tests
 

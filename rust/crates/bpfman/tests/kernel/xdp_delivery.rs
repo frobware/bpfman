@@ -222,14 +222,8 @@ impl Frames {
     }
 }
 
-fn scenario<S>(
-    backend: S,
-    mode: XdpMode,
-    action_code: u32,
-    proceed: bool,
-    keep_action: bool,
-    frames: Frames,
-) where
+fn scenario<S>(backend: S, mode: XdpMode, action_code: u32, proceed: bool, frames: Frames)
+where
     S: OpenStore
         + CommitLoad
         + UnloadStore
@@ -239,6 +233,7 @@ fn scenario<S>(
         + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    let setup_timing = TestTiming::phase("delivery.setup");
     let c = Context::new();
     let network = Network::new();
     frames.configure(&network);
@@ -287,7 +282,10 @@ fn scenario<S>(
     let (object, symbol) = frames.observer();
     let observer = load(object, symbol, Default::default());
     let ids = [action, tail, observer];
-    let traffic = |execution, delivery| frames.traffic(&c, &network, ids, execution, delivery);
+    let traffic = |execution, delivery| {
+        let _timing = TestTiming::phase("delivery.packet_observation");
+        frames.traffic(&c, &network, ids, execution, delivery);
+    };
     let netns = network.namespace();
     let request = |id, iface: &str, requested_mode, priority, proceed_on| XdpAttach {
         program_id: id,
@@ -340,6 +338,9 @@ fn scenario<S>(
     };
     let old = app.get_xdp_dispatcher(details.key).expect("snapshot");
     let outer_id = old.members()[0].outer_link_id;
+    drop(setup_timing);
+
+    let attach_timing = TestTiming::phase("delivery.attach_restoration");
     faults.set(Some(Point::XdpReplace));
     let error = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
@@ -348,48 +349,72 @@ fn scenario<S>(
     assert_eq!(error.restoration_attempts().len(), 1);
     assert!(error.restoration_attempts()[0].is_ok());
     assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
+    drop(attach_timing);
     traffic([3, 0], single_delivery);
     faults.set(None);
 
-    let second = app
+    let chain_timing = TestTiming::phase("delivery.chain_reconstruction");
+    let mut action_link = first.id;
+    let tail_link = app
         .attach_xdp(request(tail, "in0", mode, 60, Default::default()))
-        .expect("tail attachment");
-    let chain = app.get_xdp_dispatcher(details.key).expect("chain");
-    assert_eq!(
-        chain
-            .members()
-            .iter()
-            .map(|m| m.member.id)
-            .collect::<Vec<_>>(),
-        [first.id, second.id]
-    );
-    assert_eq!(chain.members()[0].outer_link_id, outer_id);
+        .expect("tail attachment")
+        .id;
+    drop(chain_timing);
     let both_execution = [3, if proceed { 3 } else { 0 }];
-    let (removed, survivor) = if keep_action {
-        (second.id, first.id)
-    } else {
-        (first.id, second.id)
-    };
-    faults.set(Some(Point::XdpReplace));
-    let error = app
-        .detach_xdp(removed)
-        .expect_err("detach publication failure");
-    assert_eq!(error.unresolved(), 0);
-    assert_eq!(error.restoration_attempts().len(), 1);
-    assert!(error.restoration_attempts()[0].is_ok());
-    assert_eq!(
-        app.get_xdp_dispatcher(details.key).expect("restored"),
-        chain
-    );
-    traffic(both_execution, chain_delivery);
-    faults.set(None);
 
-    app.detach_xdp(removed).expect("remove member");
-    let remaining = app.get_xdp_dispatcher(details.key).expect("survivor");
-    assert_eq!(remaining.members().len(), 1);
-    assert_eq!(remaining.members()[0].member.id, survivor);
-    assert_eq!(remaining.members()[0].outer_link_id, outer_id);
-    app.detach_xdp(survivor).expect("last detach");
+    // Both survivor choices share setup and the attach-failure probe. Restore
+    // the removed action before the second detach fault, retaining the tail's
+    // link identity, continuation mask and stable outer link.
+    for keep_action in [false, true] {
+        let detach_timing = TestTiming::phase("delivery.detach_restoration");
+        let chain = app.get_xdp_dispatcher(details.key).expect("chain");
+        assert_eq!(
+            chain
+                .members()
+                .iter()
+                .map(|m| m.member.id)
+                .collect::<Vec<_>>(),
+            [action_link, tail_link]
+        );
+        assert_eq!(chain.members()[0].outer_link_id, outer_id);
+        let (removed, survivor) = if keep_action {
+            (tail_link, action_link)
+        } else {
+            (action_link, tail_link)
+        };
+        faults.set(Some(Point::XdpReplace));
+        let error = app
+            .detach_xdp(removed)
+            .expect_err("detach publication failure");
+        assert_eq!(error.unresolved(), 0);
+        assert_eq!(error.restoration_attempts().len(), 1);
+        assert!(error.restoration_attempts()[0].is_ok());
+        assert_eq!(
+            app.get_xdp_dispatcher(details.key).expect("restored"),
+            chain
+        );
+        drop(detach_timing);
+        traffic(both_execution, chain_delivery);
+        faults.set(None);
+
+        let survivor_timing = TestTiming::phase("delivery.survivor_transition");
+        app.detach_xdp(removed).expect("remove member");
+        let remaining = app.get_xdp_dispatcher(details.key).expect("survivor");
+        assert_eq!(remaining.members().len(), 1);
+        assert_eq!(remaining.members()[0].member.id, survivor);
+        assert_eq!(remaining.members()[0].outer_link_id, outer_id);
+        drop(survivor_timing);
+        if !keep_action {
+            let _timing = TestTiming::phase("delivery.chain_reconstruction");
+            action_link = app
+                .attach_xdp(request(action, "in0", mode, 50, mask))
+                .expect("restore action member for second survivor choice")
+                .id;
+        }
+    }
+
+    let teardown_timing = TestTiming::phase("delivery.managed_teardown");
+    app.detach_xdp(action_link).expect("last detach");
     assert!(app.get_xdp_dispatcher(details.key).is_err());
 
     for id in observers {
@@ -401,6 +426,12 @@ fn scenario<S>(
     assert!(app.list_link_records().expect("links").is_empty());
     assert!(app.list_xdp_dispatchers().expect("dispatchers").is_empty());
     c.no_artifacts();
+    drop(teardown_timing);
+
+    let _timing = TestTiming::phase("delivery.fixture_teardown");
+    drop(app);
+    drop(network);
+    drop(c);
 }
 
 pub(super) fn exercise<S>(backend: S, mode: XdpMode, frames: Frames)
@@ -416,16 +447,7 @@ where
 {
     for action_code in [3, 4] {
         for proceed in [false, true] {
-            for keep_action in [false, true] {
-                scenario(
-                    backend.clone(),
-                    mode,
-                    action_code,
-                    proceed,
-                    keep_action,
-                    frames,
-                );
-            }
+            scenario(backend.clone(), mode, action_code, proceed, frames);
         }
     }
 }

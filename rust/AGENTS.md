@@ -350,7 +350,9 @@ The architecture and compatibility goals are in
   lifecycle and TC lifecycle together on a shared runtime. Keep this explicit
   concurrent-store coverage; normal Go Make runs remain shared by default.
   Leave isolation unset for full-corpus shared-store stress. `BPFMAN_KERNEL_TIMINGS=1`
-  reports whole tests, runner batches and broadcast phases. The optional
+  reports whole tests, runner batches and forwarding/broadcast phases. Forwarding
+  phases separate restoration from packet observation and include fixture teardown;
+  preserve capture windows and both survivor choices when sharing setup. The optional
   `BPFMAN_E2E_SCRIPT_TIMELINE` JSONL records scheduler queue/start/end, CPU and
   command completion; both it and `RUST_LOG` survive the privileged runner.
   Run backend batches sequentially because separate runners share a suite lock.
