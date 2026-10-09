@@ -18,6 +18,42 @@ pub(super) fn timings_enabled() -> bool {
     std::env::var_os("BPFMAN_KERNEL_TIMINGS").as_deref() == Some(std::ffi::OsStr::new("1"))
 }
 
+// Only independent forwarding fixtures opt in. The outer libtest runner and
+// backend script batches stay sequential. Each job constructs and tears down
+// its own runtime, namespace, fault state and kernel descriptors in one worker.
+pub(super) fn forwarding_fixtures<T: Send>(jobs: Vec<T>, run: impl Fn(T) + Sync) {
+    let mut workers = [Vec::new(), Vec::new()];
+    for (index, job) in jobs.into_iter().enumerate() {
+        workers[index % 2].push(job);
+    }
+    let parent = std::thread::current();
+    let name = parent.name().expect("named kernel test");
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = workers
+            .into_iter()
+            .map(|jobs| {
+                let run = &run;
+                std::thread::Builder::new()
+                    // Phase telemetry remains attributed to its enclosing test.
+                    .name(name.to_owned())
+                    .spawn_scoped(scope, move || {
+                        let _timing = TestTiming::phase("forwarding.worker");
+                        for job in jobs {
+                            run(job);
+                        }
+                    })
+                    .expect("forwarding worker")
+            })
+            .collect();
+        // Join every worker before propagating a failure: sibling fixture
+        // cleanup must finish before the next test/backend can begin.
+        let outcomes: Vec<_> = handles.into_iter().map(|handle| handle.join()).collect();
+        if let Some(failure) = outcomes.into_iter().find_map(Result::err) {
+            std::panic::resume_unwind(failure);
+        }
+    });
+}
+
 // Direct stderr bypasses libtest's success-output capture. Opt in through the
 // Make environment; one guard covers the whole scenario, including teardown.
 pub(super) struct TestTiming {

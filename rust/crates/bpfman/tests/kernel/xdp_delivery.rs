@@ -442,12 +442,15 @@ where
         + LinkStore
         + XdpReplacementStore
         + bpfman_store::TcStore
-        + Clone,
+        + Clone
+        + Send,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
-    for action_code in [3, 4] {
-        for proceed in [false, true] {
-            scenario(backend.clone(), mode, action_code, proceed, frames);
-        }
-    }
+    let jobs = [3, 4]
+        .into_iter()
+        .flat_map(|action| [false, true].map(|proceed| (backend.clone(), action, proceed)))
+        .collect();
+    forwarding_fixtures(jobs, |(backend, action, proceed)| {
+        scenario(backend, mode, action, proceed, frames);
+    });
 }

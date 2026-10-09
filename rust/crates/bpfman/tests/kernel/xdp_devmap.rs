@@ -572,7 +572,8 @@ where
         + LinkStore
         + XdpReplacementStore
         + bpfman_store::TcStore
-        + Clone,
+        + Clone
+        + Send,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     exercise_kind(backend, mode, frames, Kind::Array);
@@ -586,7 +587,8 @@ where
         + LinkStore
         + XdpReplacementStore
         + bpfman_store::TcStore
-        + Clone,
+        + Clone
+        + Send,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     exercise_kind(backend, mode, frames, Kind::Hash);
@@ -600,14 +602,18 @@ where
         + LinkStore
         + XdpReplacementStore
         + bpfman_store::TcStore
-        + Clone,
+        + Clone
+        + Send,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     // Every restoration probe uses a populated target. The missing-key
     // fallback is therefore unobservable here; DROP/PASS fallback execution
     // belongs to the parallel scripts. Keep both masks and removal choices,
     // plus every store, mode, frame shape and map kind in this kernel contract.
-    for proceed in [false, true] {
-        scenario(backend.clone(), mode, proceed, frames, kind);
-    }
+    let jobs = [false, true]
+        .map(|proceed| (backend.clone(), proceed))
+        .into();
+    forwarding_fixtures(jobs, |(backend, proceed)| {
+        scenario(backend, mode, proceed, frames, kind);
+    });
 }

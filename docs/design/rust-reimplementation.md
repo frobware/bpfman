@@ -217,6 +217,14 @@ contracts fell from 216.462 s to 144.647 s. Separate packet-observation and
 fixture-teardown phases identify the remaining cost. See the
 [forwarding fixture-reuse follow-up](#txdirect-redirect-and-devmap-unicast-fixture-reuse-9-october-2026).
 
+The bounded-parallelism follow-up passed the complete gate with the same 96
+kernel tests and both script batches. Two synchronous workers run independent
+retained forwarding and broadcast fixtures, while top-level kernel tests and
+backend batches stay sequential. Kernel time fell from 467.88 s (7m48s) to
+368.81 s (6m09s); the 36 affected contracts fell from 227.230 s to 122.383 s.
+Assertions and 300 ms capture windows are unchanged. See the
+[concurrency audit and timing evidence](#bounded-parallel-forwarding-fault-fixtures-9-october-2026).
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -2675,3 +2683,100 @@ The first implementation work should settle these points with code and tests:
 These questions should be answered by the local-load plus standalone-attach
 slice and then revisited during the dispatcher proof. They should not be hidden
 behind a generic framework designed in advance.
+
+
+### Bounded parallel forwarding fault fixtures (9 October 2026)
+
+Retained TX/direct REDIRECT, DEVMAP/DEVMAP_HASH unicast and broadcast contracts
+now distribute their independent fixtures across two synchronous scoped workers.
+Direct forwarding gives each worker two action/mask combinations; map unicast
+splits the continuation masks, and broadcast splits ingress exclusion. Every
+worker constructs and tears down its own application and fixture. The enclosing
+kernel tests still run with `--test-threads=1`; backend script batches remain
+sequential, with the existing Go runner's internal parallel scheduling.
+
+The concurrency audit checked the remaining shared process/kernel boundaries:
+
+- Namespace names use a process ID and atomic sequence; fixed interface names
+  and packet markers are confined to each private network namespace. Commands
+  select namespaces explicitly. Aya namespace entry uses disposable threads and
+  does not change the fixture worker's network namespace.
+- Runtime roots, bpffs mounts, stores, writer-lock inodes, fault decorators and
+  counters are fixture-local. Workers share the runner's private mount namespace,
+  but mount/unmount only their own temporary roots. They do not mutate process
+  environment or install global subscribers.
+- Broadcast tracepoints are global observations filtered by both the fixture's
+  exact DEVMAP ID and input interface. Map lifetime checks observe the exact
+  retained map ID, rather than global inventory counts. Tracefs format reads and
+  bytecode fixture reads are read-only.
+- All scoped workers are joined before forwarding a panic to libtest, so sibling
+  fixture cleanup finishes before the next test or backend starts. Adapter
+  namespace helpers remain scoped within each fixture operation.
+
+No fault combinations, restoration/ownership assertions, survivor choices,
+map identity/lifetime checks or 300 ms packet observation windows were removed.
+No production code, dependencies, Aya code or script admission labels changed.
+The worker limit bounds fixture concurrency; the adapter can additionally create
+short-lived namespace threads and helper subprocesses.
+
+`BPFMAN_KERNEL_TIMINGS=1` retains whole-test timings and parent-test attribution
+for phase records. New `forwarding.worker` phases cover each complete worker,
+including fixture cleanup. Existing phases overlap across workers, though direct
+and unicast phases remain non-overlapping within each successful fixture.
+Summed phase durations measure accumulated worker time, not test wall time;
+worker records also contain the nested fixture phases and cannot be added to them.
+
+Formatting and Clippy passed, followed by all 36 focused kernel contracts on both
+stores. Telemetry contained all 832 forwarding fixture phases and 160 broadcast
+fixture phases, plus 80 completed worker records. Per-test phase counts matched
+the original fixture matrix. Worker totals fit within twice the enclosing test's
+wall time, and fixture phase totals fit within their worker totals.
+
+| Group | Previous full gate seconds | Two-worker focused seconds |
+| --- | ---: | ---: |
+| Ordinary TX/direct REDIRECT | 35.763 | 20.236 |
+| Jumbo TX/direct REDIRECT and array DEVMAP | 54.599 | 29.740 |
+| Ordinary array DEVMAP | 18.061 | 9.647 |
+| Ordinary/jumbo DEVMAP_HASH unicast | 36.224 | 19.688 |
+| Broadcast | 82.583 | 47.392 |
+| All 36 affected contracts | 227.230 | 126.703 |
+
+The focused run reduced elapsed time by approximately 100.5 seconds (44%). JSON
+contributed 61.859 seconds and SQLite 64.844 seconds. Accumulated worker time was
+252.403 seconds, illustrating the overlap; this change reduces elapsed time,
+not total work. Existing capture windows remained intact. These are local
+before/after samples, not a controlled benchmark.
+
+Focused evidence: `/tmp/bpfman-forwarding-parallel-focused.log` and
+`/tmp/bpfman-forwarding-parallel-focused-summary.json`.
+
+
+The complete timed `direnv exec . make rust-check lint-make` exited successfully:
+formatting, Clippy, userspace/compile-fail contracts, Rustdoc with warnings denied
+and Makefile lint passed. All 96 kernel tests passed, with none failed or ignored.
+Both stores passed all 84 isolated scripts and their four concurrent shared-runtime
+scripts, including final inventory/artifact checks. The final output again
+contained all 1,072 expected completed phase records and 96 whole-test records.
+
+| Group | Previous full gate seconds | Two-worker full gate seconds |
+| --- | ---: | ---: |
+| Ordinary TX/direct REDIRECT | 35.763 | 18.839 |
+| Jumbo TX/direct REDIRECT and array DEVMAP | 54.599 | 29.011 |
+| Ordinary array DEVMAP | 18.061 | 9.762 |
+| Ordinary/jumbo DEVMAP_HASH unicast | 36.224 | 19.480 |
+| Broadcast | 82.583 | 45.291 |
+| All 36 affected contracts | 227.230 | 122.383 |
+| Both backend acceptance batches | 125.531 | 131.890 |
+| Other retained kernel tests | 114.971 | 114.458 |
+| Complete kernel stage | 467.88 | 368.81 |
+
+The affected contracts saved 104.847 seconds (46%); the complete kernel stage
+saved 99.07 seconds (21%), finishing in 6m09s. The unchanged script acceptance
+batches varied upward by approximately six seconds; other retained tests were
+nearly unchanged. JSON's affected contracts took 59.872 seconds and SQLite's
+62.511 seconds. Summed worker time was 243.373 seconds, so phase totals must
+continue to be interpreted as overlapping work rather than wall time.
+
+Final evidence: `/tmp/bpfman-forwarding-parallel-rust-check.log`,
+`/tmp/bpfman-forwarding-parallel-gate-summary.json` and
+`/tmp/bpfman-forwarding-parallel-gate-timeline.jsonl`.

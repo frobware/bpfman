@@ -351,7 +351,8 @@ where
         + LinkStore
         + XdpReplacementStore
         + bpfman_store::TcStore
-        + Clone,
+        + Clone
+        + Send,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     exercise_kind(backend, mode, frames, Kind::Array);
@@ -365,7 +366,8 @@ where
         + LinkStore
         + XdpReplacementStore
         + bpfman_store::TcStore
-        + Clone,
+        + Clone
+        + Send,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
     exercise_kind(backend, mode, frames, Kind::Hash);
@@ -379,10 +381,14 @@ where
         + LinkStore
         + XdpReplacementStore
         + bpfman_store::TcStore
-        + Clone,
+        + Clone
+        + Send,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
-    for exclude in [false, true] {
-        scenario(backend.clone(), mode, frames, exclude, kind);
-    }
+    let jobs = [false, true]
+        .map(|exclude| (backend.clone(), exclude))
+        .into();
+    forwarding_fixtures(jobs, |(backend, exclude)| {
+        scenario(backend, mode, frames, exclude, kind);
+    });
 }

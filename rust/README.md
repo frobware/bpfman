@@ -1448,8 +1448,10 @@ rg 'kernel-timing' /tmp/bpfman-rust-check.log
 Every kernel test has a monotonic timer covering its complete body and teardown.
 Opt-in TSV records contain `kernel-timing`, test name, elapsed seconds and
 `completed`/`failed`; they bypass libtest's captured success output. Timings do
-not enable concurrent Rust fixtures. The two backend-wide script batches still
-use the Go runner's parallel scheduler; remaining kernel contracts run serially.
+not control concurrency. Retained TX/direct REDIRECT, DEVMAP unicast and
+broadcast contracts run independent fixtures on two synchronous scoped workers.
+Top-level kernel tests remain serial, and the two backend-wide script batches
+remain sequential while using the Go runner's parallel scheduler internally.
 The corpus also emits `script-timing` rows with backend, runtime scope,
 implementation and the Go runner's existing per-script elapsed results.
 `script-batch-timing` records each complete runner invocation separately.
@@ -1479,9 +1481,13 @@ restoration, packet observation, survivor transitions, chain reconstruction,
 managed teardown and fixture teardown. Packet observation includes counter reads
 and the unchanged 300 ms capture window; fixture teardown includes namespace
 deletion and the outer context's unmount/temporary-directory cleanup. These
-phases do not overlap on successful runs. Broadcast phases retain their combined
-restoration/survivor measurements and exclude outer fixture teardown. All phases
-are portions of the whole-test timer; do not add them to that timer again.
+phases do not overlap within one successful fixture, but overlap across workers.
+Broadcast phases retain their combined restoration/survivor measurements and
+exclude outer fixture teardown. Workers inherit the parent test name for phase
+attribution; `forwarding.worker` measures each complete worker, including its
+fixture teardown. Worker and fixture phase totals can exceed whole-test wall
+time. Do not add them to the whole-test timer or sum nested worker/fixture
+records as elapsed time.
 
 The contention/isolation checkpoint's complete timed `rust-check lint-make`
 gate passed all 96 kernel tests in 540.19 s (9m00s), versus 782.36 s (13m02s)
@@ -1503,6 +1509,16 @@ packet observation, 36.931 s to setup, 6.619 s to managed teardown and 0.187 s t
 outer fixture teardown. These are local samples. The
 [forwarding follow-up](../docs/design/rust-reimplementation.md#txdirect-redirect-and-devmap-unicast-fixture-reuse-9-october-2026)
 records the complete matrix and validation evidence.
+
+The bounded-parallelism gate passed all 96 kernel tests and both stores' complete
+script batches in 368.81 s (6m09s), versus 467.88 s (7m48s). The 36 affected
+forwarding/broadcast contracts fell from 227.230 s to 122.383 s. Two scoped
+workers overlap independent fixtures; every restoration/lifetime assertion and
+300 ms capture window remains. Both stores again passed all 84 isolated scripts
+and four shared-runtime scripts. Formatting, Clippy, userspace/compile-fail
+contracts, Rustdoc and Makefile lint passed. These are local samples; the
+[parallel-fixture follow-up](../docs/design/rust-reimplementation.md#bounded-parallel-forwarding-fault-fixtures-9-october-2026)
+records the concurrency audit, phase counts and full comparison.
 
 
 ## Script parity through the Go runner
@@ -1770,7 +1786,7 @@ lifecycle tests, all 168 real-kernel tests (none ignored), and documentation. Th
 serial kernel suite completed in 1834.78 seconds. The focused TC target passed two
 store contracts and 36 kernel/CLI/script checks. Makefile lint and the Go runner's
 clsact capability unit check also passed. Userspace contracts run
-before the complete serial kernel suite in the normal gate.
+before the complete kernel suite in the normal gate.
 
 Egress, TCX, outer-filter status, and deleted-namespace/orphan repair
 remain unsupported. Qdisc inspection/deletion

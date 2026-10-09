@@ -24,7 +24,7 @@ The architecture and compatibility goals are in
   surface and environment support them; report untested boundaries accurately.
 - `rust-test-userspace` runs all nonprivileged workspace tests, including CLI
   contracts and the stateful fake. The normal `rust-test`/`rust-check` gate runs
-  this stage before the complete serial real-kernel binary, so cheap admission
+  this stage before the complete real-kernel binary, so cheap admission
   or persistence failures are found before the long packet suites. Keep automatic
   CLI test discovery in `test-userspace.sh`; do not replace it with a partial list.
 - On NixOS, Go and Rust tests share `e2e-kmod-build` and
@@ -352,7 +352,13 @@ The architecture and compatibility goals are in
   Leave isolation unset for full-corpus shared-store stress. `BPFMAN_KERNEL_TIMINGS=1`
   reports whole tests, runner batches and forwarding/broadcast phases. Forwarding
   phases separate restoration from packet observation and include fixture teardown;
-  preserve capture windows and both survivor choices when sharing setup. The optional
+  preserve capture windows and both survivor choices when sharing setup. Retained
+  forwarding and broadcast contracts opt into two synchronous scoped fixture
+  workers; top-level kernel tests and backend batches remain sequential. Construct
+  each fixture's runtime, namespace, fault state and descriptors inside its worker.
+  Join both workers before propagating a panic. Phase records retain the parent
+  test name, overlap across workers and must not be summed as wall time;
+  `forwarding.worker` records include nested fixture phases. The optional
   `BPFMAN_E2E_SCRIPT_TIMELINE` JSONL records scheduler queue/start/end, CPU and
   command completion; both it and `RUST_LOG` survive the privileged runner.
   Run backend batches sequentially because separate runners share a suite lock.
