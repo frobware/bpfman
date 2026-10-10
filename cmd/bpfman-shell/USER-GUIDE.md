@@ -53,6 +53,36 @@ when its selector matches. `BPFMAN_UNDER_TEST` chooses the executable separately
 This is runner admission policy, not new script syntax. Scripts remain parallel
 unless they explicitly request serial or exclusive scheduling.
 
+The corpus runner can schedule independent inputs from one script separately:
+
+```bpfman
+#pragma cases=[{"name":"drop-stop","params":{"fallback":1,"proceed":"pass,dispatcher_return"}},{"name":"pass-stop","params":{"fallback":2,"proceed":"pass,dispatcher_return"}}]
+```
+
+Put this pragma in the first 20 lines alongside labels. Case names must be unique
+and contain letters, digits, `_` or `-`, starting with a letter or digit; declare
+1–64 cases, each with a JSON `params` object. A malformed or repeated declaration
+fails admission. Each case appears as `scripts/Foo.bpfman/drop-stop` and runs under
+the existing scheduler, timeout, fail-fast, network pool and cleanup rules. With
+runtime isolation enabled, each case owns a separate store and bpffs. Serial and
+exclusive labels still apply. Repeats appear as `Foo.bpfman#0/drop-stop`.
+
+The runner supplies the typed JSON object through `BPFMAN_E2E_CASE`; it does not
+turn parameter keys into environment overrides. Plain scripts have inherited case
+input cleared. A script can read the object using existing commands:
+
+```bpfman
+guard input <- exec sh -c 'printf "%s\n" "${BPFMAN_E2E_CASE:-null}"'
+let params = $input.stdout |> jq fromjson
+```
+
+Direct `bpfman-shell Foo.bpfman` execution does not expand cases. Scripts should
+provide a useful default when case input is absent; the DEVMAP, broadcast and
+TX/direct REDIRECT helpers run their complete matrix in that mode. Select one case with
+`TEST='TestBPFManScripts/scripts/Foo[.]bpfman$/drop-stop$'` through Make. Selecting
+just the script runs all its cases. Labels still select scripts, not individual
+cases.
+
 ## Mental Model
 
 A statement is either a bpfman-shell form or a command. Reserved words such as

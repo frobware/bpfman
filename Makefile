@@ -1070,7 +1070,7 @@ $(BIN_DIR)/xdp-delivery-probe: e2e/testdata/xdp-delivery/main.go go.mod go.sum |
 	CGO_ENABLED=0 go build -o $@ ./e2e/testdata/xdp-delivery
 
 rust-test: rust-test-userspace e2e-kmod-insmod
-	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER)
+	$(RUST_TEST_ENV) BPFMAN_KERNEL_SUITE=all cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER)
 
 # Fail cheap admission/persistence contracts before privileged integration tests.
 # Unit tests exclude integration targets, doctests and process-signal fixtures.
@@ -1902,7 +1902,7 @@ rust-test-scripts: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 
 .PHONY: rust-test-kernel-load
 rust-test-kernel-load: rust-build $(RUST_TEST_INPUTS)
-	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- --skip script_corpus --nocapture
+	$(RUST_TEST_ENV) BPFMAN_KERNEL_SUITE=contracts cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER)
 
 .PHONY: rust-test-xdp-switch
 rust-test-xdp-switch: rust-build $(RUST_TEST_INPUTS)

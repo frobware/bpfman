@@ -1,5 +1,6 @@
 # -*- mode: bpfman -*-
 #pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"devmap"}
+#pragma cases=[{"name":"drop-stop","params":{"fallback":1,"proceed":"pass,dispatcher_return"}},{"name":"drop-continue","params":{"fallback":1,"proceed":"pass,redirect,dispatcher_return"}},{"name":"pass-stop","params":{"fallback":2,"proceed":"pass,dispatcher_return"}},{"name":"pass-continue","params":{"fallback":2,"proceed":"pass,redirect,dispatcher_return"}}]
 # Given: a private, pooled namespace and an explicit drv XDP dispatcher
 # When: DEVMAP forwarding, live updates and both survivor choices are exercised
 # Then: delivery, continuation, map identity and payload integrity are preserved

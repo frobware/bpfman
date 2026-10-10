@@ -1,5 +1,6 @@
 # -*- mode: bpfman -*-
 #pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"broadcast"}
+#pragma cases=[{"name":"include-ingress","params":{"flags":8}},{"name":"exclude-ingress","params":{"flags":24}}]
 # Given: a private pooled namespace and an explicit skb XDP dispatcher
 # When: broadcast fan-out, ingress exclusion, live updates and both survivors run
 # Then: exact delivery, continuation, map identity and complete payloads survive

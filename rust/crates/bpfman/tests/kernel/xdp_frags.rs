@@ -28,9 +28,10 @@ struct Network {
 
 impl Network {
     fn new() -> Self {
+        let identity = fixture_id();
         let network = Self {
-            receiver: format!("bpfman-frags-{}-r", std::process::id()),
-            sender: format!("bpfman-frags-{}-s", std::process::id()),
+            receiver: format!("bpfman-frags-{identity}-r"),
+            sender: format!("bpfman-frags-{identity}-s"),
         };
         for ns in [&network.receiver, &network.sender] {
             ip(&["netns", "add", ns], true);

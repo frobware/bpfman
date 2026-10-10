@@ -27,7 +27,7 @@ fn ip(args: &[&str]) {
 
 impl Namespace {
     fn new(suffix: &str) -> Self {
-        let name = format!("bpfman-rust-{}-{suffix}", std::process::id());
+        let name = format!("bpfman-rust-{}-{suffix}", fixture_id());
         ip(&["netns", "add", &name]);
         let ns = Self {
             name,

@@ -25,9 +25,7 @@ pub(super) struct Network(String);
 
 impl Network {
     pub(super) fn new() -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let network = Self(format!("bpfman-delivery-{}-{sequence}", std::process::id()));
+        let network = Self(format!("bpfman-delivery-{}", fixture_id()));
         ip(&["netns", "add", &network.0]);
         for (a, b) in [("in0", "source0"), ("out0", "sink0")] {
             ip(&[

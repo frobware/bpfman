@@ -1,5 +1,6 @@
 # -*- mode: bpfman -*-
 #pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"delivery"}
+#pragma cases=[{"name":"stop","params":{"continues":false}},{"name":"continue","params":{"continues":true}}]
 # Given: a pooled private namespace and explicit drv XDP mode
 # When: TX, continuation and both survivor choices handle 8014-byte frames
 # Then: exact delivery, payload integrity and dispatcher identity are preserved

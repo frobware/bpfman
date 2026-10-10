@@ -187,12 +187,27 @@ def devmap_scenario(object mode size fallback proceed) {
     assert not path-exists $targets
 }
 
+def delivery_case() {
+    guard input <- exec sh -c 'printf "%s\n" "${BPFMAN_E2E_CASE:-null}"'
+    return $input.stdout |> jq fromjson
+}
+
 def devmap_behaviour(object mode frame_size) {
     let size = $frame_size |> jq tonumber
-    foreach fallback in [1 2] {
-        foreach proceed in ["pass,dispatcher_return" "pass,redirect,dispatcher_return"] {
-            devmap_scenario $object $mode $size $fallback $proceed
+    # The corpus runner schedules named cases independently. Direct shell use
+    # retains the complete matrix when no case input is supplied.
+    guard params <- delivery_case
+    let default_case = $params |> jq ". == null"
+    if $default_case {
+        foreach fallback in [1 2] {
+            foreach proceed in ["pass,dispatcher_return" "pass,redirect,dispatcher_return"] {
+                devmap_scenario $object $mode $size $fallback $proceed
+            }
         }
+    } else {
+        let valid = $params |> jq '(.fallback == 1 or .fallback == 2) and (.proceed == "pass,dispatcher_return" or .proceed == "pass,redirect,dispatcher_return")'
+        assert $valid == true
+        devmap_scenario $object $mode $size $params.fallback $params.proceed
     }
 }
 
@@ -271,8 +286,17 @@ def direct_delivery_behaviour(mode frame_size action_code) {
     let size = $frame_size |> jq tonumber
     let action = $action_code |> jq tonumber
     let continuation = $action |> jq 'if . == 3 then "pass,tx,dispatcher_return" else "pass,redirect,dispatcher_return" end'
-    direct_delivery_scenario $mode $size $action pass,dispatcher_return
-    direct_delivery_scenario $mode $size $action $continuation
+    guard params <- delivery_case
+    let default_case = $params |> jq ". == null"
+    if $default_case {
+        direct_delivery_scenario $mode $size $action pass,dispatcher_return
+        direct_delivery_scenario $mode $size $action $continuation
+    } else {
+        let valid = $params |> jq '.continues | type == "boolean"'
+        assert $valid == true
+        let proceed = $params.continues |> jq "if . then \"${continuation}\" else \"pass,dispatcher_return\" end"
+        direct_delivery_scenario $mode $size $action $proceed
+    }
 }
 
 # Broadcast uses a fourth capture socket in the existing probe. The filtered
@@ -471,8 +495,17 @@ def broadcast_scenario(object mode size flags returned) {
 
 def broadcast_behaviour(object mode frame_size) {
     let size = $frame_size |> jq tonumber
-    broadcast_scenario $object $mode $size 8 3
-    broadcast_scenario $object $mode $size 24 0
+    guard params <- delivery_case
+    let default_case = $params |> jq ". == null"
+    if $default_case {
+        broadcast_scenario $object $mode $size 8 3
+        broadcast_scenario $object $mode $size 24 0
+    } else {
+        let valid = $params |> jq ".flags == 8 or .flags == 24"
+        assert $valid == true
+        let returned = $params.flags |> jq "if . == 8 then 3 else 0 end"
+        broadcast_scenario $object $mode $size $params.flags $returned
+    }
 }
 
 

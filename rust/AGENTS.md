@@ -354,14 +354,34 @@ The architecture and compatibility goals are in
   phases separate restoration from packet observation and include fixture teardown;
   preserve capture windows and both survivor choices when sharing setup. Retained
   forwarding and broadcast contracts opt into two synchronous scoped fixture
-  workers; top-level kernel tests and backend batches remain sequential. Construct
+  workers in focused/one-thread runs. Complete suites use `test-kernel.sh`: discover
+  every case, run corpus/Go/global-inventory stages serially, and run independent
+  contracts on four threads within each backend (two and one are supported through
+  `BPFMAN_KERNEL_TEST_THREADS`). Backend stages remain sequential; unclassified
+  names fail admission. Forwarding uses one fixture worker when top-level tests
+  are concurrent, keeping the fixture limit at four instead of multiplying it.
+  Construct
   each fixture's runtime, namespace, fault state and descriptors inside its worker.
-  Join both workers before propagating a panic. Phase records retain the parent
-  test name, overlap across workers and must not be summed as wall time;
+  Join all workers before propagating a panic. Phase records retain the parent
+  test name, overlap across fixtures/tests and must not be summed as wall time;
   `forwarding.worker` records include nested fixture phases. The optional
   `BPFMAN_E2E_SCRIPT_TIMELINE` JSONL records scheduler queue/start/end, CPU and
   command completion; both it and `RUST_LOG` survive the privileged runner.
   Run backend batches sequentially because separate runners share a suite lock.
+  Corpus `#pragma cases` declares independently scheduled typed input objects;
+  each case retains normal admission, timeout, pooled networks, defers and residue
+  checks. Eight DEVMAP scripts expand their four fallback/mask combinations this
+  way; eight broadcast scripts expand ingress inclusion/exclusion and eight
+  TX/direct REDIRECT scripts expand stopping/continuing masks into two cases
+  each. Direct shell execution still runs the complete matrix. Script counts
+  refer to files; distinguish expanded case/process counts when checking telemetry.
+  Isolated script batches default to 32 Go-runner slots; shared-runtime batches
+  default to four. The existing Make `PARALLEL` override is preserved through
+  sudo and selects the script limit independently of retained kernel threads.
+  Keep isolated-runtime inventory/pin checks before normal bpffs unmount. Busy
+  references may drain within a bounded five-second cleanup deadline; persistent
+  holders fail. Never replace that proof with lazy/forced unmount. A zero script
+  process exit does not establish that its later runner cleanup passed.
 - Make each vertical slice's supported command surface explicit. Unsupported
   commands and flags fail clearly; never invent successful observations for
   functionality not yet implemented.

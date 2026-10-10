@@ -1450,8 +1450,18 @@ Opt-in TSV records contain `kernel-timing`, test name, elapsed seconds and
 `completed`/`failed`; they bypass libtest's captured success output. Timings do
 not control concurrency. Retained TX/direct REDIRECT, DEVMAP unicast and
 broadcast contracts run independent fixtures on two synchronous scoped workers.
-Top-level kernel tests remain serial, and the two backend-wide script batches
-remain sequential while using the Go runner's parallel scheduler internally.
+Complete suites discover all kernel cases and run script acceptance separately
+from retained contracts. Corpus, legacy Go and global dispatcher-inventory checks
+remain serial. Independent retained contracts run on four threads within each
+backend; `BPFMAN_KERNEL_TEST_THREADS=2` or `1` selects a lower limit. Backend
+stages remain sequential. Forwarding uses one fixture worker when top-level tests
+are concurrent, so nesting does not multiply the four-fixture limit. Focused
+Make targets retain their serial outer runner and two forwarding fixture workers.
+The script batches use the Go runner's parallel scheduler internally: isolated
+acceptance defaults to 32 slots and shared-runtime coverage to four. The existing
+Make override, for example `make rust-test-scripts PARALLEL=16`, selects the
+script limit independently of `BPFMAN_KERNEL_TEST_THREADS`. The privileged runner
+preserves it, and the script timeline records the actual configured limit.
 The corpus also emits `script-timing` rows with backend, runtime scope,
 implementation and the Go runner's existing per-script elapsed results.
 `script-batch-timing` records each complete runner invocation separately.
@@ -1469,10 +1479,14 @@ Set `BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-scripts.jsonl` to append the Go
 runner's optional JSONL timeline through Make or the Rust gate. `suite_start`
 records actual `-test.parallel` and `GOMAXPROCS`; `script_queued`, `script_start`
 and `script_end` separate scheduler waiting, execution and cleanup. End markers
-follow residue checks and unmounting. `script_process` records runtime scope,
+follow residue checks and unmounting. Isolated cleanup waits at most five seconds
+for `EBUSY` mount references, using normal unmount; persistent holders fail.
+`script_process` records runtime scope,
 wall milliseconds, OS-reported user/system CPU milliseconds, output byte count
-and exit code. It does not record command arguments or captured output. CPU
-includes waited-for descendants on Linux; it is not a count of blocked time.
+and exit code. It does not record command arguments or captured output.
+An exit code of zero records the script body; the suite must also pass its
+subsequent cleanup checks.
+CPU includes waited-for descendants on Linux; it is not a count of blocked time.
 CLI tracing remains separately opt-in with `RUST_LOG` and `--trace-file`.
 Forwarding and broadcast contracts additionally emit `kernel-phase-timing`
 records with test name, phase, seconds and outcome. TX/direct REDIRECT
@@ -1486,8 +1500,11 @@ Broadcast phases retain their combined restoration/survivor measurements and
 exclude outer fixture teardown. Workers inherit the parent test name for phase
 attribution; `forwarding.worker` measures each complete worker, including its
 fixture teardown. Worker and fixture phase totals can exceed whole-test wall
-time. Do not add them to the whole-test timer or sum nested worker/fixture
-records as elapsed time.
+time. Whole-test durations also overlap within concurrent backend stages.
+Use each libtest stage's reported elapsed time for wall-time comparisons; do not
+sum whole-test or nested worker/fixture records as elapsed time. `kernel-stage`
+reports each stage's thread limit and selected case count, and
+`kernel-suite-counts` verifies complete discovery/selection.
 
 The contention/isolation checkpoint's complete timed `rust-check lint-make`
 gate passed all 96 kernel tests in 540.19 s (9m00s), versus 782.36 s (13m02s)
@@ -1520,12 +1537,42 @@ contracts, Rustdoc and Makefile lint passed. These are local samples; the
 [parallel-fixture follow-up](../docs/design/rust-reimplementation.md#bounded-parallel-forwarding-fault-fixtures-9-october-2026)
 records the concurrency audit, phase counts and full comparison.
 
+The concurrent-stage/named-case gate subsequently passed all 96 discovered
+kernel tests exactly once in 213.75 s (3m34s), versus 368.81 s (6m09s).
+Independent contracts run four at a time within each backend; global dispatcher
+inventory checks, script batches and the legacy Go runner remain serial.
+Retained contract wall time was 96.87 s; acceptance was 116.83 s. Both stores
+passed all 84 admitted files, every named DEVMAP case and four shared-runtime
+scripts, including residue verification. All assertions and capture windows
+remain. Go shell tests/lint, runner contracts and the full Rust gate passed.
+An exploratory duplicate stimulus report did not recur in 18 stress contracts or
+the final gate; diagnostic output and the investigation note remain. The
+[stage/case follow-up](../docs/design/rust-reimplementation.md#concurrent-kernel-stages-and-named-script-cases-9-october-2026)
+records the measured stages and case counts. These are local samples.
+
+The expanded broadcast/TX/direct REDIRECT cases and 32-slot isolated acceptance
+gate passed in 193.25 s (3m13s), with all 96 kernel tests, all 84 files and all
+64 named cases per store. Script acceptance fell to 95.26 s; retained contracts
+took 97.97 s. Shared-runtime coverage still runs four concurrent scripts per
+store. Bounded normal bpffs release addresses busy references without accepting
+persistent holders; 20 repetitions of both fast kernel contracts passed. Go
+passed all eight cases from the four affected shared scripts. The full Rust gate,
+Go lint and explicit e2e runner lint passed. See the
+[expanded-case follow-up](../docs/design/rust-reimplementation.md#expanded-packet-cases-and-script-throughput-9-october-2026)
+for timings, the failed-gate investigation and remaining scheduling costs.
+
 
 ## Script parity through the Go runner
 
 Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
 84 admitted scripts: 52 shared Go/Rust scripts and 32 Rust-only scripts,
-out of 171 scripts in total. A Rust-only script additionally declares:
+out of 171 scripts in total. Eight DEVMAP files declare four named cases each;
+eight broadcast and eight TX/direct REDIRECT files declare two each. The 84-file
+isolated corpus therefore executes 124 script processes per store: 60 plain
+scripts and 64 named cases. Each case has its own runtime, pooled network, timeout
+and residue checks. Direct shell execution still runs the complete matrix. See the
+[case runner guide](../cmd/bpfman-shell/USER-GUIDE.md#running-and-checking-scripts).
+A Rust-only script additionally declares:
 
 ```bpfman
 #pragma labels={"rust":"ok","rust-only":"true"}

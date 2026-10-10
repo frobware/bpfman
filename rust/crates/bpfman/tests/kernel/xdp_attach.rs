@@ -13,12 +13,16 @@ use bpfman_store::{
 };
 use std::{fs, num::NonZeroU32, process::Command};
 
-pub(super) struct Interface(String);
+pub(super) struct Interface {
+    receiver: String,
+    peer: String,
+}
 
 impl Interface {
     pub(super) fn new() -> Self {
-        let name = format!("bxa{}", std::process::id());
-        let peer = format!("bxb{}", std::process::id());
+        let identity = fixture_id();
+        let name = format!("bxa{identity}");
+        let peer = format!("bxb{identity}");
         let out = Command::new("ip")
             .args(["link", "add", &name, "type", "veth", "peer", "name", &peer])
             .output()
@@ -28,8 +32,11 @@ impl Interface {
             "{}",
             String::from_utf8_lossy(&out.stderr)
         );
-        let lease = Self(name);
-        for iface in [&lease.0, &peer] {
+        let lease = Self {
+            receiver: name,
+            peer,
+        };
+        for iface in [&lease.receiver, &lease.peer] {
             assert!(
                 Command::new("ip")
                     .args(["link", "set", iface, "up"])
@@ -41,14 +48,20 @@ impl Interface {
         lease
     }
 
+    pub(super) fn endpoints(&self) -> (&str, &str) {
+        (&self.peer, &self.receiver)
+    }
+
     pub(super) fn name(&self) -> InterfaceName {
-        self.0.parse().expect("interface")
+        self.receiver.parse().expect("interface")
     }
 }
 
 impl Drop for Interface {
     fn drop(&mut self) {
-        let result = Command::new("ip").args(["link", "del", &self.0]).output();
+        let result = Command::new("ip")
+            .args(["link", "del", &self.receiver])
+            .output();
         if !std::thread::panicking() {
             assert!(result.expect("delete interface").status.success());
         }

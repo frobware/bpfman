@@ -119,7 +119,7 @@ where
         assert_eq!(error.restoration_attempts().len(), 1);
         assert!(error.restoration_attempts()[0].is_ok());
         assert_eq!(app.get_xdp_dispatcher(details.key).expect("restored"), old);
-        traffic(&c, &[a], &[b]);
+        traffic(&c, &interface, &[a], &[b]);
         faults.set(None);
         let second = app
             .attach_xdp(request(b, Default::default()))
@@ -152,7 +152,7 @@ where
             app.get_xdp_dispatcher(details.key).expect("old chain"),
             chain
         );
-        traffic(&c, &[a, b], &[]);
+        traffic(&c, &interface, &[a, b], &[]);
         faults.set(None);
         app.detach_xdp(removed).expect("detach member");
         let remaining = app.get_xdp_dispatcher(details.key).expect("survivor");

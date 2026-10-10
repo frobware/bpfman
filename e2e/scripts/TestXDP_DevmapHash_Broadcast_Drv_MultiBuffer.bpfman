@@ -1,5 +1,6 @@
 # -*- mode: bpfman -*-
 #pragma labels={"rust":"ok","rust-only":"true","program":"xdp","area":"broadcast"}
+#pragma cases=[{"name":"include-ingress","params":{"flags":8}},{"name":"exclude-ingress","params":{"flags":24}}]
 # Given: a private pooled namespace and an explicit drv fragment-aware dispatcher
 # When: jumbo broadcast, ingress exclusion, updates and both survivors run
 # Then: single-target frames stay intact and cloning reports exact EOPNOTSUPP

@@ -5,6 +5,7 @@
 set -eu
 
 manifest=${1:?Rust manifest required}
+sh "${0%/*}/test-kernel-runner-test.sh"
 cargo test --manifest-path "$manifest" --workspace --exclude bpfman --locked
 
 set --

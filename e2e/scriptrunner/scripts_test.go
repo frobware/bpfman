@@ -90,6 +90,8 @@ import (
 // address pool's `net veth-pair` builtin maximum name
 // diversity per dispatched wave. Unset or N=1 keeps the
 // default one-pass behaviour and the unsuffixed subtest names.
+//
+//nolint:paralleltest // The suite coordinates exclusive cases and must finish before other top-level tests.
 func TestBPFManScripts(t *testing.T) {
 	if err := emitScriptTimelineMarker("suite_start", t.Name()); err != nil {
 		t.Fatalf("write suite timeline: %v", err)
@@ -195,45 +197,59 @@ func TestBPFManScripts(t *testing.T) {
 				}
 			}
 			t.Run(name, func(t *testing.T) {
-				if meta.err != nil {
-					t.Fatalf("read script metadata: %v", meta.err)
+				runCase := func(t *testing.T, params map[string]json.RawMessage) {
+					if meta.err != nil {
+						t.Fatalf("read script metadata: %v", meta.err)
+					}
+					if skipReason != "" {
+						t.Skip(skipReason)
+					}
+					if err := emitScriptTimelineMarker("script_queued", t.Name()); err != nil {
+						t.Fatalf("write script timeline queue marker: %v", err)
+					}
+					if !runExclusive {
+						t.Parallel()
+					}
+					if runSerial {
+						scriptSerialMu.Lock()
+						defer scriptSerialMu.Unlock()
+					}
+					if failfast {
+						if abortCtx.Err() != nil {
+							t.Skip("failfast: skipped after an earlier failure")
+						}
+						cancelIfFailed := func() {
+							if t.Failed() {
+								abortCancel()
+							}
+						}
+						defer cancelIfFailed()
+						// Residue verification can fail after the script body returns.
+						t.Cleanup(cancelIfFailed)
+					}
+					if err := emitScriptTimelineMarker("script_start", t.Name()); err != nil {
+						t.Fatalf("write script timeline start marker: %v", err)
+					}
+
+					t.Cleanup(func() {
+						if err := emitScriptTimelineMarker("script_end", t.Name()); err != nil {
+							t.Errorf("write script timeline end marker: %v", err)
+						}
+					})
+					runBPFManScript(t, e2eDir, rel, timeout, failfast, abortCtx, params)
 				}
-				if skipReason != "" {
-					t.Skip(skipReason)
+				if len(meta.mode.Cases) == 0 || meta.err != nil || skipReason != "" {
+					runCase(t, nil)
+					return
 				}
-				if err := emitScriptTimelineMarker("script_queued", t.Name()); err != nil {
-					t.Fatalf("write script timeline queue marker: %v", err)
-				}
+				// Release registration before scheduling cases. Each child owns
+				// its runtime, pooled networks, deadline, defers and cleanup.
 				if !runExclusive {
 					t.Parallel()
 				}
-				if runSerial {
-					scriptSerialMu.Lock()
-					defer scriptSerialMu.Unlock()
+				for _, scriptCase := range meta.mode.Cases {
+					t.Run(scriptCase.Name, func(t *testing.T) { runCase(t, scriptCase.Params) })
 				}
-				if failfast {
-					if abortCtx.Err() != nil {
-						t.Skip("failfast: skipped after an earlier failure")
-					}
-					cancelIfFailed := func() {
-						if t.Failed() {
-							abortCancel()
-						}
-					}
-					defer cancelIfFailed()
-					// Residue verification can fail after the script body returns.
-					t.Cleanup(cancelIfFailed)
-				}
-				if err := emitScriptTimelineMarker("script_start", t.Name()); err != nil {
-					t.Fatalf("write script timeline start marker: %v", err)
-				}
-
-				t.Cleanup(func() {
-					if err := emitScriptTimelineMarker("script_end", t.Name()); err != nil {
-						t.Errorf("write script timeline end marker: %v", err)
-					}
-				})
-				runBPFManScript(t, e2eDir, rel, timeout, failfast, abortCtx)
 			})
 		}
 	}
@@ -452,6 +468,7 @@ func scriptImplementationSkipReason(implementation string, labels k8slabels.Set)
 	return ""
 }
 
+//nolint:paralleltest // Admission cases change the process environment with t.Setenv.
 func TestScriptImplementationAdmission(t *testing.T) {
 	for _, implementation := range []string{"", "go", "rust"} {
 		t.Setenv(bpfmanImplementationEnv, implementation)
@@ -471,13 +488,32 @@ func scriptSelectorSkipReason(selector k8slabels.Selector, labels k8slabels.Set)
 	return fmt.Sprintf("script labels %s do not match %s=%s", labels.String(), bpfmanShellSelectorEnv, selector.String())
 }
 
+// Case input cannot override runtime, binary selection or other runner settings.
+// Clear inherited case input for plain scripts; parameters retain their JSON types.
+func scriptCaseEnvironment(env []string, params map[string]json.RawMessage) ([]string, error) {
+	result := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "BPFMAN_E2E_CASE=") {
+			result = append(result, entry)
+		}
+	}
+	if params != nil {
+		data, err := json.Marshal(params)
+		if err != nil {
+			return nil, fmt.Errorf("encode script case: %w", err)
+		}
+		result = append(result, "BPFMAN_E2E_CASE="+string(data))
+	}
+	return result, nil
+}
+
 // runBPFManScript executes one .bpfman script under a per-script
 // deadline. Output goes to a single combined buffer (matching
 // the Bash runners' user-visible shape) and is dumped via
 // t.Fatalf on failure or via t.Logf on success; either way the
 // Go test framework owns the framing so go test -json picks it
 // up cleanly.
-func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration, failfast bool, abortCtx context.Context) {
+func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration, failfast bool, abortCtx context.Context, params map[string]json.RawMessage) {
 	t.Helper()
 	timeoutCause := fmt.Errorf("script %s exceeded %s: %w", script, timeout, context.DeadlineExceeded)
 	ctx, cancel := context.WithTimeoutCause(t.Context(), timeout, timeoutCause)
@@ -497,7 +533,12 @@ func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration,
 	// invoked from. PATH is already set up at TestMain (BIN_DIR
 	// prepended once, before any exec.Command).
 	cmd.Dir = e2eDir
-	cmd.Env = append(os.Environ(), "BPFMAN_E2E_SCRIPT_NAME="+t.Name())
+	caseEnv, err := scriptCaseEnvironment(os.Environ(), params)
+	if err != nil {
+		t.Fatalf("script case input: %v", err)
+	}
+	cmd.Env = caseEnv
+	cmd.Env = append(cmd.Env, "BPFMAN_E2E_SCRIPT_NAME="+t.Name())
 	if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") == "1" {
 		root := isolatedScriptRuntime(t, cmd.Env)
 		cmd.Env = append(cmd.Env, "BPFMAN_RUNTIME_DIR="+root)

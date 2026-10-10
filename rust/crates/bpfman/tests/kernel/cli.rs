@@ -291,6 +291,17 @@ fn run_dsl(
         |names| format!("TestBPFManScripts/scripts/({})[.]bpfman$", names.join("|")),
     );
     let started = timings_enabled().then(std::time::Instant::now);
+    // Isolated cases spend time waiting for packet observation and subprocesses.
+    // The Go runner owns their pool and scheduling; keep the shared-store batch
+    // at four slots and honour the existing Make override for focused profiling.
+    let parallel = std::env::var("PARALLEL").map_or_else(
+        |_| if isolated { 32 } else { 4 },
+        |value| {
+            value
+                .parse::<usize>()
+                .expect("PARALLEL must be nonnegative")
+        },
+    );
     let output = Command::new("timeout")
         .arg("300s")
         .arg("make")
@@ -303,6 +314,7 @@ fn run_dsl(
         .arg(format!("E2E_SCRIPTS_TEST_BIN={}", runner.display()))
         .arg(format!("BIN_DIR={}", shell_dir.display()))
         .arg(format!("TEST={filter}"))
+        .arg(format!("PARALLEL={parallel}"))
         .arg(format!("BPFMAN_E2E_SCRIPT_SELECTOR={selector}"))
         .env("BPFMAN_RUNTIME_DIR", c.layout.root())
         .env(

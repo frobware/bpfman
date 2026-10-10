@@ -225,6 +225,22 @@ backend batches stay sequential. Kernel time fell from 467.88 s (7m48s) to
 Assertions and 300 ms capture windows are unchanged. See the
 [concurrency audit and timing evidence](#bounded-parallel-forwarding-fault-fixtures-9-october-2026).
 
+The subsequent concurrent-stage and named-case follow-up passed the full gate:
+all 96 kernel tests ran exactly once, backend stages remained sequential, and
+both stores passed the complete 84-file corpus with 32 named DEVMAP cases plus
+four shared-runtime scripts. Kernel time fell from 368.81 s (6m09s) to 213.75 s
+(3m34s), approximately 42%. Retained contracts took 96.87 s and script acceptance
+116.83 s. Assertions, fault matrices and capture windows remain intact. See the
+[runner abstractions and final evidence](#concurrent-kernel-stages-and-named-script-cases-9-october-2026).
+
+The expanded packet-case follow-up passed the full gate in 193.25 s (3m13s),
+with all 96 kernel tests, 84 admitted files and 64 named cases per store.
+Isolated acceptance uses 32 Go-runner slots; shared-runtime coverage uses four.
+Normal bpffs release waits within a bounded deadline for busy references;
+persistent-holder rejection is tested. Assertions and capture windows remain
+unchanged. See the
+[throughput measurements and cleanup evidence](#expanded-packet-cases-and-script-throughput-9-october-2026).
+
 The replacement fault matrix covers attach and
 non-last detach, partial acquisition at either extension slot, rejected and
 post-mutation switch failures, publication, restoration, cleanup, cancellation,
@@ -2780,3 +2796,277 @@ continue to be interpreted as overlapping work rather than wall time.
 Final evidence: `/tmp/bpfman-forwarding-parallel-rust-check.log`,
 `/tmp/bpfman-forwarding-parallel-gate-summary.json` and
 `/tmp/bpfman-forwarding-parallel-gate-timeline.jsonl`.
+
+
+### Concurrent kernel stages and named script cases (9 October 2026)
+
+The complete Rust gate now separates script acceptance from retained kernel
+contracts. `rust/test-kernel.sh` discovers the complete libtest manifest, rejects
+unclassified names and selects each case exactly once. Corpus and legacy Go
+runner stages run serially. JSON contracts finish before SQLite contracts start.
+Independent contracts use four top-level test threads by default; one and two
+are available through `BPFMAN_KERNEL_TEST_THREADS`. With concurrent outer tests,
+forwarding has one fixture worker rather than two, so nested scheduling does not
+multiply the fixture concurrency. Focused targets keep their existing serial
+outer runner and two forwarding workers.
+
+All in-process network fixtures now share an atomic identity allocator. Short
+hexadecimal interface names stay within Linux's 15-byte limit. The ordinary XDP
+traffic helper receives its fixture's sender/receiver handle instead of
+reconstructing names from the process ID. Fragment and namespace-replacement
+fixtures also receive unique names. Network namespace entry still happens in
+disposable adapter threads; runtime directories, mounts, fault state, descriptors
+and counters remain fixture-owned. External commands inherit per-command
+environment; concurrent tests do not mutate process environment or subscribers.
+Tracepoint tests retain exact kernel IDs and private maps. Broadcast errors
+remain filtered by exact map ID and interface.
+
+The first four-thread run found a genuine shared observation: XDP loading checks
+the global set of `xdp_dispatcher` programs to prove its temporary verification
+target is released. It could mistake another test's live dispatcher for a leak.
+That test now runs in a serial global-inventory stage per backend, with the
+original assertion and reclamation deadline unchanged. The same exploratory run
+reported one duplicate stimulus frame. Its cause was not confirmed. Packet
+failures now include capture interface, sequence, kernel interface index, packet
+type and actual/expected MAC addresses. The subsequent complete four-thread
+contracts run passed, and three repetitions of concurrent switch/runtime/unload
+contracts per store passed all 18 tests without another duplicate. Retain these
+diagnostics rather than treating one unreproduced report as an established cause.
+
+| Retained-contract scheduling | Passed cases | Stage seconds |
+| --- | ---: | ---: |
+| Previous serial outer runner, two forwarding workers | 94 | 236.841 |
+| Two outer threads, one forwarding worker | 94 | 182.65 |
+| Four outer threads, serial global-inventory stages | 94 | 95.46 |
+
+These are local samples, not a controlled benchmark; the two-thread sample
+preceded the explicit global-inventory separation. No assertions, fault cases,
+survivor choices or 300 ms capture windows were removed. The serial load checks
+are scheduled separately, not skipped. Fast shell runner contracts exercise
+complete selection, exact filters, backend ordering, serial global stages,
+invalid admission and stop-on-failure. They run in the userspace gate without
+sudo or kernel resources.
+
+The script bottleneck also contained an avoidable serial dimension: each DEVMAP
+file ran its four fallback/proceed-on combinations one after another. The Go
+runner now supports reusable `#pragma cases` metadata with named, typed JSON
+input objects. Each case is a normal child subtest with the existing scheduler,
+pooled network allocator, deadline, cancellation, defers and residue checks.
+Isolation creates a fresh store and bpffs per case. Serial/exclusive labels and
+repeat policy still apply; labels select files, and test-name filters can select
+individual cases. Parent file subtests preserve existing selection/admission
+checks. Malformed, duplicate or empty cases fail admission.
+
+Eight existing DEVMAP/DEVMAP_HASH files declare `drop-stop`, `drop-continue`,
+`pass-stop` and `pass-continue`. Their existing scenario body and assertions are
+unchanged. The runner supplies only `BPFMAN_E2E_CASE` JSON, preventing parameter
+keys from overriding runtime/binary settings; plain scripts have inherited case
+input cleared. Standalone shell execution defaults to the complete four-case
+matrix. There remain 84 admitted files (52 shared, 32 Rust-only), but isolated
+acceptance now executes 108 script processes per backend: 76 plain files and
+32 cases from eight parameterized files. All eight files retain their existing
+Rust-only labels; this scheduling change makes no new Go parity claim.
+
+Metadata validation, typed environment isolation and the complete Go shell test
+suite passed, along with repository Go lint and runner admission/cancellation/
+telemetry contracts. The runner guide documents case syntax and focused
+selection. Suite/stage timers read Linux uptime to report elapsed time independent
+of wall-clock adjustments; whole-test and phase totals overlap under concurrency
+and must not be summed as wall time.
+
+Evidence before the final gate: `/tmp/bpfman-kernel-parallel-two.log`,
+`/tmp/bpfman-kernel-parallel-four.log` (exploratory failures),
+`/tmp/bpfman-kernel-parallel-four-isolated.log`,
+`/tmp/bpfman-stimulus-concurrency.log`, `/tmp/bpfman-script-cases-unit.log`,
+`/tmp/bpfman-script-cases-runner-contracts.log` and
+`/tmp/bpfman-script-cases-go-lint.log`.
+
+
+The first full acceptance attempt caught a script-input comparison error:
+structured objects cannot be compared directly with `null` in the DSL. The
+helper now uses jq to produce a scalar Boolean, as other structured comparisons
+do. The full gate was rerun after this correction; no scripts or cases were
+removed or relabelled to make it pass.
+
+Final `direnv exec . make rust-check lint-make` exited successfully. Formatting,
+Clippy, all userspace/compile-fail contracts, the fast runner scheduling contracts,
+Rustdoc with warnings denied and Makefile lint passed. All 96 discovered kernel
+tests passed exactly once, with none ignored. Per-test phase counts matched the
+unchanged forwarding/broadcast matrix: 832 forwarding phases, 160 broadcast
+phases and 40 worker records (one per helper invocation under four-thread
+execution), all completed. The reduction from 80 to 40 worker records reflects
+removing nested two-worker scheduling; it removes no fixture or observation.
+
+| Complete gate component | Previous kernel stage seconds | Final seconds |
+| --- | ---: | ---: |
+| Both backend script batches | 131.890 | 116.83 |
+| Retained kernel contracts | 236.841 | 96.87 |
+| Complete kernel stage | 368.81 | 213.75 |
+
+The final stage breakdown was corpus 116.83 s, JSON global inventory 0.80 s,
+JSON independent contracts 45.83 s, SQLite global inventory 0.85 s,
+SQLite independent contracts 48.91 s and legacy Go 0.48 s. Suite elapsed time
+includes discovery and process-launch overhead, so it differs slightly from the
+sum of stages. The kernel stage saved 155.06 s (42%), finishing in 3m34s.
+These are local samples, not a controlled benchmark or full build-duration claim.
+
+Each backend passed all 84 admitted parent files, every named case from the eight
+DEVMAP files, and its four concurrent shared-runtime scripts. The final timeline
+contained 225 successful process/start/end records: 108 isolated cases per store,
+four shared cases per store and one legacy Go script. All 64 named DEVMAP cases
+across both stores completed cleanup; inventory/artifact checks precede their end
+markers. JSON's isolated/shared batches took 41.434/15.511 s and SQLite's took
+43.543/16.211 s. Named DEVMAP cases typically took around six seconds; other long
+scripts still determine the batch completion time. The unexplained exploratory
+duplicate-frame report did not recur in the stress run or complete final gate;
+keep its diagnostic note and enriched probe output for future investigation.
+
+Final evidence: `/tmp/bpfman-kernel-stages-final-rust-check.log`,
+`/tmp/bpfman-kernel-stages-final-summary.json`,
+`/tmp/bpfman-kernel-stages-final-phase-matrix.json` and
+`/tmp/bpfman-kernel-stages-final-gate-timeline.jsonl`.
+
+
+### Expanded packet cases and script throughput (9 October 2026)
+
+The saved timeline identified the next corpus bottleneck: broadcast files took
+20–23 seconds each, running independent ingress-inclusion and ingress-exclusion
+fixtures serially. Eight broadcast files now declare `include-ingress` and
+`exclude-ingress` cases. Eight TX/direct REDIRECT files declare `stop` and
+`continue` cases for their independent proceed-on masks. They use the existing
+Go runner's case metadata, scheduler and pooled networks; no additional runner
+syntax or DSL builtin was needed. The packet scenario bodies, survivor checks,
+fragment/error evidence and 300 ms capture windows remain unchanged.
+
+A shared `delivery_case` helper reads typed JSON input using existing `exec` and
+jq commands. Each family validates its supported parameters before creating a
+fixture. With input absent, direct shell execution still runs the complete
+matrix; an unprivileged shell check also verified the helper's null default.
+Case parameters select only the independent dimension: they cannot replace the
+script's object, mode, frame size, action or expected delivery assertions.
+
+There remain 84 admitted files: 52 shared and 32 Rust-only. Twenty-four files now
+expand to 64 named cases, while 60 plain files still execute once. Isolated
+acceptance therefore runs 124 script processes per backend. Existing labels are
+unchanged. Go passed all eight cases from the four shared ordinary-driver
+TX/REDIRECT and array/hash broadcast scripts, including final inventory/artifact
+checks. That comparison does not promote any Rust-only scenario to shared parity.
+
+Splitting these cases alone passed the complete gate in 210.99 s (3m31s), versus
+213.75 s (3m34s): only a small improvement. All 96 kernel tests ran exactly once,
+and every file/case passed on both stores. The isolated JSON/SQLite batches took
+40.999/41.303 s including invocation overhead; shared coverage took
+15.858/16.207 s. The process timeline still showed work queued behind the Go
+runner's 16 slots. Shortening individual scripts did not remove the throughput
+limit.
+
+A separate measurement used the runner's existing `PARALLEL=32` setting, with
+backends sequential, isolated runtimes and private mount namespaces:
+
+| Isolated process timeline | 16 slots, seconds | 32 slots, seconds |
+| --- | ---: | ---: |
+| JSON | 40.929 | 33.397 |
+| SQLite | 41.227 | 36.666 |
+
+Both 32-slot batches passed every one of their 124 processes and cleanup checks.
+Timeline start/end pairs confirmed a maximum of 32 active cases and no unresolved
+case at the end. These are local samples, not a controlled benchmark; the table
+uses process/start/end markers rather than mixing them with invocation totals.
+More concurrency raises some individual process times while reducing batch wall
+time.
+
+Rust's isolated acceptance now requests 32 slots from the existing Go runner;
+the explicit shared-runtime subset requests four. The normal Make `PARALLEL`
+override survives sudo and chooses the script limit independently of retained
+kernel-test threads. A focused `PARALLEL=2` run verified the actual timeline limit
+and completed its tracepoint script. Backend order, suite locks, admission,
+timeouts, defers and residue assertions are unchanged.
+
+Evidence: `/tmp/bpfman-expanded-cases-rust-check.log`,
+`/tmp/bpfman-expanded-cases-summary.json`,
+`/tmp/bpfman-expanded-cases-phase-matrix.json`,
+`/tmp/bpfman-expanded-cases-gate-timeline.jsonl`,
+`/tmp/bpfman-case-concurrency-32.log`,
+`/tmp/bpfman-case-concurrency-32-summary.json`,
+`/tmp/bpfman-case-concurrency-32-timeline.jsonl`,
+`/tmp/bpfman-expanded-cases-go.log`,
+`/tmp/bpfman-expanded-cases-go-timeline.jsonl` and
+`/tmp/bpfman-script-parallel-override-timeline.jsonl`.
+
+The first full gate after selecting 32 slots found a cleanup failure on JSON's
+`TestMultiProgTracepoint_LoadAttachDetachUnload`: the script process exited zero
+and inventory/artifact checks succeeded, but normal bpffs unmount returned
+`EBUSY`. Thirty-one other cases were active. SQLite completed its acceptance;
+the corpus stage failed and stopped subsequent stages. The mount holder was not
+identified, so higher concurrency is an observed trigger rather than an
+established root cause. A process's zero exit code alone is not proof that its
+runner cleanup passed; inspect the suite outcome as well as timeline pairs.
+
+Isolated-runtime cleanup now waits up to five seconds only for `EBUSY` references
+to drain, polling every 10 ms before attempting normal unmount again. Successful
+cleanup still requires the mount to release; no lazy/forced detach is used, no
+inventory/pin assertion changes, and persistent holders or other errors fail.
+Polling occurs only on busy mounts, and the runner logs its poll count. Two fast
+real-kernel contracts hold an opened bpffs directory: one releases it and proves
+normal unmount succeeds; the other retains it through a short deadline, verifies
+`EBUSY` and deadline causes, proves the mount remains attached, then explicitly
+releases it. Twenty repetitions passed both contracts. Repository Go lint passed.
+
+Failure/contract evidence: `/tmp/bpfman-expanded-cases-final-rust-check.log`,
+`/tmp/bpfman-expanded-cases-final-gate-timeline.jsonl`,
+`/tmp/bpfman-bpffs-drain-contracts.log` and
+`/tmp/bpfman-bpffs-drain-go-lint.log`.
+
+The final timed `direnv exec . make rust-check lint-make` exited successfully
+with bounded normal-unmount cleanup and the 32/four-slot defaults. Formatting,
+Clippy, userspace/compile-fail and shell scheduling contracts, Rustdoc with
+warnings denied and Makefile lint passed. All 96 discovered kernel tests ran
+exactly once with none failed or ignored. Repository Go lint and explicit
+e2e-tagged runner lint also passed. Required serial top-level runner tests retain
+their scheduling, with narrow lint explanations; case-input imports are formatted.
+
+| Complete gate component | First concurrent-stage gate, seconds | Expanded cases at 16 slots, seconds | Final 32-slot gate, seconds |
+| --- | ---: | ---: | ---: |
+| Both backend script batches | 116.83 | 114.52 | 95.26 |
+| Retained kernel contracts | 96.87 | 96.43 | 97.97 |
+| Complete kernel stage | 213.75 | 210.99 | 193.25 |
+
+The final kernel stage took 3m13s: 20.50 s (10%) less than the first concurrent-stage
+checkpoint, and 175.56 s (48%) less than the preceding committed 368.81 s (6m09s)
+checkpoint. Retained contracts varied upward slightly; the improvement came from
+script acceptance. These are local samples rather than a controlled benchmark
+or a full build-time measurement.
+
+Final stages were corpus 95.26 s, JSON global inventory 0.80 s, JSON independent
+contracts 46.12 s, SQLite global inventory 0.87 s, SQLite independent contracts
+49.72 s and legacy Go 0.46 s. Each store passed all 84 admitted files, all 64
+named cases and all four concurrent shared-runtime scripts. The final timeline
+contained 257 successful script processes with matching start/end markers:
+124 isolated processes and four shared processes per backend, plus legacy Go.
+Actual isolated/shared runner limits were 32/four, with observed maxima of
+32/four active scripts. Process/start/end wall times were JSON 30.444/15.831 s
+and SQLite 32.436/16.113 s; invocation totals were 30.518/15.904 s and
+32.507/16.186 s respectively. Cleanup checks and normal unmount precede end
+markers; the full suite outcome also confirms cleanup succeeded.
+
+Per-test phase counts again matched the unchanged fault/survivor matrix:
+832 forwarding phases, 160 broadcast phases and 40 worker records, all completed.
+The retained exploratory duplicate-frame note remains; no duplicate report
+occurred in the final gate. The busy-mount holder from the failed gate remains
+unidentified; bounded normal release and persistent-holder rejection are the
+verified contract, rather than a claim about that holder's origin.
+
+The next obvious scheduling cost is the explicit shared-runtime cohort: it still
+adds about 16 seconds per backend after isolated acceptance finishes. A future
+runner change could overlap those cohorts in one backend invocation while
+retaining separate runtime scopes, shared-store concurrency and cohort-wide
+cleanup checks. That needs explicit scoped runner support; simply dropping the
+shared cohort or running competing suite-lock holders would lose coverage.
+Retained contracts now contribute about 98 seconds and should continue to use
+phase evidence before changing concurrency or fixture boundaries.
+
+Final evidence: `/tmp/bpfman-bpffs-drain-final-rust-check.log`,
+`/tmp/bpfman-bpffs-drain-final-summary.json`,
+`/tmp/bpfman-bpffs-drain-final-phase-matrix.json`,
+`/tmp/bpfman-bpffs-drain-final-gate-timeline.jsonl` and
+`/tmp/bpfman-bpffs-drain-runner-lint.log`.

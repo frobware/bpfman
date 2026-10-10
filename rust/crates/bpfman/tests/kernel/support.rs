@@ -18,13 +18,28 @@ pub(super) fn timings_enabled() -> bool {
     std::env::var_os("BPFMAN_KERNEL_TIMINGS").as_deref() == Some(std::ffi::OsStr::new("1"))
 }
 
+// Shared allocator for every in-process network fixture. Interface names use
+// short hexadecimal identities to stay below Linux's 15-byte name limit.
+pub(super) fn fixture_id() -> String {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    assert!(sequence < 0x10000, "fixture identity exhausted");
+    format!("{:x}{sequence:04x}", std::process::id())
+}
+
 // Only independent forwarding fixtures opt in. The outer libtest runner and
 // backend script batches stay sequential. Each job constructs and tears down
 // its own runtime, namespace, fault state and kernel descriptors in one worker.
+#[allow(clippy::panic)]
 pub(super) fn forwarding_fixtures<T: Send>(jobs: Vec<T>, run: impl Fn(T) + Sync) {
-    let mut workers = [Vec::new(), Vec::new()];
+    let count = match std::env::var("BPFMAN_KERNEL_TEST_THREADS").as_deref() {
+        Ok("2" | "4") => 1,
+        Ok("1") | Err(_) => 2,
+        other => panic!("invalid kernel concurrency: {other:?}"),
+    };
+    let mut workers: Vec<Vec<T>> = (0..count).map(|_| Vec::new()).collect();
     for (index, job) in jobs.into_iter().enumerate() {
-        workers[index % 2].push(job);
+        workers[index % count].push(job);
     }
     let parent = std::thread::current();
     let name = parent.name().expect("named kernel test");

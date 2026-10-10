@@ -69,7 +69,7 @@ where
         app.attach_xdp(request(removed))
             .expect("duplicate program member");
         let before = app.get_xdp_dispatcher(details.key).expect("before");
-        traffic(&c, &[a, b], &[]);
+        traffic(&c, &interface, &[a, b], &[]);
         faults.set(Some(Point::XdpReplace));
         let error = app.unload(removed).expect_err("publication failure");
         let progress = error.report().expect("retained unload");
@@ -88,7 +88,7 @@ where
             before
         );
         assert!(c.layout.program_pin_path(removed).exists());
-        traffic(&c, &[a, b], &[]);
+        traffic(&c, &interface, &[a, b], &[]);
         faults.set(None);
         let pin = c.layout.program_pin_path(removed);
         let moved = pin.with_file_name("held_program");
@@ -123,7 +123,7 @@ where
             after.members()[0].details.revision.get(),
             before.members()[0].details.revision.get() + 2
         );
-        traffic(&c, &[survivor], &[]);
+        traffic(&c, &interface, &[survivor], &[]);
         faults.set(Some(Point::XdpDelete));
         let error = app
             .unload(survivor)

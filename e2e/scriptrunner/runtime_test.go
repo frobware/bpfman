@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,9 +25,14 @@ func isolatedScriptRuntime(t *testing.T, env []string) string {
 	env = append(env, "BPFMAN_RUNTIME_DIR="+root)
 	t.Cleanup(func() {
 		defer func() {
-			if err := syscall.Unmount(filepath.Join(root, "fs"), 0); err != nil &&
-				!errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.ENOENT) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			waits, err := unmountScriptBpffs(ctx, filepath.Join(root, "fs"))
+			if err != nil {
 				t.Errorf("unmount script bpffs: %v", err)
+			}
+			if waits > 0 {
+				t.Logf("bpffs unmount waited for busy references: polls=%d", waits)
 			}
 		}()
 		// A script that fails before running the CLI need not create a runtime.
@@ -80,4 +86,91 @@ func isolatedScriptRuntime(t *testing.T, env []string) string {
 		}
 	})
 	return root
+}
+
+// Inventory and pin checks precede this release. A transient mount reference
+// must drain before normal unmount; persistent holders still fail cleanup.
+// Never use lazy/forced unmount, which would hide unresolved ownership.
+func unmountScriptBpffs(ctx context.Context, path string) (int, error) {
+	waits := 0
+	for {
+		err := syscall.Unmount(path, 0)
+		if err == nil || errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOENT) {
+			return waits, nil
+		}
+		if !errors.Is(err, syscall.EBUSY) {
+			return waits, err
+		}
+		select {
+		case <-ctx.Done():
+			return waits, fmt.Errorf("mount references did not drain: %w; %w", err, context.Cause(ctx))
+		case <-time.After(10 * time.Millisecond):
+			waits++
+		}
+	}
+}
+
+func TestScriptBpffsUnmountWaitsForReleasedDirectory(t *testing.T) {
+	t.Parallel()
+	path, held := busyScriptMount(t)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	released := make(chan error, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		released <- held.Close()
+	}()
+	waits, err := unmountScriptBpffs(ctx, path)
+	if releaseErr := <-released; releaseErr != nil {
+		t.Fatal(releaseErr)
+	}
+	if err != nil {
+		t.Fatalf("did not release mount: polls=%d err=%v", waits, err)
+	}
+	t.Logf("normal unmount completed after directory release: polls=%d", waits)
+}
+
+func TestScriptBpffsUnmountRejectsPersistentDirectoryHolder(t *testing.T) {
+	t.Parallel()
+	path, held := busyScriptMount(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+	defer cancel()
+	_, err := unmountScriptBpffs(ctx, path)
+	if !errors.Is(err, syscall.EBUSY) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("persistent mount reference was accepted: %v", err)
+	}
+	// A failed release must leave the mount attached for explicit recovery.
+	if err := syscall.Unmount(path, 0); !errors.Is(err, syscall.EBUSY) {
+		t.Fatalf("busy mount was detached: %v", err)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recovery, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	if _, err := unmountScriptBpffs(recovery, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func busyScriptMount(t *testing.T) (string, *os.File) {
+	t.Helper()
+	path := t.TempDir()
+	if err := syscall.Mount("bpf", path, "bpf", 0, ""); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := syscall.Unmount(path, 0); err != nil && !errors.Is(err, syscall.EINVAL) {
+			t.Errorf("release contract bpffs: %v", err)
+		}
+	})
+	held, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = held.Close() })
+	if err := syscall.Unmount(path, 0); !errors.Is(err, syscall.EBUSY) {
+		t.Fatalf("directory FD did not retain mount: %v", err)
+	}
+	return path, held
 }

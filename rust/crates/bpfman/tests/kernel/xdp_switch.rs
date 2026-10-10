@@ -309,7 +309,7 @@ where
         unreachable!("XDP")
     };
     let kernel = bpfman_kernel_aya::Kernel;
-    traffic(&c, &[first], &[second]);
+    traffic(&c, &interface, &[first], &[second]);
     let final_link = c.writer(|w| {
         let (old, _) = backend
             .observe_xdp_dispatcher(w, details.key)
@@ -345,7 +345,7 @@ where
         let receipt = failure.remaining.expect("restoration evidence");
         assert_eq!(live(outer_id).program, new_id.get());
         assert_eq!(live(outer_id).id, outer_id.get());
-        traffic(&c, &[first, second], &[]);
+        traffic(&c, &interface, &[first, second], &[]);
 
         // Rejected restoration cannot make the staged revision eligible for cleanup.
         probe.0.lock().expect("faults").reject_update = true;
@@ -381,7 +381,7 @@ where
             old
         );
 
-        traffic(&c, &[first], &[second]);
+        traffic(&c, &interface, &[first], &[second]);
 
         // The public kernel capability uses the same confined mechanism.
         let adopted = kernel.observe_dispatcher(w, &old).expect("adopt");
@@ -466,7 +466,7 @@ where
                     .pin_present
             );
         }
-        traffic(&c, &[first, second], &[]);
+        traffic(&c, &interface, &[first, second], &[]);
         // A zero continuation mask at slot zero stops slot one's execution.
         let stopped = stage_config(
             w,
@@ -483,7 +483,7 @@ where
             )
             .map_err(|e| e.cause)
             .expect("switch stop mask");
-        traffic(&c, &[second], &[first]);
+        traffic(&c, &interface, &[second], &[first]);
         kernel
             .restore_dispatcher(w, receipt)
             .map_err(|e| e.cause)
@@ -498,7 +498,7 @@ where
         let final_snapshot = publish_replacement(w, &backend, &current, &survivor, &[keep]);
         assert_eq!(live(outer_id).program, survivor.program.id().get());
         assert_eq!(live(outer_id).id, outer_id.get());
-        traffic(&c, &[keep], &[removed]);
+        traffic(&c, &interface, &[keep], &[removed]);
         final_snapshot.members()[0].member.id
     });
     app.detach_xdp(final_link)
@@ -509,7 +509,12 @@ where
     assert!(names(&c.layout.root().join("fs/xdp")).is_empty());
 }
 
-pub(super) fn traffic(c: &Context, active: &[NonZeroU32], inactive: &[NonZeroU32]) {
+pub(super) fn traffic(
+    c: &Context,
+    interface: &Interface,
+    active: &[NonZeroU32],
+    inactive: &[NonZeroU32],
+) {
     fn count(c: &Context, id: NonZeroU32) -> u64 {
         let map =
             aya::maps::MapData::from_pin(c.layout.map_directory_path(id).join("xdp_stats_map"))
@@ -529,10 +534,9 @@ pub(super) fn traffic(c: &Context, active: &[NonZeroU32], inactive: &[NonZeroU32
         .chain(inactive)
         .map(|id| count(c, *id))
         .collect();
-    let peer = format!("bxb{}", std::process::id());
-    let receiver = format!("bxa{}", std::process::id());
+    let (peer, receiver) = interface.endpoints();
     let output = std::process::Command::new(repository().join("bin/xdp-delivery-probe"))
-        .args(["stimulus", &peer, &receiver])
+        .args(["stimulus", peer, receiver])
         .output()
         .expect("send marked test frames");
     assert!(

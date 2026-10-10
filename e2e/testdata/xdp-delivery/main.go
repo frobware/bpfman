@@ -112,7 +112,7 @@ func run(size int, captures []string, source string, observeAll bool) error {
 				}
 				sequence := binary.BigEndian.Uint32(buffer[18:22])
 				if sequence >= 3 || seen[index][sequence] {
-					return fmt.Errorf("invalid or duplicate frame at capture %d: %d", index, sequence)
+					return fmt.Errorf("invalid or duplicate frame at capture %d (%s): sequence=%d ifindex=%d type=%d dst=%x src=%x expected-dst=%x expected-src=%x", index, captures[index], sequence, addr.Ifindex, addr.Pkttype, buffer[:6], buffer[6:12], frame[:6], frame[6:12])
 				}
 				if n != len(frame) || !bytes.Equal(buffer[22:n], frame[22:]) {
 					return fmt.Errorf("damaged frame at capture %d: %d bytes", index, n)
