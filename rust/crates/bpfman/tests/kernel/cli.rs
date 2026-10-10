@@ -219,21 +219,9 @@ pub(super) fn go_dsl(script: &str) {
 }
 
 pub(super) fn corpus(store: &'static str) {
+    // Both cohorts share one runner/pool. Four scripts additionally mutate one
+    // owned writer/store while ordinary acceptance keeps per-case isolation.
     run_dsl(store, None, &rust(), true);
-    // Keep concurrent cross-script mutations on one writer/store in the gate.
-    // This covers file loading and both dispatcher types, including a full
-    // fill/drain/refill chain, without unrelated inventory in every acceptance.
-    run_dsl(
-        store,
-        Some(&[
-            "TestProgram_FileLifecycle",
-            "TestXDP_DispatcherFillDrainRefill",
-            "TestXDP_Lifecycle_Drv",
-            "TestTC_IngressLifecycle",
-        ]),
-        &rust(),
-        false,
-    );
 }
 
 fn run_dsl(
@@ -292,8 +280,8 @@ fn run_dsl(
     );
     let started = timings_enabled().then(std::time::Instant::now);
     // Isolated cases spend time waiting for packet observation and subprocesses.
-    // The Go runner owns their pool and scheduling; keep the shared-store batch
-    // at four slots and honour the existing Make override for focused profiling.
+    // The Go runner owns their pool and scheduling; keep the shared-store cohort
+    // limited to four slots and honour the Make override for focused profiling.
     let parallel = std::env::var("PARALLEL").map_or_else(
         |_| if isolated { 32 } else { 4 },
         |value| {
@@ -302,6 +290,13 @@ fn run_dsl(
                 .expect("PARALLEL must be nonnegative")
         },
     );
+    let shared = [
+        "TestProgram_FileLifecycle.bpfman",
+        "TestXDP_DispatcherFillDrainRefill.bpfman",
+        "TestXDP_Lifecycle_Drv.bpfman",
+        "TestTC_IngressLifecycle.bpfman",
+    ];
+    let mixed = isolated && scripts.is_none();
     let output = Command::new("timeout")
         .arg("300s")
         .arg("make")
@@ -320,6 +315,14 @@ fn run_dsl(
         .env(
             "BPFMAN_E2E_ISOLATED_RUNTIME",
             if isolated { "1" } else { "0" },
+        )
+        .env(
+            "BPFMAN_E2E_SHARED_SCRIPTS",
+            if mixed {
+                shared.join(",")
+            } else {
+                String::new()
+            },
         )
         .env("BPFMAN_STORE", store)
         .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
@@ -343,7 +346,13 @@ fn run_dsl(
         // Go already reports per-script elapsed time. Preserve only those
         // result rows, rather than dumping captured CLI/packet output.
         let mut stderr = std::io::stderr().lock();
-        let scope = if isolated { "isolated" } else { "shared" };
+        let scope = if mixed {
+            "mixed"
+        } else if isolated {
+            "isolated"
+        } else {
+            "shared"
+        };
         let implementation = if binary == rust() { "rust" } else { "go" };
         if let Some(started) = started {
             let _ = writeln!(
@@ -354,7 +363,7 @@ fn run_dsl(
         }
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             let line = line.trim();
-            if line.starts_with("--- PASS: TestBPFManScripts/scripts/") {
+            if line.starts_with("--- PASS: TestBPFManScripts/") && line.contains("/scripts/") {
                 let _ = writeln!(
                     stderr,
                     "script-timing\t{store}\t{scope}\t{implementation}\t{line}"
@@ -362,13 +371,25 @@ fn run_dsl(
             }
         }
     }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let prefix = if mixed { "isolated/" } else { "" };
     for script in expected {
         assert!(
-            String::from_utf8_lossy(&output.stdout)
-                .contains(&format!("--- PASS: TestBPFManScripts/scripts/{script} (")),
-            "must execute selected script {script}: {}",
-            String::from_utf8_lossy(&output.stdout),
+            stdout.contains(&format!(
+                "--- PASS: TestBPFManScripts/{prefix}scripts/{script} ("
+            )),
+            "must execute selected script {script}: {stdout}",
         );
+    }
+    if mixed {
+        for script in shared {
+            assert!(
+                stdout.contains(&format!(
+                    "--- PASS: TestBPFManScripts/shared/scripts/{script} ("
+                )),
+                "must execute shared script {script}: {stdout}",
+            );
+        }
     }
     assert_eq!(
         c.json(binary, &["program", "list", "-o", "json"])["programs"],

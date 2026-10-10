@@ -346,9 +346,11 @@ The architecture and compatibility goals are in
   per backend with `BPFMAN_E2E_ISOLATED_RUNTIME=1`: fresh per-script stores/bpffs,
   unchanged pooled interfaces and parallel scheduling. The Go runner checks each
   script's inventories/artifacts before unmounting, including after failure.
-  Each backend additionally runs file lifecycle, XDP fill/drain/refill, XDP
-  lifecycle and TC lifecycle together on a shared runtime. Keep this explicit
-  concurrent-store coverage; normal Go Make runs remain shared by default.
+  The same runner overlaps an additional shared cohort containing file lifecycle,
+  XDP fill/drain/refill, XDP lifecycle and TC lifecycle. Its owned runtime must
+  pass inventory/artifact checks and normal unmount after all shared scripts finish.
+  Keep this explicit concurrent-store coverage; normal Go Make runs remain shared
+  by default.
   Leave isolation unset for full-corpus shared-store stress. `BPFMAN_KERNEL_TIMINGS=1`
   reports whole tests, runner batches and forwarding/broadcast phases. Forwarding
   phases separate restoration from packet observation and include fixture teardown;
@@ -375,13 +377,20 @@ The architecture and compatibility goals are in
   TX/direct REDIRECT scripts expand stopping/continuing masks into two cases
   each. Direct shell execution still runs the complete matrix. Script counts
   refer to files; distinguish expanded case/process counts when checking telemetry.
-  Isolated script batches default to 32 Go-runner slots; shared-runtime batches
-  default to four. The existing Make `PARALLEL` override is preserved through
+  Mixed script cohorts use one Go runner per backend with 32 slots; shared-runtime
+  execution is additionally capped at four. `BPFMAN_E2E_SHARED_SCRIPTS` selects
+  additional shared filenames without overriding admission. Reject admitted
+  exclusive scripts before overlapping cohorts. Mixed test names include
+  `/isolated/scripts/` or `/shared/scripts/`; legacy names remain when unset.
+  The existing Make `PARALLEL` override is preserved through
   sudo and selects the script limit independently of retained kernel threads.
   Keep isolated-runtime inventory/pin checks before normal bpffs unmount. Busy
   references may drain within a bounded five-second cleanup deadline; persistent
   holders fail. Never replace that proof with lazy/forced unmount. A zero script
-  process exit does not establish that its later runner cleanup passed.
+  process exit does not establish that its later runner cleanup passed. Timeline
+  `runtime_cleanup` reports verification/unmount outcomes separately; `script_end`
+  follows isolated cleanup and `cohort_end` follows shared cleanup. Shared script
+  end markers alone do not establish successful cohort cleanup.
 - Make each vertical slice's supported command surface explicit. Unsupported
   commands and flags fail clearly; never invent successful observations for
   functionality not yet implemented.

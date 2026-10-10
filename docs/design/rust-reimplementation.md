@@ -235,7 +235,11 @@ four shared-runtime scripts. Kernel time fell from 368.81 s (6m09s) to 213.75 s
 
 The expanded packet-case follow-up passed the full gate in 193.25 s (3m13s),
 with all 96 kernel tests, 84 admitted files and 64 named cases per store.
-Isolated acceptance uses 32 Go-runner slots; shared-runtime coverage uses four.
+Isolated acceptance uses 32 Go-runner slots; shared-runtime coverage uses four. The
+10 October follow-up overlaps these cohorts in one runner per backend, with shared
+execution still capped at four. All 96 kernel tests passed in 163.20 s (2m43s);
+acceptance fell to 67.36 s, and explicit cleanup outcomes now accompany process
+telemetry. See the [cohort follow-up](#overlapping-script-cohorts-10-october-2026).
 Normal bpffs release waits within a bounded deadline for busy references;
 persistent-holder rejection is tested. Assertions and capture windows remain
 unchanged. See the
@@ -3070,3 +3074,96 @@ Final evidence: `/tmp/bpfman-bpffs-drain-final-rust-check.log`,
 `/tmp/bpfman-bpffs-drain-final-phase-matrix.json`,
 `/tmp/bpfman-bpffs-drain-final-gate-timeline.jsonl` and
 `/tmp/bpfman-bpffs-drain-runner-lint.log`.
+
+
+### Overlapping script cohorts (10 October 2026)
+
+The Rust corpus now uses one Go-runner invocation per backend. Two named cohorts
+enter the existing parallel queue together: all admitted files/cases retain their
+isolated runtimes, and four lifecycle scripts additionally share one owned
+runtime. JSON and SQLite still run sequentially, and the system-wide suite lock
+is unchanged. The shared cohort is capped at four executing scripts within the
+same 32-slot runner; the Make `PARALLEL` override remains independent of retained
+Rust kernel threads. No packet assertions or observation windows changed.
+
+`BPFMAN_E2E_SHARED_SCRIPTS` names comma-separated script basenames for the
+additional shared pass. It requires isolation and cannot bypass selector or
+implementation admission. Invalid, duplicate, missing or unadmitted names fail
+before execution; admitted exclusive scripts also prohibit overlapping cohorts.
+Normal Go runs and existing test names remain unchanged when the setting is
+absent. Mixed tests use `/isolated/scripts/` and `/shared/scripts/`, and Rust checks
+both cohorts' expected PASS rows so a filter cannot silently omit acceptance.
+
+Each isolated case still checks empty program/link/dispatcher inventories and
+artifact collections before normal bpffs unmount. The shared cohort now owns its
+runtime inside the Go runner and applies those same checks after all shared
+scripts finish, then normally unmounts it. The existing bounded busy-reference
+release remains; persistent holders still fail. Configuration and case parameters
+never mutate the process environment while scripts run concurrently.
+
+Telemetry separates script exit from cleanup: all script markers carry
+`RuntimeScope`; `script_end` carries a test outcome; `runtime_cleanup` reports
+verification/unmount success or failure independently of body exit; and
+`cohort_end` follows all children and owned-runtime cleanup. A shared script's
+successful end does not imply successful cohort cleanup. No captured output,
+arguments, metadata or store contents are added to telemetry.
+
+Temporary negative fixtures deliberately left an artifact after a successful
+script exit. All three script processes exited zero, while both affected owned
+runtimes reported failed cleanup, the isolated test failed, and the shared cohort
+failed after its script had passed. Six admission checks rejected invalid,
+duplicate, missing, unselected, non-isolated or exclusive configurations before
+any cohort/script execution. A two-slot repeat check ran 16 processes: eight
+isolated repetitions each used a distinct runtime, eight shared repetitions used
+one common runtime, the scopes never shared paths, and all nine runtimes were
+cleaned and removed. Fast runner admission, case input, cancellation, process
+telemetry and real bpffs release contracts passed; e2e-tagged runner lint passed.
+
+| Kernel stage component | Previous checkpoint, seconds | Overlapping cohorts, seconds |
+| --- | ---: | ---: |
+| Both backend script batches | 95.26 | 67.36 |
+| Retained kernel contracts | 97.97 | 95.81 |
+| Complete kernel stage | 193.25 | 163.20 |
+
+The kernel stage fell by 30.05 s (16%), from 3m13s to 2m43s. Acceptance accounts
+for 27.90 s of that improvement; retained contracts also varied slightly. These
+are local samples, not a controlled benchmark or the full build/gate duration.
+Shared scripts took longer individually while overlapping the other work:
+JSON/SQLite shared process windows were 29.099/31.498 s, versus roughly 16 s in
+the previous separate batches. The isolated windows were 31.704/35.392 s, and
+the complete combined invocations took 31.778/35.470 s. Overlap eliminates the
+serial tail despite this contention; it does not make each script faster.
+
+All 96 discovered kernel tests ran exactly once, with none failed or ignored.
+Each store passed all 84 admitted files, all 64 named cases and the four additional
+shared scripts: 124 isolated plus four shared processes per store, and one legacy
+Go process, for 257 total. Admission remains 52 shared and 32 Rust-only files;
+labels and scenario matrices are unchanged. The timeline proved both cohorts
+had scripts active simultaneously, total activity never exceeded 32 and shared
+activity never exceeded four. All 250 owned-runtime cleanup outcomes and four
+cohort end outcomes passed. The full per-test phase matrix matched the previous
+checkpoint: 292 test/phase pairs and 1032 completed records, comprising 832
+forwarding phases, 160 broadcast phases and 40 worker records.
+
+Formatting, Clippy, userspace/compile-fail and shell scheduling contracts, kernel
+acceptance and warnings-denied Rustdoc all passed through `rust-check`. The
+combined command subsequently failed Make's undefined-variable probe because the
+new optional setting lacked an empty Make default. Adding that default and
+rerunning `rust-fmt lint-make` passed; no kernel behaviour changed. Go comparison
+also passed all eight ordinary driver TX/REDIRECT and array/hash broadcast cases,
+including isolated cleanup and final test outcomes.
+
+Evidence: `/tmp/bpfman-overlap-rust-check.log`,
+`/tmp/bpfman-overlap-gate-timeline.jsonl`, `/tmp/bpfman-overlap-summary.json`,
+`/tmp/bpfman-overlap-phase-matrix.json`,
+`/tmp/bpfman-overlap-runner-contracts.log`,
+`/tmp/bpfman-overlap-runner-lint-final.log`,
+`/tmp/bpfman-overlap-make-final.log`,
+`/tmp/bpfman-overlap-negative-check.log`,
+`/tmp/bpfman-overlap-negative-summary.json`,
+`/tmp/bpfman-overlap-go-final.log` and
+`/tmp/bpfman-overlap-go-final-timeline.jsonl`.
+
+Retained Rust contracts now account for about 96 seconds of the 163-second kernel
+stage. Further reductions should start with their per-test and phase evidence,
+while preserving fault matrices, ownership proofs and packet observation windows.

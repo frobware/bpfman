@@ -1457,8 +1457,9 @@ backend; `BPFMAN_KERNEL_TEST_THREADS=2` or `1` selects a lower limit. Backend
 stages remain sequential. Forwarding uses one fixture worker when top-level tests
 are concurrent, so nesting does not multiply the four-fixture limit. Focused
 Make targets retain their serial outer runner and two forwarding fixture workers.
-The script batches use the Go runner's parallel scheduler internally: isolated
-acceptance defaults to 32 slots and shared-runtime coverage to four. The existing
+The script cohorts use one Go runner per backend and its parallel scheduler:
+isolated acceptance and shared-runtime coverage overlap within 32 slots, with
+shared-runtime execution additionally capped at four scripts. The existing
 Make override, for example `make rust-test-scripts PARALLEL=16`, selects the
 script limit independently of `BPFMAN_KERNEL_TEST_THREADS`. The privileged runner
 preserves it, and the script timeline records the actual configured limit.
@@ -1478,8 +1479,12 @@ captures retain their 300 ms windows for unexpected or duplicate traffic.
 Set `BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-scripts.jsonl` to append the Go
 runner's optional JSONL timeline through Make or the Rust gate. `suite_start`
 records actual `-test.parallel` and `GOMAXPROCS`; `script_queued`, `script_start`
-and `script_end` separate scheduler waiting, execution and cleanup. End markers
-follow residue checks and unmounting. Isolated cleanup waits at most five seconds
+and `script_end` separate scheduler waiting, execution and cleanup. `RuntimeScope`
+identifies the cohort on every script marker, and end markers carry a
+`passed`/`failed`/`skipped` outcome. Isolated end markers follow residue checks and
+unmounting. Shared script end markers precede cohort cleanup; `runtime_cleanup`
+reports inventory/artifact verification and normal unmount separately from body
+exit codes. `cohort_end` includes all child tests and runtime cleanup. Isolated cleanup waits at most five seconds
 for `EBUSY` mount references, using normal unmount; persistent holders fail.
 `script_process` records runtime scope,
 wall milliseconds, OS-reported user/system CPU milliseconds, output byte count
@@ -1560,6 +1565,18 @@ passed all eight cases from the four affected shared scripts. The full Rust gate
 Go lint and explicit e2e runner lint passed. See the
 [expanded-case follow-up](../docs/design/rust-reimplementation.md#expanded-packet-cases-and-script-throughput-9-october-2026)
 for timings, the failed-gate investigation and remaining scheduling costs.
+
+
+The overlapping-cohort follow-up passed all 96 kernel tests in 163.20 s (2m43s),
+versus 193.25 s (3m13s). One runner per backend overlaps isolated acceptance with
+four scripts on an owned shared runtime; acceptance fell from 95.26 s to 67.36 s.
+All 257 script processes and 250 owned-runtime cleanup outcomes passed, with
+unchanged fault/phase counts. Rust checks, runner contracts/lint and corrected
+Make lint passed. Negative fixtures proved cleanup failures remain visible after
+zero script exits. See the
+[cohort follow-up](../docs/design/rust-reimplementation.md#overlapping-script-cohorts-10-october-2026)
+for scope ownership, telemetry outcomes, contention and validation evidence.
+These are kernel-stage local timings, not total gate durations.
 
 
 ## Script parity through the Go runner
@@ -1664,12 +1681,19 @@ Each runs all 84 admitted scripts with `BPFMAN_E2E_ISOLATED_RUNTIME=1`, using
 fresh per-script stores and bpffs mounts. The runner checks every script's empty
 program/link/dispatcher inventories and artifact collections before unmounting,
 including on script failure. Script assertions and pooled network parallelism
-remain unchanged. Each backend then runs four scripts together on a shared
-runtime: file lifecycle, XDP fill/drain/refill, XDP lifecycle and TC lifecycle.
-This retains concurrent writer/store/dispatcher coverage in the gate.
+remain unchanged. The same runner concurrently executes an additional shared
+cohort: file lifecycle, XDP fill/drain/refill, XDP lifecycle and TC lifecycle.
+The four scripts share one owned runtime, checked and normally unmounted after
+all four finish. This retains concurrent writer/store/dispatcher coverage in the
+gate without a second invocation or suite-lock contention. Mixed cohort test
+names include `/isolated/scripts/` or `/shared/scripts/`.
 Normal Go `make run-e2e-scripts` remains shared by default; the same isolation
-opt-in is available for either implementation. Leave it unset to stress the full
-corpus on one store. Backend batches still run sequentially.
+opt-in is available for either implementation. `BPFMAN_E2E_SHARED_SCRIPTS` names
+comma-separated `.bpfman` basenames for an additional shared cohort when isolation
+is enabled. Admission still applies; missing, duplicate or unselected names and
+admitted exclusive scripts fail before execution. Without the cohort setting,
+existing test names and scheduling stay unchanged. Leave isolation unset to
+stress the full corpus on one store. Backend batches still run sequentially.
 The old individual Rust script
 wrappers have been removed. `make rust-test-scripts` runs these batches directly;
 `rust-test-xdp-corpus` and `rust-test-observation` also select this acceptance gate.

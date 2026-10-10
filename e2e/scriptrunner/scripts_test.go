@@ -96,10 +96,6 @@ func TestBPFManScripts(t *testing.T) {
 	if err := emitScriptTimelineMarker("suite_start", t.Name()); err != nil {
 		t.Fatalf("write suite timeline: %v", err)
 	}
-	timeout := scriptTimeout()
-	repeats := scriptRepeats()
-	e2eDir := e2ePackageDir(t)
-
 	// -test.failfast cannot interrupt an already-released
 	// t.Parallel() wave, so the flag is a no-op for parallel
 	// scripts. Drive the abort cooperatively instead, preserving
@@ -116,6 +112,62 @@ func TestBPFManScripts(t *testing.T) {
 	// cancel abortCtx before any script runs and skip them all.
 	// t.Cleanup runs only after every subtest completes.
 	t.Cleanup(abortCancel)
+
+	shared, err := parseSharedScripts(os.Getenv("BPFMAN_E2E_SHARED_SCRIPTS"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shared) == 0 {
+		scope := "shared"
+		if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") == "1" {
+			scope = "isolated"
+		}
+		runScriptCohort(t, scope, nil, false, failfast, abortCtx, abortCancel)
+		return
+	}
+	if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") != "1" {
+		t.Fatal("BPFMAN_E2E_SHARED_SCRIPTS requires BPFMAN_E2E_ISOLATED_RUNTIME=1")
+	}
+	validateSharedScripts(t, shared)
+	// Both groups use the same Go parallel queue and pooled networks. Register
+	// shared first so its four writers overlap the longer isolated cohort.
+	for _, scope := range []string{"shared", "isolated"} {
+		t.Run(scope, func(t *testing.T) {
+			t.Parallel()
+			runScriptCohort(t, scope, shared, true, failfast, abortCtx, abortCancel)
+		})
+	}
+}
+
+func runScriptCohort(t *testing.T, scope string, shared map[string]bool, mixed, failfast bool, abortCtx context.Context, abortCancel context.CancelFunc) {
+	t.Helper()
+	timeout := scriptTimeout()
+	repeats := scriptRepeats()
+	e2eDir := e2ePackageDir(t)
+	env := os.Environ()
+	var sharedSlots chan struct{}
+	if mixed {
+		if failfast {
+			t.Cleanup(func() {
+				if t.Failed() {
+					abortCancel()
+				}
+			})
+		}
+		if err := emitScopedTimelineMarker("cohort_start", t.Name(), scope, ""); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := emitScopedTimelineMarker("cohort_end", t.Name(), scope, scriptOutcome(t.Failed(), t.Skipped())); err != nil {
+				t.Errorf("write cohort timeline: %v", err)
+			}
+		})
+		if scope == "shared" {
+			root := ownedScriptRuntime(t, env, scope)
+			env = append(env, "BPFMAN_RUNTIME_DIR="+root)
+			sharedSlots = make(chan struct{}, 4)
+		}
+	}
 
 	const sub = "scripts"
 	absSub := filepath.Join(e2eDir, sub)
@@ -161,6 +213,9 @@ func TestBPFManScripts(t *testing.T) {
 	// burn wall-clock time without tickling new race windows.
 	for r := range repeats {
 		for _, abs := range matches {
+			if mixed && scope == "shared" && !shared[filepath.Base(abs)] {
+				continue
+			}
 			if (serial[abs] || exclusive[abs]) && r > 0 {
 				continue
 			}
@@ -204,11 +259,19 @@ func TestBPFManScripts(t *testing.T) {
 					if skipReason != "" {
 						t.Skip(skipReason)
 					}
-					if err := emitScriptTimelineMarker("script_queued", t.Name()); err != nil {
+					if err := emitScopedTimelineMarker("script_queued", t.Name(), scope, ""); err != nil {
 						t.Fatalf("write script timeline queue marker: %v", err)
 					}
 					if !runExclusive {
 						t.Parallel()
+					}
+					if sharedSlots != nil {
+						select {
+						case sharedSlots <- struct{}{}:
+							t.Cleanup(func() { <-sharedSlots })
+						case <-abortCtx.Done():
+							t.Skip("failfast: shared cohort cancelled")
+						}
 					}
 					if runSerial {
 						scriptSerialMu.Lock()
@@ -227,16 +290,16 @@ func TestBPFManScripts(t *testing.T) {
 						// Residue verification can fail after the script body returns.
 						t.Cleanup(cancelIfFailed)
 					}
-					if err := emitScriptTimelineMarker("script_start", t.Name()); err != nil {
+					if err := emitScopedTimelineMarker("script_start", t.Name(), scope, ""); err != nil {
 						t.Fatalf("write script timeline start marker: %v", err)
 					}
 
 					t.Cleanup(func() {
-						if err := emitScriptTimelineMarker("script_end", t.Name()); err != nil {
+						if err := emitScopedTimelineMarker("script_end", t.Name(), scope, scriptOutcome(t.Failed(), t.Skipped())); err != nil {
 							t.Errorf("write script timeline end marker: %v", err)
 						}
 					})
-					runBPFManScript(t, e2eDir, rel, timeout, failfast, abortCtx, params)
+					runBPFManScript(t, e2eDir, rel, timeout, failfast, abortCtx, params, env, scope)
 				}
 				if len(meta.mode.Cases) == 0 || meta.err != nil || skipReason != "" {
 					runCase(t, nil)
@@ -319,6 +382,7 @@ type scriptTimelineMarker struct {
 	Action       string    `json:"Action"`
 	Package      string    `json:"Package"`
 	Test         string    `json:"Test"`
+	Outcome      string    `json:"Outcome,omitempty"`
 	RuntimeScope string    `json:"RuntimeScope,omitempty"`
 	WallMillis   float64   `json:"WallMillis,omitempty"`
 	UserMillis   float64   `json:"UserMillis,omitempty"`
@@ -340,14 +404,11 @@ func emitScriptTimelineMarker(action, testName string) error {
 	return writeScriptTimelineMarker(marker)
 }
 
-func emitScriptProcessMarker(testName string, cmd *exec.Cmd, wall time.Duration, outputBytes int) error {
+func emitScriptProcessMarker(testName, scope string, cmd *exec.Cmd, wall time.Duration, outputBytes int) error {
 	if os.Getenv(bpfmanShellTimelineEnv) == "" {
 		return nil
 	}
-	marker := scriptTimelineMarker{Time: time.Now(), Action: "script_process", Package: bpfmanShellTestPackage, Test: testName, RuntimeScope: "shared", WallMillis: float64(wall) / float64(time.Millisecond), OutputBytes: outputBytes}
-	if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") == "1" {
-		marker.RuntimeScope = "isolated"
-	}
+	marker := scriptTimelineMarker{Time: time.Now(), Action: "script_process", Package: bpfmanShellTestPackage, Test: testName, RuntimeScope: scope, WallMillis: float64(wall) / float64(time.Millisecond), OutputBytes: outputBytes}
 	if cmd.ProcessState != nil {
 		code := cmd.ProcessState.ExitCode()
 		marker.ExitCode = &code
@@ -513,7 +574,7 @@ func scriptCaseEnvironment(env []string, params map[string]json.RawMessage) ([]s
 // t.Fatalf on failure or via t.Logf on success; either way the
 // Go test framework owns the framing so go test -json picks it
 // up cleanly.
-func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration, failfast bool, abortCtx context.Context, params map[string]json.RawMessage) {
+func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration, failfast bool, abortCtx context.Context, params map[string]json.RawMessage, env []string, scope string) {
 	t.Helper()
 	timeoutCause := fmt.Errorf("script %s exceeded %s: %w", script, timeout, context.DeadlineExceeded)
 	ctx, cancel := context.WithTimeoutCause(t.Context(), timeout, timeoutCause)
@@ -533,19 +594,19 @@ func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration,
 	// invoked from. PATH is already set up at TestMain (BIN_DIR
 	// prepended once, before any exec.Command).
 	cmd.Dir = e2eDir
-	caseEnv, err := scriptCaseEnvironment(os.Environ(), params)
+	caseEnv, err := scriptCaseEnvironment(env, params)
 	if err != nil {
 		t.Fatalf("script case input: %v", err)
 	}
 	cmd.Env = caseEnv
 	cmd.Env = append(cmd.Env, "BPFMAN_E2E_SCRIPT_NAME="+t.Name())
-	if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") == "1" {
-		root := isolatedScriptRuntime(t, cmd.Env)
+	if scope == "isolated" {
+		root := ownedScriptRuntime(t, cmd.Env, scope)
 		cmd.Env = append(cmd.Env, "BPFMAN_RUNTIME_DIR="+root)
 	}
 	started := time.Now()
 	out, err := runScriptCommand(ctx, cmd)
-	if timelineErr := emitScriptProcessMarker(t.Name(), cmd, time.Since(started), len(out)); timelineErr != nil {
+	if timelineErr := emitScriptProcessMarker(t.Name(), scope, cmd, time.Since(started), len(out)); timelineErr != nil {
 		t.Errorf("write script process timeline: %v", timelineErr)
 	}
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -588,7 +649,7 @@ func TestScriptProcessTimelinePreservesFailureAndOmitsOutput(t *testing.T) {
 	out, err := runScriptCommand(t.Context(), cmd)
 	require.Error(t, err)
 	require.Equal(t, "private-output\n", string(out))
-	require.NoError(t, emitScriptProcessMarker(t.Name(), cmd, time.Since(started), len(out)))
+	require.NoError(t, emitScriptProcessMarker(t.Name(), "isolated", cmd, time.Since(started), len(out)))
 	data, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.NotContains(t, string(data), "private-output")

@@ -273,6 +273,11 @@ override RACE := $(filter 1,$(RACE))
 BPFMAN_E2E_ISOLATED_RUNTIME ?=
 override BPFMAN_E2E_ISOLATED_RUNTIME := $(filter 1,$(BPFMAN_E2E_ISOLATED_RUNTIME))
 
+# Optional additional shared-store script cohort, overlapped with isolation.
+# Names are validated by the script runner; unset preserves ordinary scheduling.
+BPFMAN_E2E_SHARED_SCRIPTS ?=
+
+
 # forward-env renders `VAR='value'` for each VAR in $(1) that has
 # a non-empty value in the current Make environment. Suitable for
 # prepending to a sudo command line where sudo strips arbitrary
@@ -989,6 +994,7 @@ E2E_SCRIPTS_FORWARD_VARS := \
 	BPFMAN_E2E_IMAGE_REGISTRY \
 	BPFMAN_E2E_IMPLEMENTATION \
 	BPFMAN_E2E_ISOLATED_RUNTIME \
+	BPFMAN_E2E_SHARED_SCRIPTS \
 	BPFMAN_E2E_POLICY_RULE_PREF \
 	BPFMAN_E2E_SCRIPT_REPEATS \
 	BPFMAN_E2E_SCRIPT_SELECTOR \

@@ -83,6 +83,19 @@ TX/direct REDIRECT helpers run their complete matrix in that mode. Select one ca
 just the script runs all its cases. Labels still select scripts, not individual
 cases.
 
+The Go test runner can overlap isolated acceptance with an additional shared-store
+cohort. Set `BPFMAN_E2E_ISOLATED_RUNTIME=1` and
+`BPFMAN_E2E_SHARED_SCRIPTS=First.bpfman,Second.bpfman` through Make. Named files
+still participate in isolated acceptance and also run on one owned shared runtime;
+the shared cohort is capped at four scripts within the existing parallel limit.
+Labels and implementation admission still apply. Invalid, duplicate, missing or
+unselected filenames and admitted exclusive scripts are rejected before execution.
+Mixed test names include `/isolated/scripts/` or `/shared/scripts/`; without the
+cohort setting, existing names and scheduling are unchanged. Shared inventories
+and artifacts are checked after all cohort scripts finish, before normal bpffs
+unmount. Optional timeline `runtime_cleanup` and `cohort_end` outcomes distinguish
+that proof from each script process's exit code.
+
 ## Mental Model
 
 A statement is either a bpfman-shell form or a command. Reserved words such as

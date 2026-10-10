@@ -19,20 +19,28 @@ import (
 // Isolation removes unrelated inventory and writer contention from acceptance.
 // Shared-runtime stress remains available by leaving the opt-in unset.
 // Verify residue before unmounting, including when the script itself failed.
-func isolatedScriptRuntime(t *testing.T, env []string) string {
+func ownedScriptRuntime(t *testing.T, env []string, scope string) string {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "runtime")
 	env = append(env, "BPFMAN_RUNTIME_DIR="+root)
 	t.Cleanup(func() {
+		cleanupFailed := false
+		report := func(format string, args ...any) {
+			cleanupFailed = true
+			t.Errorf(format, args...)
+		}
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			waits, err := unmountScriptBpffs(ctx, filepath.Join(root, "fs"))
 			if err != nil {
-				t.Errorf("unmount script bpffs: %v", err)
+				report("unmount script bpffs: %v", err)
 			}
 			if waits > 0 {
 				t.Logf("bpffs unmount waited for busy references: polls=%d", waits)
+			}
+			if err := emitScopedTimelineMarker("runtime_cleanup", t.Name(), scope, scriptOutcome(cleanupFailed, false)); err != nil {
+				t.Errorf("write runtime cleanup timeline: %v", err)
 			}
 		}()
 		// A script that fails before running the CLI need not create a runtime.
@@ -52,18 +60,18 @@ func isolatedScriptRuntime(t *testing.T, env []string) string {
 			cmd.Stderr = &stderr
 			out, err := cmd.Output()
 			if err != nil {
-				t.Errorf("verify script %s inventory: %v\n%s", collection, err, stderr.String())
+				report("verify script %s inventory: %v\n%s", collection, err, stderr.String())
 				continue
 			}
 			var inventory map[string]json.RawMessage
 			if err := json.Unmarshal(out, &inventory); err != nil {
-				t.Errorf("decode script %s inventory: %v", collection, err)
+				report("decode script %s inventory: %v", collection, err)
 				continue
 			}
 			var rows []json.RawMessage
 			raw := inventory[collection+"s"]
 			if err := json.Unmarshal(raw, &rows); err != nil || string(raw) == "null" || len(rows) != 0 {
-				t.Errorf("script left %s inventory: %s (decode: %v)", collection, raw, err)
+				report("script left %s inventory: %s (decode: %v)", collection, raw, err)
 			}
 		}
 		for _, collection := range []string{"fs/maps", "fs/links", "fs/xdp", "fs/tc-ingress", "fs/tc-egress", "tc", "programs", ".staging"} {
@@ -72,16 +80,16 @@ func isolatedScriptRuntime(t *testing.T, env []string) string {
 				continue
 			}
 			if err != nil || len(entries) != 0 {
-				t.Errorf("script left artifacts in %s: %v (read: %v)", collection, entries, err)
+				report("script left artifacts in %s: %v (read: %v)", collection, entries, err)
 			}
 		}
 		entries, err := os.ReadDir(filepath.Join(root, "fs"))
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("inspect script bpffs: %v", err)
+			report("inspect script bpffs: %v", err)
 		}
 		for _, entry := range entries {
 			if strings.HasPrefix(entry.Name(), "prog_") {
-				t.Errorf("script left program pin %s", entry.Name())
+				report("script left program pin %s", entry.Name())
 			}
 		}
 	})
