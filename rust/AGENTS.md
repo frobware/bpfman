@@ -367,6 +367,9 @@ The architecture and compatibility goals are in
   are concurrent, keeping the fixture limit at eight instead of multiplying it.
   Construct each fixture's runtime, namespace, fault state and descriptors inside
   its worker.
+  Open AF_PACKET capture sockets with protocol zero and enable reception only
+  when binding the intended interface. Binding an already receiving socket can
+  leave another concurrent fixture's frames queued, even with unique interfaces.
   Join all workers before propagating a panic. Phase records retain the parent
   test name, overlap across fixtures/tests and must not be summed as wall time;
   `forwarding.worker` records include nested fixture phases. The optional

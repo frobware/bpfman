@@ -245,6 +245,12 @@ independent retained contracts to eight workers. The full gate passed all 96
 kernel tests in 150.41 s (2m30s), with retained stages taking 68.96 s versus
 104.45 s in the repeated four-worker baseline. Script acceptance took 81.40 s
 in this sample. See the [worker timing follow-up](#eight-worker-retained-contracts-11-october-2026).
+The subsequent jumbo split passed all 100 kernel tests in 139.55 s (2m20s),
+with the same fault matrix. Matching contract-only samples took 60.32 s before
+and 60.48 s after: smaller jobs reduced idle worker capacity but did not establish
+a wall-time saving. This slice also fixes a pre-bind capture race exposed by
+the unchanged baseline. See the
+[jumbo scheduling follow-up](#separately-scheduled-jumbo-forwarding-contracts-11-october-2026).
 Normal bpffs release waits within a bounded deadline for busy references;
 persistent-holder rejection is tested. Assertions and capture windows remain
 unchanged. See the
@@ -3281,3 +3287,104 @@ Evidence: `/tmp/bpfman-contract-workers-4.log`,
 `/tmp/bpfman-contract-workers-gate.log.summary.json`,
 `/tmp/bpfman-contract-workers-acceptance-summary.json` and
 `/tmp/bpfman-contract-workers-acceptance-phase-matrix.json`.
+
+### Separately scheduled jumbo forwarding contracts (11 October 2026)
+
+Four combined multi-buffer tests now become eight independently scheduled
+contracts: TX/direct REDIRECT delivery and array DEVMAP, each on JSON/SQLite
+and driver/SKB ingress. Their helpers already construct independent networks,
+runtimes, programs and fault state; the split changes only their test entry
+points and timing names. All names retain `xdp_multibuffer_forwarding`, so the
+existing focused Make target selects every split contract. The complete runner
+still uses eight outer workers, one inner fixture worker, serial inventory
+checks and sequential backend stages. No scheduler or production API changes
+were needed.
+
+The fresh unchanged baseline exposed a capture isolation bug before reaching
+SQLite. `json_xdp_unload_lifecycle` expected PASS counts `[0, 3]` but received
+`[2, 3]`: all three frames arrived at the receiver, while the sender socket also
+counted two frames. The shared Go packet helper created AF_PACKET sockets with
+an active protocol before binding their interface. That gap permits other
+fixtures' frames in the same network namespace to queue; binding afterward
+does not discard them. Unique interface names therefore did not provide full
+capture isolation.
+
+A deterministic probe in a disposable network namespace sent a foreign frame
+between socket creation and bind. The old socket retained that frame after bind;
+protocol zero at creation received only the later frame on its selected interface.
+The helper now enables reception in the interface-specific bind. No frame is
+discarded to mask this failure, and assertions, exact payload/sequence checks,
+300 ms full-capture windows and the PASS stimulus deadline remain unchanged.
+The rule is recorded in `rust/AGENTS.md`. The failed initial baseline is not
+used as passing evidence; both timing comparison runs use the corrected helper.
+
+Validation used the existing Make targets:
+
+```sh
+direnv exec . env BPFMAN_KERNEL_TIMINGS=1 make rust-test-kernel-load \
+  > /tmp/bpfman-jumbo-split-baseline-fixed.log 2>&1
+# After splitting the four combined test entry points:
+direnv exec . env BPFMAN_KERNEL_TIMINGS=1 \
+  BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-jumbo-split-gate-timeline.jsonl \
+  make rust-check lint-make > /tmp/bpfman-jumbo-split-gate.log 2>&1
+direnv exec . env BPFMAN_KERNEL_TIMINGS=1 make rust-test-kernel-load \
+  > /tmp/bpfman-jumbo-split-contracts.log 2>&1
+```
+
+| Stage, seconds | Combined, contract-only baseline | Split, full gate | Split, contract-only repeat |
+| --- | ---: | ---: | ---: |
+| JSON independent contracts | 28.51 | 33.98 | 28.09 |
+| SQLite independent contracts | 29.60 | 31.62 | 30.16 |
+| Both serial global checks | 1.70 | 2.68 | 1.70 |
+| Legacy Go contract | 0.49 | 0.48 | 0.48 |
+| Retained stage subtotal | 60.30 | 68.76 | 60.43 |
+| Script acceptance | — | 70.74 | — |
+| Complete kernel stage | — | 139.55 | — |
+
+All three runs exited zero. Contract-only wrapper totals were 60.32/60.48 s;
+the baseline selected 94 of 96 discovered tests, and the split selected 98 of
+100. The full gate selected all 100 exactly once, with none failed or ignored.
+Start/end records pair for every test and prove peak outer concurrency of eight
+in independent stages and one in serial stages. Mapping split names back to
+their former combined parents preserves every per-test phase count: 292
+normalized test/phase pairs and 1032 records, including 832 forwarding, 160
+broadcast and 40 fixture-worker phases. No fault cases, continuation masks,
+survivor choices, fragment reads, ownership proofs or capture windows were removed.
+
+Idle capacity between first start and last end fell from 46.351/43.934 to
+28.297/29.873 JSON/SQLite slot-seconds in the matching contract-only samples.
+These overlap across workers and are not elapsed-time savings. Retained wall
+time is effectively unchanged; the full gate's improvement from 150.41 to
+139.55 s mostly reflects script acceptance varying from 81.40 to 70.74 s.
+The split must not be credited with that corpus-time change. Longer per-test
+durations after script acceptance also justify the contract-only repeat rather
+than comparing its 68.76 s directly to the earlier 60.30 s baseline. These are
+local samples, not a controlled benchmark.
+
+Both stores passed all 84 admitted files, 64 named cases and four additional
+shared scripts. All 257 script processes, 250 owned-runtime cleanup outcomes
+and four cohort completions passed, with the 32/four script limits and scope
+overlap preserved. Formatting, Clippy, userspace/compile-fail tests, scheduler
+contracts, real-kernel acceptance, warnings-denied Rustdoc and Make lint passed.
+Go lint reported zero issues. The existing file lifecycle, XDP lifecycle,
+fill/drain/refill and TC ingress lifecycle scripts also passed against the Go
+binary with isolated SQLite runtimes and the corrected shared helper.
+
+The longest matching-run tests now contain ordinary or jumbo TX/direct REDIRECT
+delivery, at 10.36–11.17 s. Each still bundles four independent action/mask
+fixtures. A next slice can separately schedule TX and direct REDIRECT for both
+frame shapes, preserving fixture reuse within each survivor pair, then measure
+whether that reduces the remaining tail. More useful scheduling granularity
+does not itself guarantee lower elapsed time.
+
+Evidence: `/tmp/bpfman-jumbo-split-baseline.log` (failed original baseline),
+`/tmp/bpfman-packet-bind-regression.py`,
+`/tmp/bpfman-jumbo-split-baseline-fixed.log`,
+`/tmp/bpfman-jumbo-split-gate.log`,
+`/tmp/bpfman-jumbo-split-contracts.log`, their `.summary.json` reports,
+`/tmp/bpfman-jumbo-split-comparison.json`,
+`/tmp/bpfman-jumbo-split-gate-timeline.jsonl`,
+`/tmp/bpfman-jumbo-split-acceptance-summary.json`,
+`/tmp/bpfman-jumbo-split-acceptance-phase-matrix.json`,
+`/tmp/bpfman-jumbo-split-lint-go.log` and
+`/tmp/bpfman-jumbo-split-go-shared.log`.

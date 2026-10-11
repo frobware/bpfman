@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright Authors of bpfman
 
-// This test fixture runs inside a private namespace. It opens every capture
-// socket before sending three marked frames, then reports received frames at
-// source0 (TX), in0 (PASS), and sink0 (REDIRECT). Outgoing copies never count.
+// This test fixture captures only the requested interfaces. It opens every
+// capture socket before sending three marked frames, then reports received frames
+// at source0 (TX), in0 (PASS), and sink0 (REDIRECT). Outgoing copies never count.
 package main
 
 import (
@@ -35,7 +35,9 @@ func run(size int, captures []string, source string, observeAll bool) error {
 		if err != nil {
 			return err
 		}
-		fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, protocol)
+		// Keep reception disabled until Bind selects the capture interface.
+		// Otherwise another fixture's frames can queue before the socket is bound.
+		fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC|unix.SOCK_NONBLOCK, 0)
 		if err != nil {
 			return err
 		}

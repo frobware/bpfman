@@ -1179,8 +1179,9 @@ also passed. Aya and the lockfile remain unchanged.
 ### XDP multi-buffer forwarding
 
 Run `direnv exec . make rust-test-scripts rust-test-xdp-multibuffer-forwarding`
-for ordinary script acceptance and four combined real-kernel restoration suites:
-SQLite/JSON with explicitly observed native/SKB ingress modes. Together they
+for ordinary script acceptance and eight independently scheduled real-kernel
+restoration suites: direct TX/REDIRECT and DEVMAP, each on SQLite/JSON with
+explicitly observed native/SKB ingress modes. Together they
 cover the direct TX/REDIRECT and DEVMAP lifecycle scenarios above with three
 8014-byte Ethernet frames (8000 bytes after the Ethernet header) and MTU 9000 on
 all four interfaces. Separate `xdp.frags` fixtures share the ordinary fixtures'
@@ -1593,6 +1594,19 @@ passed. Eight-worker occupancy now shows a scheduling tail around the longest
 jumbo forwarding groups. See the
 [worker timing follow-up](../docs/design/rust-reimplementation.md#eight-worker-retained-contracts-11-october-2026)
 for the audit, baseline variation, validation and remaining scheduling opportunity.
+
+The jumbo scheduling follow-up splits the four combined delivery/DEVMAP tests
+into eight independent contracts. The full gate passed all 100 kernel tests in
+139.55 s (2m20s), with the identical normalized fault/phase matrix. Matching
+contract-only runs took 60.32 s before and 60.48 s after; reduced idle worker
+capacity has not established a wall-time saving. Most of the full-stage change
+came from script-time variation. The shared packet helper also fixes a baseline
+failure caused by foreign frames queuing before interface bind: capture remains
+disabled until binding its interface, preserving all assertions and windows.
+Both stores' complete acceptance, four shared scripts against Go, Go lint and
+the full Rust/Make gate passed. See the
+[jumbo scheduling follow-up](../docs/design/rust-reimplementation.md#separately-scheduled-jumbo-forwarding-contracts-11-october-2026)
+for reproduction evidence, timings and the remaining TX/direct REDIRECT tail.
 
 
 ## Script parity through the Go runner

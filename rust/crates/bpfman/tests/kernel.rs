@@ -345,14 +345,21 @@ fn json_xdp_devmap_delivery_skb() {
     );
 }
 
+// Delivery and DEVMAP own separate fixtures. Keep them separately scheduled so
+// idle workers can take either jumbo fault matrix without waiting for the other.
 #[test]
-fn sqlite_xdp_multibuffer_forwarding() {
-    let _timing = support::TestTiming::start("sqlite_xdp_multibuffer_forwarding");
+fn sqlite_xdp_multibuffer_forwarding_delivery() {
+    let _timing = support::TestTiming::start("sqlite_xdp_multibuffer_forwarding_delivery");
     xdp_delivery::exercise(
         bpfman_store_sqlite::Backend,
         bpfman_model::XdpMode::Drv,
         xdp_delivery::Frames::MultiBuffer,
     );
+}
+
+#[test]
+fn sqlite_xdp_multibuffer_forwarding_devmap() {
+    let _timing = support::TestTiming::start("sqlite_xdp_multibuffer_forwarding_devmap");
     xdp_devmap::exercise(
         bpfman_store_sqlite::Backend,
         bpfman_model::XdpMode::Drv,
@@ -361,13 +368,18 @@ fn sqlite_xdp_multibuffer_forwarding() {
 }
 
 #[test]
-fn sqlite_xdp_multibuffer_forwarding_skb() {
-    let _timing = support::TestTiming::start("sqlite_xdp_multibuffer_forwarding_skb");
+fn sqlite_xdp_multibuffer_forwarding_delivery_skb() {
+    let _timing = support::TestTiming::start("sqlite_xdp_multibuffer_forwarding_delivery_skb");
     xdp_delivery::exercise(
         bpfman_store_sqlite::Backend,
         bpfman_model::XdpMode::Skb,
         xdp_delivery::Frames::MultiBuffer,
     );
+}
+
+#[test]
+fn sqlite_xdp_multibuffer_forwarding_devmap_skb() {
+    let _timing = support::TestTiming::start("sqlite_xdp_multibuffer_forwarding_devmap_skb");
     xdp_devmap::exercise(
         bpfman_store_sqlite::Backend,
         bpfman_model::XdpMode::Skb,
@@ -376,13 +388,18 @@ fn sqlite_xdp_multibuffer_forwarding_skb() {
 }
 
 #[test]
-fn json_xdp_multibuffer_forwarding() {
-    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding");
+fn json_xdp_multibuffer_forwarding_delivery() {
+    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_delivery");
     xdp_delivery::exercise(
         bpfman_store_json::Backend,
         bpfman_model::XdpMode::Drv,
         xdp_delivery::Frames::MultiBuffer,
     );
+}
+
+#[test]
+fn json_xdp_multibuffer_forwarding_devmap() {
+    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_devmap");
     xdp_devmap::exercise(
         bpfman_store_json::Backend,
         bpfman_model::XdpMode::Drv,
@@ -391,13 +408,18 @@ fn json_xdp_multibuffer_forwarding() {
 }
 
 #[test]
-fn json_xdp_multibuffer_forwarding_skb() {
-    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_skb");
+fn json_xdp_multibuffer_forwarding_delivery_skb() {
+    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_delivery_skb");
     xdp_delivery::exercise(
         bpfman_store_json::Backend,
         bpfman_model::XdpMode::Skb,
         xdp_delivery::Frames::MultiBuffer,
     );
+}
+
+#[test]
+fn json_xdp_multibuffer_forwarding_devmap_skb() {
+    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_devmap_skb");
     xdp_devmap::exercise(
         bpfman_store_json::Backend,
         bpfman_model::XdpMode::Skb,
