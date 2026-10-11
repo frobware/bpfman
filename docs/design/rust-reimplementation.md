@@ -3547,3 +3547,155 @@ archived `baseline/bpfman`, four profiled runner logs/timelines, `analysis.json`
 `gate.log` / `gate.log.summary.json`, `gate-acceptance-summary.json` and the
 Rust/Go syscall diagnostic logs. Wrappers and analysis scripts remain temporary
 measurement tooling, not repository dependencies.
+
+
+### Further dependency profiling and fake-kernel storage costs (11 October 2026)
+
+CPU sampling was repeated with the retained `aya-obj` level-two override. The
+same isolated XDP fill/drain/refill script and normal runtime cleanup passed.
+The first load/attach/detach profiles contained 57/44/45 samples with none lost.
+Inclusive sampled cycles in `EbpfLoader::new` / kernel BTF parsing were
+46.37%/29.97%/28.11%, compared with 83.66%/74.56%/72.45% before parser
+optimization. Remaining `EbpfLoader::load` work accounted for
+10.56%/3.54%/7.66%. These small samples include diagnostic tracing overhead;
+ancestral stack percentages overlap and must not be added or read as wall time.
+
+A reversible experiment also compiled `aya` at optimization level two. Both
+binaries were archived before comparison, and the build log confirmed the Aya
+compiler override. Eight sequential runner invocations exercised the unchanged
+XDP and TC fill/drain/refill scripts: two samples per binary per store, with
+baseline/candidate/candidate/baseline ordering on JSON and the reverse on
+SQLite. These timing controls did not enable CLI tracing or CPU sampling.
+
+| Mean script process time, seconds | `aya-obj` optimized | Both Aya crates optimized |
+| --- | ---: | ---: |
+| JSON XDP | 9.347 | 9.257 |
+| JSON TC | 9.060 | 9.014 |
+| SQLite XDP | 9.621 | 9.590 |
+| SQLite TC | 9.521 | 9.443 |
+
+All 16 script processes and owned-runtime cleanups passed. The observed
+0.33–0.96% differences do not justify another dependency override; the additional
+Aya setting was removed. The committed `aya-obj` override remains, with workspace
+code in its ordinary debug profile. No loader construction, verifier target,
+CO-RE behavior, assertion, fixture or concurrency limit changed.
+
+The 60-test fake-kernel lifecycle suite was then timed using a temporary stdout
+observer with one libtest worker, without changing test bodies. All tests passed
+in 45.30 s. Its two XDP replacement failure matrices dominated: 8.55 s on JSON
+and 15.16 s on SQLite. These are serial diagnostic timings, not the ordinary
+parallel suite duration. Each matrix preserves all 88 combinations of attach or
+detach, forward failure, failure phase and cleanup failure, including explicit
+retry and residue assertions. The fake kernel still uses the real filesystem
+and the two production store backends.
+
+Separate syscall-summary runs of those two matrices passed on the normal
+Btrfs-backed `/tmp`. JSON spent 7.815 s in 1224 `fsync` calls during a 9.45 s
+instrumented test; SQLite spent 13.204 s in 2888 calls during a 16.02 s test.
+The SQLite matrix therefore performs about 2.36 times as many synchronization
+calls, although its mean call latency was lower. This identifies a backend
+storage cost; the aggregate probe does not assign each call to bytecode,
+snapshot publication or SQLite WAL/checkpoint work. `strace -f -w -c` also
+counts the harness thread's `futex` join wait, which overlaps the worker and
+must not be added to its elapsed time.
+
+The complete, unchanged 60-test suite was then run with normal libtest
+parallelism through `make rust-test-kernel-fake` on each filesystem:
+
+| Fixture filesystem | Tests passed | Suite seconds |
+| --- | ---: | ---: |
+| Btrfs (`/tmp`) | 60 | 21.97 |
+| tmpfs (owned temporary directory under `/dev/shm`) | 60 | 2.22 |
+
+Only the second invocation's `TMPDIR` changed. Both production stores, actual
+files, reopening, locks, publication, cleanup and every failure combination
+remained active. The temporary tmpfs parent was empty after the tests and
+removed normally. Matching syscall probes on tmpfs retained exactly
+1224/2888 `fsync` calls, taking 0.0036/0.0112 s; both matrices passed. This is
+an observed 89.9% reduction for this fake-kernel suite, not a reduction in the
+real-kernel stage or proof of physical storage durability.
+
+The next bounded implementation should give this fake-kernel suite an explicit,
+owned memory-backed fixture scope with a portable disk-backed fallback. Keep
+actual synchronization operations enabled and retain separate real-filesystem
+persistence/durability contracts. Scope any temporary-directory selection to
+this target rather than changing every workspace test or real-kernel fixture.
+No persistent test-runner change was made during these measurements.
+
+Evidence: `/tmp/bpfman-aya-next-measure/` contains archived baseline and candidate
+binaries, the optimized-parser CPU samples/reports, `candidate-build.log`, eight
+script logs/timelines and `benchmark-summary.json`, `fake-serial-timing.json`,
+`fake-experiments.json`, and Btrfs/tmpfs syscall summaries for both matrices.
+Temporary profiling wrappers, the stdout observer and the supplementary Make
+file are measurement tooling only.
+
+The normal `direnv exec . env BPFMAN_KERNEL_TIMINGS=1
+BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-aya-next-measure/gate-timeline.jsonl
+make rust-check lint-make` gate subsequently exited zero, with disk-backed fake
+fixtures. Formatting, Clippy, all userspace/compile-fail and scheduler contracts,
+real-kernel acceptance, Rustdoc and Make lint passed. The normal fake suite took
+22.05 s. The complete kernel stage took 100.21 s
+(52.92 s scripts and 47.23 s retained stages).
+All 100 kernel tests ran exactly once, and all 1032 retained phase counts and
+test identities matched the prior complete gate. Both stores passed all 84
+admitted files, 64 named cases and four additional shared scripts; all 257
+process exits, 250 owned-runtime cleanups and four cohort outcomes passed.
+The temporary additional Aya override is absent from the final workspace.
+Raw gate stdout/stderr and the corresponding coverage reports are retained
+in the same measurement directory. This slice changes only this document.
+
+
+### Owned tmpfs fixtures for the fake kernel (11 October 2026)
+
+The existing Cargo test runner now selects `test-kernel-fake.sh` only for the
+`kernel_lifecycle` binary. Both the focused `rust-test-kernel-fake` target and
+the automatic userspace gate supply this runner; automatic target discovery
+still includes every nonprivileged integration target. Other targets preserve
+their incoming `TMPDIR`, and the privileged kernel runner retains its existing
+namespace and concurrency behavior.
+
+The fake runner verifies that `/dev/shm` is tmpfs and creates a private owned
+suite directory there when possible. Missing tmpfs or failed directory creation
+falls back to an owned directory under the normal `TMPDIR` (or `/tmp`).
+`BPFMAN_FAKE_KERNEL_TMPFS=0` explicitly selects that fallback. Only the test
+child receives the selected `TMPDIR`. Each fixture still creates its own
+subdirectory and uses the same production stores, real files, locks and
+synchronization calls. No Rust assertion, failure matrix or fixture body changed;
+no dependency, privilege or asynchronous runtime was added.
+
+After the child exits, the runner requires the owned suite directory to be empty
+and removes it with `rmdir`. Residue fails cleanup and remains available for
+inspection; successful test exit cannot hide failed cleanup. The runner reports
+fixture selection and cleanup outcome, preserves a failed child's status, and
+forwards termination before waiting for the child and cleaning its scope.
+Fast shell contracts cover selection/fallback, arguments, exit status, signal
+handling, residue refusal and unchanged temporary-directory scope for unrelated
+targets. They run in the normal userspace gate without sudo or kernel state.
+
+The focused suite passed all 60 tests in 2.47 s on tmpfs, including empty-scope
+cleanup. Its forced default-filesystem run with `TMPDIR=/tmp` passed the same
+60 tests and cleanup in 21.87 s. This retains the measured saving through the
+normal Make targets while preserving an explicit disk-backed diagnostic run.
+Shell syntax, ShellCheck and the fast runner contracts passed.
+
+The full `direnv exec . env BPFMAN_KERNEL_TIMINGS=1
+BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-fake-tmpfs-gate/gate-timeline.jsonl
+make rust-check lint-make` gate exited zero. The fake-kernel target passed all
+60 cases in 2.40 s with a verified tmpfs scope and successful removal. All
+58 reported userspace test groups retained their previous counts (367 cases);
+the sum of their reported target durations fell from 40.99 to 21.13 s compared
+with the preceding complete gate. That sum excludes build and prerequisite
+setup, rather than measuring the entire Make invocation.
+
+Formatting, Clippy, userspace/compile-fail and both fast runner contract suites,
+real-kernel acceptance, Rustdoc and Make lint passed. The real-kernel stage took
+105.53 s (58.77 s scripts and
+46.72 s retained stages); this fixture change does not target
+that stage. All 100 kernel tests ran exactly once, with the same 1032 phase
+counts and test identities as the preceding complete gate. Both stores passed
+all 84 admitted files, 64 named cases and four additional shared scripts;
+all 257 process exits, 250 owned-runtime cleanups and four cohort outcomes
+passed. Evidence includes `/tmp/bpfman-fake-tmpfs-focused.log`,
+`/tmp/bpfman-fake-disk-focused.log`, and `/tmp/bpfman-fake-tmpfs-gate/` with
+separate raw gate stdout/stderr, the script timeline, coverage summaries and
+`userspace-comparison.json`.

@@ -1086,12 +1086,12 @@ rust-test-unit: $(RUST_DISPATCHER)
 
 .PHONY: rust-test-userspace
 rust-test-userspace: rust-build $(RUST_TEST_INPUTS)
-	$(RUST_TEST_ENV) sh rust/test-userspace.sh $(RUST_MANIFEST)
+	$(RUST_TEST_ENV) sh rust/test-userspace.sh $(RUST_MANIFEST) $(RUST_TEST_RUNNER)
 
 # Public lifecycle with the stateful fake kernel and both concrete stores.
 .PHONY: rust-test-kernel-fake
 rust-test-kernel-fake: $(RUST_DISPATCHER)
-	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --locked --test kernel_lifecycle
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --locked --test kernel_lifecycle $(RUST_TEST_RUNNER)
 
 # Pure XDP planning, ABI, ownership transitions, and compile-fail contracts.
 .PHONY: rust-test-xdp-core

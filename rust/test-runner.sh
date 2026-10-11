@@ -3,6 +3,9 @@
 set -eu
 
 case "${1##*/}" in
+    kernel_lifecycle-*)
+        exec sh "${0%/*}/test-kernel-fake.sh" "$@"
+        ;;
     kernel-*)
         if [ -n "${BPFMAN_KERNEL_SUITE:-}" ]; then
             exec sudo -n \

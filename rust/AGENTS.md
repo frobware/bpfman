@@ -31,6 +31,12 @@ The architecture and compatibility goals are in
   this stage before the complete real-kernel binary, so cheap admission
   or persistence failures are found before the long packet suites. Keep automatic
   CLI test discovery in `test-userspace.sh`; do not replace it with a partial list.
+- The Cargo runner scopes owned tmpfs fixtures to `kernel_lifecycle` only,
+  in both `rust-test-kernel-fake` and the automatic userspace gate. Preserve real
+  stores, locks and synchronization calls. Missing or unwritable `/dev/shm`
+  falls back to the normal temporary filesystem; `BPFMAN_FAKE_KERNEL_TMPFS=0`
+  forces that fallback. Require an empty owned scope before removal and fail on
+  residue. Other targets retain their incoming `TMPDIR`.
 - On NixOS, Go and Rust tests share `e2e-kmod-build` and
   `e2e/kmod/prepare-kdir.sh`. If `/lib/modules/$(uname -r)/build` is absent, the
   helper discovers the matching `kernel.dev` output from

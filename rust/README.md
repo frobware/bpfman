@@ -1425,10 +1425,24 @@ instances. Bytecode publication, runtime locking, and persistence remain real;
 no bpffs mount or kernel privileges are needed for these tests. Store fault
 injection uses the existing forwarding `Faults<S>` decorator.
 
+The Cargo test runner gives only this suite a private temporary directory on
+`/dev/shm` when it is writable tmpfs. Real stores, files, locks and synchronization
+calls remain enabled. If tmpfs is unavailable, the runner creates an owned
+directory under the usual `TMPDIR` (or `/tmp`). Other test targets retain their
+incoming temporary directory. The runner reports its fixture scope and requires
+it to be empty before removal after the suite, including on failure. Residue
+fails cleanup and leaves the owned directory available for inspection.
+
 Run this focused suite with:
 
 ```sh
 direnv exec . make rust-test-kernel-fake
+```
+
+To exercise the default-filesystem fallback explicitly:
+
+```sh
+direnv exec . env BPFMAN_FAKE_KERNEL_TMPFS=0 TMPDIR=/tmp make rust-test-kernel-fake
 ```
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem

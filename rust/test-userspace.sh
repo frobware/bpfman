@@ -5,10 +5,12 @@
 set -eu
 
 manifest=${1:?Rust manifest required}
+shift
 sh "${0%/*}/test-kernel-runner-test.sh"
+sh "${0%/*}/test-kernel-fake-runner-test.sh"
 cargo test --manifest-path "$manifest" --workspace --exclude bpfman --locked
 
-set --
+# Preserve the Cargo runner supplied by Make while discovering every target.
 for source in "${manifest%/Cargo.toml}"/crates/bpfman/tests/*.rs; do
     target=${source##*/}
     target=${target%.rs}
