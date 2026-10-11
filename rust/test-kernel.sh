@@ -13,8 +13,10 @@ read -r suite_started ignored < /proc/uptime
 binary=${1:?Kernel test binary required}
 shift
 [ "$#" -eq 0 ] || { echo 'kernel suites do not accept additional filters' >&2; exit 1; }
-threads=${BPFMAN_KERNEL_TEST_THREADS:-4}
-case "$threads" in 1|2|4) ;; *) echo 'kernel test threads must be 1, 2 or 4' >&2; exit 1 ;; esac
+# Independent contracts own private runtimes and fixture identities. Global
+# inventory checks and backend boundaries remain serial at every thread limit.
+threads=${BPFMAN_KERNEL_TEST_THREADS:-8}
+case "$threads" in 1|2|4|8) ;; *) echo 'kernel test threads must be 1, 2, 4 or 8' >&2; exit 1 ;; esac
 export BPFMAN_KERNEL_TEST_THREADS=$threads
 mode=${BPFMAN_KERNEL_SUITE:-all}
 case "$mode" in all|contracts) ;; *) echo 'unknown kernel suite' >&2; exit 1 ;; esac

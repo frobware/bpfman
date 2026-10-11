@@ -1448,14 +1448,20 @@ rg 'kernel-timing' /tmp/bpfman-rust-check.log
 Every kernel test has a monotonic timer covering its complete body and teardown.
 Opt-in TSV records contain `kernel-timing`, test name, elapsed seconds and
 `completed`/`failed`; they bypass libtest's captured success output. Timings do
-not control concurrency. Retained TX/direct REDIRECT, DEVMAP unicast and
+not control concurrency. `kernel-test-start` adds process ID, test name and
+monotonic seconds since that process's timing origin; `kernel-test-end` adds
+the same fields and outcome. Pair by process ID and test name to reconstruct
+worker occupancy and the elapsed interval, including teardown. Each backend
+invocation has its own clock origin. Missing end records indicate an incomplete
+run; completion telemetry does not replace the runner's exit status.
+Retained TX/direct REDIRECT, DEVMAP unicast and
 broadcast contracts run independent fixtures on two synchronous scoped workers.
 Complete suites discover all kernel cases and run script acceptance separately
 from retained contracts. Corpus, legacy Go and global dispatcher-inventory checks
-remain serial. Independent retained contracts run on four threads within each
-backend; `BPFMAN_KERNEL_TEST_THREADS=2` or `1` selects a lower limit. Backend
+remain serial. Independent retained contracts run on eight threads within each
+backend; `BPFMAN_KERNEL_TEST_THREADS=4`, `2` or `1` selects a lower limit. Backend
 stages remain sequential. Forwarding uses one fixture worker when top-level tests
-are concurrent, so nesting does not multiply the four-fixture limit. Focused
+are concurrent, so nesting does not multiply the eight-fixture limit. Focused
 Make targets retain their serial outer runner and two forwarding fixture workers.
 The script cohorts use one Go runner per backend and its parallel scheduler:
 isolated acceptance and shared-runtime coverage overlap within 32 slots, with
@@ -1577,6 +1583,16 @@ zero script exits. See the
 [cohort follow-up](../docs/design/rust-reimplementation.md#overlapping-script-cohorts-10-october-2026)
 for scope ownership, telemetry outcomes, contention and validation evidence.
 These are kernel-stage local timings, not total gate durations.
+
+The eight-worker retained-contract follow-up passed the full gate with all 96
+kernel tests in 150.41 s (2m30s). Retained stage time fell from 104.45 s in a
+repeated four-worker baseline to 68.96 s (34%); script acceptance took 81.40 s in
+this sample. All test start/end records paired and every fault/phase count was
+unchanged. All 257 script processes and 250 owned-runtime cleanup outcomes
+passed. Eight-worker occupancy now shows a scheduling tail around the longest
+jumbo forwarding groups. See the
+[worker timing follow-up](../docs/design/rust-reimplementation.md#eight-worker-retained-contracts-11-october-2026)
+for the audit, baseline variation, validation and remaining scheduling opportunity.
 
 
 ## Script parity through the Go runner

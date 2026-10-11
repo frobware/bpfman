@@ -352,18 +352,21 @@ The architecture and compatibility goals are in
   Keep this explicit concurrent-store coverage; normal Go Make runs remain shared
   by default.
   Leave isolation unset for full-corpus shared-store stress. `BPFMAN_KERNEL_TIMINGS=1`
-  reports whole tests, runner batches and forwarding/broadcast phases. Forwarding
-  phases separate restoration from packet observation and include fixture teardown;
-  preserve capture windows and both survivor choices when sharing setup. Retained
+  reports whole tests, runner batches and forwarding/broadcast phases. Whole-test
+  start/end records include process ID and monotonic offsets from a per-process
+  origin; pair them by process and test name to measure worker occupancy. Require
+  matched ends and a successful runner exit, not only completed phase records.
+  Forwarding phases separate restoration from packet observation and include
+  fixture teardown; preserve capture windows and both survivor choices when sharing setup. Retained
   forwarding and broadcast contracts opt into two synchronous scoped fixture
   workers in focused/one-thread runs. Complete suites use `test-kernel.sh`: discover
   every case, run corpus/Go/global-inventory stages serially, and run independent
-  contracts on four threads within each backend (two and one are supported through
-  `BPFMAN_KERNEL_TEST_THREADS`). Backend stages remain sequential; unclassified
-  names fail admission. Forwarding uses one fixture worker when top-level tests
-  are concurrent, keeping the fixture limit at four instead of multiplying it.
-  Construct
-  each fixture's runtime, namespace, fault state and descriptors inside its worker.
+  contracts on eight threads within each backend (four, two and one are supported
+  through `BPFMAN_KERNEL_TEST_THREADS`). Backend stages remain sequential;
+  unclassified names fail admission. Forwarding uses one fixture worker when top-level tests
+  are concurrent, keeping the fixture limit at eight instead of multiplying it.
+  Construct each fixture's runtime, namespace, fault state and descriptors inside
+  its worker.
   Join all workers before propagating a panic. Phase records retain the parent
   test name, overlap across fixtures/tests and must not be summed as wall time;
   `forwarding.worker` records include nested fixture phases. The optional

@@ -23,7 +23,7 @@ sqlite_case: test
 go_case: test
 LIST
 runner="${0%/*}/test-kernel.sh"
-for threads in 1 2 4; do
+for threads in 1 2 4 8; do
     : > "$FAKE_KERNEL_LOG"
     BPFMAN_KERNEL_TEST_THREADS=$threads BPFMAN_KERNEL_SUITE=all sh "$runner" "$root/kernel" > "$root/output"
     cat > "$root/expected" <<EXPECTED
@@ -37,12 +37,15 @@ EXPECTED
     cmp "$root/expected" "$FAKE_KERNEL_LOG"
 done
 : > "$FAKE_KERNEL_LOG"
+BPFMAN_KERNEL_TEST_THREADS= BPFMAN_KERNEL_SUITE=all sh "$runner" "$root/kernel" > "$root/output"
+cmp "$root/expected" "$FAKE_KERNEL_LOG"
+: > "$FAKE_KERNEL_LOG"
 BPFMAN_KERNEL_TEST_THREADS=2 BPFMAN_KERNEL_SUITE=contracts sh "$runner" "$root/kernel" > "$root/output"
-sed '1d' "$root/expected" | sed 's/threads=4/threads=2/g' > "$root/contracts"
+sed '1d' "$root/expected" | sed 's/threads=8/threads=2/g' > "$root/contracts"
 cmp "$root/contracts" "$FAKE_KERNEL_LOG"
 
 # Invalid admission must have no effects; a failed stage stops later backends.
-for invalid in 0 3 invalid; do
+for invalid in 0 3 16 invalid; do
     : > "$FAKE_KERNEL_LOG"
     if BPFMAN_KERNEL_TEST_THREADS=$invalid sh "$runner" "$root/kernel" > "$root/output" 2>&1; then exit 1; fi
     [ ! -s "$FAKE_KERNEL_LOG" ]

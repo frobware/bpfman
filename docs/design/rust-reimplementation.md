@@ -240,6 +240,11 @@ Isolated acceptance uses 32 Go-runner slots; shared-runtime coverage uses four. 
 execution still capped at four. All 96 kernel tests passed in 163.20 s (2m43s);
 acceptance fell to 67.36 s, and explicit cleanup outcomes now accompany process
 telemetry. See the [cohort follow-up](#overlapping-script-cohorts-10-october-2026).
+The 11 October follow-up adds paired per-test start/end timestamps and raises
+independent retained contracts to eight workers. The full gate passed all 96
+kernel tests in 150.41 s (2m30s), with retained stages taking 68.96 s versus
+104.45 s in the repeated four-worker baseline. Script acceptance took 81.40 s
+in this sample. See the [worker timing follow-up](#eight-worker-retained-contracts-11-october-2026).
 Normal bpffs release waits within a bounded deadline for busy references;
 persistent-holder rejection is tested. Assertions and capture windows remain
 unchanged. See the
@@ -3167,3 +3172,112 @@ Evidence: `/tmp/bpfman-overlap-rust-check.log`,
 Retained Rust contracts now account for about 96 seconds of the 163-second kernel
 stage. Further reductions should start with their per-test and phase evidence,
 while preserving fault matrices, ownership proofs and packet observation windows.
+
+### Eight-worker retained contracts (11 October 2026)
+
+The existing `kernel-timing` records already covered every kernel test. New opt-in
+`kernel-test-start` and `kernel-test-end` records make their overlap measurable:
+process ID, test name and monotonic seconds from that process's clock origin,
+plus the outcome on end records. Pair by process ID and test name; each backend
+invocation has its own origin. End records include body and teardown, and the
+old elapsed/phase records remain available unchanged. No command arguments,
+runtime paths or store contents enter these new records. Missing end records or
+a failed runner exit still invalidate a run.
+
+The concurrency audit retained these boundaries:
+
+- Runtime roots, mounts, stores, lock files and fault state belong to each fixture.
+- The atomic fixture allocator supplies unique namespace and host-veth names;
+  fixed names such as `in0` are confined to each private network namespace.
+- Namespace entry runs on fresh disposable adapter threads and never changes
+  another worker's namespace or process-wide environment.
+- Redirect-error observation filters by the fixture's map ID; program, map and
+  link reclamation checks target owned IDs. TC filters and clsact evidence remain
+  confined to their namespace and exact attachment identities.
+- The two XDP load tests compare global dispatcher inventories and remain in
+  separate serial stages. Corpus, legacy Go and backend boundaries also remain
+  sequential. Script concurrency is unchanged.
+
+Independent retained tests now default to eight outer workers. Forwarding keeps
+one inner fixture worker under concurrent outer execution, so nesting cannot
+turn eight into sixteen. Focused serial targets still use two fixture workers,
+joining all workers before propagating a panic. `BPFMAN_KERNEL_TEST_THREADS`
+accepts 1, 2, 4 or 8; fast scheduler contracts verify every setting, the default,
+serial global stages, backend order and rejection before effects. The local
+measurement host exposes 16 CPUs; lower limits remain available for other hosts.
+
+The four-worker repeat kept all four slots occupied for 47.762 of the JSON
+stage's 49.12 seconds and 50.183 of SQLite's 52.79 seconds. Unused capacity
+between the first test start and last end was only 2.194/4.633 slot-seconds.
+Reordering the same work at four workers therefore has little headroom. Packet
+observation remains the largest forwarding phase group, while setup includes
+fresh program loads for distinct action, continuation, map and fragment cases.
+Existing fixtures already reuse networks/programs across both survivor choices;
+this slice preserves that structure and changes scheduling without sharing new
+ownership across independent cases. All restoration assertions, fault matrices,
+fragment reads, redirect-error evidence and 300 ms observation windows remain.
+
+Validation used the normal Make targets, sequentially, with the runner file
+unchanged while each shell process executed it:
+
+```sh
+direnv exec . env BPFMAN_KERNEL_TIMINGS=1 BPFMAN_KERNEL_TEST_THREADS=4 \
+  make rust-test-kernel-load > /tmp/bpfman-contract-workers-4-repeat.log 2>&1
+direnv exec . env BPFMAN_KERNEL_TIMINGS=1 \
+  BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-contract-workers-gate-timeline.jsonl \
+  make rust-check lint-make > /tmp/bpfman-contract-workers-gate.log 2>&1
+```
+
+| Stage, seconds | First four-worker sample | Repeated four-worker sample | Eight-worker full gate |
+| --- | ---: | ---: | ---: |
+| JSON independent contracts | 62.31 | 49.12 | 32.37 |
+| SQLite independent contracts | 52.91 | 52.79 | 34.15 |
+| Both serial global checks | 2.13 | 1.96 | 1.88 |
+| Legacy Go contract | 0.58 | 0.58 | 0.56 |
+| Retained stage subtotal | 117.93 | 104.45 | 68.96 |
+| Script acceptance | — | — | 81.40 |
+| Complete kernel stage | — | — | 150.41 |
+
+Both contract-only four-worker runs exited zero and ran all 94 retained tests;
+their wrapper totals were 117.98 and 104.50 seconds. The repeated baseline
+avoids treating the first sample's slower JSON execution as an eight-worker
+speedup. Against the repeated subtotal, retained work fell by 35.49 seconds
+(34%). These are local samples, not a controlled benchmark. Script time also
+varied: it was 67.36 seconds at the prior checkpoint and 81.40 here, despite
+unchanged scheduling. The overall kernel stage improved from 163.20 to 150.41
+seconds; this does not measure builds, userspace tests or total gate duration.
+
+An initial eight-worker measurement passed all 94 retained tests but its shell
+wrapper exited 127 before final counters: editing the runner's default while it
+was still executing changed the file beneath the shell's read offset. That run
+is not a successful gate. The subsequent full gate used a stable runner, exited
+zero and supersedes it. No kernel failure or weakened assertion was involved.
+
+The successful full gate ran all 96 discovered tests exactly once, with no
+failures or ignored tests. Start/end records paired for every test, agreed with
+the existing elapsed records and proved peak outer activity of eight for each
+independent backend stage and one for serial stages. Every per-test phase count
+matched both four-worker baselines and the prior checkpoint: 292 test/phase
+pairs, 832 forwarding phases, 160 broadcast phases and 40 fixture-worker records.
+Both stores passed all 84 admitted script files, all 64 named cases and the four
+additional shared scripts. All 257 script processes, 250 owned-runtime cleanup
+outcomes and four cohort completions passed; script scope overlap and its 32/four
+limits remain intact. Formatting, Clippy, userspace/compile-fail tests, scheduler
+contracts, real-kernel acceptance, warnings-denied Rustdoc and Make lint passed.
+
+Eight workers expose a new scheduling tail: JSON/SQLite had 48.946/46.949 unused
+slot-seconds between their first start and last end, compared with only
+2.194/4.633 at four workers. Jumbo forwarding tests remain the longest, at
+16.16–17.85 seconds. A next slice can split their already independent delivery
+and DEVMAP groups into separately scheduled contracts, preserving each fixture
+and fault matrix while letting idle workers take smaller jobs. Idle slot-seconds
+are overlapping capacity, not wall time or a guaranteed saving.
+
+Evidence: `/tmp/bpfman-contract-workers-4.log`,
+`/tmp/bpfman-contract-workers-4-repeat.log`,
+`/tmp/bpfman-contract-workers-gate.log`,
+`/tmp/bpfman-contract-workers-gate-timeline.jsonl`,
+`/tmp/bpfman-contract-workers-comparison.txt`,
+`/tmp/bpfman-contract-workers-gate.log.summary.json`,
+`/tmp/bpfman-contract-workers-acceptance-summary.json` and
+`/tmp/bpfman-contract-workers-acceptance-phase-matrix.json`.

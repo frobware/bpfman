@@ -27,13 +27,13 @@ pub(super) fn fixture_id() -> String {
     format!("{:x}{sequence:04x}", std::process::id())
 }
 
-// Only independent forwarding fixtures opt in. The outer libtest runner and
-// backend script batches stay sequential. Each job constructs and tears down
-// its own runtime, namespace, fault state and kernel descriptors in one worker.
+// Only independent forwarding fixtures opt in. Concurrent outer tests use one
+// fixture worker each, avoiding multiplied concurrency. Each job constructs and
+// tears down its own runtime, namespace, fault state and descriptors in its worker.
 #[allow(clippy::panic)]
 pub(super) fn forwarding_fixtures<T: Send>(jobs: Vec<T>, run: impl Fn(T) + Sync) {
     let count = match std::env::var("BPFMAN_KERNEL_TEST_THREADS").as_deref() {
-        Ok("2" | "4") => 1,
+        Ok("2" | "4" | "8") => 1,
         Ok("1") | Err(_) => 2,
         other => panic!("invalid kernel concurrency: {other:?}"),
     };
@@ -79,18 +79,45 @@ pub(super) struct TestTiming {
 
 impl TestTiming {
     pub(super) fn start(name: &'static str) -> Self {
-        Self {
-            name,
-            started: timings_enabled().then(std::time::Instant::now),
-            phase: false,
-        }
+        Self::new(name, false)
     }
 
     pub(super) fn phase(name: &'static str) -> Self {
-        let mut timer = Self::start(name);
-        timer.phase = true;
+        Self::new(name, true)
+    }
+
+    fn new(name: &'static str, phase: bool) -> Self {
+        use std::io::Write;
+
+        let timer = Self {
+            name,
+            started: timings_enabled().then(|| {
+                let _ = timing_origin();
+                std::time::Instant::now()
+            }),
+            phase,
+        };
+        if let Some(started) = timer.started.filter(|_| !phase) {
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "kernel-test-start\t{}\t{name}\t{:.6}",
+                std::process::id(),
+                timing_offset(started)
+            );
+        }
         timer
     }
+}
+
+// Monotonic offsets share an origin within one libtest process, including
+// overlapping tests. Process IDs distinguish sequential backend invocations.
+fn timing_offset(now: std::time::Instant) -> f64 {
+    now.duration_since(timing_origin()).as_secs_f64()
+}
+
+fn timing_origin() -> std::time::Instant {
+    static ORIGIN: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    *ORIGIN.get_or_init(std::time::Instant::now)
 }
 
 impl Drop for TestTiming {
@@ -113,11 +140,20 @@ impl Drop for TestTiming {
                     started.elapsed().as_secs_f64()
                 );
             } else {
+                let ended = std::time::Instant::now();
+                let mut stderr = std::io::stderr().lock();
                 let _ = writeln!(
-                    std::io::stderr().lock(),
+                    stderr,
+                    "kernel-test-end\t{}\t{}\t{:.6}\t{outcome}",
+                    std::process::id(),
+                    self.name,
+                    timing_offset(ended)
+                );
+                let _ = writeln!(
+                    stderr,
                     "kernel-timing\t{}\t{:.3}\t{outcome}",
                     self.name,
-                    started.elapsed().as_secs_f64(),
+                    ended.duration_since(started).as_secs_f64(),
                 );
             }
         }
