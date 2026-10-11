@@ -1439,6 +1439,12 @@ kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 
 ## Measuring privileged test time
 
+Development and inherited test builds compile `aya-obj` with optimization level
+two because Aya eagerly parses kernel BTF on loader construction. Workspace code
+keeps its normal debug profile. Cargo's overall `unoptimized` summary still
+applies to the workspace, so record dependency profile settings when comparing
+timings; see the measurements in the design document.
+
 Set `BPFMAN_KERNEL_TIMINGS=1` through the normal Make targets:
 
 ```sh

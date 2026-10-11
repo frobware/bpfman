@@ -42,6 +42,12 @@ tracing-chrome = "0.7"
 # Error derives work with core::error::Error; pure crates must not enable std.
 thiserror = { version = "2", default-features = false }
 
+# Aya parses the running kernel's BTF whenever it constructs a loader. Optimize
+# that dependency in development and inherited test builds; workspace code keeps
+# its normal debug profile.
+[profile.dev.package.aya-obj]
+opt-level = 2
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "deny"

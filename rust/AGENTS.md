@@ -18,6 +18,10 @@ The architecture and compatibility goals are in
   `.#static` shell, use `direnv exec . env NIX_LDFLAGS= make ...` for Rust: that
   shell's added static-glibc search path breaks ordinary dynamic Rust binaries.
   Do not change the user's `.envrc` or the Go build environment to work around it.
+- Development and inherited test profiles optimize `aya-obj` at level two to
+  reduce eager kernel BTF parsing. Workspace code retains its normal debug
+  settings. Include this dependency override when recording build/timing evidence;
+  Cargo's overall `unoptimized` summary does not describe every dependency.
 - Before handing off implementation changes, run `make rust-check` and inspect
   its exit status. Investigate failures; never skip or weaken a test to get a
   green result. Run relevant real-kernel acceptance tests when the implemented

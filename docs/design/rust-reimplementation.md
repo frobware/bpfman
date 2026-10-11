@@ -3388,3 +3388,162 @@ Evidence: `/tmp/bpfman-jumbo-split-baseline.log` (failed original baseline),
 `/tmp/bpfman-jumbo-split-acceptance-phase-matrix.json`,
 `/tmp/bpfman-jumbo-split-lint-go.log` and
 `/tmp/bpfman-jumbo-split-go-shared.log`.
+
+### CLI cost under parallel acceptance (11 October 2026)
+
+A fresh measurement of the committed code passed `make rust-test`: all 100
+kernel tests executed, with 64.06 s in script acceptance and 59.47 s in retained
+contracts, for 123.56 s total. Userspace targets reported another 40.56 s of test
+execution, including 22.15 s in the fake-kernel lifecycle integration target;
+these sums exclude compilation and prerequisite setup. The difference from the
+earlier 139.55 s kernel sample is run-to-run variation, not a code improvement.
+All 257 script processes, 250 owned-runtime cleanups and four cohort completions
+passed. Whole-test timing pairs were intact; one DEVMAP setup phase interleaved
+with libtest stdout, so this sample does not prove a completely parsed phase
+matrix. The eight delivery contracts' phase records were intact: packet
+observation accounted for 38.6% and setup for 30.0% of their summed sequential
+phase durations. These durations overlap across tests and are not elapsed time.
+
+Additional measurements used temporary executable wrappers named `bpfman` and
+the CLI's existing `--trace-file`, with
+`RUST_LOG=debug,bpfman_lock=trace,bpfman_fs=trace`. Only XDP/TC fill/drain/refill
+commands were profiled. Each store ran the two scripts alone with one runner
+slot, then the normal 32-slot corpus with its four-slot shared cohort. The Rust
+binary, scripts, kernel and cleanup assertions stayed unchanged. Instrumented
+standalone scripts measured about 15 s versus the earlier approximately 14 s
+samples; this includes profiling overhead and run variation. The following
+comparisons use equally instrumented runs.
+
+| Mean CLI command duration, ms | JSON alone | JSON corpus, isolated | SQLite alone | SQLite corpus, isolated |
+| --- | ---: | ---: | ---: | ---: |
+| Program load, XDP script | 140.9 | 273.7 | 141.7 | 312.2 |
+| XDP attach | 80.2 | 172.8 | 79.8 | 220.1 |
+| Link detach, XDP script | 80.0 | 193.0 | 78.5 | 177.6 |
+| Program unload, XDP script | 21.7 | 26.4 | 20.0 | 25.4 |
+
+Each script performs 31 loads, 31 attaches, 31 detaches and 31 unloads. TC shows
+the same pattern: standalone load/attach/detach means were approximately
+142–145/77–78/75–77 ms, increasing to 263–318/194–227/129–175 ms in the corpus.
+The profiled isolated scripts took 15.1–15.2 s alone and 26.1–31.1 s in the
+corpus. Isolated writer-lock waits summed to only 10.5–25.3 ms per corpus script;
+the shared XDP script instead waited 4.34 s on JSON and 5.41 s on SQLite. JSON
+snapshot publication summed to roughly 0.3–0.6 s per command category in the
+corpus. Store publication and lock acquisition therefore do not explain most
+of the isolated command cost. Successful execution and cleanup markers were
+validated for both corpora and all focused runs; 1334 command timelines parsed
+with balanced span starts and ends.
+
+An additional isolated XDP script sampled the first load, attach and detach
+using `perf record -e cycles:u -F 999 --call-graph dwarf`. The script and its
+cleanup passed. The three profiles contained 137/89/82 samples, with none lost.
+Inclusive sampled cycles in `EbpfLoader::new` / kernel BTF loading were
+83.66%/74.56%/72.45%. These are small diagnostic CPU samples, not wall-time
+percentages or a measured optimization. They identify repeated kernel BTF
+reading/parsing as the principal userspace hotspot in the unoptimized build.
+Aya 0.14's constructor eagerly calls `Btf::from_sys_fs()`; an ordinary program
+load constructs loaders for both the user object and its verification target,
+while dispatcher replacement constructs another loader. Calling `.btf(None)`
+or supplying cached BTF after `new()` does not avoid that constructor work.
+
+The next bounded experiment should optimize compilation of the `aya-obj`
+dependency in the development/test profile, then compare matched script and
+retained-contract timings and run the full gate. This can target the measured
+parser cost without modifying Aya source, changing program semantics or
+weakening acceptance. Any proposal to reduce loader constructions must separately
+preserve CO-RE, verifier targets, fragment flags and object ownership. More test
+splitting has limited scheduling headroom and should follow measured reductions
+in per-command CPU cost.
+
+Evidence: `/tmp/bpfman-measure-current-report.txt`,
+`/tmp/bpfman-measure-current.log`,
+`/tmp/bpfman-measure-current-focused-comparison.json`, and
+`/tmp/bpfman-cli-profile/` containing the four runner logs/timelines,
+`analysis.json`, `summary.txt`, per-command Chrome traces and the three CPU
+profiles with compact reports. Temporary wrappers and profiling files are not
+repository dependencies; no production or test implementation changed.
+
+### Optimized BTF parser and loader-use audit (11 October 2026)
+
+The next measurement compiles only `aya-obj` at optimization level two using
+`[profile.dev.package.aya-obj]`; test builds inherit this setting. Workspace code
+keeps its normal debug profile, and dependency debug symbols remain available.
+The build log confirms `rustc --crate-name aya_obj -C opt-level=2`; its overall
+`unoptimized` summary still describes the workspace profile. The initial build
+took 10.34 s. No Aya source, dependency version, application operation, fixture,
+assertion, capture window or concurrency limit changed. The override is retained
+after the following successful measurements and full gate; optimized dependency
+locals can be harder to inspect in a debugger.
+
+The previous CLI-profiling binary was archived before rebuilding. Matching
+temporary wrappers captured the same two standalone scripts per store and the
+same normal mixed corpus per store. All 1334 per-command timelines parsed with
+balanced spans, and every per-script command-category count matched the baseline.
+
+| Profiled script, seconds | Before | Optimized `aya-obj` |
+| --- | ---: | ---: |
+| JSON XDP, alone | 15.247 | 10.290 |
+| JSON TC, alone | 15.087 | 10.175 |
+| SQLite XDP, alone | 15.186 | 10.372 |
+| SQLite TC, alone | 15.240 | 10.212 |
+| JSON XDP, isolated in corpus | 27.856 | 19.065 |
+| JSON TC, isolated in corpus | 26.083 | 19.849 |
+| SQLite XDP, isolated in corpus | 30.746 | 18.176 |
+| SQLite TC, isolated in corpus | 31.140 | 19.809 |
+
+Standalone XDP load means fell from 140.9/141.7 to 57.6/59.1 ms on JSON/SQLite;
+attach means fell from 80.2/79.8 to 41.7/43.2 ms. The shared XDP scripts also
+improved, from 30.968/33.007 to 21.753/21.634 s. These are local samples with
+profiling overhead and scheduling variation, not guaranteed production speedups.
+All four runner invocations passed, including 256 corpus processes, 250 corpus
+owned-runtime cleanups, four cohort completions and the four focused processes
+and cleanups. Both corpora preserved peak concurrency of 32 globally and four
+in the shared scope, with scope overlap.
+
+The complete `direnv exec . env BPFMAN_KERNEL_TIMINGS=1
+BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-aya-build-measure/gate-timeline.jsonl
+make rust-check lint-make` gate then exited zero:
+
+| Kernel stage, seconds | Earlier unchanged-code measurement | Optimized parser gate |
+| --- | ---: | ---: |
+| Script acceptance, both stores | 64.06 | 54.78 |
+| Retained contracts, including serial stages | 59.47 | 46.61 |
+| Complete kernel stage | 123.56 | 101.45 |
+
+The observed complete-kernel reduction is 17.9%, with 21.6% in retained contracts.
+All 100 tests ran exactly once; all 1032 retained phase counts match the prior
+complete baseline, including every fault/lifetime combination. Both stores
+passed their 84 admitted files, 64 named cases and four extra shared scripts;
+all 257 process exits, 250 owned-runtime cleanups and four cohort outcomes passed.
+Formatting, Clippy, userspace/compile-fail and scheduler contracts, Rustdoc and
+Make lint passed. Raw gate stdout/stderr were saved separately to avoid libtest
+stdout interleaving with timing records; the analysis log groups unchanged timing
+records by the runner's existing stages and retains the raw evidence.
+
+The loader-use audit found ordinary public-API use rather than an accidental
+reload of members during replacement. Aya's `EbpfLoader::new()` eagerly loads
+kernel BTF even before the caller can select `.btf(None)` or supply cached BTF.
+Its mutable `.load()` supports reuse, but global overrides and extension names
+remain in the builder and have no public reset. Blindly sharing one builder
+between user objects and differently configured verification dispatchers would
+therefore risk changing load semantics. Go also uses a separate verification
+dispatcher for XDP/TC, then reuses pinned members during replacement.
+
+An isolated syscall probe of the first XDP load, attach and detach observed
+two/one/one opens of `/sys/kernel/btf/vmlinux` in Rust. The same existing XDP
+script passed against Go on SQLite, including normal cleanup, and its matching
+commands opened kernel BTF zero times. The vendored cilium/ebpf relocation path
+returns before loading kernel types when there are no CO-RE relocations, and its
+kernel BTF reader caches decoded types within the process when needed. This
+explains a real efficiency difference in the library defaults. It does not
+justify dropping required verification targets or disabling CO-RE. An upstream
+lazy or explicitly supplied BTF constructor remains a useful future option;
+calling `.btf(None)` after Aya's current constructor would not fix the measured
+work. Further experiments can profile the remaining optimized-build cost before
+changing loader ownership or scheduling.
+
+Evidence: `/tmp/bpfman-aya-build-measure/` contains `optimized-build.log`, the
+archived `baseline/bpfman`, four profiled runner logs/timelines, `analysis.json`,
+`comparison.json`, the raw `gate.stdout.log` / `gate.stderr.log`, derived
+`gate.log` / `gate.log.summary.json`, `gate-acceptance-summary.json` and the
+Rust/Go syscall diagnostic logs. Wrappers and analysis scripts remain temporary
+measurement tooling, not repository dependencies.
