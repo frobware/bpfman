@@ -228,17 +228,25 @@ The same `lifecycle::exercise<S>` scenarios run against both SQLite and JSON.
 CLI and unchanged DSL tests inspect returned JSON and runtime artifacts, with no
 database queries. `make rust-test` and `make rust-check` build the fixtures and
 run all kernel and unchanged DSL tests as part of the normal gate. Cargo's runner
-uses passwordless `sudo -n` to execute the kernel test binary serially in a
-private mount namespace; other test binaries run as the invoking user. Missing
-privileges fail the gate. The focused kernel and observation targets select
+uses passwordless `sudo -n` to execute the kernel test binary in a private mount
+namespace. Complete gates run independent contracts on eight workers within each
+backend; global inventory, corpus and Go stages remain serial. Other test binaries
+run as the invoking user. Missing privileges fail the gate. The focused kernel
+and observation targets select
 subsets of the same suite. The harness and executable-selection tests are Rust
 integration tests.
 
 SQL fixtures and DDL/DML remain in tests explicitly testing SQLite. Adapter tests
 verify transaction rollback, constraints, orphan map-set absence, invalid records,
-and conditional deletion. `tests/sqlite_compatibility.rs` checks the selected
-SQLite CLI against Go's schema. These format-specific assertions do not belong in
-the generic lifecycle tests. Sharing persisted state with Go is checked separately
+and conditional deletion. SQL statement and malformed-row unit matrices use
+connection-local in-memory SQLite with the same Go schema as file fixtures;
+timestamp normalization is tested without a database. Shared file fixtures
+initialize the schema/version table and seed data in separate transactions,
+retaining ordinary commits while avoiding one synchronization per setup statement.
+Opening, byte-preservation, WAL, independent-reader/writer and receipt contracts
+continue using actual database files. `tests/sqlite_compatibility.rs` checks the
+selected SQLite CLI against Go's schema. These format-specific assertions do not
+belong in the generic lifecycle tests. Sharing persisted state with Go is checked separately
 in `tests/kernel/go_compatibility.rs`; JSON does not need to share
 Go's SQLite representation. The division preserves the previous coverage:
 

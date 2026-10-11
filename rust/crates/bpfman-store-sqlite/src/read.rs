@@ -81,3 +81,6 @@ fn read(connection: &mut Connection) -> Result<Vec<StoredProgramSummary>, Failur
 
     Ok(programs)
 }
+
+#[cfg(test)]
+mod tests;

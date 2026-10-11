@@ -3699,3 +3699,185 @@ passed. Evidence includes `/tmp/bpfman-fake-tmpfs-focused.log`,
 `/tmp/bpfman-fake-disk-focused.log`, and `/tmp/bpfman-fake-tmpfs-gate/` with
 separate raw gate stdout/stderr, the script timeline, coverage summaries and
 `userspace-comparison.json`.
+
+
+### Real-kernel storage and SQLite fixture measurements (11 October 2026)
+
+Temporary supplementary Make targets and a measurement-only Cargo runner compared
+owned Btrfs (`/tmp`) and tmpfs (`/dev/shm`) fixture scopes. Only the test child's
+`TMPDIR` changed. Production test bodies, file-backed stores, synchronization,
+bpffs preparation/mounts, fault cases, packet windows and concurrency remained
+unchanged. The retained kernel suite kept eight workers and sequential backend
+stages; the committed `aya-obj` optimization remained active. No persistent runner
+or fixture change was made in this measurement slice.
+
+The nine SQLite read contracts and five full-record contracts passed in all
+four ordinary disk/tmpfs/tmpfs/disk runs:
+
+| SQLite target | Disk mean seconds | Tmpfs mean seconds |
+| --- | ---: | ---: |
+| `read` (9 tests) | 3.035 | 0.020 |
+| `records` (5 tests) | 6.450 | 0.030 |
+
+These are libtest target durations, excluding Cargo/build time. Supplementary
+serial observations passed the same 14 tests on each filesystem. The slowest
+disk cases were `malformed_full_records_fail_instead_of_being_omitted` (5.848 s),
+`rejects_malformed_stored_values` (2.201 s), and
+`refuses_old_and_new_schemas_without_migrating` (1.295 s). The malformed
+full-record case constructs eight fresh databases rather than timing one read.
+
+Serial syscall-summary runs also passed all cases. `read` performed exactly
+1015 `fsync` calls on both filesystems, taking 6.654 s on disk and 0.0032 s on
+tmpfs. `records` performed exactly 1308 calls, taking 8.655 s and 0.0044 s.
+These are instrumented, serial runs, not the parallel target means above.
+Harness `futex` waits overlap test execution and must not be added to wall time.
+
+To separate fixture construction from reads, a throwaway Rust probe linked the
+same Cargo-built SQLite adapter dependencies and called the unchanged
+`rust/tests/support/mod.rs` fixture. Three fresh databases per invocation used
+the real schema, seeding and public `Store` reads. Uninstrumented disk means
+were 622 ms for `database()`, 81.8 ms for `seed()`, 0.42 ms for `Store::open`,
+0.18 ms for `read_records`, and 0.086 ms for `read_programs`. On tmpfs,
+construction and seeding took 2.41 ms and 0.17 ms. Timestamped sync-only probes
+assigned every successful sync to a measured phase: construction made 92
+`fsync` calls per database, seeding made 12, and both read phases made none.
+The fixture executes schema statements and seeds in autocommit mode; fixture
+initialization, rather than row decoding or cached reads, dominates this cost.
+
+A separate throwaway copy of that fixture wrapped only schema/version setup in
+one transaction. The SQL and physical database files remained the same, and
+the probe's seeded public reads still passed. Its uninstrumented disk
+construction mean fell to 27.9 ms, with four construction syncs instead of 92.
+Seeding remained unchanged at about 81 ms and 12 syncs. This is a measured
+fixture experiment, not a change to the checked-in helper or the production
+creation path; production creation already uses a transaction. Batching fixture
+setup is therefore a useful next slice even for tests that must retain files.
+
+The complete retained real-kernel suite passed all 98 selected tests on disk
+in 46.65 s and 46.11 s. One tmpfs run passed the same 98 tests in 40.56 s.
+All three passing runs retained identical test identities and all 1032 phase
+counts, with no failed phase outcomes. The roughly 5.8-second difference from
+the disk mean is indicative only: the tmpfs configuration was not reliable.
+An initial tmpfs run failed `json_xdp_unload_lifecycle`; a subsequent run failed
+`sqlite_xdp_unload_lifecycle`. An isolated serial tmpfs run failed both, while
+its disk comparison passed both. Each failure was the immediate program-ID
+absence assertion at `kernel/xdp_unload.rs:111`, after successful unload and
+managed-file removal. The first program ID was absent when inspected later,
+after fixture cleanup. This is consistent with a deferred kernel release
+timing assumption, but those observations do not prove when the final reference
+disappeared or whether cleanup accelerated it. The existing extension-link
+lifetime helper already uses bounded observation polling. Do not broaden the
+committed tmpfs runner to real-kernel tests until the program-release contract
+has been investigated and made independent of disk latency.
+
+Serial syscall probes of XDP switch/restoration and TC attached unload on both
+stores passed all four tests on each filesystem: 18.10 s on disk and 16.20 s
+on tmpfs. Both made 278 sync calls; their aggregate sync time fell from 1.742 s
+to 0.00092 s. In the complete passing suites, overlapping phase sums also showed
+lower forwarding setup and managed teardown costs while packet observation
+remained similar. Phase sums are concurrent/nested work, not a wall-time
+partition, and must not be presented as additional elapsed-time savings.
+
+All 34 owned measurement scopes, including those belonging to failed test runs
+and an initial measurement-wrapper path error, passed empty-directory cleanup
+and were removed. Failed experiment logs remain part of the evidence. The
+checked-in runner continues to scope tmpfs only to the fake-kernel suite.
+
+#### Which SQLite tests can use `:memory:`?
+
+Plain `:memory:` is connection-local. The public file-backed store opens its
+own reader and writer connections, so changing its pathname to `:memory:` is
+not a valid fixture substitution. SQL-only assertions can instead exercise
+private connection-based functions from adapter unit modules. No public
+in-memory store mode or wider visibility is needed for that approach.
+
+| Existing coverage | Appropriate next form | Coverage to preserve |
+| --- | --- | --- |
+| `queries::tests::cached_statements_rebind_after_errors_and_keep_record_fields_distinct` | In-memory connection with the actual Go schema | Binding, statement reuse after errors, joins, constraints and affected-row counts; file creation is covered separately. |
+| `records::timestamps_match_go_rfc3339nano_without_losing_precision` (currently an integration test) | Pure unit assertions on the private timestamp decoder | Exact fractional precision and timezone normalization; no database is necessary. |
+| `malformed_full_records_fail_instead_of_being_omitted` | In-memory adapter unit matrix using the private full-record read function | Real SQL projection plus decoder failures and missing-map-set rejection; retain file-backed opening/read-only contracts. |
+| `rejects_malformed_stored_values` | In-memory adapter unit matrix using the private summary read function | Invalid kinds, IDs and metadata plus existing error translation; retain file-backed opening contracts. |
+| `reader::tests::sequential_reads_reuse_the_initial_connection_including_after_an_error` | Already uses an in-memory connection | Connection reuse and failed-transaction release without reopening the absent pathname. |
+
+Retain files for the unchanged-database-byte assertions, creation/publication,
+missing/corrupt/symlink paths, schema mutation through a second connection,
+committed WAL visibility, overlapping readers that open additional connections,
+CLI/runtime reopening, and runtime/device/inode-bound cleanup receipts. The
+cached full-record integration test also needs independent writer/reader
+connections to establish visibility of committed changes. Public link, XDP,
+TC and unload publication/receipt contracts must continue using the concrete
+file-backed adapter even when individual SQL invariants acquire fast unit tests.
+Named shared-memory databases would change the connection and WAL conditions
+of these contracts and are not a substitute for their current evidence.
+
+Evidence is in `/tmp/bpfman-storage-followup/`: supplementary Make targets and
+runner, raw separate stdout/stderr logs (including failures),
+`measurements.json`, serial per-test observations, syscall summaries,
+`fixture-probes.json`, timestamped phase/sync traces, and `report.json`.
+The phase probe's transactional fixture copy is temporary measurement tooling;
+the repository's test helper, production code and test scheduling are unchanged.
+
+
+### Batched SQLite fixtures and connection-local unit matrices (11 October 2026)
+
+The measured fixture improvement is now implemented. Shared test-only
+`rust/tests/support/schema.rs` includes the unchanged Go migrations and owns the
+existing schema/version setup and seed rows. Schema initialization and seeding
+each run in their own transaction. File fixtures still create an actual
+`db/store.db` and perform ordinary SQLite commits; the same helper also initializes
+connection-local in-memory databases for adapter unit tests. Production creation,
+store opening, connections, receipts and synchronization policy remain unchanged.
+
+The cached-statement binding/reuse unit test now uses an in-memory connection
+with the actual Go schema, retaining all its binding, duplicate-insert, constraint,
+query, deletion and successful-close assertions. The full-record and summary
+malformed-value matrices moved from file-backed integration targets into private
+adapter unit modules, calling the same transaction/query/decoder functions and
+checking the same public error classification. All seven malformed full-record
+updates, three malformed summary updates and missing-map-set rejection remain.
+Timestamp precision/timezone assertions moved into a pure decoder unit test.
+The duplicate integration cases were removed; there is no public in-memory store
+mode, widened production visibility, new dependency or asynchronous code.
+
+File-backed coverage remains for public store opening, unchanged database bytes,
+schema changes from another connection, reader/writer visibility, committed WAL,
+missing/corrupt/symlink paths, production publication and conditional cleanup
+identity. CLI and generic runtime tests continue using the concrete adapters.
+The real-kernel runner and program-release assertions were not changed: the
+preceding tmpfs experiment exposed a timing-sensitive immediate-absence assertion,
+not an in-memory SQLite race. Its precise kernel-release cause remains unproven;
+normal real-kernel contracts continue using disk-backed fixtures.
+
+The focused `rust-test-xdp-store` target passed both adapters and shared XDP
+snapshot/replacement contracts. The complete `direnv exec . env
+BPFMAN_KERNEL_TIMINGS=1
+BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-sqlite-fixture-gate/gate-timeline.jsonl
+make rust-check lint-make` gate exited zero. Formatting, Clippy with warnings
+denied, userspace/compile-fail and shell runner contracts, real-kernel acceptance,
+Rustdoc with warnings denied and Make lint/undefined-variable probes passed.
+
+All 58 reported userspace groups retain 367 cases, with the same test identities
+after accounting for the three relocated module paths. The sum of reported
+target durations fell from 21.13 s in the preceding checkpoint to 10.28 s; this
+excludes compilation and prerequisites. The SQLite library's eight tests took
+0.06 s, the eight remaining file read contracts took 0.17 s, and the three
+remaining file full-record contracts took 0.20 s. Before this slice those groups
+contained five/nine/five tests and took 0.11/3.01/6.36 s respectively. The
+fake-kernel target retained all 60 cases and owned tmpfs cleanup, taking 2.21 s.
+
+A three-fixture probe of the checked-in helper on Btrfs confirmed uninstrumented
+means of 30.9 ms for schema construction and 27.1 ms for seeding, compared with
+622 ms and 81.8 ms before this slice. Timestamped sync-only traces assign four
+syncs to construction and four to seeding, instead of 92 and 12. Both read phases
+still perform no syncs, and all probe scopes passed empty-directory cleanup.
+
+The complete kernel stage passed all 100 tests exactly once in 96.46 s
+(49.98 s scripts and 46.43 s retained stages), preserving the same 1032 phase
+counts and test identities. Both backends passed all 84 admitted files, 64 named
+cases and four additional shared scripts. All 257 script process exits, 250
+owned-runtime cleanups and four cohort outcomes passed, with scheduler limits and
+cohort overlap preserved. This slice targets userspace fixture overhead; the
+kernel/corpus timing difference from the previous gate is not an attributed
+optimization. Evidence is in `/tmp/bpfman-sqlite-fixture-gate/`, including raw
+separate gate logs, the script timeline, coverage reports,
+`userspace-comparison.json` and the post-change fixture phase/sync probes.

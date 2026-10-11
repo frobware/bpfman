@@ -209,3 +209,6 @@ fn read(connection: &mut rusqlite::Connection) -> Result<Vec<StoredProgram>, Fai
 
     Ok(records)
 }
+
+#[cfg(test)]
+mod tests;

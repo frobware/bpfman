@@ -18,6 +18,9 @@ mod unload;
 mod write;
 mod xdp;
 
+#[cfg(test)]
+mod test_support;
+
 pub use bpfman_store::LoadRecord;
 pub use unload::{delete_unloaded_program, delete_unused_map_set, observe_unload};
 pub use write::persist_program;

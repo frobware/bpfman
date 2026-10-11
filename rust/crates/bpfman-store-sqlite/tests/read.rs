@@ -148,28 +148,6 @@ fn existing_empty_or_corrupt_files_are_never_repaired() -> Result<(), Box<dyn st
 }
 
 #[test]
-fn rejects_malformed_stored_values() -> Result<(), Box<dyn std::error::Error>> {
-    for update in [
-        "UPDATE managed_programs SET program_type = 'bogus' WHERE program_id = 7",
-        "UPDATE managed_programs SET program_id = 0 WHERE program_id = 7",
-        "UPDATE managed_programs SET metadata_json = '{\"x\":2}' WHERE program_id = 7",
-    ] {
-        let db = support::database()?;
-        support::seed(&db)?;
-        db.connection.execute(update, [])?;
-
-        assert_eq!(
-            read_programs(&db.path)
-                .expect_err("invalid stored value")
-                .kind(),
-            ErrorKind::InvalidData
-        );
-    }
-
-    Ok(())
-}
-
-#[test]
 fn reads_committed_wal_state() -> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     db.connection.pragma_update(None, "journal_mode", "WAL")?;

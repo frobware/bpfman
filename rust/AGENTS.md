@@ -323,6 +323,11 @@ The architecture and compatibility goals are in
   a simulated store implementation. SQLite `:memory:` is a real backend and is
   suitable for adapter tests; use temporary files when testing multiple independent
   connections, reopening, locking, or persistent store identity.
+  Shared SQLite test fixtures apply Go's schema/version setup and seed rows in
+  separate transactions, preserving real commits without syncing every setup
+  statement. SQL/decoder unit tests use the same schema and seed helper with
+  connection-local in-memory databases; timestamp formatting needs no database.
+  Keep public file-backed opening, read-only, WAL, publication and receipt contracts.
   A test-only failure decorator may intercept
   a named operation and retain its receipt on failure; all successful persistence
   and receipt validation must delegate unchanged to the concrete backend.
