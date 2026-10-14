@@ -3,13 +3,15 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The latest
-capability checkpoint adds complete multi-member legacy TC ingress replacement on
+capability checkpoint adds independent legacy TC ingress and egress dispatchers on
 both stores.
 One to ten EXT members are rebuilt in priority order around a native TC dispatcher,
 using the same exact legacy filter handle. Publication failures restore the old
 chain before staged cleanup; restoration and retirement failures retain consuming
 receipts for explicit retries. Attached-program unload rebuilds surviving members,
-including repeated attachments of the same program. TC egress remains unfinished.
+including repeated attachments of the same program. Direction is part of dispatcher,
+store, pin and exact-filter identity. Both hooks retain shared clsact ownership
+through either attach/drain order.
 The preceding XDP checkpoint added native DEVMAP_HASH egress PASS/DROP for ordinary and genuine
 multi-buffer frames in driver and generic SKB modes on both SQLite and JSON stores,
 building on hash/array unicast, broadcast, and ingress exclusion acceptance.
@@ -75,7 +77,8 @@ Script parity now has an in-corpus manifest: passing scripts carry
 `#pragma labels={"rust":"ok"}`. Run that selection through the existing Go runner,
 using its interface pool and scheduling machinery, once per store. Grow this set
 before expanding Rust-specific packet scenarios; corpus failures should drive
-subsequent implementation. TC egress remains one known gap. Compare performance
+subsequent implementation. TC egress traffic and ingress/egress independence now
+pass on both stores. Compare performance
 on the same scripts after behavior matches.
 Full behavioural parity remains unfinished.
 
@@ -103,8 +106,8 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
-| TC ingress | One to ten members per interface/namespace; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, dispatcher get/list | Egress, TCX, outer-filter status and orphan repair |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 8 for TC replacement; format 7 retains singleton TC; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, dispatcher get/list | TCX, outer-filter status and orphan repair |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 9 for TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -4114,3 +4117,94 @@ admitted files, 64 named cases and four additional shared scripts. All 257 scrip
 process exits, 250 owned-runtime cleanup outcomes and four cohort outcomes passed.
 The complete retained per-test phase matrix is unchanged at 1032 records. Kernel
 stage time was 88.10 s; this local sample is not a benchmark or full Make duration.
+
+### TC ingress parity audit and independent egress (14 October 2026)
+
+Three previously unlabelled scripts passed unchanged against Rust on both JSON
+and SQLite with owned tmpfs fixtures and successful cleanup:
+`TestDispatcher_SlotReusedAfterDetachTC`, `TestTC_DefaultProceedOnRebuild` and
+`TestTC_DispatcherChainProceedOn`. Their assertions needed no implementation fixes;
+they now carry `rust=ok` parity labels.
+
+TC direction is now a refined `TcDirection` inside `TcKey`. The same complete
+revision/consuming recovery interpreter handles either hook. Direction travels
+through preparation, staged ownership, exact legacy netlink filters, retained
+switch/restoration receipts, store selection and attached unload grouping. Separate
+`fs/tc-ingress` and `fs/tc-egress` collections prevent pin collisions. Ingress's
+existing ownership evidence names are preserved; egress uses
+`tc/egress_dispatcher_<nsid>_<ifindex>_<revision>`. Observation and removal remain
+confined. No Aya, dependency, TC CONFIG ABI or Go SQLite schema changes are needed.
+
+A first attachment on the other hook validates the existing managed dispatcher
+and copies its established clsact ownership under the writer lock. Each subsequent
+revision retains that evidence. Either hook can reclaim the shared owned qdisc
+once both filter blocks are empty. Borrowed qdiscs remain borrowed; foreign filters
+remain untouched and retain clsact. This avoids losing ownership when the original
+creating hook drains before the other hook. Netlink observation/mutation remains
+subject to concurrent privileged writers outside bpfman's lock.
+
+The CLI accepts `link attach tc ... ingress|egress` and reports the stored direction.
+`dispatcher get tc-egress` and directional list filters now select the matching
+complete snapshot. Both unchanged requested egress gates,
+`TestTC_EgressTrafficCounting` and `TestTC_IngressEgressIndependence`, passed with
+both stores on tmpfs and now carry parity labels.
+
+New JSON stores use format 9. Ingress rows omit the default direction to preserve
+older wire representations; egress rows explicitly record it. Formats 7 and 8
+retain their operations and reject egress without changing state. Snapshot
+validation rejects egress hidden inside an older format. Tests retain the format-7
+singleton/replacement boundary and add older-format egress refusal, unchanged bytes
+and invalid persisted-direction evidence. The future-version fixture now uses 10.
+There are no implicit upgrades or conversions.
+
+Existing shared real-store contracts and stateful fake replacement/unload fault
+and cancellation matrices now exercise both hooks. Failed cleanup on one direction
+still gives the independent other direction on the same interface its one pass.
+Six new real-kernel tests run the existing exact-filter, publication compensation,
+restoration, partial retirement and reopened unload contracts for egress as well as
+ingress. The immediate post-unload program-ID checks and retained-link ordering
+remain intact. `make rust-test-tc` runs both store contracts and all twelve kernel
+TC tests; ingress/egress named aliases select that same complete subset.
+
+The marked-frame probe sends on `source0` and receives on `in0`, so the egress
+contracts attach on `source0`. The first exploratory run showed ENOBUFS from an
+intentional TC_ACT_SHOT at the sender. Linux 6.18.54's
+[packet_snd](https://github.com/gregkh/linux/blob/v6.18.54/net/packet/af_packet.c)
+translates the transmit drop status through `net_xmit_errno`. An explicit
+`packets-egress-drop` mode now requires ENOBUFS for every one of the three sends;
+packet absence, exact member counters, capture windows and ordinary modes retain
+their existing assertions. The corrected focused target passed all twelve TC
+kernel tests and both store contracts, with empty-scope tmpfs cleanup.
+
+`TestTC_BidirectionalClsactOwnership` adds twelve Rust-only cases covering both
+attach orders, both drained hooks and owned/borrowed/foreign-filter qdiscs. It
+requires unchanged survivor snapshots, correct directional dispatcher listing,
+reopened CLI unload, retained foreign filters and immediate clsact postconditions.
+Both stores passed before adding its `rust=ok` label. Foreign-filter checks count
+actual option-bearing matchall entries, excluding tc's JSON summary entries.
+No script runner changes were needed.
+
+Evidence is in `/tmp/bpfman-tc-directions/`: ingress and egress per-store logs,
+initial and corrected kernel contract logs, per-store ownership case logs and
+userspace/lint logs. Full-gate results follow below.
+
+The final `direnv exec . make rust-check lint-make` completed every Rust gate:
+formatting, warnings-denied Clippy/Rustdoc, userspace and compile-fail contracts,
+all 60 shared fake-kernel tests (with expanded TC direction matrices), and all 106
+real-kernel tests exactly once. Both fake and real owned tmpfs scopes cleaned
+successfully. The kernel stage completed in 95.03 s; this is a local sample, not
+a controlled performance comparison.
+
+Both stores passed all 90 admitted script files (57 shared Go/Rust parity files
+and 33 Rust-only files), including 76 named cases and the four additional
+shared-runtime scripts per store. Normal inventory, artifact and unmount checks
+remain required. This run did not enable phase/timeline export; it makes no new
+phase-count or scheduler-occupancy comparison.
+
+The subsequent Make lint in that composite invocation initially failed because
+checkmake parsed a multi-target alias declaration as one target name. Splitting
+the aliases into separate declarations left their dependencies unchanged;
+`direnv exec . make lint-make` then exited zero, including the undefined-variable
+probes. Final logs are `gate.stdout.log`, `gate.stderr.log` and
+`make-lint-final.log`; `final-report.json` records the unique kernel-test count
+and admitted manifest counts. `git diff --check` is clean.

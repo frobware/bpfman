@@ -29,18 +29,23 @@ pub(super) fn tc(network: &Network, args: &[&str]) -> serde_json::Value {
     }
 }
 
-pub(super) fn clsact(network: &Network) -> bool {
-    tc(network, &["qdisc", "show", "dev", "in0"])
+pub(super) fn clsact(network: &Network, interface: &str) -> bool {
+    tc(network, &["qdisc", "show", "dev", interface])
         .as_array()
         .expect("qdiscs")
         .iter()
         .any(|q| q["kind"] == "clsact")
 }
 
-pub(super) fn request(id: NonZeroU32, network: &Network) -> TcAttach {
+pub(super) fn request(
+    id: NonZeroU32,
+    network: &Network,
+    hook: bpfman_model::TcDirection,
+) -> TcAttach {
     TcAttach {
+        direction: hook,
         program_id: id,
-        interface: "in0".parse().expect("interface"),
+        interface: interface(hook).parse().expect("interface"),
         netns: network.namespace(),
         priority: 25,
         proceed_on: Default::default(),
@@ -57,17 +62,23 @@ pub(super) fn count(c: &Context, id: NonZeroU32) -> u64 {
     map.get(&0, 0).expect("counter").iter().sum()
 }
 
-pub(super) fn traffic(network: &Network, local: u32) {
-    let output = network.probe(&["packets", "64"]);
+pub(super) fn traffic(network: &Network, local: u32, hook: bpfman_model::TcDirection) {
+    let mode = if hook == bpfman_model::TcDirection::Egress && local == 0 {
+        "packets-egress-drop"
+    } else {
+        "packets"
+    };
+    let output = network.probe(&[mode, "64"]);
     let counts: Vec<u32> = serde_json::from_slice(&output).expect("capture counts");
     assert_eq!(counts, vec![0, local, 0]);
 }
 
-pub(super) fn exercise<S>(backend: S)
+pub(super) fn exercise<S>(backend: S, hook: bpfman_model::TcDirection)
 where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + TcStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    let interface = interface(hook);
     let c = Context::new();
     let network = Network::new();
     let faults = Faults::new(backend.clone());
@@ -85,49 +96,49 @@ where
     .expect("prepare TC");
     let loaded = app.load(prepared).expect("load TC");
     let id = loaded.record.id;
-    assert!(!clsact(&network));
+    assert!(!clsact(&network, interface));
     assert_eq!(count(&c, id), 0);
 
     // A conflicting classic ingress qdisc is never adopted or deleted.
-    tc(&network, &["qdisc", "add", "dev", "in0", "ingress"]);
+    tc(&network, &["qdisc", "add", "dev", interface, "ingress"]);
     let error = app
-        .attach_tc(request(id, &network))
+        .attach_tc(request(id, &network, hook))
         .expect_err("classic ingress conflict");
     assert_eq!(error.unresolved(), 0, "{error:?}");
     assert!(app.list_link_records().expect("links").is_empty());
     assert!(
-        tc(&network, &["qdisc", "show", "dev", "in0"])
+        tc(&network, &["qdisc", "show", "dev", interface])
             .as_array()
             .expect("qdiscs")
             .iter()
             .any(|q| q["kind"] == "ingress")
     );
-    tc(&network, &["qdisc", "del", "dev", "in0", "ingress"]);
+    tc(&network, &["qdisc", "del", "dev", interface, "ingress"]);
 
     // Failed publication compensates the exact filter and bpfman-created clsact.
     faults.set(Some(Point::TcCommit));
     let error = app
-        .attach_tc(request(id, &network))
+        .attach_tc(request(id, &network, hook))
         .expect_err("publication fault");
     assert_eq!(error.unresolved(), 0, "{error:?}");
-    assert!(!clsact(&network));
+    assert!(!clsact(&network, interface));
     assert!(app.list_link_records().expect("links").is_empty());
-    traffic(&network, 3);
+    traffic(&network, 3, hook);
     faults.set(None);
 
     // A failed cleanup retains ownership and the original publication failure.
     faults.set(Some(Point::TcCommitWithBlockedCleanup));
     let error = app
-        .attach_tc(request(id, &network))
+        .attach_tc(request(id, &network, hook))
         .expect_err("publication and cleanup fault");
     assert_eq!(error.unresolved(), 1, "{error:?}");
-    assert!(!clsact(&network));
+    assert!(!clsact(&network, interface));
     assert!(
         app.list_link_records()
             .expect("no committed link")
             .is_empty()
     );
-    let tc_dir = c.layout.root().join("fs/tc-ingress");
+    let tc_dir = c.layout.root().join("fs").join(hook.dispatcher_type());
     let revisions = names(&tc_dir);
     assert_eq!(revisions.len(), 1);
     remove_injected_directory(&tc_dir.join(&revisions[0]).join("blocked_cleanup"));
@@ -149,16 +160,16 @@ where
     let cancelled = bpfman_runtime::Cancellation::new();
     cancelled.cancel();
     assert_eq!(
-        app.attach_tc_with_cancellation(request(id, &network), &cancelled)
+        app.attach_tc_with_cancellation(request(id, &network, hook), &cancelled)
             .expect_err("cancelled attach")
             .unresolved(),
         0
     );
-    assert!(!clsact(&network));
+    assert!(!clsact(&network, interface));
     let late = bpfman_runtime::Cancellation::new();
     faults.cancel_at(Point::TcCommit, &late);
     let record = app
-        .attach_tc_with_cancellation(request(id, &network), &late)
+        .attach_tc_with_cancellation(request(id, &network, hook), &late)
         .expect("commit determines outcome despite late cancellation");
     assert!(late.is_cancelled());
     let LinkDetails::Tc(details) = &record.details else {
@@ -166,8 +177,11 @@ where
     };
     assert_eq!(details.filter_priority, 50);
     assert_ne!(details.filter_handle.get(), 0);
-    assert!(clsact(&network));
-    let filters = tc(&network, &["filter", "show", "dev", "in0", "ingress"]);
+    assert!(clsact(&network, interface));
+    let filters = tc(
+        &network,
+        &["filter", "show", "dev", interface, hook.as_str()],
+    );
     assert_eq!(
         filters
             .as_array()
@@ -179,7 +193,7 @@ where
         "filters: {filters}"
     );
     let before = count(&c, id);
-    traffic(&network, 0);
+    traffic(&network, 0, hook);
     assert_eq!(count(&c, id) - before, 3);
     let observed = app.get_link(record.id).expect("observed TC link");
     assert!(observed.kernel.is_some() && observed.pin_present);
@@ -187,7 +201,7 @@ where
     let cancelled = bpfman_runtime::Cancellation::new();
     cancelled.cancel();
     assert!(
-        app.attach_tc_with_cancellation(request(id, &network), &cancelled)
+        app.attach_tc_with_cancellation(request(id, &network, hook), &cancelled)
             .is_err()
     );
     assert_eq!(
@@ -200,12 +214,9 @@ where
         .unload_with_cancellation(id, &cancelled)
         .expect_err("cancelled unload admission");
     assert!(error.report().is_none());
-    traffic(&network, 0);
+    traffic(&network, 0, hook);
 
-    let marker = c.layout.root().join("tc").join(format!(
-        "dispatcher_{}_{}_1",
-        details.key.nsid, details.key.ifindex
-    ));
+    let marker = c.layout.tc_ownership_path(details.key, details.revision);
     let evidence = std::fs::read(&marker).expect("ownership evidence");
     assert_eq!(evidence, vec![1]);
     std::fs::write(&marker, [9]).expect("malformed evidence fixture");
@@ -216,7 +227,7 @@ where
             .report()
             .is_none()
     );
-    traffic(&network, 0);
+    traffic(&network, 0, hook);
     std::fs::write(&marker, &evidence).expect("restore ownership evidence");
 
     // The exact tuple alone cannot authorize removal after a foreign program replaces it.
@@ -227,8 +238,8 @@ where
             "filter",
             "replace",
             "dev",
-            "in0",
-            "ingress",
+            interface,
+            hook.as_str(),
             "pref",
             "50",
             "handle",
@@ -258,7 +269,7 @@ where
         vec![record.clone()]
     );
     assert!(std::path::Path::new(&record.pin_path).exists());
-    traffic(&network, 3);
+    traffic(&network, 3, hook);
     let dispatcher = std::path::Path::new(&record.pin_path)
         .parent()
         .expect("revision")
@@ -269,8 +280,8 @@ where
             "filter",
             "replace",
             "dev",
-            "in0",
-            "ingress",
+            interface,
+            hook.as_str(),
             "pref",
             "50",
             "handle",
@@ -283,7 +294,7 @@ where
             dispatcher.to_str().expect("dispatcher pin"),
         ],
     );
-    traffic(&network, 0);
+    traffic(&network, 0, hook);
 
     // Foreign BPF filters share priority 50 with distinct exact handles.
     for direction in ["ingress", "egress"] {
@@ -293,7 +304,7 @@ where
                 "filter",
                 "add",
                 "dev",
-                "in0",
+                interface,
                 direction,
                 "pref",
                 "50",
@@ -322,22 +333,28 @@ where
         .detach_tc(record.id)
         .expect_err("conditional delete fault");
     assert_eq!(error.unresolved(), 1, "{error:?}");
-    assert!(clsact(&network), "foreign filters retain clsact");
+    assert!(clsact(&network, interface), "foreign filters retain clsact");
     assert!(
-        tc(&network, &["filter", "show", "dev", "in0", "ingress"])
-            .as_array()
-            .expect("filters")
-            .iter()
-            .all(|f| f["options"]["prog"]["id"] != details.dispatcher_id.get())
+        tc(
+            &network,
+            &["filter", "show", "dev", interface, hook.as_str()]
+        )
+        .as_array()
+        .expect("filters")
+        .iter()
+        .all(|f| f["options"]["prog"]["id"] != details.dispatcher_id.get())
     );
     assert!(
-        !tc(&network, &["filter", "show", "dev", "in0", "ingress"])
-            .as_array()
-            .expect("foreign ingress")
-            .is_empty()
+        !tc(
+            &network,
+            &["filter", "show", "dev", interface, hook.as_str()]
+        )
+        .as_array()
+        .expect("foreign ingress")
+        .is_empty()
     );
     assert!(
-        !tc(&network, &["filter", "show", "dev", "in0", "egress"])
+        !tc(&network, &["filter", "show", "dev", interface, "egress"])
             .as_array()
             .expect("foreign egress")
             .is_empty()
@@ -346,12 +363,14 @@ where
     let report = app.retry_tc_cleanup(error).expect("explicit retry");
     assert_eq!(report.unresolved(), 0);
     assert!(app.list_link_records().expect("links").is_empty());
-    traffic(&network, 3);
-    tc(&network, &["qdisc", "del", "dev", "in0", "clsact"]);
+    traffic(&network, 3, hook);
+    tc(&network, &["qdisc", "del", "dev", interface, "clsact"]);
 
     // An existing empty clsact is borrowed and survives a successful reopened detach.
-    tc(&network, &["qdisc", "add", "dev", "in0", "clsact"]);
-    let record = app.attach_tc(request(id, &network)).expect("borrow clsact");
+    tc(&network, &["qdisc", "add", "dev", interface, "clsact"]);
+    let record = app
+        .attach_tc(request(id, &network, hook))
+        .expect("borrow clsact");
     drop(app);
     let app = Bpfman::new(
         ActiveStore::open(backend.clone(), &c.layout, TIMEOUT).expect("reopen"),
@@ -359,17 +378,22 @@ where
         TIMEOUT,
     );
     app.detach_tc(record.id).expect("detach borrowed");
-    assert!(clsact(&network));
+    assert!(clsact(&network, interface));
     assert!(
-        tc(&network, &["filter", "show", "dev", "in0", "ingress"])
-            .as_array()
-            .expect("filters")
-            .is_empty()
+        tc(
+            &network,
+            &["filter", "show", "dev", interface, hook.as_str()]
+        )
+        .as_array()
+        .expect("filters")
+        .is_empty()
     );
-    tc(&network, &["qdisc", "del", "dev", "in0", "clsact"]);
+    tc(&network, &["qdisc", "del", "dev", interface, "clsact"]);
 
     // A newly created, unused clsact is reclaimed after a reopened detach.
-    let record = app.attach_tc(request(id, &network)).expect("owned clsact");
+    let record = app
+        .attach_tc(request(id, &network, hook))
+        .expect("owned clsact");
     drop(app);
     let app = Bpfman::new(
         ActiveStore::open(backend, &c.layout, TIMEOUT).expect("reopen"),
@@ -377,7 +401,7 @@ where
         TIMEOUT,
     );
     app.detach_tc(record.id).expect("detach owned");
-    assert!(!clsact(&network));
+    assert!(!clsact(&network, interface));
     let report = app.unload(id).expect("unload detached TC");
     assert_eq!(report.unresolved(), 0);
     c.absent(id);
@@ -388,4 +412,13 @@ where
 #[allow(clippy::disallowed_methods)]
 fn remove_injected_directory(path: &std::path::Path) {
     std::fs::remove_dir(path).expect("repair injected cleanup failure");
+}
+
+// The packet probe transmits on source0 and receives on in0.
+// Both hooks therefore inspect the same test frames with unchanged assertions.
+pub(super) fn interface(hook: bpfman_model::TcDirection) -> &'static str {
+    match hook {
+        bpfman_model::TcDirection::Ingress => "in0",
+        bpfman_model::TcDirection::Egress => "source0",
+    }
 }

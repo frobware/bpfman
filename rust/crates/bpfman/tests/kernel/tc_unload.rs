@@ -3,18 +3,19 @@
 use super::{
     faults::{Faults, Point},
     support::*,
-    tc::{clsact, count, request, tc, traffic},
+    tc::{clsact, count, interface, request, tc, traffic},
     xdp_delivery::Network,
 };
 use bpfman_model::{LinkDetails, ProgramSpec};
 use bpfman_runtime::{ActiveStore, Bpfman, Cancellation, PreparedProgram, UnloadErrorKind};
 use bpfman_store::*;
 
-pub(super) fn exercise<S>(backend: S)
+pub(super) fn exercise<S>(backend: S, hook: bpfman_model::TcDirection)
 where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + TcStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    let interface = interface(hook);
     for ownership in ["owned", "borrowed", "foreign"] {
         let c = Context::new();
         let first = Network::new();
@@ -40,20 +41,19 @@ where
             .id;
         if ownership == "borrowed" {
             for network in [&first, &second] {
-                tc(network, &["qdisc", "add", "dev", "in0", "clsact"]);
+                tc(network, &["qdisc", "add", "dev", interface, "clsact"]);
             }
         }
-        let a = app.attach_tc(request(id, &first)).expect("first namespace");
+        let a = app
+            .attach_tc(request(id, &first, hook))
+            .expect("first namespace");
         let b = app
-            .attach_tc(request(id, &second))
+            .attach_tc(request(id, &second, hook))
             .expect("second namespace");
         let LinkDetails::Tc(details) = &b.details else {
             panic!("TC");
         };
-        let marker = c.layout.root().join("tc").join(format!(
-            "dispatcher_{}_{}_1",
-            details.key.nsid, details.key.ifindex
-        ));
+        let marker = c.layout.tc_ownership_path(details.key, details.revision);
         let evidence = std::fs::read(&marker).expect("ownership");
         std::fs::write(&marker, [9]).expect("malformed later attachment evidence");
         let error = app
@@ -62,8 +62,8 @@ where
         assert!(error.report().is_none());
         assert!(std::path::Path::new(&a.pin_path).exists());
         assert!(std::path::Path::new(&b.pin_path).exists());
-        traffic(&first, 0);
-        traffic(&second, 0);
+        traffic(&first, 0, hook);
+        traffic(&second, 0, hook);
         std::fs::write(&marker, evidence).expect("restore this test's evidence");
 
         let mut foreign = Vec::new();
@@ -79,7 +79,7 @@ where
                             "filter",
                             "add",
                             "dev",
-                            "in0",
+                            interface,
                             direction,
                             "pref",
                             "50",
@@ -95,7 +95,7 @@ where
                             "classifier/foreign",
                         ],
                     );
-                    let rows = tc(network, &["filter", "show", "dev", "in0", direction]);
+                    let rows = tc(network, &["filter", "show", "dev", interface, direction]);
                     foreign.push(
                         rows.as_array()
                             .expect("filter list")
@@ -143,15 +143,15 @@ where
             std::slice::from_ref(&b)
         );
         let before = count(&c, id);
-        traffic(&first, 3);
-        traffic(&second, 3);
+        traffic(&first, 3, hook);
+        traffic(&second, 3, hook);
         assert_eq!(
             count(&c, id),
             before,
             "detached traffic no longer executes extension"
         );
         for network in [&first, &second] {
-            assert_eq!(clsact(network), ownership != "owned");
+            assert_eq!(clsact(network, interface), ownership != "owned");
         }
         let token = Cancellation::new();
         token.cancel();
@@ -189,14 +189,14 @@ where
         // unload cannot silently remove a program under that new attachment.
         let error = if ownership == "owned" {
             let new = app
-                .attach_tc(request(id, &first))
+                .attach_tc(request(id, &first, hook))
                 .expect("new attachment while recovery retained");
             let error = app
                 .retry_unload(error)
                 .expect_err("new prerequisite blocks program removal");
             assert_eq!(error.kind(), UnloadErrorKind::InvalidState);
             assert!(error.report().expect("report").attempts().is_empty());
-            traffic(&first, 0);
+            traffic(&first, 0, hook);
             app.detach_tc(new.id)
                 .expect("explicitly handle new attachment");
             error
@@ -250,15 +250,15 @@ where
         assert_program_absent(id);
         assert_eq!(report.unresolved(), 0);
         for network in [&first, &second] {
-            traffic(network, 3);
-            assert_eq!(clsact(network), ownership != "owned");
+            traffic(network, 3, hook);
+            assert_eq!(clsact(network, interface), ownership != "owned");
         }
         if ownership == "foreign" {
             let mut index = 0;
             for network in [&first, &second] {
                 for direction in ["ingress", "egress"] {
                     assert_eq!(
-                        tc(network, &["filter", "show", "dev", "in0", direction])
+                        tc(network, &["filter", "show", "dev", interface, direction])
                             .as_array()
                             .expect("foreign filters")
                             .iter()

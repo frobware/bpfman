@@ -53,7 +53,7 @@ pub struct XdpReceipt {
     programs: Vec<state::Program>,
 }
 
-/// Conditional evidence for one unchanged TC ingress snapshot.
+/// Conditional evidence for one unchanged TC snapshot.
 pub struct TcReceipt {
     root: RuntimeIdentity,
     store: String,

@@ -1,6 +1,6 @@
 //! Fixed SQL for one complete TC dispatcher snapshot.
 
-use bpfman_model::XdpKey;
+use bpfman_model::TcKey;
 use bpfman_store::TcCommit;
 use rusqlite::{Connection, Transaction, named_params};
 
@@ -34,7 +34,7 @@ pub(crate) struct Row {
 
 pub(crate) fn rows(
     conn: &Connection,
-    key: Option<XdpKey>,
+    key: Option<TcKey>,
     link: Option<i64>,
 ) -> rusqlite::Result<Vec<Row>> {
     let mut statement = conn.prepare_cached(
@@ -47,16 +47,18 @@ pub(crate) fn rows(
             d.created_at AS dispatcher_created, d.updated_at AS dispatcher_updated
          FROM links l LEFT JOIN link_tc_details x ON x.id=l.id
          LEFT JOIN dispatchers d ON d.program_id=x.dispatcher_program_id
-            AND d.type='tc-ingress' AND d.nsid=x.nsid AND d.ifindex=x.ifindex
+            AND d.type=('tc-' || x.direction) AND d.nsid=x.nsid AND d.ifindex=x.ifindex
          LEFT JOIN managed_programs p ON p.program_id=l.kernel_prog_id
          WHERE l.kind='tc' AND (:nsid IS NULL OR x.nsid=:nsid)
             AND (:ifindex IS NULL OR x.ifindex=:ifindex)
+            AND (:direction IS NULL OR x.direction=:direction)
             AND (:link IS NULL OR l.id=:link) ORDER BY l.id",
     )?;
     let parameters = named_params! {
         ":nsid": key.map(|k| k.nsid.get()),
         ":ifindex": key.map(|k| k.ifindex.get()),
         ":link": link,
+        ":direction": key.map(|k| k.direction.as_str()),
     };
 
     statement
@@ -91,15 +93,15 @@ pub(crate) fn rows(
         .collect()
 }
 
-pub(crate) fn vacant(conn: &Connection, key: XdpKey) -> rusqlite::Result<bool> {
+pub(crate) fn vacant(conn: &Connection, key: TcKey) -> rusqlite::Result<bool> {
     conn.prepare_cached(
         "SELECT NOT EXISTS(SELECT 1 FROM dispatchers
-            WHERE type='tc-ingress' AND nsid=:nsid AND ifindex=:ifindex)
+            WHERE type=:type AND nsid=:nsid AND ifindex=:ifindex)
          AND NOT EXISTS(SELECT 1 FROM link_tc_details
-            WHERE nsid=:nsid AND ifindex=:ifindex AND direction='ingress') AS vacant",
+            WHERE nsid=:nsid AND ifindex=:ifindex AND direction=:direction) AS vacant",
     )?
     .query_row(
-        named_params! { ":nsid": key.nsid.get(), ":ifindex": key.ifindex.get() },
+        named_params! { ":nsid": key.nsid.get(), ":ifindex": key.ifindex.get(), ":type": key.direction.dispatcher_type(), ":direction": key.direction.as_str() },
         |r| r.get("vacant"),
     )
 }
@@ -126,9 +128,10 @@ pub(crate) fn insert(
         tx.prepare_cached(
         "INSERT INTO dispatchers(type,nsid,ifindex,revision,program_id,priority,filter_handle,
             netns,created_at,updated_at)
-         VALUES('tc-ingress',:nsid,:ifindex,:revision,:program,:filter_priority,:filter_handle,:netns,:created,:created)",
+         VALUES(:type,:nsid,:ifindex,:revision,:program,:filter_priority,:filter_handle,:netns,:created,:created)",
     )?
     .execute(named_params! {
+        ":type": d.key.direction.dispatcher_type(),
         ":revision": d.revision.get(),
         ":nsid": d.key.nsid.get(),
         ":ifindex": d.key.ifindex.get(),
@@ -156,10 +159,11 @@ pub(crate) fn insert(
     tx.prepare_cached(
         "INSERT INTO link_tc_details(id,interface,ifindex,direction,priority,position,proceed_on,
             netns,nsid,dispatcher_program_id)
-         VALUES(:id,:interface,:ifindex,'ingress',:priority,:position,:actions,:netns,:nsid,:dispatcher)",
+         VALUES(:id,:interface,:ifindex,:direction,:priority,:position,:actions,:netns,:nsid,:dispatcher)",
     )?
     .execute(named_params! {
         ":id": id,
+        ":direction": d.key.direction.as_str(),
         ":interface": d.interface.as_str(),
         ":ifindex": d.key.ifindex.get(),
         ":priority": d.priority,
@@ -186,10 +190,11 @@ pub(crate) fn remove_member(tx: &Transaction<'_>, id: i64) -> rusqlite::Result<(
 pub(crate) fn remove_dispatcher(tx: &Transaction<'_>, row: &Row) -> rusqlite::Result<()> {
     let dispatchers = tx
         .prepare_cached(
-            "DELETE FROM dispatchers WHERE type='tc-ingress' AND nsid=:nsid
+            "DELETE FROM dispatchers WHERE type=:type AND nsid=:nsid
             AND ifindex=:ifindex AND program_id=:program",
         )?
         .execute(named_params! {
+            ":type": format!("tc-{}", row.direction),
             ":nsid": row.nsid,
             ":ifindex": row.ifindex,
             ":program": row.dispatcher,
@@ -201,7 +206,7 @@ pub(crate) fn remove_dispatcher(tx: &Transaction<'_>, row: &Row) -> rusqlite::Re
     Ok(())
 }
 
-pub(crate) fn updated(tx: &Transaction<'_>, key: XdpKey, timestamp: &str) -> rusqlite::Result<()> {
-    tx.prepare_cached("UPDATE dispatchers SET updated_at=:updated WHERE type='tc-ingress' AND nsid=:nsid AND ifindex=:ifindex")?.execute(named_params! { ":updated": timestamp, ":nsid": key.nsid.get(), ":ifindex": key.ifindex.get() })?;
+pub(crate) fn updated(tx: &Transaction<'_>, key: TcKey, timestamp: &str) -> rusqlite::Result<()> {
+    tx.prepare_cached("UPDATE dispatchers SET updated_at=:updated WHERE type=:type AND nsid=:nsid AND ifindex=:ifindex")?.execute(named_params! { ":updated": timestamp, ":type": key.direction.dispatcher_type(), ":nsid": key.nsid.get(), ":ifindex": key.ifindex.get() })?;
     Ok(())
 }

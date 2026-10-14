@@ -13,8 +13,8 @@ pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
 
 mod tc;
 pub use tc::{
-    InvalidTc, InvalidTcSnapshot, TcDispatcherSnapshot, TcLink, TcProceedOn, TcSnapshot, tc_config,
-    tc_revision_config,
+    InvalidTc, InvalidTcDirection, InvalidTcSnapshot, TcDirection, TcDispatcherSnapshot, TcKey,
+    TcLink, TcProceedOn, TcSnapshot, tc_config, tc_revision_config,
 };
 mod xdp;
 pub use xdp::{

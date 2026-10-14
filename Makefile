@@ -1990,8 +1990,12 @@ rust-test-xdp-broadcast-hash: rust-build $(RUST_TEST_INPUTS)
 rust-test-xdp-egress-hash: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- xdp_devmap_egress_hash --nocapture
 
-# Legacy TC ingress revisions, exact filter handles, clsact ownership and recovery.
-.PHONY: rust-test-tc-ingress
-rust-test-tc-ingress: rust-build $(RUST_TEST_INPUTS)
+# Legacy TC ingress/egress revisions, exact filters, clsact ownership and recovery.
+.PHONY: rust-test-tc rust-test-tc-ingress rust-test-tc-egress
+rust-test-tc-ingress: rust-test-tc
+
+rust-test-tc-egress: rust-test-tc
+
+rust-test-tc: rust-build $(RUST_TEST_INPUTS)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test tc_store --locked
-	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- tc_ingress --nocapture
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- tc_ --nocapture

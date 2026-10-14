@@ -3,7 +3,7 @@ use super::*;
 use bpfman_core::{
     XdpMemberIdentity, XdpMemberOrder, XdpMembershipPlan, XdpReplacement, plan_xdp_membership,
 };
-use bpfman_model::{TcDispatcherSnapshot, XdpKey};
+use bpfman_model::{TcDispatcherSnapshot, TcKey};
 use bpfman_store::{TcMemberCommit, TcReplace, XdpMemberId};
 
 type Owned<S, K> = Vec<Resource<S, K>>;
@@ -40,6 +40,7 @@ fn members(snapshot: &TcDispatcherSnapshot) -> Vec<Member> {
             name: m.program_name.clone(),
             request: TcAttach {
                 program_id: m.member.program_id,
+                direction: m.details.key.direction,
                 interface: m.details.interface.clone(),
                 netns: m.details.netns.clone(),
                 priority: m.details.priority,
@@ -78,7 +79,7 @@ pub(super) fn attach<S: TcStore, K: TcLifecycle>(
     }
     let (key, prepared) = app
         .kernel
-        .prepare_tc(w, r.program_id, &r.interface, &r.netns)
+        .prepare_tc(w, r.program_id, &r.interface, &r.netns, r.direction)
         .map_err(LinkCause::from)?;
     let Some((snapshot, receipt)) = app
         .store
@@ -97,6 +98,7 @@ pub(super) fn attach<S: TcStore, K: TcLifecycle>(
         name: program.spec.name().clone(),
         request: TcAttach {
             program_id: r.program_id,
+            direction: r.direction,
             interface: first.details.interface.clone(),
             netns: first.details.netns.clone(),
             priority: r.priority,
@@ -251,7 +253,7 @@ fn stage_ref<S: TcStore, K: TcLifecycle>(owned: &[Resource<S, K>]) -> Result<&K:
 fn stage<S: TcStore, K: TcLifecycle>(
     app: &Bpfman<S, K>,
     w: &RuntimeWriter<'_>,
-    key: XdpKey,
+    key: TcKey,
     desired: &[Member],
     plan: &bpfman_core::XdpRevisionPlan,
     owned: bool,
@@ -273,6 +275,7 @@ fn stage<S: TcStore, K: TcLifecycle>(
                 m.request.program_id,
                 &m.request.interface,
                 &m.request.netns,
+                m.request.direction,
             )
             .map_err(LinkCause::from)
             .map_err(before)?;

@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func run(size int, captures []string, source string, observeAll bool) error {
+func run(size int, captures []string, source string, observeAll bool, expectEgressDrop bool) error {
 	protocol := int(binary.NativeEndian.Uint16([]byte{0x88, 0xb5}))
 	var sockets []int
 	defer func() {
@@ -76,7 +76,15 @@ func run(size int, captures []string, source string, observeAll bool) error {
 	}
 	for sequence := range uint32(3) {
 		binary.BigEndian.PutUint32(frame[18:22], sequence)
-		if err := unix.Sendto(sockets[0], frame, 0, &unix.SockaddrLinklayer{Protocol: uint16(protocol), Ifindex: sourceIndex}); err != nil {
+		err := unix.Sendto(sockets[0], frame, 0, &unix.SockaddrLinklayer{Protocol: uint16(protocol), Ifindex: sourceIndex})
+		if expectEgressDrop {
+			// packet_snd translates NET_XMIT_DROP from TC_ACT_SHOT to ENOBUFS.
+			// Require all three sends to fail; callers also verify TC counters and
+			// absence at every capture. Ordinary probe modes still require success.
+			if err != unix.ENOBUFS {
+				return fmt.Errorf("egress drop sequence %d: expected ENOBUFS, got %v", sequence, err)
+			}
+		} else if err != nil {
 			return err
 		}
 	}
@@ -199,14 +207,14 @@ func updateTarget(args []string) error {
 func main() {
 	var err error
 	if len(os.Args) == 1 {
-		err = run(64, []string{"source0", "in0", "sink0"}, "source0", true)
+		err = run(64, []string{"source0", "in0", "sink0"}, "source0", true, false)
 	} else if os.Args[1] == "stimulus" {
 		if len(os.Args) != 4 {
 			err = fmt.Errorf("usage: stimulus SENDER RECEIVER (a private veth pair)")
 		} else {
-			err = run(64, []string{os.Args[2], os.Args[3]}, os.Args[2], false)
+			err = run(64, []string{os.Args[2], os.Args[3]}, os.Args[2], false, false)
 		}
-	} else if os.Args[1] == "packets" {
+	} else if os.Args[1] == "packets" || os.Args[1] == "packets-egress-drop" {
 		if len(os.Args) < 3 {
 			err = fmt.Errorf("usage: packets SIZE [EXTRA_CAPTURE_INTERFACE...] (64 through 9014 bytes)")
 		} else {
@@ -216,7 +224,7 @@ func main() {
 				if size < 64 || size > 9014 {
 					err = fmt.Errorf("frame size must be between 64 and 9014 bytes")
 				} else {
-					err = run(size, append([]string{"source0", "in0", "sink0"}, os.Args[3:]...), "source0", true)
+					err = run(size, append([]string{"source0", "in0", "sink0"}, os.Args[3:]...), "source0", true, os.Args[1] == "packets-egress-drop")
 				}
 			}
 		}

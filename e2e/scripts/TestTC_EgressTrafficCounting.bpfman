@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: multiple TC programs attached to egress rather than the usual
 # ingress path

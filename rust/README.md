@@ -171,8 +171,9 @@ their existing operations: tracepoint programs from version 1, tracepoint links
 from version 2, and XDP loads from version 3. XDP attachment requires a separately
 initialized version 4 or newer runtime. Version 5 adds multi-member XDP
 replacement. Version 6 persists explicit network namespace paths. New stores use
-version 8, which adds complete TC ingress revisions. Version 7 retains TC loads
-and singleton ingress attachments without implicit upgrade.
+version 9, which adds independent TC egress dispatchers. Version 8 retains complete
+TC ingress revisions. Version 7 retains TC loads and singleton ingress attachments
+without implicit upgrade. Formats 7–8 reject egress without changing existing state.
 Versions 1–6 refuse TC without upgrading. Versions 4 and 5 reject namespaced attachments without upgrading;
 version 4 also rejects replacement. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
@@ -1396,7 +1397,7 @@ read (`invalid bpf_context access off=20 size=4`), so all eight new scripts carr
 more of the overall bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
 behavior, as do hash-backed broadcast, ingress exclusion, and ordinary/genuine
 multi-buffer egress. Array-map multi-buffer egress and multi-buffer fan-out remain
-separate library/kernel boundaries. TC ingress attachment is described below;
+separate library/kernel boundaries. TC ingress and egress attachment is described below;
 multi-member replacement and attached-program unload are supported.
 
 The hash egress checkpoint passed `direnv exec . make rust-check`: formatting,
@@ -1846,11 +1847,11 @@ contracts are integration tests and should not be described as unit tests.
 The remaining migration inventory is in the
 [testing audit](../docs/design/rust-reimplementation.md#testing-migration-audit-8-october-2026).
 
-## TC ingress attachment and unload
+## TC ingress and egress attachment and unload
 
 A managed TC classifier loads as EXT against an unpinned native TC dispatcher.
-The first ingress attachment stages a new dispatcher and slot-zero freplace link,
-then installs a legacy netlink filter at priority 50. Member `--priority` remains a
+The first attachment on either hook stages a new dispatcher and slot-zero
+freplace link, then installs a legacy netlink filter at priority 50. Member `--priority` remains a
 separate operator field. Aya remains unchanged; explicit netlink options avoid its
 modern-kernel TCX default. The public API returns the actual kernel-assigned filter
 handle, which is stored with the dispatcher and checked against its program ID
@@ -1872,12 +1873,15 @@ uses bit zero and dispatcher-return (30) uses bit 31. An explicitly continued SH
 returns the dispatcher's final OK; a SHOT under the default mask drops the packet.
 
 `link get/list` report stored TC attachments and actual freplace identities.
-An ingress point supports one to ten members, ordered by priority, unattached
-before attached, then program name. Attach and non-last detach stage a complete
+Each ingress or egress point supports one to ten members, ordered by priority,
+unattached before attached, then program name. Attach and non-last detach stage a complete
 new revision and replace the native dispatcher at the existing filter handle.
 Survivors retain managed link IDs and operator fields; slots and kernel IDs change
-together. `dispatcher get tc-ingress NSID IFINDEX` and dispatcher list expose full
-stored membership. Aya's public `SchedClassifierLink::attached` and
+together. `dispatcher get tc-ingress NSID IFINDEX`,
+`dispatcher get tc-egress NSID IFINDEX` and dispatcher list expose full stored membership. Direction is part of the typed
+attach-point identity and every store, pin and filter selection, so both chains
+can coexist on one interface without changing the other chain during rebuild or
+drain. Aya's public `SchedClassifierLink::attached` and
 `SchedClassifier::attach_to_link` perform the filter replacement without patches.
 
 Failed publication restores the old chain before staged cleanup. Failed
@@ -1891,7 +1895,7 @@ attachment before destructive effects, then consumes exact filter, dispatcher an
 conditional record receipts under the same writer lock. Non-last removal rebuilds
 survivors; repeated attachments of one program use the latest committed revision.
 A failed member blocks later members of that dispatcher, while independent
-interfaces each receive one pass. Failed prerequisites retain
+interfaces and hooks each receive one pass. Failed prerequisites retain
 ownership and block program/map/bytecode removal; `UnloadReport::tc_attempts()`
 exposes each link's cleanup history. `retry_unload` resumes only unresolved work;
 completed links are not detached again. Retry admission may be cancelled without
@@ -1902,20 +1906,31 @@ lost on process exit remains future work.
 
 Clsact ownership lives in a confined, singly linked one-byte receipt at
 `<runtime>/tc/dispatcher_<nsid>_<ifindex>_<revision>`, separate from operator metadata.
-Fresh revisions copy established ownership, and cleanup removes only its own receipt.
+Egress evidence uses `egress_dispatcher_<nsid>_<ifindex>_<revision>` in the same
+collection. Fresh revisions copy established ownership, and cleanup removes only
+its own receipt. First attach on the other hook validates the existing managed
+dispatcher and copies its qdisc ownership under the writer lock. Either drain order
+can reclaim the shared owned qdisc when both hooks become empty. Borrowed qdiscs
+remain borrowed.
 Reopened detach preserves pre-existing empty clsact qdiscs. A created clsact is
 reclaimed only when ingress and egress filters are both empty; foreign filters
 preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 8 for replacement; format 7 retains singleton
-TC. Older formats retain their operations without upgrading.
+receipt. New JSON stores use format 9 for egress; format 8 retains ingress
+replacement and format 7 retains singleton ingress. Older formats retain their
+operations without upgrading.
 
-`direnv exec . make rust-test-tc-ingress` selects real veth lifecycle/CLI and
-failure-recovery tests. `make rust-test-scripts` separately runs the unchanged
-`TestTC_LoadAndGet`, `TestTC_LinkRoundTrip`, and twelve Go chain, ordering,
-signed-encoding, namespace, survivor-unload and clsact scripts on both stores. The Rust runner advertises `BPFMAN_E2E_CLSACT_RECLAIM=true` so the reclaim
+`direnv exec . make rust-test-tc` selects store and real veth failure-recovery
+contracts for both hooks and both stores. The earlier `rust-test-tc-ingress` target
+and `rust-test-tc-egress` alias run the same complete TC subset.
+`make rust-test-scripts` separately runs all admitted unchanged Go TC load/link
+lifecycle, chain, ordering, signed-encoding, namespace,
+survivor-unload, egress traffic and ingress/egress independence scripts on both stores.
+The Rust-only bidirectional clsact script adds twelve cases for both attach/drain
+orders and owned/borrowed/foreign-filter qdiscs. The Rust runner advertises
+`BPFMAN_E2E_CLSACT_RECLAIM=true` so the reclaim
 script executes independently of Go's disabled production policy.
 The lifecycle tests require exact marked-packet counts, preserve foreign filters
 at the same priority on both hooks, reopen before detach, cross publication and
@@ -1930,7 +1945,14 @@ store contracts and 36 kernel/CLI/script checks. Makefile lint and the Go runner
 clsact capability unit check also passed. Userspace contracts run
 before the complete kernel suite in the normal gate.
 
-Egress, TCX, outer-filter status, and deleted-namespace/orphan repair
-remain unsupported. Qdisc inspection/deletion
+The 14 October egress checkpoint passed all twelve TC kernel contracts and the
+full Rust gate: 106 real-kernel tests, all userspace/compile-fail contracts and
+warnings-denied Clippy/Rustdoc, using owned tmpfs scopes with successful cleanup.
+Both stores passed all 90 admitted script files, including the two unchanged TC
+egress acceptance gates and twelve Rust-only shared-clsact cases. Make lint passed
+after splitting its target alias declarations. See the
+[implementation record](../docs/design/rust-reimplementation.md#tc-ingress-parity-audit-and-independent-egress-14-october-2026).
+
+TCX, outer-filter status, and deleted-namespace/orphan repair remain unsupported. Qdisc inspection/deletion
 uses separate netlink requests and is not atomic against privileged tools changing
 the same objects outside bpfman's writer lock.

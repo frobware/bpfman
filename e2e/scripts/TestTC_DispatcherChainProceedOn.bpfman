@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: five TC ingress programs attached with the middle member
 # configured to stop on OK

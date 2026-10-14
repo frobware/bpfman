@@ -135,22 +135,25 @@ impl RuntimeLayout {
 }
 
 impl RuntimeLayout {
-    /// Canonical TC ingress revision container.
+    /// Canonical TC revision container.
     pub fn tc_revision_path(
         &self,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
         revision: std::num::NonZeroU32,
     ) -> PathBuf {
-        self.root.join("fs/tc-ingress").join(format!(
-            "dispatcher_{}_{}_{}",
-            key.nsid, key.ifindex, revision
-        ))
+        self.root
+            .join("fs")
+            .join(key.direction.dispatcher_type())
+            .join(format!(
+                "dispatcher_{}_{}_{}",
+                key.nsid, key.ifindex, revision
+            ))
     }
 
     /// Canonical TC freplace pin for one execution slot.
     pub fn tc_slot_path(
         &self,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
         revision: std::num::NonZeroU32,
         slot: bpfman_model::XdpSlot,
     ) -> PathBuf {
@@ -158,8 +161,36 @@ impl RuntimeLayout {
             .join(format!("link_{}", slot.index()))
     }
 
-    /// Canonical first-member TC ingress freplace pin.
-    pub fn tc_extension_path(&self, key: bpfman_model::XdpKey) -> std::path::PathBuf {
+    /// Canonical first-member TC freplace pin.
+    pub fn tc_extension_path(&self, key: bpfman_model::TcKey) -> std::path::PathBuf {
         self.tc_slot_path(key, std::num::NonZeroU32::MIN, bpfman_model::XdpSlot::FIRST)
+    }
+}
+
+impl RuntimeLayout {
+    /// Durable ownership evidence for one TC hook and revision.
+    pub fn tc_ownership_path(
+        &self,
+        key: bpfman_model::TcKey,
+        revision: std::num::NonZeroU32,
+    ) -> PathBuf {
+        self.root
+            .join("tc")
+            .join(Self::tc_ownership_name(key, revision))
+    }
+
+    pub(crate) fn tc_ownership_name(
+        key: bpfman_model::TcKey,
+        revision: std::num::NonZeroU32,
+    ) -> String {
+        match key.direction {
+            bpfman_model::TcDirection::Ingress => {
+                format!("dispatcher_{}_{}_{}", key.nsid, key.ifindex, revision)
+            }
+            bpfman_model::TcDirection::Egress => format!(
+                "egress_dispatcher_{}_{}_{}",
+                key.nsid, key.ifindex, revision
+            ),
+        }
     }
 }

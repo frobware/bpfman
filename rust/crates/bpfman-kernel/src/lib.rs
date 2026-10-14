@@ -37,7 +37,7 @@ pub trait ProgramObservations {
 
 /// Standalone and dispatcher-member link observations.
 pub trait LinkObservations {
-    /// Read a canonical legacy TC ingress freplace pin.
+    /// Read a canonical legacy TC freplace pin.
     fn tc_pin(
         &self,
         _runtime: &RuntimeDirectory,

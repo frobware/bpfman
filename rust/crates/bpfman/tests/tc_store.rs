@@ -3,7 +3,7 @@
 
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
-use bpfman_model::{InterfaceName, LinkDetails, LinkState, ProgramSpec, TcLink, XdpKey};
+use bpfman_model::{InterfaceName, LinkDetails, LinkState, ProgramSpec, TcKey, TcLink};
 use bpfman_store::{
     CommitLoad, LinkReader, LoadRecord, OpenStore, ProgramReader, TcCommit, TcStore,
 };
@@ -54,8 +54,10 @@ fn desired<'a>(
     ]
 }
 
-fn contract<S: OpenStore + CommitLoad + TcStore + Clone>(backend: S)
-where
+fn contract<S: OpenStore + CommitLoad + TcStore + Clone>(
+    backend: S,
+    hook: bpfman_model::TcDirection,
+) where
     S::Reader: LinkReader,
 {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -65,7 +67,8 @@ where
         RuntimeLayout::try_from(temp.path().join("two")).expect("layout"),
     )
     .expect("other");
-    let key = XdpKey {
+    let key = TcKey {
+        direction: hook,
         nsid: NonZeroU64::MIN,
         ifindex: n(7),
     };
@@ -319,10 +322,20 @@ where
 
 #[test]
 fn sqlite_snapshot_contract() {
-    contract(bpfman_store_sqlite::Backend);
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        contract(bpfman_store_sqlite::Backend, hook);
+    }
 }
 
 #[test]
 fn json_snapshot_contract() {
-    contract(bpfman_store_json::Backend);
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        contract(bpfman_store_json::Backend, hook);
+    }
 }

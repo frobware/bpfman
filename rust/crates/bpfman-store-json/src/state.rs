@@ -1,3 +1,4 @@
+//! Version 9 adds independent TC egress dispatchers.
 //! Version 8 adds complete TC ingress revisions.
 //! Version 7 adds TC extension loads and singleton ingress attachments.
 //! Version 6 adds explicit XDP namespace paths. Version 5 adds multi-member XDP
@@ -94,7 +95,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 8,
+            version: 9,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -116,7 +117,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=8) {
+        if !matches!(header.version, 1..=9) {
             return Err(Failure::Version(header.version));
         }
 
@@ -254,6 +255,9 @@ impl State {
         }
         let mut tc_keys = BTreeSet::new();
         for row in &self.tc {
+            if self.version < 9 && row.key().direction == bpfman_model::TcDirection::Egress {
+                return Err(Failure::Invalid("TC egress requires format 9"));
+            }
             if !link_ids.insert(row.link_id)
                 || row.link_id.get() >= self.next_link_id
                 || !kernel_ids.insert(row.extension_link_id)

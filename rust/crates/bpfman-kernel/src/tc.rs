@@ -1,9 +1,9 @@
 use crate::{Acquisition, Error, Removal};
 use bpfman_fs::RuntimeWriter;
-use bpfman_model::{InterfaceName, NetworkNamespace, TcProceedOn, TcSnapshot, XdpKey};
+use bpfman_model::{InterfaceName, NetworkNamespace, TcKey, TcProceedOn, TcSnapshot};
 use std::num::NonZeroU32;
 
-/// Legacy TC ingress ownership; deliberately separate from TCX.
+/// Legacy TC ownership; deliberately separate from TCX.
 pub trait TcLifecycle {
     /// Adopted extension and retained namespace/interface evidence.
     type Prepared;
@@ -49,14 +49,8 @@ pub trait TcLifecycle {
         program: NonZeroU32,
         interface: &InterfaceName,
         netns: &NetworkNamespace,
-    ) -> Result<(XdpKey, Self::Prepared), Error>;
-    /// Stage the one-member dispatcher and freplace link without traffic effects.
-    fn stage_tc(
-        &self,
-        w: &RuntimeWriter<'_>,
-        prepared: Self::Prepared,
-        actions: TcProceedOn,
-    ) -> Acquisition<Self::Stage>;
+        direction: bpfman_model::TcDirection,
+    ) -> Result<(TcKey, Self::Prepared), Error>;
     /// Create or reuse clsact and install a legacy netlink filter; never use TCX.
     fn attach_tc_filter(
         &self,

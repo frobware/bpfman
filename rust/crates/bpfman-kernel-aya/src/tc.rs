@@ -12,7 +12,7 @@ use bpfman_fs::{
     ExtensionProgram, KernelResult, PinSource, PinTarget, ProgramPinning, RuntimeWriter, TcKernel,
 };
 use bpfman_kernel::{Acquisition, Error, ErrorKind, Removal, TcLifecycle};
-use bpfman_model::{InterfaceName, NetworkNamespace, TcProceedOn, TcSnapshot, XdpKey};
+use bpfman_model::{InterfaceName, NetworkNamespace, TcKey, TcProceedOn, TcSnapshot};
 use std::{io, num::NonZeroU32};
 
 fn invalid(message: &'static str) -> io::Error {
@@ -20,7 +20,7 @@ fn invalid(message: &'static str) -> io::Error {
 }
 
 fn kernel(e: impl std::error::Error + Send + Sync + 'static) -> Error {
-    Error::new(ErrorKind::Unavailable, "TC ingress kernel operation", e)
+    Error::new(ErrorKind::Unavailable, "TC kernel operation", e)
 }
 
 fn before<T>(cause: Error) -> EffectFailure<Option<T>, Error> {
@@ -109,20 +109,19 @@ impl TcLifecycle for Kernel {
         program: NonZeroU32,
         interface: &InterfaceName,
         netns: &NetworkNamespace,
-    ) -> Result<(XdpKey, PreparedTc), Error> {
+        direction: bpfman_model::TcDirection,
+    ) -> Result<(TcKey, PreparedTc), Error> {
         let namespace = XdpNamespace::open(interface, netns).map_err(kernel)?;
-        let key = namespace.key();
+        let key = TcKey::new(namespace.key(), direction);
         let program = w.prepare_tc_program(self, program).map_err(filesystem)?;
-        Ok((key, PreparedTc { program, namespace }))
-    }
-
-    fn stage_tc(
-        &self,
-        w: &RuntimeWriter<'_>,
-        prepared: PreparedTc,
-        actions: TcProceedOn,
-    ) -> Acquisition<TcStage> {
-        self.stage_tc_revision(w, vec![prepared], NonZeroU32::MIN, &[actions], false)
+        Ok((
+            key,
+            PreparedTc {
+                program,
+                namespace,
+                direction,
+            },
+        ))
     }
 
     fn stage_tc_revision(
@@ -136,13 +135,14 @@ impl TcLifecycle for Kernel {
         let Some(first) = prepared.first() else {
             return Err(before(kernel(invalid("empty TC revision"))));
         };
-        let key = first.namespace.key();
+        let direction = first.direction;
+        let key = TcKey::new(first.namespace.key(), direction);
         if prepared.len() != actions.len() {
             return Err(before(kernel(invalid("TC member count mismatch"))));
         }
         for p in &prepared {
             p.namespace.validate().map_err(kernel).map_err(before)?;
-            if p.namespace.key() != key {
+            if TcKey::new(p.namespace.key(), p.direction) != key {
                 return Err(before(kernel(invalid("TC interface changed"))));
             }
         }
@@ -180,6 +180,7 @@ impl TcLifecycle for Kernel {
         .map_err(map)
         {
             Ok(pins) => Ok(TcStage {
+                direction,
                 pins,
                 dispatcher: Some(dispatcher),
                 namespace,
@@ -188,6 +189,7 @@ impl TcLifecycle for Kernel {
             Err(f) => Err(EffectFailure {
                 cause: f.cause,
                 remaining: f.remaining.map(|pins| TcStage {
+                    direction,
                     pins,
                     dispatcher: Some(dispatcher),
                     namespace,
@@ -217,6 +219,7 @@ impl TcLifecycle for Kernel {
         }
         stage.namespace.validate().map_err(kernel).map_err(before)?;
         let mut outer = TcFilter {
+            direction: stage.direction,
             namespace: stage
                 .namespace
                 .duplicate()
@@ -231,7 +234,11 @@ impl TcLifecycle for Kernel {
                 .0
                 .get(),
             handle: None,
-            clsact_owned: false,
+            clsact_owned: stage
+                .pins
+                .clsact_owned(w)
+                .map_err(filesystem)
+                .map_err(before)?,
         };
         let dispatcher = stage
             .dispatcher
@@ -267,7 +274,7 @@ impl TcLifecycle for Kernel {
             let id = program
                 .attach_with_options(
                     stage.namespace.tc_interface(),
-                    TcAttachType::Ingress,
+                    attach_type(stage.direction),
                     TcAttachOptions::Netlink(NlOptions {
                         priority: 50,
                         ..Default::default()
@@ -337,7 +344,7 @@ impl TcLifecycle for Kernel {
         }
         let root = w.identity().map_err(filesystem)?;
         let namespace = XdpNamespace::open(&d.interface, &d.netns).map_err(kernel)?;
-        if namespace.key() != d.key {
+        if TcKey::new(namespace.key(), d.key.direction) != d.key {
             return Err(kernel(invalid(
                 "TC namespace/interface differs from snapshot",
             )));
@@ -349,6 +356,7 @@ impl TcLifecycle for Kernel {
         let present = namespace
             .run_tc(|| {
                 tc_netlink::filter(
+                    d.key.direction,
                     d.key.ifindex.get(),
                     d.filter_handle.get(),
                     d.dispatcher_id.get(),
@@ -356,6 +364,7 @@ impl TcLifecycle for Kernel {
             })
             .map_err(kernel)?;
         let filter = TcFilter {
+            direction: d.key.direction,
             namespace: namespace.duplicate().map_err(kernel)?,
             root,
             dispatcher: d.dispatcher_id.get(),
@@ -364,6 +373,7 @@ impl TcLifecycle for Kernel {
         };
         Ok((
             TcStage {
+                direction: d.key.direction,
                 pins,
                 dispatcher: None,
                 namespace,
@@ -384,6 +394,8 @@ impl TcLifecycle for Kernel {
         if root != filter.root
             || root != old.root
             || root != new.root
+            || old.direction != new.direction
+            || old.direction != filter.direction
             || old.namespace.key() != new.namespace.key()
             || old.namespace.key() != filter.namespace.key()
         {
@@ -408,6 +420,7 @@ impl TcLifecycle for Kernel {
             .handle
             .ok_or_else(|| before(kernel(invalid("TC filter missing"))))?;
         let mut receipt = TcSwitch {
+            direction: filter.direction,
             namespace: filter
                 .namespace
                 .duplicate()
@@ -434,6 +447,7 @@ impl TcLifecycle for Kernel {
             .namespace
             .run_tc(|| {
                 if !tc_netlink::filter(
+                    receipt.direction,
                     receipt.namespace.key().ifindex.get(),
                     handle.get(),
                     receipt.old_id,
@@ -444,9 +458,14 @@ impl TcLifecycle for Kernel {
             })
             .map_err(kernel)
             .map_err(before)?;
-        let result = receipt
-            .namespace
-            .run_tc(|| replace_filter(&receipt.namespace, handle, &mut receipt.new));
+        let result = receipt.namespace.run_tc(|| {
+            replace_filter(
+                &receipt.namespace,
+                receipt.direction,
+                handle,
+                &mut receipt.new,
+            )
+        });
         match result {
             Ok(()) => Ok(receipt),
             Err(cause) => Err(EffectFailure {
@@ -467,6 +486,7 @@ impl TcLifecycle for Kernel {
                 .run_tc(|| {
                     // An uncertain failed switch can already be on the original target.
                     match tc_netlink::filter(
+                        receipt.direction,
                         receipt.namespace.key().ifindex.get(),
                         receipt.handle.get(),
                         receipt.old_id,
@@ -478,13 +498,19 @@ impl TcLifecycle for Kernel {
                         Err(_) => {}
                     }
                     if !tc_netlink::filter(
+                        receipt.direction,
                         receipt.namespace.key().ifindex.get(),
                         receipt.handle.get(),
                         receipt.new_id,
                     )? {
                         return Err(invalid("TC replacement filter missing"));
                     }
-                    replace_filter(&receipt.namespace, receipt.handle, &mut receipt.old)
+                    replace_filter(
+                        &receipt.namespace,
+                        receipt.direction,
+                        receipt.handle,
+                        &mut receipt.old,
+                    )
                 })
                 .map_err(kernel)
         })();
@@ -504,7 +530,12 @@ impl TcLifecycle for Kernel {
                 .run_tc(|| {
                     let ifindex = filter.namespace.key().ifindex.get();
                     if let Some(handle) = filter.handle {
-                        tc_netlink::detach(ifindex, handle.get(), filter.dispatcher)?;
+                        tc_netlink::detach(
+                            filter.direction,
+                            ifindex,
+                            handle.get(),
+                            filter.dispatcher,
+                        )?;
                         filter.handle = None;
                     }
                     if filter.clsact_owned {
@@ -523,6 +554,7 @@ impl TcLifecycle for Kernel {
 
     fn remove_tc_stage(&self, w: &RuntimeWriter<'_>, stage: TcStage) -> Removal<TcStage> {
         let TcStage {
+            direction,
             pins,
             dispatcher,
             namespace,
@@ -531,6 +563,7 @@ impl TcLifecycle for Kernel {
         w.remove_tc_pins(self, pins).map_err(|f| EffectFailure {
             cause: filesystem(f.cause),
             remaining: TcStage {
+                direction,
                 pins: f.remaining,
                 dispatcher,
                 namespace,
@@ -542,6 +575,7 @@ impl TcLifecycle for Kernel {
 
 fn replace_filter(
     namespace: &XdpNamespace,
+    direction: bpfman_model::TcDirection,
     handle: NonZeroU32,
     program: &mut SchedClassifier,
 ) -> io::Result<()> {
@@ -551,7 +585,7 @@ fn replace_filter(
     }
     let link = SchedClassifierLink::attached(
         namespace.tc_interface(),
-        TcAttachType::Ingress,
+        attach_type(direction),
         50,
         TcHandle::from(handle.get()),
         None,
@@ -561,4 +595,11 @@ fn replace_filter(
     // Descriptor-free netlink ownership transfers to the retained switch/filter receipt.
     std::mem::forget(link);
     Ok(())
+}
+
+fn attach_type(direction: bpfman_model::TcDirection) -> TcAttachType {
+    match direction {
+        bpfman_model::TcDirection::Ingress => TcAttachType::Ingress,
+        bpfman_model::TcDirection::Egress => TcAttachType::Egress,
+    }
 }

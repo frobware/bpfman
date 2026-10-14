@@ -8,7 +8,7 @@ use crate::{
     removal::open_owned,
 };
 use bpfman_core::EffectFailure;
-use bpfman_model::{TcDispatcherSnapshot, TcSnapshot, XdpKey};
+use bpfman_model::{TcDispatcherSnapshot, TcKey, TcSnapshot};
 use std::{
     fs::File,
     io::{Read, Write},
@@ -37,7 +37,7 @@ struct TcExtensionPin {
     id: NonZeroU32,
 }
 
-fn name(key: XdpKey, revision: NonZeroU32) -> String {
+fn name(key: TcKey, revision: NonZeroU32) -> String {
     format!("dispatcher_{}_{}_{}", key.nsid, key.ifindex, revision)
 }
 
@@ -116,17 +116,23 @@ impl RuntimeWriter<'_> {
         }
         let ownership_dir = optional_dir(&self.runtime.root, "tc", CONFINED)?
             .ok_or(Failure::Unsafe("TC ownership collection missing"))?;
-        let ownership = observe(self, &ownership_dir, "tc", &name(d.key, d.revision), false)?
-            .ok_or(Failure::Unsafe("TC ownership evidence missing"))?;
+        let ownership = observe(
+            self,
+            &ownership_dir,
+            "tc",
+            &crate::RuntimeLayout::tc_ownership_name(d.key, d.revision),
+            false,
+        )?
+        .ok_or(Failure::Unsafe("TC ownership evidence missing"))?;
         let bpffs = optional_dir(&self.runtime.root, "fs", BENEATH)?
             .ok_or(Failure::Unsafe("TC bpffs missing"))?;
         crate::link::verify_bpffs(&bpffs)?;
-        let collection = optional_dir(&bpffs, "tc-ingress", CONFINED)?
+        let collection = optional_dir(&bpffs, d.key.direction.dispatcher_type(), CONFINED)?
             .ok_or(Failure::Unsafe("TC collection missing"))?;
         let directory = observe(
             self,
             &collection,
-            "fs/tc-ingress",
+            &format!("fs/{}", d.key.direction.dispatcher_type()),
             &name(d.key, d.revision),
             true,
         )?;
@@ -156,7 +162,11 @@ impl RuntimeWriter<'_> {
                     return Err(Failure::Unsafe("unknown TC revision child").into());
                 }
             }
-            let parent = format!("fs/tc-ingress/{}", name(d.key, d.revision));
+            let parent = format!(
+                "fs/{}/{}",
+                d.key.direction.dispatcher_type(),
+                name(d.key, d.revision)
+            );
             pins.program = observe(self, &fd, &parent, "dispatcher", false)?.map(Box::new);
             if let Some(pin) = &pins.program {
                 let owned = open_owned(pin)?;
@@ -239,28 +249,11 @@ impl RuntimeWriter<'_> {
 }
 
 impl<E: ExtensionProgram> TcProgram<E> {
-    /// Stage a singleton revision; no qdisc or filter is created here.
-    pub fn stage(
-        &mut self,
-        w: &RuntimeWriter<'_>,
-        key: XdpKey,
-        dispatcher: &mut E::Dispatcher,
-    ) -> Result<TcPins, EffectFailure<Option<TcPins>, Error>> {
-        Self::stage_revision(
-            core::slice::from_mut(self),
-            w,
-            key,
-            NonZeroU32::MIN,
-            dispatcher,
-            false,
-        )
-    }
-
     /// Stage every member in a fresh revision, copying established qdisc ownership.
     pub fn stage_revision(
         programs: &mut [Self],
         w: &RuntimeWriter<'_>,
-        key: XdpKey,
+        key: TcKey,
         revision: NonZeroU32,
         dispatcher: &mut E::Dispatcher,
         clsact_owned: bool,
@@ -276,12 +269,13 @@ impl<E: ExtensionProgram> TcProgram<E> {
             .map_err(fail)?
             .ok_or_else(|| fail(Failure::Unsafe("program bpffs missing").into()))?;
         crate::link::verify_bpffs(&bpffs).map_err(fail)?;
-        let collection = ensure_directory(&bpffs, "tc-ingress", CONFINED).map_err(fail)?;
+        let collection =
+            ensure_directory(&bpffs, key.direction.dispatcher_type(), CONFINED).map_err(fail)?;
         let ownership_dir = ensure_directory(&w.runtime.root, "tc", CONFINED).map_err(fail)?;
         let directory = entry(
             w,
             &collection,
-            "fs/tc-ingress".into(),
+            format!("fs/{}", key.direction.dispatcher_type()),
             name(key, revision),
             true,
         )
@@ -303,8 +297,14 @@ impl<E: ExtensionProgram> TcProgram<E> {
                 .ok_or(Failure::Unsafe("missing TC revision"))?;
             directory.observe()?;
             let fd = open_owned(directory)?;
-            let parent = format!("fs/tc-ingress/{}", directory.name);
-            let mut owner = entry(w, &ownership_dir, "tc".into(), name(key, revision), false)?;
+            let parent = format!("fs/{}/{}", key.direction.dispatcher_type(), directory.name);
+            let mut owner = entry(
+                w,
+                &ownership_dir,
+                "tc".into(),
+                crate::RuntimeLayout::tc_ownership_name(key, revision),
+                false,
+            )?;
             let owner_fd = rustix::fs::openat2(
                 &ownership_dir,
                 &owner.name,
@@ -486,7 +486,9 @@ impl RuntimeDirectory {
             return Ok(None);
         };
         crate::link::verify_bpffs(&bpffs)?;
-        let Some(collection) = optional_dir(&bpffs, "tc-ingress", CONFINED)? else {
+        let Some(collection) =
+            optional_dir(&bpffs, details.key.direction.dispatcher_type(), CONFINED)?
+        else {
             return Ok(None);
         };
         let Some(revision) =

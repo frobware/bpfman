@@ -74,7 +74,7 @@ pub enum LinkDetails {
     Tracepoint(Tracepoint),
     /// XDP extension attached through a dispatcher.
     Xdp(crate::XdpLink),
-    /// Legacy TC ingress dispatcher extension.
+    /// Legacy TC dispatcher extension.
     Tc(crate::TcLink),
 }
 

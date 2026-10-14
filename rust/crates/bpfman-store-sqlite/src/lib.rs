@@ -78,7 +78,7 @@ pub struct XdpReceipt {
     rows: Vec<queries::xdp::Row>,
 }
 
-/// Conditional evidence for one unchanged complete TC ingress snapshot.
+/// Conditional evidence for one unchanged complete TC snapshot.
 pub struct TcReceipt {
     root: bpfman_fs::RuntimeIdentity,
     database: (u64, u64),

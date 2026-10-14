@@ -451,7 +451,7 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for Faults<S> {
     fn preflight_tc(
         &self,
         w: &RuntimeWriter<'_>,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
         program: NonZeroU32,
     ) -> Result<(), Error> {
         self.backend.preflight_tc(w, key, program)
@@ -494,7 +494,7 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for Faults<S> {
     fn observe_tc_dispatcher(
         &self,
         w: &RuntimeWriter<'_>,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
     ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
     {
         self.backend.observe_tc_dispatcher(w, key)

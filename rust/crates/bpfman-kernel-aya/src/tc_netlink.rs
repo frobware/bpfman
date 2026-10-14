@@ -225,9 +225,14 @@ pub(super) fn clsact(ifindex: u32) -> io::Result<bool> {
 }
 
 /// Validate only the exact stored filter; absence is successful teardown evidence.
-pub(super) fn filter(ifindex: u32, handle: u32, dispatcher: u32) -> io::Result<bool> {
-    for f in request(46, true, ifindex, INGRESS, 0, 0)? {
-        if f.parent == INGRESS
+pub(super) fn filter(
+    direction: bpfman_model::TcDirection,
+    ifindex: u32,
+    handle: u32,
+    dispatcher: u32,
+) -> io::Result<bool> {
+    for f in request(46, true, ifindex, parent(direction), 0, 0)? {
+        if f.parent == parent(direction)
             && f.chain == 0
             && (f.info >> 16) == u32::from(PRIORITY)
             && (f.info & 0xffff) == u32::from(3u16.to_be())
@@ -242,13 +247,18 @@ pub(super) fn filter(ifindex: u32, handle: u32, dispatcher: u32) -> io::Result<b
     Ok(false)
 }
 
-pub(super) fn detach(ifindex: u32, handle: u32, dispatcher: u32) -> io::Result<()> {
-    if !filter(ifindex, handle, dispatcher)? {
+pub(super) fn detach(
+    direction: bpfman_model::TcDirection,
+    ifindex: u32,
+    handle: u32,
+    dispatcher: u32,
+) -> io::Result<()> {
+    if !filter(direction, ifindex, handle, dispatcher)? {
         return Ok(());
     }
     // ETH_P_ALL is encoded in network byte order within the native-endian info word.
     let info = (u32::from(PRIORITY) << 16) | u32::from(3u16.to_be());
-    match request(45, false, ifindex, INGRESS, handle, info) {
+    match request(45, false, ifindex, parent(direction), handle, info) {
         Ok(_) => Ok(()),
         Err(e) if e.raw_os_error() == Some(libc::ENOENT) => Ok(()),
         Err(e) => Err(e),
@@ -268,6 +278,13 @@ pub(super) fn reclaim_clsact(ifindex: u32) -> io::Result<()> {
         Ok(_) => Ok(()),
         Err(e) if e.raw_os_error() == Some(libc::ENOENT) => Ok(()),
         Err(e) => Err(e),
+    }
+}
+
+fn parent(direction: bpfman_model::TcDirection) -> u32 {
+    match direction {
+        bpfman_model::TcDirection::Ingress => INGRESS,
+        bpfman_model::TcDirection::Egress => EGRESS,
     }
 }
 

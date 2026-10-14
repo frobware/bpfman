@@ -7,7 +7,7 @@ use crate::{
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeLayout, RuntimeWriter};
 use bpfman_model::{
-    LinkDetails, LinkState, StoredLink, TcDispatcherSnapshot, TcLink, TcSnapshot, XdpKey,
+    LinkDetails, LinkState, StoredLink, TcDispatcherSnapshot, TcKey, TcLink, TcSnapshot,
 };
 use bpfman_store::{Error, TcCommit, TcStore};
 use serde::{Deserialize, Serialize};
@@ -24,6 +24,8 @@ pub(super) struct Row {
     pub(super) extension_link_id: NonZeroU32,
     nsid: NonZeroU64,
     ifindex: NonZeroU32,
+    #[serde(default = "ingress", skip_serializing_if = "is_ingress")]
+    direction: Direction,
     interface: String,
     netns: String,
     #[serde(default = "first_revision", skip_serializing_if = "is_first_revision")]
@@ -39,6 +41,39 @@ pub(super) struct Row {
     created_at: String,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Direction {
+    Ingress,
+    Egress,
+}
+
+fn ingress() -> Direction {
+    Direction::Ingress
+}
+
+fn is_ingress(direction: &Direction) -> bool {
+    *direction == Direction::Ingress
+}
+
+impl From<bpfman_model::TcDirection> for Direction {
+    fn from(direction: bpfman_model::TcDirection) -> Self {
+        match direction {
+            bpfman_model::TcDirection::Ingress => Self::Ingress,
+            bpfman_model::TcDirection::Egress => Self::Egress,
+        }
+    }
+}
+
+impl From<Direction> for bpfman_model::TcDirection {
+    fn from(direction: Direction) -> Self {
+        match direction {
+            Direction::Ingress => Self::Ingress,
+            Direction::Egress => Self::Egress,
+        }
+    }
+}
+
 fn first_revision() -> NonZeroU32 {
     NonZeroU32::MIN
 }
@@ -52,10 +87,11 @@ fn is_first_slot(slot: &usize) -> bool {
 }
 
 impl Row {
-    pub(super) fn key(&self) -> XdpKey {
-        XdpKey {
+    pub(super) fn key(&self) -> TcKey {
+        TcKey {
             nsid: self.nsid,
             ifindex: self.ifindex,
+            direction: self.direction.into(),
         }
     }
 
@@ -129,14 +165,19 @@ impl Row {
     }
 }
 
-fn preflight(state: &State, key: XdpKey, program: NonZeroU32) -> Result<(), Failure> {
+fn preflight(state: &State, key: TcKey, program: NonZeroU32) -> Result<(), Failure> {
     if state.version < 7 {
         return Err(Failure::Unsupported(
             "TC requires JSON format 7; no implicit upgrade",
         ));
     }
+    if state.version < 9 && key.direction == bpfman_model::TcDirection::Egress {
+        return Err(Failure::Unsupported(
+            "TC egress requires JSON format 9; no implicit upgrade",
+        ));
+    }
     if state.tc.iter().any(|r| r.key() == key) {
-        return Err(Failure::Unsupported("TC ingress attach point is occupied"));
+        return Err(Failure::Unsupported("TC attach point is occupied"));
     }
     if !state
         .programs
@@ -154,7 +195,7 @@ impl TcStore for Backend {
     fn preflight_tc(
         &self,
         w: &RuntimeWriter<'_>,
-        key: XdpKey,
+        key: TcKey,
         program: NonZeroU32,
     ) -> Result<(), Error> {
         let file = w.open_store_snapshot().map_err(Failure::from)?;
@@ -180,6 +221,7 @@ impl TcStore for Backend {
             extension_link_id: request.extension_link_id,
             nsid: d.key.nsid,
             ifindex: d.key.ifindex,
+            direction: d.key.direction.into(),
             interface: d.interface.as_str().into(),
             netns: d.netns.as_str().into(),
             revision: d.revision,
@@ -245,7 +287,7 @@ impl TcStore for Backend {
     fn observe_tc_dispatcher(
         &self,
         w: &RuntimeWriter<'_>,
-        key: XdpKey,
+        key: TcKey,
     ) -> Result<Option<(TcDispatcherSnapshot, TcReceipt)>, Error> {
         let file = w.open_store_snapshot().map_err(Failure::from)?;
         let (_, state) = read(&file)?;
@@ -353,6 +395,7 @@ impl TcStore for Backend {
                     extension_link_id: a.extension_link_id,
                     nsid: key.nsid,
                     ifindex: key.ifindex,
+                    direction: key.direction.into(),
                     interface: d.interface.as_str().into(),
                     netns: d.netns.as_str().into(),
                     revision: d.revision,

@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #
 # Given: an existing TC member and an incoming same-priority program
 # under default proceed-on

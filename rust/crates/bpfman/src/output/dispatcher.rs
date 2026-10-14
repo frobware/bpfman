@@ -130,7 +130,7 @@ fn tc_value(snapshot: &bpfman_model::TcDispatcherSnapshot) -> io::Result<serde_j
         .collect();
     Ok(serde_json::json!({
         "key": {
-            "type": "tc-ingress",
+            "type": d.key.direction.dispatcher_type(),
             "nsid": d.key.nsid.get(),
             "ifindex": d.key.ifindex.get(),
         },

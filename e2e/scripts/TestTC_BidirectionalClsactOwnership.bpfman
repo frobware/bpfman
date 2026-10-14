@@ -1,0 +1,85 @@
+# -*- mode: bpfman -*-
+#pragma labels={"rust":"ok","rust-only":"true","area":"tc"}
+#pragma cases=[{"name":"ingress-first-drain-ingress-owned","params":{"first":"ingress","drain":"ingress","ownership":"owned"}},{"name":"ingress-first-drain-ingress-borrowed","params":{"first":"ingress","drain":"ingress","ownership":"borrowed"}},{"name":"ingress-first-drain-ingress-foreign","params":{"first":"ingress","drain":"ingress","ownership":"foreign"}},{"name":"ingress-first-drain-egress-owned","params":{"first":"ingress","drain":"egress","ownership":"owned"}},{"name":"ingress-first-drain-egress-borrowed","params":{"first":"ingress","drain":"egress","ownership":"borrowed"}},{"name":"ingress-first-drain-egress-foreign","params":{"first":"ingress","drain":"egress","ownership":"foreign"}},{"name":"egress-first-drain-ingress-owned","params":{"first":"egress","drain":"ingress","ownership":"owned"}},{"name":"egress-first-drain-ingress-borrowed","params":{"first":"egress","drain":"ingress","ownership":"borrowed"}},{"name":"egress-first-drain-ingress-foreign","params":{"first":"egress","drain":"ingress","ownership":"foreign"}},{"name":"egress-first-drain-egress-owned","params":{"first":"egress","drain":"egress","ownership":"owned"}},{"name":"egress-first-drain-egress-borrowed","params":{"first":"egress","drain":"egress","ownership":"borrowed"}},{"name":"egress-first-drain-egress-foreign","params":{"first":"egress","drain":"egress","ownership":"foreign"}}]
+# Shared clsact ownership survives either attach/drain order and CLI reopening.
+# Borrowed qdiscs and foreign filters remain after all managed members unload.
+
+import ../lib.bpfman
+
+def tc_bidirectional(first_hook drain_hook ownership) {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    let netns = "/var/run/netns/${pair.a.ns}"
+    let clsactCount = 'fromjson | [ .[] | select(.kind == "clsact") ] | length'
+    let second_hook = $first_hook |> jq 'if . == "ingress" then "egress" else "ingress" end'
+    let survivor_hook = $drain_hook |> jq 'if . == "ingress" then "egress" else "ingress" end'
+
+    if $ownership == borrowed {
+        guard _ <- net exec $pair.a tc qdisc add dev $pair.a.link clsact
+    }
+    guard loaded <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+    let prog = $loaded.programs[0]
+
+    guard first <- bpfman link attach tc $prog $pair.a.link $first_hook --priority 50 --netns $netns
+    guard second <- bpfman link attach tc $prog $pair.a.link $second_hook --priority 50 --netns $netns
+    guard first_tail <- bpfman link attach tc $prog $pair.a.link $first_hook --priority 100 --netns $netns
+    guard second_tail <- bpfman link attach tc $prog $pair.a.link $second_hook --priority 100 --netns $netns
+
+    if $ownership == foreign {
+        guard _ <- net exec $pair.a tc filter add dev $pair.a.link ingress pref 100 matchall action pass
+        guard _ <- net exec $pair.a tc filter add dev $pair.a.link egress pref 100 matchall action pass
+    }
+    guard in_list <- bpfman dispatcher list --type tc-ingress
+    guard eg_list <- bpfman dispatcher list --type tc-egress
+    assert ($in_list |> jq ".dispatchers | length") == 1
+    assert ($eg_list |> jq ".dispatchers | length") == 1
+    guard before <- bpfman dispatcher get "tc-${survivor_hook}" $pair.a.nsid $pair.a.ifindex
+    assert ($before |> jq ".members | length") == 2
+
+    if $drain_hook == $first_hook {
+        bpfman link detach $first
+        bpfman link detach $first_tail
+    } else {
+        bpfman link detach $second
+        bpfman link detach $second_tail
+    }
+    assert fail bpfman dispatcher get "tc-${drain_hook}" $pair.a.nsid $pair.a.ifindex
+    guard after <- bpfman dispatcher get "tc-${survivor_hook}" $pair.a.nsid $pair.a.ifindex
+    let before_json = $before |> jq tojson
+    let after_json = $after |> jq tojson
+    assert $after_json == $before_json
+    guard qOne <- net exec $pair.a tc -j qdisc show dev $pair.a.link
+    assert ($qOne.stdout |> jq $clsactCount) == 1
+
+    bpfman program unload $prog
+    assert fail bpfman dispatcher get "tc-${survivor_hook}" $pair.a.nsid $pair.a.ifindex
+    guard qEmpty <- net exec $pair.a tc -j qdisc show dev $pair.a.link
+    if $ownership == owned {
+        assert ($qEmpty.stdout |> jq $clsactCount) == 0
+    } else {
+        assert ($qEmpty.stdout |> jq $clsactCount) == 1
+        if $ownership == foreign {
+            foreach hook in [ingress egress] {
+                guard filters <- net exec $pair.a tc -j filter show dev $pair.a.link $hook
+                let filterCount = $filters.stdout |> jq 'fromjson | [ .[] | select(.kind == "matchall" and .options != null) ] | length'
+                assert $filterCount == 1
+            }
+        }
+        guard _ <- net exec $pair.a tc qdisc del dev $pair.a.link clsact
+    }
+}
+
+guard input <- exec sh -c 'printf "%s\n" "${BPFMAN_E2E_CASE:-null}"'
+let params = $input.stdout |> jq fromjson
+let all_cases = $params |> jq ". == null"
+if $all_cases {
+    foreach first in [ingress egress] {
+        foreach drain in [ingress egress] {
+            foreach ownership in [owned borrowed foreign] {
+                tc_bidirectional $first $drain $ownership
+            }
+        }
+    }
+} else {
+    tc_bidirectional $params.first $params.drain $params.ownership
+}

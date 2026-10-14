@@ -67,12 +67,14 @@ pub struct TcDispatcher(aya::Ebpf);
 
 /// Adopted managed TC extension and retained namespace.
 pub struct PreparedTc {
+    direction: bpfman_model::TcDirection,
     program: bpfman_fs::TcProgram<TcExtension>,
     namespace: XdpNamespace,
 }
 
 /// Owned TC revision, including partial pin acquisitions.
 pub struct TcStage {
+    direction: bpfman_model::TcDirection,
     pins: bpfman_fs::TcPins,
     dispatcher: Option<TcDispatcher>,
     namespace: XdpNamespace,
@@ -81,6 +83,7 @@ pub struct TcStage {
 
 /// Retained exact TC filter and both native targets across restoration attempts.
 pub struct TcSwitch {
+    direction: bpfman_model::TcDirection,
     namespace: XdpNamespace,
     root: bpfman_fs::RuntimeIdentity,
     handle: std::num::NonZeroU32,
@@ -92,6 +95,7 @@ pub struct TcSwitch {
 
 /// Exact TC filter and clsact cleanup. Partial acquisition may own only clsact.
 pub struct TcFilter {
+    direction: bpfman_model::TcDirection,
     namespace: XdpNamespace,
     root: bpfman_fs::RuntimeIdentity,
     dispatcher: u32,

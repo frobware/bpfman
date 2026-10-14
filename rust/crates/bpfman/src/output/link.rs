@@ -12,7 +12,7 @@ fn record(link: &StoredLink) -> Value {
         LinkDetails::Tc(d) => (
             "tc",
             json!({
-                "interface":d.interface.as_str(), "ifindex":d.key.ifindex.get(), "direction":"ingress", "priority":d.priority,
+                "interface":d.interface.as_str(), "ifindex":d.key.ifindex.get(), "direction":d.key.direction.as_str(), "priority":d.priority,
                 "position":d.slot.index(), "proceed_on":(-1..=30).filter(|code| d.proceed_on.mask() & (1 << (code+1)) != 0).collect::<Vec<i32>>(),
                 "netns":d.netns.as_str(), "nsid":d.key.nsid.get(), "dispatcher_id":d.dispatcher_id.get(), "revision":d.revision.get(),
                 "filter_priority":d.filter_priority, "filter_handle":d.filter_handle.get(),
@@ -138,7 +138,10 @@ pub(super) fn observed(link: &ObservedLink) -> Value {
 
 pub(super) fn attachment(details: &LinkDetails) -> (&'static str, String) {
     match details {
-        LinkDetails::Tc(d) => ("tc", format!("{}:ingress", d.interface.as_str())),
+        LinkDetails::Tc(d) => (
+            "tc",
+            format!("{}:{}", d.interface.as_str(), d.key.direction),
+        ),
         LinkDetails::Tracepoint(t) => ("tracepoint", t.to_string()),
         LinkDetails::Xdp(d) => ("xdp", format!("{}:xdp", d.interface.as_str())),
     }

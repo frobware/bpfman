@@ -1,7 +1,7 @@
 use crate::{Error, OpenStore};
 use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
-use bpfman_model::{StoredLink, TcLink, TcSnapshot, XdpKey};
+use bpfman_model::{StoredLink, TcKey, TcLink, TcSnapshot};
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64},
@@ -21,15 +21,15 @@ pub struct TcCommit<'a> {
     pub created_at: &'a str,
 }
 
-/// Atomic TC ingress publication and conditional complete-snapshot mutation.
+/// Atomic TC publication and conditional complete-snapshot mutation.
 pub trait TcStore: OpenStore {
     /// Non-cloneable evidence for the original runtime, store, and snapshot.
     type TcReceipt: Send + Sync + 'static;
-    /// Refuse occupied TC ingress attach points and non-TC programs.
+    /// Refuse occupied TC attach points and non-TC programs.
     fn preflight_tc(
         &self,
         w: &RuntimeWriter<'_>,
-        key: XdpKey,
+        key: TcKey,
         program: NonZeroU32,
     ) -> Result<(), Error>;
     /// Publish the whole acquired snapshot. Err guarantees no commit.
@@ -50,7 +50,7 @@ pub trait TcStore: OpenStore {
     fn observe_tc_dispatcher(
         &self,
         w: &RuntimeWriter<'_>,
-        key: XdpKey,
+        key: TcKey,
     ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, Error>;
     /// Replace only the unchanged complete snapshot. Failure guarantees no publication.
     fn replace_tc(

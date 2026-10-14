@@ -326,7 +326,7 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for ActiveStore<S> {
     fn preflight_tc(
         &self,
         w: &RuntimeWriter<'_>,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
         program: NonZeroU32,
     ) -> Result<(), bpfman_store::Error> {
         self.check_writer(w)?;
@@ -361,7 +361,7 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for ActiveStore<S> {
     fn observe_tc_dispatcher(
         &self,
         w: &RuntimeWriter<'_>,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
     ) -> Result<Option<(bpfman_model::TcDispatcherSnapshot, Self::TcReceipt)>, bpfman_store::Error>
     {
         self.check_writer(w)?;

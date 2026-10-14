@@ -100,7 +100,7 @@ The architecture and compatibility goals are in
   and driver/SKB modes. Aya remains unchanged, and the array DEVMAP boundary is
   still tested explicitly. See [egress acceptance](README.md#xdp-devmap-egress-programs).
 
-## TC ingress ownership
+## Legacy TC ingress and egress ownership
 
 - Force `TcAttachOptions::Netlink` for legacy TC. Aya's ordinary `attach` selects
   TCX on modern kernels. Use its public `handle()` result; never rediscover or
@@ -116,6 +116,18 @@ The architecture and compatibility goals are in
   created clsact only if both ingress and egress are empty. A foreign filter
   preserves the qdisc and relinquishes ownership. Refuse classic ingress qdiscs,
   malformed ownership evidence, and changed filter identities before teardown.
+- Include direction in `TcKey`, every stage/filter/switch receipt and store selection.
+  Keep ingress/egress revisions in separate bpffs collections. Ingress ownership
+  evidence retains its existing name; egress uses `egress_dispatcher_<nsid>_<ifindex>_<revision>`
+  in the same confined `tc` collection. The first attach on the opposite hook
+  validates the existing managed dispatcher and copies established clsact ownership
+  under the writer lock. Either hook can then reclaim the shared qdisc after both
+  are empty; a pre-existing borrowed qdisc remains borrowed.
+  Extend fault, cancellation, exact-filter and immediate-unload contracts to both
+  hooks. The marked-frame probe sends from `source0`, so egress recovery contracts
+  attach there and ingress contracts attach to `in0`. Its explicit
+  `packets-egress-drop` mode requires ENOBUFS on all three sends and preserves
+  packet/counter assertions; ordinary modes still require successful sends.
 - TC proceed-on shifts signed return codes by one: UNSPEC -1 is bit zero,
   PIPE 3 is bit four, dispatcher-return 30 is bit 31. Its CONFIG is 84 bytes;
   do not reuse the XDP ABI or return-code mask.
@@ -124,14 +136,15 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 8 for TC replacement; format 7 retains singleton TC.
-  Formats 1–7 never upgrade implicitly.
+- New JSON stores use format 9 for independent TC egress chains; format 8
+  retains ingress replacement, and format 7 retains singleton ingress.
+  Formats 1–8 never upgrade implicitly.
   Attached unload must adopt all TC attachments before effects, finish exact
   filter/stage/record prerequisites before program teardown, and retain blocked
   ownership for explicit retry. Reject newly acquired links between retry passes.
-  `make rust-test-tc-ingress` runs both stores, including replacement and attached
+  `make rust-test-tc` runs both hooks and both stores, including replacement and attached
   unload. Members of one dispatcher use its latest revision; a failed member blocks
-  later members of that dispatcher while independent interfaces continue one pass.
+  later members of that dispatcher while independent interfaces/hooks continue one pass.
 - The unchanged Go clsact script has a production-policy guard. Rust's test harness
   explicitly sets `BPFMAN_E2E_CLSACT_RECLAIM=true`, forwarded by Make, to run its
   assertions against Rust without changing Go's reclaim policy.

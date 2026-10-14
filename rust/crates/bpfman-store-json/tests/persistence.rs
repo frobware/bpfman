@@ -55,7 +55,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":9}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":10}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -70,7 +70,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     fs::write(layout.database_path(), &pristine).expect("restore");
     let mut reader = writer(&runtime, |w| Backend.open(w).expect("open"));
-    fs::write(layout.database_path(), b"{\"version\":9}").expect("change version");
+    fs::write(layout.database_path(), b"{\"version\":10}").expect("change version");
 
     assert_eq!(
         reader
@@ -388,7 +388,7 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
         });
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
-        assert_eq!(state["version"], 8);
+        assert_eq!(state["version"], 9);
         state["version"] = version.into();
         fs::write(
             layout.database_path(),
@@ -584,7 +584,7 @@ fn old_formats_refuse_tc_without_upgrade_or_partial_publication() {
 
 #[test]
 fn format_seven_retains_singletons_and_refuses_replacement_without_upgrade() {
-    use bpfman_model::{ProgramSpec, TcLink, XdpKey, XdpSlot};
+    use bpfman_model::{ProgramSpec, TcLink, XdpSlot};
     use bpfman_store::{
         CommitLoad, LoadRecord, TcCommit, TcMemberCommit, TcReplace, TcStore, XdpMemberId,
     };
@@ -624,7 +624,8 @@ fn format_seven_retains_singletons_and_refuses_replacement_without_upgrade() {
             )
             .expect("legacy TC load");
         let d = TcLink {
-            key: XdpKey {
+            key: bpfman_model::TcKey {
+                direction: bpfman_model::TcDirection::Ingress,
                 nsid: NonZeroU64::MIN,
                 ifindex: id,
             },
@@ -691,4 +692,116 @@ fn format_seven_retains_singletons_and_refuses_replacement_without_upgrade() {
             .map_err(|f| f.cause)
             .expect("legacy last detach");
     });
+}
+
+#[test]
+fn ingress_formats_refuse_egress_without_changing_the_snapshot() {
+    use bpfman_model::{ProgramSpec, TcDirection, TcKey, TcLink, XdpSlot};
+    use bpfman_store::{TcCommit, TcStore};
+
+    for version in [7, 8] {
+        let temp = tempfile::tempdir().expect("temp");
+        let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
+        let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+        writer(&runtime, |w| {
+            Backend.open(w).expect("new store");
+        });
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot"))
+                .expect("JSON");
+        state["version"] = version.into();
+        fs::write(
+            layout.database_path(),
+            serde_json::to_vec(&state).expect("older format"),
+        )
+        .expect("fixture");
+        writer(&runtime, |w| {
+            let metadata = BTreeMap::new();
+            Backend
+                .commit_program(
+                    w,
+                    LoadRecord {
+                        id: NonZeroU32::MIN,
+                        spec: &ProgramSpec::Tc("entry".try_into().expect("symbol")),
+                        source: "tc.o",
+                        license: "GPL",
+                        created_at: "2026-10-14T00:00:00Z",
+                        metadata: &metadata,
+                        globals: &Default::default(),
+                    },
+                )
+                .expect("existing TC load support");
+            let mut details = TcLink {
+                key: TcKey {
+                    nsid: std::num::NonZeroU64::MIN,
+                    ifindex: NonZeroU32::MIN,
+                    direction: TcDirection::Ingress,
+                },
+                interface: "veth0".parse().expect("interface"),
+                netns: Default::default(),
+                revision: NonZeroU32::MIN,
+                slot: XdpSlot::FIRST,
+                priority: 50,
+                proceed_on: Default::default(),
+                dispatcher_id: NonZeroU32::new(50).expect("dispatcher"),
+                filter_handle: NonZeroU32::MIN,
+                filter_priority: 50,
+            };
+            Backend
+                .commit_tc(
+                    w,
+                    TcCommit {
+                        program_id: NonZeroU32::MIN,
+                        details: &details,
+                        extension_link_id: NonZeroU32::new(51).expect("link"),
+                        metadata: &metadata,
+                        created_at: "2026-10-14T00:00:00Z",
+                    },
+                )
+                .expect("old ingress remains writable");
+            let original = fs::read(layout.database_path()).expect("snapshot");
+            let state: serde_json::Value = serde_json::from_slice(&original).expect("JSON");
+            assert_eq!(state["version"], version);
+            assert!(state["tc"][0].get("direction").is_none());
+            details.key.direction = TcDirection::Egress;
+            assert_eq!(
+                Backend
+                    .preflight_tc(w, details.key, NonZeroU32::MIN)
+                    .expect_err("no upgrade")
+                    .kind(),
+                ErrorKind::Unsupported
+            );
+            assert_eq!(
+                Backend
+                    .commit_tc(
+                        w,
+                        TcCommit {
+                            program_id: NonZeroU32::MIN,
+                            details: &details,
+                            extension_link_id: NonZeroU32::new(52).expect("link"),
+                            metadata: &metadata,
+                            created_at: "2026-10-14T00:00:00Z",
+                        }
+                    )
+                    .expect_err("no egress publication")
+                    .kind(),
+                ErrorKind::Unsupported
+            );
+            assert_eq!(
+                fs::read(layout.database_path()).expect("unchanged"),
+                original
+            );
+            let mut invalid: serde_json::Value = serde_json::from_slice(&original).expect("JSON");
+            invalid["tc"][0]["direction"] = "egress".into();
+            fs::write(
+                layout.database_path(),
+                serde_json::to_vec(&invalid).expect("invalid older format"),
+            )
+            .expect("fixture");
+            assert!(
+                Backend.open(w).is_err(),
+                "old versions cannot hide egress state"
+            );
+        });
+    }
 }

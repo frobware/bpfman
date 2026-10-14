@@ -301,7 +301,7 @@ impl bpfman_store::XdpDispatcherReader for Store {
                 let mut result = Vec::new();
                 let mut total = 0;
                 for (kind, nsid, ifindex) in keys {
-                    if kind == "tc-ingress" {
+                    if matches!(kind.as_str(), "tc-ingress" | "tc-egress") {
                         continue;
                     }
                     if kind != "xdp" {

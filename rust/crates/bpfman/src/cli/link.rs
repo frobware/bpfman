@@ -42,12 +42,11 @@ impl LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
-    /// Attach a TC extension through a legacy ingress dispatcher.
+    /// Attach a TC extension through a legacy TC dispatcher.
     Tc {
         program_id: NonZeroU32,
         interface: bpfman_model::InterfaceName,
-        #[arg(value_parser = ["ingress"])]
-        direction: String,
+        direction: bpfman_model::TcDirection,
         #[arg(long, default_value = "")]
         netns: bpfman_model::NetworkNamespace,
         #[arg(short = 'p', long, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
@@ -118,7 +117,7 @@ impl LinkCommand {
                     AttachCommand::Tc {
                         program_id,
                         interface,
-                        direction: _,
+                        direction,
                         netns,
                         priority,
                         proceed_on,
@@ -133,6 +132,7 @@ impl LinkCommand {
                     bpfman_runtime::TcAttach {
                         program_id,
                         interface,
+                        direction,
                         netns,
                         priority,
                         proceed_on: mask.try_into().map_err(anyhow::Error::from)?,

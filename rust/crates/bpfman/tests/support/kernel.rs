@@ -66,8 +66,8 @@ enum Resource {
     Extension(NonZeroU32),
     Outer(NonZeroU32),
     LiveOuter(NonZeroU32),
-    TcStage(XdpKey, NonZeroU32, NonZeroU32),
-    TcFilter(XdpKey, NonZeroU32, NonZeroU32),
+    TcStage(TcKey, NonZeroU32, NonZeroU32),
+    TcFilter(TcKey, NonZeroU32, NonZeroU32),
 }
 
 struct Program {
@@ -126,6 +126,11 @@ pub(super) struct Live {
 pub(super) struct PreparedXdp {
     extension: Loaded,
     key: XdpKey,
+}
+
+pub(super) struct PreparedTc {
+    extension: Loaded,
+    key: TcKey,
 }
 
 fn error(kind: ErrorKind, message: &'static str) -> Error {
@@ -1277,7 +1282,7 @@ pub(super) struct TcSwitch {
 // The fake models owned TC stage/filter generations and EXT target lifetimes.
 // Qdisc and netlink identity guarantees remain real-kernel acceptance tests.
 impl TcLifecycle for FakeKernel {
-    type Prepared = PreparedXdp;
+    type Prepared = PreparedTc;
     type Stage = Vec<Receipt>;
     type Filter = Receipt;
     type Switch = TcSwitch;
@@ -1288,24 +1293,24 @@ impl TcLifecycle for FakeKernel {
         program: NonZeroU32,
         interface: &InterfaceName,
         netns: &NetworkNamespace,
-    ) -> Result<(XdpKey, PreparedXdp), Error> {
+        direction: TcDirection,
+    ) -> Result<(TcKey, PreparedTc), Error> {
         self.enter(Point::PrepareTc)?;
-        self.prepare_xdp(w, program, interface, netns)
-    }
-
-    fn stage_tc(
-        &self,
-        w: &RuntimeWriter<'_>,
-        prepared: PreparedXdp,
-        actions: TcProceedOn,
-    ) -> Acquisition<Vec<Receipt>> {
-        self.stage_tc_revision(w, vec![prepared], NonZeroU32::MIN, &[actions], false)
+        let (key, prepared) = self.prepare_xdp(w, program, interface, netns)?;
+        let key = TcKey::new(key, direction);
+        Ok((
+            key,
+            PreparedTc {
+                key,
+                extension: prepared.extension,
+            },
+        ))
     }
 
     fn stage_tc_revision(
         &self,
         w: &RuntimeWriter<'_>,
-        prepared: Vec<PreparedXdp>,
+        prepared: Vec<PreparedTc>,
         _: NonZeroU32,
         actions: &[TcProceedOn],
         _: bool,

@@ -774,13 +774,19 @@ mod tc;
 #[test]
 fn sqlite_tc_ingress_lifecycle() {
     let _timing = support::TestTiming::start("sqlite_tc_ingress_lifecycle");
-    tc::exercise(bpfman_store_sqlite::Backend);
+    tc::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::TcDirection::Ingress,
+    );
 }
 
 #[test]
 fn json_tc_ingress_lifecycle() {
     let _timing = support::TestTiming::start("json_tc_ingress_lifecycle");
-    tc::exercise(bpfman_store_json::Backend);
+    tc::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::TcDirection::Ingress,
+    );
 }
 
 #[path = "kernel/tc_unload.rs"]
@@ -789,13 +795,19 @@ mod tc_unload;
 #[test]
 fn sqlite_tc_ingress_attached_unload() {
     let _timing = support::TestTiming::start("sqlite_tc_ingress_attached_unload");
-    tc_unload::exercise(bpfman_store_sqlite::Backend);
+    tc_unload::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::TcDirection::Ingress,
+    );
 }
 
 #[test]
 fn json_tc_ingress_attached_unload() {
     let _timing = support::TestTiming::start("json_tc_ingress_attached_unload");
-    tc_unload::exercise(bpfman_store_json::Backend);
+    tc_unload::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::TcDirection::Ingress,
+    );
 }
 
 #[path = "kernel/tc_replace.rs"]
@@ -804,13 +816,19 @@ mod tc_replace;
 #[test]
 fn sqlite_tc_ingress_replacement() {
     let _timing = support::TestTiming::start("sqlite_tc_ingress_replacement");
-    tc_replace::exercise(bpfman_store_sqlite::Backend);
+    tc_replace::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::TcDirection::Ingress,
+    );
 }
 
 #[test]
 fn json_tc_ingress_replacement() {
     let _timing = support::TestTiming::start("json_tc_ingress_replacement");
-    tc_replace::exercise(bpfman_store_json::Backend);
+    tc_replace::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::TcDirection::Ingress,
+    );
 }
 
 #[test]
@@ -823,4 +841,58 @@ fn sqlite_script_corpus() {
 fn json_script_corpus() {
     let _timing = support::TestTiming::start("json_script_corpus");
     cli::corpus("json");
+}
+
+#[test]
+fn sqlite_tc_egress_lifecycle() {
+    let _timing = support::TestTiming::start("sqlite_tc_egress_lifecycle");
+    tc::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::TcDirection::Egress,
+    );
+}
+
+#[test]
+fn json_tc_egress_lifecycle() {
+    let _timing = support::TestTiming::start("json_tc_egress_lifecycle");
+    tc::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::TcDirection::Egress,
+    );
+}
+
+#[test]
+fn sqlite_tc_egress_attached_unload() {
+    let _timing = support::TestTiming::start("sqlite_tc_egress_attached_unload");
+    tc_unload::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::TcDirection::Egress,
+    );
+}
+
+#[test]
+fn json_tc_egress_attached_unload() {
+    let _timing = support::TestTiming::start("json_tc_egress_attached_unload");
+    tc_unload::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::TcDirection::Egress,
+    );
+}
+
+#[test]
+fn sqlite_tc_egress_replacement() {
+    let _timing = support::TestTiming::start("sqlite_tc_egress_replacement");
+    tc_replace::exercise(
+        bpfman_store_sqlite::Backend,
+        bpfman_model::TcDirection::Egress,
+    );
+}
+
+#[test]
+fn json_tc_egress_replacement() {
+    let _timing = support::TestTiming::start("json_tc_egress_replacement");
+    tc_replace::exercise(
+        bpfman_store_json::Backend,
+        bpfman_model::TcDirection::Egress,
+    );
 }

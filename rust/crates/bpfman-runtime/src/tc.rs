@@ -1,4 +1,4 @@
-//! TC ingress publication and consuming recovery under one writer lock.
+//! TC publication and consuming recovery under one writer lock.
 use crate::{Bpfman, Cancellation, LinkCause, link_error::Cause};
 use bpfman_core::{
     EffectFailure, XdpCleanup, XdpCleanupKind, XdpCleanupReport, XdpCleanupStep, XdpResource,
@@ -14,12 +14,14 @@ use std::{
     num::{NonZeroU32, NonZeroU64},
 };
 
-/// Legacy TC ingress attachment through a complete dispatcher revision.
+/// Legacy TC attachment through a complete dispatcher revision.
 pub struct TcAttach {
     /// Managed classifier extension.
     pub program_id: NonZeroU32,
     /// Interface within the selected namespace.
     pub interface: InterfaceName,
+    /// Selected legacy TC hook.
+    pub direction: bpfman_model::TcDirection,
     /// Namespace selection; empty selects the caller's namespace.
     pub netns: NetworkNamespace,
     /// Member priority bounded by i32::MAX.
@@ -176,7 +178,7 @@ impl<S: TcStore, K: TcLifecycle> fmt::Display for TcError<S, K> {
         } else {
             write!(
                 f,
-                "TC ingress operation failed; {} unresolved recovery effects",
+                "TC operation failed; {} unresolved recovery effects",
                 self.unresolved()
             )
         }
@@ -329,7 +331,7 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
         w: &RuntimeWriter<'_>,
         r: &TcAttach,
         c: &Cancellation,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
         prepared: K::Prepared,
     ) -> Result<StoredLink, TcError<S, K>> {
         let mut resources = Vec::new();
@@ -337,7 +339,25 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
             check(c)?;
             self.store.preflight_tc(w, key, r.program_id)?;
             check(c)?;
-            let stage = match self.kernel.stage_tc(w, prepared, r.proceed_on) {
+            let counterpart = bpfman_model::TcKey {
+                direction: key.direction.opposite(),
+                ..key
+            };
+            let clsact_owned = match self.store.observe_tc_dispatcher(w, counterpart)? {
+                Some((snapshot, _)) => {
+                    let (stage, _) = self.kernel.observe_tc_dispatcher(w, &snapshot)?;
+                    self.kernel.tc_clsact_owned(w, &stage)?
+                }
+                None => false,
+            };
+            check(c)?;
+            let stage = match self.kernel.stage_tc_revision(
+                w,
+                vec![prepared],
+                NonZeroU32::MIN,
+                &[r.proceed_on],
+                clsact_owned,
+            ) {
                 Ok(v) => v,
                 Err(f) => {
                     resources.extend(f.remaining.map(Resource::Stage));
@@ -518,7 +538,7 @@ impl<S: OpenStore, K> Bpfman<S, K>
 where
     S::Reader: bpfman_store::LinkReader,
 {
-    /// Read complete committed TC ingress dispatchers without a writer lock.
+    /// Read complete committed TC dispatchers without a writer lock.
     pub fn list_tc_dispatchers(
         &self,
     ) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, LinkCause> {
@@ -529,10 +549,10 @@ where
             .map_err(Into::into)
     }
 
-    /// Read one complete TC ingress dispatcher without acquiring the writer lock.
+    /// Read one complete TC dispatcher without acquiring the writer lock.
     pub fn get_tc_dispatcher(
         &self,
-        key: bpfman_model::XdpKey,
+        key: bpfman_model::TcKey,
     ) -> Result<bpfman_model::TcDispatcherSnapshot, LinkCause> {
         self.list_tc_dispatchers()?
             .into_iter()

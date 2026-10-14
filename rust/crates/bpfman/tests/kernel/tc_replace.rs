@@ -4,23 +4,24 @@
 use super::{
     faults::{Faults, Point},
     support::*,
-    tc::{clsact, count, request, tc, traffic},
+    tc::{clsact, count, interface, request, tc, traffic},
     xdp_delivery::Network,
 };
 use bpfman_model::{LinkDetails, ProgramSpec};
 use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram};
 use bpfman_store::*;
 
-pub(super) fn exercise<S>(backend: S)
+pub(super) fn exercise<S>(backend: S, hook: bpfman_model::TcDirection)
 where
     S: OpenStore + CommitLoad + UnloadStore + LinkStore + XdpReplacementStore + TcStore + Clone,
     S::Reader: LinkReader + XdpDispatcherReader,
 {
+    let interface = interface(hook);
     for ownership in ["owned", "borrowed", "foreign"] {
         let c = Context::new();
         let network = Network::new();
         if ownership == "borrowed" {
-            tc(&network, &["qdisc", "add", "dev", "in0", "clsact"]);
+            tc(&network, &["qdisc", "add", "dev", interface, "clsact"]);
         }
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(
@@ -50,7 +51,7 @@ where
         let a = load(-1);
         let b = load(2);
         let d = load(0);
-        let mut r = request(a, &network);
+        let mut r = request(a, &network, hook);
         r.priority = 50;
         r.proceed_on = 1u32.try_into().expect("UNSPEC bit");
         let first = app.attach_tc(r).expect("UNSPEC first");
@@ -67,7 +68,7 @@ where
                         "filter",
                         "add",
                         "dev",
-                        "in0",
+                        interface,
                         direction,
                         "pref",
                         "50",
@@ -85,7 +86,7 @@ where
                 );
             }
         }
-        let mut r = request(b, &network);
+        let mut r = request(b, &network, hook);
         r.priority = 60;
         app.attach_tc(r).expect("second member");
         let s = app.get_tc_dispatcher(key).expect("snapshot");
@@ -93,7 +94,7 @@ where
         assert_eq!(s.members()[0].details.filter_handle, handle);
         if ownership == "foreign" {
             let before = [count(&c, a), count(&c, b), count(&c, d)];
-            traffic(&network, 0);
+            traffic(&network, 0, hook);
             assert_eq!(
                 [
                     count(&c, a) - before[0],
@@ -108,7 +109,7 @@ where
             .tc_revision_path(key, s.members()[0].details.revision);
         faults.set(Some(Point::TcReplace));
         let error = app
-            .attach_tc(request(d, &network))
+            .attach_tc(request(d, &network, hook))
             .expect_err("atomic publication failure");
         assert_eq!(error.unresolved(), 0, "{error:?}");
         assert_eq!(error.restoration_attempts().len(), 1);
@@ -117,7 +118,7 @@ where
             s
         );
         let before = [count(&c, a), count(&c, b), count(&c, d)];
-        traffic(&network, 0);
+        traffic(&network, 0, hook);
         assert_eq!(
             [
                 count(&c, a) - before[0],
@@ -129,12 +130,12 @@ where
         assert!(old_dir.exists());
         faults.set(None);
         let stop = app
-            .attach_tc(request(d, &network))
+            .attach_tc(request(d, &network, hook))
             .expect("higher priority OK stops chain");
         assert!(!old_dir.exists(), "retired revision removed");
         if ownership == "foreign" {
             let before = [count(&c, a), count(&c, b), count(&c, d)];
-            traffic(&network, 3);
+            traffic(&network, 3, hook);
             assert_eq!(
                 [
                     count(&c, a) - before[0],
@@ -152,7 +153,7 @@ where
                 .layout
                 .tc_revision_path(key, old.members()[0].details.revision);
             faults.set(Some(Point::TcReplaceWithBlockedRetirement));
-            let mut extra = request(d, &network);
+            let mut extra = request(d, &network, hook);
             extra.priority = 100;
             let error = app
                 .attach_tc(extra)
@@ -195,13 +196,13 @@ where
         assert!(app.get_link(stop.id).is_err());
         if ownership == "foreign" {
             let before = [count(&c, a), count(&c, b)];
-            traffic(&network, 0);
+            traffic(&network, 0, hook);
             assert_eq!([count(&c, a) - before[0], count(&c, b) - before[1]], [3, 3]);
         }
         app.detach_tc(first.id).expect("non-last detach");
         if ownership == "foreign" {
             let before = [count(&c, a), count(&c, b)];
-            traffic(&network, 0);
+            traffic(&network, 0, hook);
             assert_eq!([count(&c, a) - before[0], count(&c, b) - before[1]], [0, 3]);
         }
         assert_eq!(app.unload(a).expect("detached a").unresolved(), 0);
@@ -212,11 +213,11 @@ where
             TIMEOUT,
         );
         assert_eq!(app.unload(b).expect("last attached member").unresolved(), 0);
-        assert_eq!(clsact(&network), ownership != "owned");
+        assert_eq!(clsact(&network, interface), ownership != "owned");
         if ownership == "foreign" {
             for direction in ["ingress", "egress"] {
                 assert_eq!(
-                    tc(&network, &["filter", "show", "dev", "in0", direction])
+                    tc(&network, &["filter", "show", "dev", interface, direction])
                         .as_array()
                         .expect("filters")
                         .iter()
@@ -226,7 +227,7 @@ where
                 );
             }
         }
-        traffic(&network, 3);
+        traffic(&network, 3, hook);
         c.no_artifacts();
     }
 }

@@ -18,8 +18,9 @@ fn load<S: Store>(f: &Fixture<S>) -> std::num::NonZeroU32 {
         .id
 }
 
-fn request(id: std::num::NonZeroU32, interface: &str) -> TcAttach {
+fn request(id: std::num::NonZeroU32, interface: &str, hook: bpfman_model::TcDirection) -> TcAttach {
     TcAttach {
+        direction: hook,
         program_id: id,
         interface: interface.parse().expect("interface"),
         netns: Default::default(),
@@ -30,15 +31,24 @@ fn request(id: std::num::NonZeroU32, interface: &str) -> TcAttach {
 }
 
 pub(super) fn lifecycle<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        lifecycle_direction(backend, hook);
+    }
+}
+
+fn lifecycle_direction<S: Store>(backend: S, hook: bpfman_model::TcDirection) {
     let f = Fixture::new(backend);
     let id = load(&f);
     let a = f
         .app
-        .attach_tc(request(id, "fake0"))
+        .attach_tc(request(id, "fake0", hook))
         .expect("first interface");
     let b = f
         .app
-        .attach_tc(request(id, "fake1"))
+        .attach_tc(request(id, "fake1", hook))
         .expect("second interface");
     let report = f.app.unload(id).expect("attached unload");
     assert_eq!(report.unresolved(), 0);
@@ -61,11 +71,20 @@ pub(super) fn lifecycle<S: Store>(backend: S) {
 }
 
 pub(super) fn preflight<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        preflight_direction(backend, hook);
+    }
+}
+
+fn preflight_direction<S: Store>(backend: S, hook: bpfman_model::TcDirection) {
     for cancel in [false, true] {
         let f = Fixture::new(backend);
         let id = load(&f);
-        f.app.attach_tc(request(id, "fake0")).expect("first");
-        f.app.attach_tc(request(id, "fake1")).expect("second");
+        f.app.attach_tc(request(id, "fake0", hook)).expect("first");
+        f.app.attach_tc(request(id, "fake1", hook)).expect("second");
         let before = f.app.list_link_records().expect("links");
         let token = Cancellation::new();
         if cancel {
@@ -91,6 +110,15 @@ pub(super) fn preflight<S: Store>(backend: S) {
 }
 
 pub(super) fn failures<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        failures_direction(backend, hook);
+    }
+}
+
+fn failures_direction<S: Store>(backend: S, hook: bpfman_model::TcDirection) {
     for point in [
         Some(Point::RemoveTcFilter),
         Some(Point::RemoveTcStage),
@@ -98,8 +126,8 @@ pub(super) fn failures<S: Store>(backend: S) {
     ] {
         let f = Fixture::new(backend);
         let id = load(&f);
-        f.app.attach_tc(request(id, "fake0")).expect("first");
-        f.app.attach_tc(request(id, "fake1")).expect("second");
+        f.app.attach_tc(request(id, "fake0", hook)).expect("first");
+        f.app.attach_tc(request(id, "fake1", hook)).expect("second");
         if let Some(point) = point {
             f.kernel.fail_after(point, Phase::Before, 1);
         } else {
@@ -159,7 +187,7 @@ pub(super) fn failures<S: Store>(backend: S) {
         f.clean();
     }
     // Failure in the first attachment must still allow an independent second
-    // attachment its one cleanup pass, while retaining the program prerequisite.
+    // hook on the same interface its one cleanup pass, while retaining the program prerequisite.
     for point in [
         Some(Point::RemoveTcFilter),
         Some(Point::RemoveTcStage),
@@ -167,8 +195,10 @@ pub(super) fn failures<S: Store>(backend: S) {
     ] {
         let f = Fixture::new(backend);
         let id = load(&f);
-        f.app.attach_tc(request(id, "fake0")).expect("first");
-        f.app.attach_tc(request(id, "fake1")).expect("second");
+        f.app.attach_tc(request(id, "fake0", hook)).expect("first");
+        f.app
+            .attach_tc(request(id, "fake0", hook.opposite()))
+            .expect("second");
         if let Some(point) = point {
             f.kernel.fail(point, Phase::Before);
         } else {
@@ -200,9 +230,18 @@ pub(super) fn failures<S: Store>(backend: S) {
 }
 
 pub(super) fn cancellation_and_foreign_retry<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        cancellation_and_foreign_retry_direction(backend, hook);
+    }
+}
+
+fn cancellation_and_foreign_retry_direction<S: Store>(backend: S, hook: bpfman_model::TcDirection) {
     let f = Fixture::new(backend);
     let id = load(&f);
-    f.app.attach_tc(request(id, "fake0")).expect("attach");
+    f.app.attach_tc(request(id, "fake0", hook)).expect("attach");
     f.kernel.fail(Point::RemoveTcFilter, Phase::Before);
     let error = f.app.unload(id).expect_err("filter failure");
     let token = Cancellation::new();
@@ -249,7 +288,7 @@ pub(super) fn cancellation_and_foreign_retry<S: Store>(backend: S) {
     for point in [Point::RemoveTcFilter, Point::RemoveTcStage] {
         let f = Fixture::new(backend);
         let id = load(&f);
-        f.app.attach_tc(request(id, "fake0")).expect("attach");
+        f.app.attach_tc(request(id, "fake0", hook)).expect("attach");
         let token = Cancellation::new();
         f.kernel.cancel_at(point, &token);
         assert_eq!(
@@ -265,14 +304,23 @@ pub(super) fn cancellation_and_foreign_retry<S: Store>(backend: S) {
 }
 
 pub(super) fn new_link<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        new_link_direction(backend, hook);
+    }
+}
+
+fn new_link_direction<S: Store>(backend: S, hook: bpfman_model::TcDirection) {
     let f = Fixture::new(backend);
     let id = load(&f);
-    f.app.attach_tc(request(id, "fake0")).expect("attach");
+    f.app.attach_tc(request(id, "fake0", hook)).expect("attach");
     f.store.set(Some(StorePoint::TcDelete));
     let error = f.app.unload(id).expect_err("record-only recovery");
     let new = f
         .app
-        .attach_tc(request(id, "fake1"))
+        .attach_tc(request(id, "fake1", hook))
         .expect("later writer attaches");
     f.store.set(None);
     let error = f
@@ -296,10 +344,19 @@ pub(super) fn new_link<S: Store>(backend: S) {
 }
 
 pub(super) fn post_detach<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        post_detach_direction(backend, hook);
+    }
+}
+
+fn post_detach_direction<S: Store>(backend: S, hook: bpfman_model::TcDirection) {
     for kernel in [false, true] {
         let f = Fixture::new(backend);
         let id = load(&f);
-        f.app.attach_tc(request(id, "fake0")).expect("attach");
+        f.app.attach_tc(request(id, "fake0", hook)).expect("attach");
         if kernel {
             f.kernel.fail(Point::RemoveProgram, Phase::Before);
         } else {

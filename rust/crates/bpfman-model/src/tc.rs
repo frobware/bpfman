@@ -1,7 +1,94 @@
-//! Legacy TC ingress, separate from TCX and XDP identities.
+//! Legacy TC, separate from TCX and XDP identities.
 use crate::{InterfaceName, NetworkNamespace, StoredLink, Symbol, XdpKey, XdpSlot};
 use alloc::{string::String, vec::Vec};
 use core::{fmt, num::NonZeroU32};
+
+/// Legacy TC hook direction, shared by dispatcher and filter identities.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum TcDirection {
+    /// Packets arriving on the interface.
+    Ingress,
+    /// Packets leaving the interface.
+    Egress,
+}
+
+/// Invalid legacy TC hook direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct InvalidTcDirection;
+
+impl fmt::Display for InvalidTcDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("expected ingress or egress")
+    }
+}
+
+impl core::error::Error for InvalidTcDirection {}
+
+impl core::str::FromStr for TcDirection {
+    type Err = InvalidTcDirection;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw {
+            "ingress" => Ok(Self::Ingress),
+            "egress" => Ok(Self::Egress),
+            _ => Err(InvalidTcDirection),
+        }
+    }
+}
+
+impl fmt::Display for TcDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl TcDirection {
+    /// Go-compatible direction spelling.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ingress => "ingress",
+            Self::Egress => "egress",
+        }
+    }
+
+    /// Go-compatible dispatcher type and bpffs collection name.
+    pub const fn dispatcher_type(self) -> &'static str {
+        match self {
+            Self::Ingress => "tc-ingress",
+            Self::Egress => "tc-egress",
+        }
+    }
+
+    /// The other hook on the same interface.
+    pub const fn opposite(self) -> Self {
+        match self {
+            Self::Ingress => Self::Egress,
+            Self::Egress => Self::Ingress,
+        }
+    }
+}
+
+/// One legacy TC attach point, including its hook direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct TcKey {
+    /// Network namespace inode.
+    pub nsid: core::num::NonZeroU64,
+    /// Interface index within that namespace.
+    pub ifindex: NonZeroU32,
+    /// Independent ingress or egress hook.
+    pub direction: TcDirection,
+}
+
+impl TcKey {
+    /// Refine an observed namespace/interface with the selected TC hook.
+    pub const fn new(interface: XdpKey, direction: TcDirection) -> Self {
+        Self {
+            nsid: interface.nsid,
+            ifindex: interface.ifindex,
+            direction,
+        }
+    }
+}
 
 /// TC return-code mask; bit zero represents -1, bit 31 dispatcher-return 30.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -43,13 +130,13 @@ impl TcProceedOn {
     }
 }
 
-/// One extension attached to a legacy TC ingress dispatcher revision.
+/// One extension attached to a legacy TC dispatcher revision.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TcLink {
     /// Selected namespace path.
     pub netns: NetworkNamespace,
-    /// Namespace inode and interface index; TC ingress uses its own collection.
-    pub key: XdpKey,
+    /// Namespace, interface and hook direction.
+    pub key: TcKey,
     /// Validated interface name.
     pub interface: InterfaceName,
     /// Complete dispatcher revision.
@@ -68,7 +155,7 @@ pub struct TcLink {
     pub filter_priority: u16,
 }
 
-/// One member of an atomically stored TC ingress dispatcher.
+/// One member of an atomically stored TC dispatcher.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TcSnapshot {
     /// Selected extension name.
@@ -93,7 +180,7 @@ impl fmt::Display for InvalidTcSnapshot {
 
 impl core::error::Error for InvalidTcSnapshot {}
 
-/// Complete legacy TC ingress membership in execution order.
+/// Complete legacy TC membership in execution order.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TcDispatcherSnapshot(Vec<TcSnapshot>);
 

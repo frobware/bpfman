@@ -2,7 +2,7 @@ use crate::{Backend, TcReceipt, error::Failure, open, queries::tc as queries};
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeLayout, RuntimeWriter};
 use bpfman_model::{
-    LinkDetails, LinkState, StoredLink, TcDispatcherSnapshot, TcLink, TcSnapshot, XdpKey,
+    LinkDetails, LinkState, StoredLink, TcDispatcherSnapshot, TcKey, TcLink, TcSnapshot,
 };
 use bpfman_store::{Error, TcCommit, TcReplace, TcStore};
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
@@ -32,7 +32,6 @@ fn id64(raw: i64) -> Result<NonZeroU64, Failure> {
 pub(super) fn decode(row: &queries::Row) -> Result<TcSnapshot, Failure> {
     if row.program_kind != "tc"
         || row.netns != row.dispatcher_netns
-        || row.direction != "ingress"
         || !(0..10).contains(&row.position)
         || row.revision <= 0
         || row.filter_priority != 50
@@ -58,9 +57,10 @@ pub(super) fn decode(row: &queries::Row) -> Result<TcSnapshot, Failure> {
             .try_into()
             .map_err(|_| invalid())?,
         netns: row.netns.parse().map_err(|_| invalid())?,
-        key: XdpKey {
+        key: TcKey {
             nsid: id64(row.nsid)?,
             ifindex: id32(row.ifindex)?,
+            direction: row.direction.parse().map_err(|_| invalid())?,
         },
         interface: row.interface.parse().map_err(|_| invalid())?,
         priority: row.priority as u32,
@@ -100,12 +100,14 @@ pub(super) fn snapshots(c: &Connection) -> Result<Vec<TcDispatcherSnapshot>, Fai
     let mut result = Vec::new();
     let mut total = 0;
     for (kind, nsid, ifindex) in crate::queries::xdp::dispatcher_keys(c)? {
-        if kind != "tc-ingress" {
+        if !matches!(kind.as_str(), "tc-ingress" | "tc-egress") {
             continue;
         }
         let selected = rows
             .iter()
-            .filter(|r| r.nsid == nsid && r.ifindex == ifindex)
+            .filter(|r| {
+                r.nsid == nsid && r.ifindex == ifindex && format!("tc-{}", r.direction) == kind
+            })
             .map(decode)
             .collect::<Result<Vec<_>, _>>()?;
         total += selected.len();
@@ -147,10 +149,10 @@ fn identity(w: &RuntimeWriter<'_>) -> Result<(u64, u64), Failure> {
     Ok((m.dev(), m.ino()))
 }
 
-fn preflight(c: &Connection, key: XdpKey, program: NonZeroU32) -> Result<(), Failure> {
+fn preflight(c: &Connection, key: TcKey, program: NonZeroU32) -> Result<(), Failure> {
     open::require_supported(open::schema_version(c)?)?;
     if !queries::vacant(c, key)? {
-        return Err(Failure::Unsupported("TC ingress attach point is occupied"));
+        return Err(Failure::Unsupported("TC attach point is occupied"));
     }
     if !queries::is_tc(c, program.get())? {
         return Err(Failure::InvalidLink("missing managed TC program"));
@@ -164,7 +166,7 @@ impl TcStore for Backend {
     fn preflight_tc(
         &self,
         w: &RuntimeWriter<'_>,
-        key: XdpKey,
+        key: TcKey,
         program: NonZeroU32,
     ) -> Result<(), Error> {
         (|| -> Result<(), Failure> { preflight(&connection(w)?, key, program) })()
@@ -260,7 +262,7 @@ impl TcStore for Backend {
     fn observe_tc_dispatcher(
         &self,
         w: &RuntimeWriter<'_>,
-        key: XdpKey,
+        key: TcKey,
     ) -> Result<Option<(TcDispatcherSnapshot, TcReceipt)>, Error> {
         (|| -> Result<_, Failure> {
             let mut c = connection(w)?;
