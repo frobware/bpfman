@@ -3,10 +3,10 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The latest
-capability checkpoint adds independent legacy TC ingress and egress dispatchers on
-both stores.
-One to ten EXT members are rebuilt in priority order around a native TC dispatcher,
-using the same exact legacy filter handle. Publication failures restore the old
+capability checkpoint adds native TCX loading, ordered ingress/egress links and
+consuming teardown on both stores, alongside legacy TC ingress/egress dispatchers.
+For legacy TC, one to ten EXT members are rebuilt in priority order around a
+native dispatcher, using the same exact legacy filter handle. Publication failures restore the old
 chain before staged cleanup; restoration and retirement failures retain consuming
 receipts for explicit retries. Attached-program unload rebuilds surviving members,
 including repeated attachments of the same program. Direction is part of dispatcher,
@@ -107,7 +107,8 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | TCX, outer-filter status and general orphan repair |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 9 for TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 10 for TCX, format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -4334,3 +4335,144 @@ is recorded and deferred; it is not fixed or labelled as passing here.
 TCX, outer-filter status, general orphan reconciliation and cross-implementation
 TC teardown remain outside this slice. Missing a live interface in an otherwise
 accessible namespace is not treated as missing-namespace cleanup in Rust.
+
+### Native TCX lifecycle and ordering (14 October 2026)
+
+TCX now loads classifier selections as native SCHED_CLS rather than EXT programs.
+It attaches through Aya's explicit `TcAttachOptions::TcxOrder`, without a legacy
+TC dispatcher or clsact qdisc. Both stores support program and link observations,
+ingress/egress, explicit namespaces, metadata, duplicate refusal, detach and
+attached-program unload.
+
+Go's `computeTCXAttachOrder` inserts before the first greater priority, otherwise
+after the last existing member. Its detail queries derive position by priority
+and managed ID. Original Rust's `sort_tcx_links` and
+`add_and_set_tcx_link_positions` likewise use priority and previous position, with
+new ties appended. The new pure planner follows ascending priority and attachment
+order, including priority zero. Native packet-chain acceptance establishes actual
+continuation and stopping independently of the reported managed rank. Historical
+implementations remain evidence, not the correctness specification.
+
+Insertion inspects each recorded native link on the selected hook. Confirmed
+missing links and detached links do not become anchors; failed inspection or
+changed program/hook identity remains an error. Pending intent requires explicit
+cleanup. Duplicate program/hook requests identify the surviving managed link and
+fail before touching its pin. The adapter validates and retains the anchor program
+FD through attachment. The adapter's checked conversion to Aya 0.14's `ProgramId` stays inside the
+existing narrow syscall module, after validating the live classifier ID and type.
+Aya itself, dependencies and the legacy Rust workspace are unchanged.
+
+TCX uses the same production pending-intent, cancellation, finalisation and
+consuming compensation interpreter as tracepoint attachment. Its canonical pins
+are `fs/tcx-{direction}/link_{nsid}_{ifindex}_{program}`. Filesystem adoption
+validates confined traversal, pin identity, kernel link ID, program and native hook.
+Removal retains the actual link FD, explicitly detaches it, removes the owned pin,
+then closes the retained FD after the pin descriptors. A genuine external link
+holder may preserve the object but cannot preserve execution after successful
+detach: the real contract reattaches the same program before closing that holder.
+Immediate managed program-ID absence is required after unload without external
+holders. The held-program control requires presence until its FD closes, followed
+by immediate absence. No post-unload sleeps or polling were added.
+
+Native links provide teardown authority independently of a namespace selector.
+A prepared attachment refuses a changed namespace selector before acquiring a
+link. Once attached, exact adopted link descriptors allow cleanup when the stored
+selector disappears or points elsewhere, with the original namespace still alive.
+This differs from legacy TC's namespace-dependent filter removal: TCX needs no
+invented netlink authority in an unreachable namespace. Both hooks and independent
+namespaces are exercised in the same attached unload.
+
+The native multi-link recovery contract exposed excessive dependency in the Rust
+standalone unload planner: failure deleting one link record blocked unrelated
+links. It now attempts each independent link once. Failed pin removal blocks only
+that link's record; any unresolved link still blocks program teardown. Tracepoint
+fault and pending-intent contracts now require this stronger independent progress,
+retain exact receipt identities and attempt history, and prove completed pin
+removal never repeats. Failed store deletion leaves record-only retry ownership;
+reopening the application does not re-adopt completed pins. Go is unchanged.
+
+SQLite retains Go schema 2 and the existing native TCX detail table. New JSON
+stores use format 10; formats 1–9 retain their previous operations and refuse TCX
+without implicit upgrade. Existing tracepoint target strings retain their encoded
+shape; native targets use a typed object. Managed position is derived from one
+consistent store snapshot, not stored as mutable teardown authority and not
+presented as a live inventory of foreign kernel programs. Shared real-store
+contracts cover native pending/finalised intent, duplicate refusal, foreign/stale
+receipts, derived positions and preservation of loaded programs after detach.
+JSON-specific contracts prove old-format refusal without changing the snapshot.
+
+Eight existing acceptance files run unchanged against Rust on both stores:
+
+- `TestTCX_LoadAndGet`
+- `TestTCX_LinkRoundTrip`
+- `TestTCX_DuplicateAttachRejected`
+- `TestTCX_PriorityOrdering`
+- `TestTCX_ZeroPriorityDefaultOrdering`
+- `TestTCX_NetnsVethPairLinkRoundTrip`
+- `TestMultiProgTCX_AllProceed_DefaultProceedOn`
+- `TestMultiProgTCX_ChainStopsAtOK_DefaultProceedOn`
+
+They remain outside the immutable label manifest. Two explicit backend-wide TCX
+batches keep them in the normal full gate, alongside the existing 91 admitted
+files and shared-runtime cohort. `make rust-test-tcx` selects these batches and
+native kernel recovery contracts. Four additional stateful-fake tests run the
+same public runtime with real SQLite and JSON stores, covering ordering, scope
+isolation, failed acquisitions, publication/cleanup faults, cancellation and
+reopened recovery. No existing `.bpfman` assertions or labels changed, and no new
+script was introduced.
+
+General stale-pin reconciliation and reconstructing lost in-memory cleanup reports
+remain future recovery work. Managed priority does not reconcile arbitrary foreign
+chain edits, and attachment does not provide an expected-revision CAS against
+external privileged writers outside bpfman's lock. Legacy TC outer-filter status,
+shared maps, additional program families and OCI sources remain separate work.
+
+Parallel lifetime investigation found another source of references: the older
+tracepoint attached-unload contract enumerated every live kernel program while
+polling for its own release. Aya's iterator opens a program FD for each ID, so
+that test could briefly hold another fixture's program. Its verification now
+queries only its owned program ID and requires immediate absence. This removes
+both the global observer and its post-unload polling; the separately classified
+XDP global-inventory contract remains serial. The complete parallel contract stage
+then passed all 108 non-corpus cases on both stores with owned tmpfs cleanup
+(`parallel-contracts.log`, 43.29 seconds locally, not a benchmark).
+
+The eight unchanged TCX scripts also passed against the existing Go binary on
+both stores, including successful isolated runtime checks and owned tmpfs cleanup;
+see `go-json.log` and `go-sqlite.log` in `/tmp/bpfman-tcx/`.
+
+A later parallel run still caught a retained native link after its explicit
+external-holder close. Removing the global enumerator was insufficient to establish
+absence of other holders. A deterministic fork/exec control on Linux 6.18.54
+confirmed that a child paused before exec retains a CLOEXEC BPF descriptor after
+the parent closes it, and that the ID disappears immediately after the child
+executes and exits. `fd-control.c`, `fd-control.mk` and `fd-control.log` retain
+that standalone experiment; it uses a two-instruction native classifier and pipe
+handshakes, without sleeps. The Rust syscall trace independently shows subprocess
+`clone3` with `CLONE_VM|CLONE_VFORK` and without `CLONE_FILES`, copying the descriptor
+table before exec. This supplies a concrete mechanism for temporary external
+references in concurrently spawning fixtures; the trace did not reproduce the
+particular failing native-link close. The instrumented diagnostic run passed TCX
+but later hit a separate global XDP enumeration ENOENT, so it is not claimed as a
+passing full gate (`fd-inheritance.trace`, `trace-contracts.log`).
+
+The two native TCX lifetime contracts therefore run in each backend's existing
+serial global stage, separately from concurrently spawning fixtures. Every test
+remains selected, all immediate link/program absence assertions remain, and the
+ordinary backend contracts retain eight workers. This establishes the no-external-
+holder premise of the lifetime assertions without sleeping or changing production
+teardown. The native contract explicitly verifies retained link and program holders;
+production cannot revoke descriptors inherited by unrelated children.
+
+Final validation: `direnv exec . make rust-check lint-make` exited zero. All
+112 discovered kernel cases were selected and passed, as did 68 stateful-fake
+cases, userspace/store/CLI and compile-fail contracts, warnings-denied Clippy and
+Rustdoc, formatting, and Makefile lint. Both stores passed the 91-file admitted
+corpus, four shared-runtime scripts and the eight separately selected TCX files.
+All 173 existing `.bpfman` files, including their labels, were verified byte-for-byte
+against HEAD. Owned fake and real tmpfs scopes passed normal cleanup. The kernel
+stage took 99.84 seconds locally, with eight ordinary contract workers and the
+existing development/test `aya-obj` opt-level-two override; this is not a controlled
+benchmark. `/tmp/bpfman-tcx/gate.stdout.log`, `gate.stderr.log` and
+`final-report.json` retain the final evidence. No Go source, dependency, lockfile
+or legacy Rust source changed.

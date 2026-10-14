@@ -335,3 +335,147 @@ fn sqlite_atomic_failures_and_lock_free_readers() {
 fn json_atomic_failures_and_lock_free_readers() {
     failures(bpfman_store_json::Backend);
 }
+
+fn tcx_lifecycle<S>(backend: S)
+where
+    S: OpenStore + CommitLoad + LinkStore,
+    S::Reader: LinkReader,
+{
+    let temp = tempfile::tempdir().expect("tempdir");
+    let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
+    let other_layout = RuntimeLayout::try_from(temp.path().join("other")).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+    let other = RuntimeDirectory::open_or_create(other_layout).expect("other");
+    let store = ActiveStore::open(backend, &layout, Duration::from_secs(1)).expect("store");
+    let target = bpfman_model::TcxLink {
+        key: bpfman_model::TcKey {
+            nsid: std::num::NonZeroU64::MIN,
+            ifindex: NonZeroU32::MIN,
+            direction: bpfman_model::TcDirection::Ingress,
+        },
+        interface: "lo".parse().expect("interface"),
+        netns: Default::default(),
+        priority: 25,
+        position: 0,
+    };
+    writer(&runtime, |w| {
+        for raw in [42, 43] {
+            store
+                .commit_program(
+                    w,
+                    LoadRecord {
+                        globals: &Default::default(),
+                        id: id(raw),
+                        spec: &bpfman_model::ProgramSpec::Tcx(
+                            Symbol::try_from("native").expect("symbol"),
+                        ),
+                        source: "/native.o",
+                        license: "GPL",
+                        created_at: "2026-10-14T12:00:00Z",
+                        metadata: &Default::default(),
+                    },
+                )
+                .expect("native program");
+        }
+    });
+    let pending = |w: &RuntimeWriter<'_>, program, target: &bpfman_model::TcxLink| {
+        store.create_pending_tcx(
+            w,
+            bpfman_store::PendingTcx {
+                program_id: program,
+                target,
+                metadata: &Default::default(),
+                created_at: "2026-10-14T12:00:00Z",
+            },
+        )
+    };
+    let (first, receipt) = writer(&runtime, |w| {
+        pending(w, id(42), &target).expect("pending native intent")
+    });
+    assert_eq!(
+        first.pin_path,
+        layout
+            .tcx_link_path(target.key, id(42))
+            .to_str()
+            .expect("UTF8")
+    );
+    let receipt = writer(&other, |w| {
+        store
+            .finalise_link(w, receipt, id(80))
+            .expect_err("foreign runtime")
+            .remaining
+    });
+    let (_, stale) = writer(&runtime, |w| {
+        store
+            .observe_link(w, first.id)
+            .expect("observe")
+            .expect("present")
+    });
+    writer(&runtime, |w| {
+        store
+            .finalise_link(w, receipt, id(80))
+            .map_err(|e| e.cause)
+            .expect("finalise")
+    });
+    writer(&runtime, |w| {
+        assert!(
+            store.delete_link(w, stale).is_err(),
+            "pending receipt cannot delete finalised intent"
+        )
+    });
+    writer(&runtime, |w| {
+        assert!(
+            pending(w, id(42), &target).is_err(),
+            "one native attachment per program/hook"
+        )
+    });
+    let mut higher = target.clone();
+    higher.priority = 0;
+    let (second, receipt) = writer(&runtime, |w| {
+        pending(w, id(43), &higher).expect("higher priority")
+    });
+    writer(&runtime, |w| {
+        store
+            .finalise_link(w, receipt, id(81))
+            .map_err(|e| e.cause)
+            .expect("finalise second")
+    });
+    let mut reader = store
+        .open_reader(&runtime)
+        .expect("reader")
+        .expect("present");
+    let records = reader.read_links().expect("consistent ranks");
+    let LinkDetails::Tcx(first_target) = &records[0].details else {
+        unreachable!()
+    };
+    assert_eq!(first_target.position, 1);
+    let LinkDetails::Tcx(second_target) = &records[1].details else {
+        unreachable!()
+    };
+    assert_eq!(second_target.position, 0);
+    for record in [first, second] {
+        let (_, receipt) = writer(&runtime, |w| {
+            store
+                .observe_link(w, record.id)
+                .expect("observe")
+                .expect("present")
+        });
+        writer(&runtime, |w| {
+            store
+                .delete_link(w, receipt)
+                .map_err(|e| e.cause)
+                .expect("conditional delete")
+        });
+    }
+    assert!(reader.read_links().expect("empty links").is_empty());
+    assert_eq!(reader.read_records().expect("programs retained").len(), 2);
+}
+
+#[test]
+fn sqlite_tcx_intent_and_conditional_receipts() {
+    tcx_lifecycle(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_tcx_intent_and_conditional_receipts() {
+    tcx_lifecycle(bpfman_store_json::Backend);
+}

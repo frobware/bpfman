@@ -194,3 +194,17 @@ impl RuntimeLayout {
         }
     }
 }
+
+impl crate::RuntimeLayout {
+    /// Canonical native TCX pin, keyed by direction, namespace, interface and program.
+    pub fn tcx_link_path(
+        &self,
+        key: bpfman_model::TcKey,
+        program: std::num::NonZeroU32,
+    ) -> std::path::PathBuf {
+        self.root
+            .join("fs")
+            .join(format!("tcx-{}", key.direction.as_str()))
+            .join(format!("link_{}_{}_{}", key.nsid, key.ifindex, program))
+    }
+}

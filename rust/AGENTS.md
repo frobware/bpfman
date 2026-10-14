@@ -136,9 +136,9 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 9 for independent TC egress chains; format 8
+- New JSON stores use format 10 for native TCX; format 9 retains independent TC egress chains and format 8
   retains ingress replacement, and format 7 retains singleton ingress.
-  Formats 1–8 never upgrade implicitly.
+  Formats 1–9 never upgrade implicitly.
   Attached unload must adopt all TC attachments before effects, finish exact
   filter/stage/record prerequisites before program teardown, and retain blocked
   ownership for explicit retry. Reject newly acquired links between retry passes.
@@ -456,3 +456,33 @@ The architecture and compatibility goals are in
 - Make each vertical slice's supported command surface explicit. Unsupported
   commands and flags fail clearly; never invent successful observations for
   functionality not yet implemented.
+
+## Native TCX
+
+- Load native SCHED_CLS and select `TcAttachOptions::TcxOrder` explicitly. Keep
+  TCX separate from legacy TC dispatchers and clsact ownership. Order managed
+  links by ascending priority and managed ID for attachment-order ties. Validate
+  live anchor links and retain the anchor program FD through insertion; never
+  treat inspection failure as absence. Refuse pending intent and duplicate
+  program/hook attachment before native effects.
+- Keep SQLite schema 2 and native TCX details; JSON TCX requires format 10 without
+  upgrading older snapshots. Derive managed position from one store snapshot.
+  It is not an observation of foreign programs or current native chain order.
+- Adopt only canonical confined pins, validating kernel ID, program and hook.
+  Explicitly detach a retained native link before unpinning; external descriptors
+  may preserve the object but must not preserve execution. Finish owned pin-FD
+  release before returning. Keep immediate reattach, extra-holder controls and
+  program-ID absence in real kernel contracts, without sleeps or polling.
+- Standalone unload attempts every independent link once per pass. Failed pin
+  cleanup blocks only its own record, and any unresolved link blocks program
+  teardown. Record-only retries retain their receipts and never repeat completed
+  pin removal. Preserve this rule for both tracepoint and TCX.
+- `rust-test-tcx` runs recovery contracts plus eight unchanged, explicitly selected
+  existing TCX scripts on both stores. Keep them in the full gate without changing
+  script labels or assertions.
+
+- Run TCX immediate lifetime controls in the existing serial global stage,
+  separately from concurrently spawning contracts. CLOEXEC does not prevent a
+  forked child retaining a copied BPF FD before exec; the deterministic control
+  is recorded under `/tmp/bpfman-tcx/`. Preserve every immediate assertion and
+  select every discovered test; do not add polling to cover inherited holders.

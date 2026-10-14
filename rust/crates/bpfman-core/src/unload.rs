@@ -107,9 +107,15 @@ impl<P, R, M, D, S, B, E, L, Q> UnloadProgram<P, R, M, D, S, B, E, L, Q> {
                 .remaining
                 .iter()
                 .any(|earlier| match earlier.instruction.kind() {
-                    UnloadKind::LinkPin(_) | UnloadKind::LinkRecord(_) | UnloadKind::ProgramPin => {
-                        true
+                    UnloadKind::LinkPin(blocked) => match kind {
+                        UnloadKind::LinkPin(_) => false,
+                        UnloadKind::LinkRecord(id) => id == blocked,
+                        _ => true,
+                    },
+                    UnloadKind::LinkRecord(_) => {
+                        !matches!(kind, UnloadKind::LinkPin(_) | UnloadKind::LinkRecord(_))
                     }
+                    UnloadKind::ProgramPin => true,
                     UnloadKind::ProgramRecord => !matches!(kind, UnloadKind::Bytecode),
                     UnloadKind::MapPin => {
                         matches!(kind, UnloadKind::MapDirectory | UnloadKind::MapSet)

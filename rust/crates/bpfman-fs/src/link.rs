@@ -89,6 +89,7 @@ impl RuntimeWriter<'_> {
         Ok(Some(LinkPin {
             entry: Box::new(entry),
             id,
+            kind: crate::removal::LinkKind::PerfEvent,
         }))
     }
 
@@ -141,6 +142,7 @@ impl<P: TracepointProgram> PreparedTracepointAttach<P> {
         Ok(LiveTracepoint {
             root: self.program_pin.root,
             links: self.links,
+            location: Location::Tracepoint,
             link,
             id,
         })
@@ -165,14 +167,8 @@ impl<L: LinkPinning> LiveTracepoint<L> {
             ));
         }
 
-        let entry = entry(
-            writer,
-            &self.links,
-            "fs/links".into(),
-            id.to_string(),
-            false,
-        )
-        .map_err(fail)?;
+        let (collection, name, kind) = self.location.parts(id);
+        let entry = entry(writer, &self.links, collection, name, false).map_err(fail)?;
         entry.check_writer(writer).map_err(fail)?;
         self.link
             .pin(crate::PinTarget(&proc_path(&self.links).join(&entry.name)))
@@ -180,6 +176,7 @@ impl<L: LinkPinning> LiveTracepoint<L> {
         let mut receipt = LinkPin {
             entry: Box::new(entry),
             id: self.id,
+            kind,
         };
 
         match receipt.entry.observe() {
@@ -246,5 +243,31 @@ impl crate::RuntimeDirectory {
             id,
             program_id,
         }))
+    }
+}
+
+#[derive(Debug)]
+pub(super) enum Location {
+    Tracepoint,
+    Tcx {
+        key: bpfman_model::TcKey,
+        program: NonZeroU32,
+    },
+}
+
+impl Location {
+    fn parts(self, id: NonZeroU64) -> (String, String, crate::removal::LinkKind) {
+        match self {
+            Self::Tracepoint => (
+                "fs/links".into(),
+                id.to_string(),
+                crate::removal::LinkKind::PerfEvent,
+            ),
+            Self::Tcx { key, program } => (
+                format!("fs/tcx-{}", key.direction),
+                format!("link_{}_{}_{}", key.nsid, key.ifindex, program),
+                crate::removal::LinkKind::Tcx(key),
+            ),
+        }
     }
 }

@@ -14,7 +14,9 @@ use bpfman_core::EffectFailure;
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, fstat, openat2, unlinkat};
 use std::os::fd::OwnedFd;
 
+#[derive(Clone, Copy, Debug)]
 pub(super) enum LinkKind {
+    Tcx(bpfman_model::TcKey),
     PerfEvent,
     Extension,
 }
@@ -79,6 +81,9 @@ pub(super) fn remove_link(
             .map_err(Failure::Kernel)?
     };
     let expected_kind = match kind {
+        LinkKind::Tcx(key) => {
+            matches!(info.details, bpfman_model::KernelLinkDetails::Tcx { ifindex, direction } if direction == key.direction && (ifindex == 0 || ifindex == key.ifindex.get()))
+        }
         LinkKind::PerfEvent => info.details == bpfman_model::KernelLinkDetails::PerfEvent,
         // EXT selects freplace; Aya creates its tracing link with attach type zero.
         LinkKind::Extension => matches!(
@@ -92,6 +97,9 @@ pub(super) fn remove_link(
 
     // Every O_PATH descriptor to the pin must close before the live
     // descriptor: it can keep the unlinked inode's pin reference alive.
+    if matches!(kind, LinkKind::Tcx(_)) {
+        kernel.detach_retained(&retained).map_err(Failure::Kernel)?;
+    }
     remove(writer, entry)?;
     drop(retained);
     Ok(())
@@ -106,13 +114,7 @@ impl RuntimeWriter<'_> {
         kernel: &impl crate::LinkRetention,
         receipt: LinkPin,
     ) -> Result<(), EffectFailure<LinkPin, Error>> {
-        let result = remove_link(
-            self,
-            kernel,
-            &receipt.entry,
-            receipt.id,
-            LinkKind::PerfEvent,
-        );
+        let result = remove_link(self, kernel, &receipt.entry, receipt.id, receipt.kind);
         result.map_err(|cause| EffectFailure {
             cause,
             remaining: receipt,

@@ -75,7 +75,7 @@ fn insert(
 ) -> Result<(), Failure> {
     if !matches!(
         record.spec,
-        ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_) | ProgramSpec::Tc(_)
+        ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_) | ProgramSpec::Tc(_) | ProgramSpec::Tcx(_)
     ) {
         return Err(Failure::Unsupported("program type"));
     }

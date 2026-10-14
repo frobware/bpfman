@@ -1,3 +1,4 @@
+//! Version 10 adds native TCX programs and links.
 //! Version 9 adds independent TC egress dispatchers.
 //! Version 8 adds complete TC ingress revisions.
 //! Version 7 adds TC extension loads and singleton ingress attachments.
@@ -53,7 +54,7 @@ fn is_first_link_id(id: &u64) -> bool {
 pub(super) struct Link {
     pub(super) id: NonZeroU64,
     pub(super) program_id: NonZeroU32,
-    pub(super) target: String,
+    pub(super) target: LinkTarget,
     pub(super) state: LinkProgress,
     pub(super) metadata: BTreeMap<String, String>,
     pub(super) created_at: String,
@@ -95,7 +96,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 9,
+            version: 10,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -117,7 +118,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=9) {
+        if !matches!(header.version, 1..=10) {
             return Err(Failure::Version(header.version));
         }
 
@@ -157,6 +158,11 @@ impl State {
         let mut program_ids = BTreeSet::new();
 
         for row in &self.programs {
+            if self.version < 10 && row.kind == Kind::Tcx {
+                return Err(Failure::Unsupported(
+                    "TCX requires JSON format 10; no implicit upgrade",
+                ));
+            }
             if self.version < 7 && row.kind == Kind::Tc {
                 return Err(Failure::Unsupported(
                     "TC requires JSON format 7; no implicit upgrade",
@@ -190,6 +196,7 @@ impl State {
         }
         let mut link_ids = BTreeSet::new();
         let mut kernel_ids = BTreeSet::new();
+        let mut tcx_keys = BTreeSet::new();
 
         for link in &self.links {
             if !link_ids.insert(link.id)
@@ -197,7 +204,7 @@ impl State {
                 || !self
                     .programs
                     .iter()
-                    .any(|p| p.id == link.program_id && p.kind == Kind::Tracepoint)
+                    .any(|p| p.id == link.program_id && p.kind == link.target.kind())
             {
                 return Err(Failure::Invalid(
                     "duplicate link, invalid ID, or missing program",
@@ -210,9 +217,16 @@ impl State {
                 }
             }
 
-            link.target
-                .parse::<bpfman_model::Tracepoint>()
-                .map_err(|_| Failure::Invalid("invalid tracepoint target"))?;
+            if self.version < 10 && link.target.kind() == Kind::Tcx {
+                return Err(Failure::Unsupported(
+                    "TCX requires JSON format 10; no implicit upgrade",
+                ));
+            }
+            if let LinkDetails::Tcx(d) = link.target.details()? {
+                if !tcx_keys.insert((d.key, link.program_id)) {
+                    return Err(Failure::Invalid("duplicate TCX program/hook"));
+                }
+            }
             timestamp(&link.created_at)?;
         }
 
@@ -340,6 +354,12 @@ impl State {
         let row = Program {
             kind: match record.spec {
                 ProgramSpec::Tracepoint(_) => Kind::Tracepoint,
+                ProgramSpec::Tcx(_) if self.version >= 10 => Kind::Tcx,
+                ProgramSpec::Tcx(_) => {
+                    return Err(Failure::Unsupported(
+                        "TCX requires JSON format 10; no implicit upgrade",
+                    ));
+                }
                 ProgramSpec::Tc(_) if self.version >= 7 => Kind::Tc,
                 ProgramSpec::Tc(_) => {
                     return Err(Failure::Unsupported(
@@ -435,6 +455,7 @@ impl Program {
                     Kind::Tracepoint => ProgramSpec::Tracepoint(name),
                     Kind::Xdp => ProgramSpec::Xdp(name),
                     Kind::Tc => ProgramSpec::Tc(name),
+                    Kind::Tcx => ProgramSpec::Tcx(name),
                 }
             },
             source: ProgramSource::File(Some(self.source.clone())),
@@ -468,11 +489,39 @@ impl Program {
 }
 
 impl Link {
+    pub(super) fn record_at(
+        &self,
+        layout: &RuntimeLayout,
+        state: &State,
+    ) -> Result<StoredLink, Failure> {
+        let mut record = self.record(layout)?;
+        if let LinkDetails::Tcx(d) = &mut record.details {
+            d.position = state
+                .links
+                .iter()
+                .filter(|r| match &r.target {
+                    LinkTarget::Tcx(x) => {
+                        x.nsid == d.key.nsid
+                            && x.ifindex == d.key.ifindex
+                            && x.direction == d.key.direction.as_str()
+                            && (x.priority, r.id) < (d.priority, self.id)
+                    }
+                    _ => false,
+                })
+                .count();
+        }
+        Ok(record)
+    }
+}
+
+impl Link {
     pub(super) fn record(&self, layout: &RuntimeLayout) -> Result<StoredLink, Failure> {
-        let target = self
-            .target
-            .parse()
-            .map_err(|_| Failure::Invalid("invalid tracepoint target"))?;
+        let details = self.target.details()?;
+        let pin_path = match &details {
+            LinkDetails::Tracepoint(_) => layout.link_pin_path(self.id),
+            LinkDetails::Tcx(d) => layout.tcx_link_path(d.key, self.program_id),
+            _ => return Err(Failure::Invalid("invalid standalone target")),
+        };
         let state = match self.state {
             LinkProgress::Pending => LinkState::Pending,
             LinkProgress::Attached { kernel_id } => LinkState::Attached { kernel_id },
@@ -481,10 +530,9 @@ impl Link {
         Ok(StoredLink {
             id: self.id,
             program_id: self.program_id,
-            details: LinkDetails::Tracepoint(target),
+            details,
             state,
-            pin_path: layout
-                .link_pin_path(self.id)
+            pin_path: pin_path
                 .into_os_string()
                 .into_string()
                 .map_err(|_| Failure::Invalid("runtime path is not UTF-8"))?,
@@ -528,6 +576,7 @@ pub(super) enum Kind {
     Tracepoint,
     Xdp,
     Tc,
+    Tcx,
 }
 
 impl Kind {
@@ -540,6 +589,69 @@ impl Kind {
             Self::Tracepoint => ProgramType::Tracepoint,
             Self::Xdp => ProgramType::Xdp,
             Self::Tc => ProgramType::Tc,
+            Self::Tcx => ProgramType::Tcx,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(super) enum LinkTarget {
+    Tracepoint(String),
+    Tcx(TcxTarget),
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TcxTarget {
+    pub(super) interface: String,
+    pub(super) netns: String,
+    pub(super) nsid: NonZeroU64,
+    pub(super) ifindex: NonZeroU32,
+    pub(super) direction: String,
+    pub(super) priority: u32,
+}
+
+impl LinkTarget {
+    fn kind(&self) -> Kind {
+        match self {
+            Self::Tracepoint(_) => Kind::Tracepoint,
+            Self::Tcx(_) => Kind::Tcx,
+        }
+    }
+
+    fn details(&self) -> Result<LinkDetails, Failure> {
+        match self {
+            Self::Tracepoint(raw) => {
+                Ok(LinkDetails::Tracepoint(raw.parse().map_err(|_| {
+                    Failure::Invalid("invalid tracepoint target")
+                })?))
+            }
+            Self::Tcx(d) => {
+                if d.priority > i32::MAX as u32 {
+                    return Err(Failure::Invalid("invalid TCX priority"));
+                }
+                Ok(LinkDetails::Tcx(bpfman_model::TcxLink {
+                    key: bpfman_model::TcKey {
+                        nsid: d.nsid,
+                        ifindex: d.ifindex,
+                        direction: d
+                            .direction
+                            .parse()
+                            .map_err(|_| Failure::Invalid("invalid TCX direction"))?,
+                    },
+                    interface: d
+                        .interface
+                        .parse()
+                        .map_err(|_| Failure::Invalid("invalid TCX interface"))?,
+                    netns: d
+                        .netns
+                        .parse()
+                        .map_err(|_| Failure::Invalid("invalid TCX namespace"))?,
+                    priority: d.priority,
+                    position: 0,
+                }))
+            }
         }
     }
 }

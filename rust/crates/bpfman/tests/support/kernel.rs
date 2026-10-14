@@ -90,6 +90,8 @@ struct State {
     resources: BTreeMap<Resource, u64>,
     map_names: BTreeMap<(NonZeroU32, String), u32>,
     tracepoint_pins: BTreeMap<NonZeroU64, NonZeroU32>,
+    tcx_pins: BTreeMap<(TcKey, NonZeroU32), NonZeroU32>,
+    tcx_chains: BTreeMap<TcKey, Vec<NonZeroU32>>,
     extensions: BTreeMap<(XdpKey, NonZeroU32, XdpSlot), NonZeroU32>,
     dispatchers: BTreeMap<(XdpKey, NonZeroU32), NonZeroU32>,
     outers: BTreeMap<XdpKey, NonZeroU32>,
@@ -162,6 +164,12 @@ impl State {
         self.map_names.retain(|(program, _), map| {
             self.programs.contains_key(program) || self.maps.contains_key(map)
         });
+        self.tcx_pins
+            .retain(|_, id| self.resources.contains_key(&Resource::Link(*id)));
+        for chain in self.tcx_chains.values_mut() {
+            chain.retain(|id| self.links.contains_key(id));
+        }
+        self.tcx_chains.retain(|_, chain| !chain.is_empty());
         self.tracepoint_pins
             .retain(|_, id| self.resources.contains_key(&Resource::Link(*id)));
         self.extensions
@@ -242,6 +250,8 @@ impl FakeKernel {
                 resources: BTreeMap::new(),
                 map_names: BTreeMap::new(),
                 tracepoint_pins: BTreeMap::new(),
+                tcx_pins: BTreeMap::new(),
+                tcx_chains: BTreeMap::new(),
                 extensions: BTreeMap::new(),
                 dispatchers: BTreeMap::new(),
                 outers: BTreeMap::new(),
@@ -577,6 +587,7 @@ impl ProgramLoad for FakeKernel {
         self.enter(Point::Load)?;
         let kind = match spec {
             ProgramSpec::Tracepoint(_) => "tracepoint",
+            ProgramSpec::Tcx(_) => "schedcls",
             ProgramSpec::Xdp(_) | ProgramSpec::Tc(_) => "extension",
             _ => return Err(error(ErrorKind::Unsupported, "program type")),
         };
@@ -748,11 +759,22 @@ impl TracepointLinks for FakeKernel {
         };
         let result = self.acquire(w, Point::PinLink, Resource::Link(kernel));
         if result.is_ok() || result.as_ref().err().is_some_and(|e| e.remaining.is_some()) {
-            self.state
-                .lock()
-                .expect("state")
-                .tracepoint_pins
-                .insert(id, kernel);
+            let mut state = self.state.lock().expect("state");
+            if matches!(
+                state.links[&kernel].observation.details,
+                KernelLinkDetails::Tcx { .. }
+            ) {
+                let key = *state
+                    .tcx_chains
+                    .iter()
+                    .find(|(_, chain)| chain.contains(&kernel))
+                    .expect("TCX attach point")
+                    .0;
+                let program = state.links[&kernel].observation.program_id;
+                state.tcx_pins.insert((key, program), kernel);
+            } else {
+                state.tracepoint_pins.insert(id, kernel);
+            }
         }
         result
     }
@@ -762,6 +784,25 @@ impl TracepointLinks for FakeKernel {
             unreachable!("link receipt")
         };
         id
+    }
+
+    fn observe_tcx_pin(
+        &self,
+        w: &RuntimeWriter<'_>,
+        target: &TcxLink,
+        program: NonZeroU32,
+        kernel: Option<NonZeroU32>,
+    ) -> Result<Option<Receipt>, Error> {
+        self.writer(w)?;
+        let s = self.state.lock().expect("state");
+        let Some(found) = s.tcx_pins.get(&(target.key, program)).copied() else {
+            return Ok(None);
+        };
+        if kernel.is_some_and(|k| k != found) || s.links[&found].observation.program_id != program {
+            return Err(error(ErrorKind::InvalidData, "TCX pin mismatch"));
+        }
+        drop(s);
+        Ok(self.observed(Resource::Link(found)))
     }
 
     fn observe_link_pin(
@@ -842,6 +883,24 @@ impl ProgramObservations for FakeKernel {
 }
 
 impl LinkObservations for FakeKernel {
+    fn tcx_link(&self, id: NonZeroU32) -> Result<KernelLink, Error> {
+        self.tracepoint_link(id)
+    }
+
+    fn tcx_pin(
+        &self,
+        runtime: &RuntimeDirectory,
+        target: &TcxLink,
+        program: NonZeroU32,
+    ) -> Result<Option<KernelLink>, Error> {
+        self.check_root(runtime.identity().expect("root"))?;
+        let state = self.state.lock().expect("state");
+        Ok(state
+            .tcx_pins
+            .get(&(target.key, program))
+            .map(|id| state.links[id].observation.clone()))
+    }
+
     fn tracepoint_link(&self, id: NonZeroU32) -> Result<KernelLink, Error> {
         self.state
             .lock()
@@ -1627,6 +1686,131 @@ impl TcLifecycle for FakeKernel {
         result.map_err(|cause| EffectFailure {
             cause,
             remaining: stage,
+        })
+    }
+}
+
+pub(super) struct PreparedTcx {
+    program: Loaded,
+    target: TcxLink,
+}
+
+impl FakeKernel {
+    pub(super) fn tcx_programs(&self, key: TcKey) -> Vec<NonZeroU32> {
+        let state = self.state.lock().expect("state");
+        state
+            .tcx_chains
+            .get(&key)
+            .into_iter()
+            .flatten()
+            .map(|id| state.links[id].observation.program_id)
+            .collect()
+    }
+}
+
+impl TcxLinks for FakeKernel {
+    type PreparedTcx = PreparedTcx;
+
+    fn prepare_tcx(
+        &self,
+        w: &RuntimeWriter<'_>,
+        program: NonZeroU32,
+        interface: &InterfaceName,
+        netns: &NetworkNamespace,
+        direction: TcDirection,
+        priority: u32,
+    ) -> Result<(TcxLink, PreparedTcx), Error> {
+        self.enter(Point::PrepareLink)?;
+        let nsid = match netns.as_str() {
+            "" => NonZeroU64::MIN,
+            "/fake/netns/a" => NonZeroU64::new(2).expect("namespace"),
+            "/fake/netns/b" => NonZeroU64::new(3).expect("namespace"),
+            _ => return Err(error(ErrorKind::Missing, "namespace")),
+        };
+        let ifindex = match interface.as_str() {
+            "fake0" => NonZeroU32::MIN,
+            "fake1" => NonZeroU32::new(2).expect("interface"),
+            _ => return Err(error(ErrorKind::Missing, "interface")),
+        };
+        let target = TcxLink {
+            key: TcKey {
+                nsid,
+                ifindex,
+                direction,
+            },
+            interface: interface.clone(),
+            netns: netns.clone(),
+            priority,
+            position: 0,
+        };
+        Ok((
+            target.clone(),
+            PreparedTcx {
+                program: self.adopt(w, program, "schedcls")?,
+                target,
+            },
+        ))
+    }
+
+    fn attach_tcx(
+        &self,
+        w: &RuntimeWriter<'_>,
+        prepared: PreparedTcx,
+        order: TcxOrder,
+    ) -> Result<Live, Error> {
+        self.loaded(w, &prepared.program)?;
+        self.enter(Point::Attach)?;
+        let mut state = self.state.lock().expect("state");
+        let ids = state
+            .tcx_chains
+            .get(&prepared.target.key)
+            .cloned()
+            .unwrap_or_default();
+        if ids
+            .iter()
+            .any(|id| state.links[id].observation.program_id == prepared.program.id)
+        {
+            return Err(error(ErrorKind::InvalidData, "duplicate TCX attachment"));
+        }
+        let position = match order {
+            TcxOrder::First => 0,
+            TcxOrder::Before(anchor) | TcxOrder::After(anchor) => {
+                let pos = ids
+                    .iter()
+                    .position(|id| state.links[id].observation.program_id == anchor)
+                    .ok_or_else(|| error(ErrorKind::Missing, "TCX anchor"))?;
+                pos + usize::from(matches!(order, TcxOrder::After(_)))
+            }
+        };
+        let id = state.id();
+        state.links.insert(
+            id,
+            Link {
+                observation: KernelLink {
+                    id,
+                    program_id: prepared.program.id,
+                    details: KernelLinkDetails::Tcx {
+                        ifindex: prepared.target.key.ifindex.get(),
+                        direction: prepared.target.key.direction,
+                    },
+                },
+                handles: 1,
+                attached: true,
+            },
+        );
+        state
+            .tcx_chains
+            .entry(prepared.target.key)
+            .or_default()
+            .insert(position, id);
+        drop(state);
+        Ok(Live {
+            receipt: Receipt {
+                root: self.root,
+                state: self.state.clone(),
+                resource: Resource::Link(id),
+                generation: 0,
+            },
         })
     }
 }

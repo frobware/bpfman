@@ -68,34 +68,40 @@ where
         store.fail_after(Point::DeleteLink, successful_links);
         let error = app.unload(id).expect_err("link record deletion");
         let report = error.report().expect("teardown report");
-        let attempts = 2 * (successful_links + 1);
+        let attempts = 4;
+        let failures = 2 - successful_links;
         assert_eq!(report.attempts().len(), attempts);
-        assert!(
-            report.attempts()[..attempts - 1]
-                .iter()
-                .all(|a| a.outcome.is_ok())
-        );
-        assert!(report.attempts()[attempts - 1].outcome.is_err());
-        assert_eq!(
-            report.attempts()[attempts - 1].kind,
-            UnloadKind::LinkRecord(links[successful_links].id)
-        );
+        for (index, attempt) in report.attempts().iter().enumerate() {
+            assert_eq!(
+                attempt.outcome.is_err(),
+                index % 2 == 1 && index / 2 >= successful_links
+            );
+        }
         c.present(id);
 
         let observed = app.get(id).expect("partly detached program");
         assert_eq!(observed.links.len(), 2 - successful_links);
         assert!(!observed.links[0].pin_present);
         assert!(observed.links[0].kernel.is_none());
-        if successful_links == 0 {
-            assert!(observed.links[1].pin_present);
-            assert!(observed.links[1].kernel.is_some());
-        }
+        assert!(
+            observed
+                .links
+                .iter()
+                .all(|link| !link.pin_present && link.kernel.is_none())
+        );
 
         // The unchanged fault cannot heal itself. No successful step is repeated.
         let error = app.retry_unload(error).expect_err("same fault remains");
         let report = error.report().expect("retained work");
-        assert_eq!(report.attempts().len(), attempts + 1);
-        assert_eq!(report.attempts()[attempts].id, attempts - 1);
+        assert_eq!(report.attempts().len(), attempts + failures);
+        let failed_ids: Vec<_> = (successful_links..2).map(|i| 2 * i + 1).collect();
+        assert_eq!(
+            report.attempts()[attempts..]
+                .iter()
+                .map(|a| a.id)
+                .collect::<Vec<_>>(),
+            failed_ids
+        );
         let remaining = report.unresolved();
         c.present(id);
 
@@ -107,7 +113,7 @@ where
         assert_eq!(error.kind(), UnloadErrorKind::Cancelled);
         assert_eq!(
             error.report().expect("history").attempts().len(),
-            attempts + 1
+            attempts + failures
         );
         assert_eq!(error.report().expect("receipts").unresolved(), remaining);
 
@@ -127,11 +133,23 @@ where
                 .iter()
                 .filter(|a| a.outcome.is_err())
                 .count(),
-            2
+            failures * 2
         );
-        for (offset, attempt) in report.attempts()[attempts + 1..].iter().enumerate() {
-            assert_eq!(attempt.id, attempts - 1 + offset);
-            assert!(attempt.outcome.is_ok());
+        assert!(
+            report.attempts()[attempts + failures..]
+                .iter()
+                .all(|a| a.outcome.is_ok())
+        );
+        for link in &links {
+            assert_eq!(
+                report
+                    .attempts()
+                    .iter()
+                    .filter(|a| a.kind == UnloadKind::LinkPin(link.id))
+                    .count(),
+                1,
+                "successful unpin must never repeat"
+            );
         }
 
         assert!(app.list_link_records().expect("links").is_empty());
@@ -143,23 +161,10 @@ where
             };
             assert_gone(kernel_id);
         }
-        // Perf-event teardown and final program reclamation can outlive unpin.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            let present = aya::programs::loaded_programs()
-                .collect::<Result<Vec<_>, _>>()
-                .expect("kernel programs")
-                .iter()
-                .any(|p| p.id() == id.get());
-            if !present {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "unloaded program remains in kernel"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        // Probe only this fixture's ID. Enumerating every kernel program opens
+        // transient FDs to other concurrent fixtures and can extend their lifetime.
+        // Held-link teardown releases our owned references before returning.
+        assert_program_absent(id);
         c.no_artifacts();
     }
 }

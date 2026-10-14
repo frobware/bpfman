@@ -280,6 +280,17 @@ impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
         Ok(result)
     }
 
+    fn create_pending_tcx(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingTcx<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), Error> {
+        check(&self.state, Point::CreateLink)?;
+        let result = self.backend.create_pending_tcx(writer, request)?;
+        self.state.lock().expect("state").pending_link = Some(result.0.id);
+        Ok(result)
+    }
+
     fn finalise_link(
         &self,
         writer: &RuntimeWriter<'_>,

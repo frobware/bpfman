@@ -14,6 +14,7 @@ mod program;
 mod syscall;
 mod tc;
 mod tc_netlink;
+mod tcx;
 mod tracepoint;
 mod verification;
 mod xdp;
@@ -108,4 +109,10 @@ pub struct TcFilter {
     dispatcher: u32,
     handle: Option<std::num::NonZeroU32>,
     clsact_owned: bool,
+}
+
+/// Opaque native classifier with retained namespace evidence.
+pub struct AyaTcx {
+    program: aya::programs::SchedClassifier,
+    namespace: XdpNamespace,
 }

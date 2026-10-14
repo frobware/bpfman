@@ -1,4 +1,4 @@
-//! One production interpreter for tracepoint attachment, detach, and cleanup.
+//! Shared standalone attachment, detach and consuming cleanup interpreter.
 
 use crate::{Bpfman, Cancellation, LinkCause, LinkError, LinkReport, TracepointAttach};
 use bpfman_core::{EffectFailure, LinkCleanup, LinkCleanupReport, LinkCleanupStep, LinkResource};
@@ -6,13 +6,15 @@ use bpfman_fs::RuntimeWriter;
 use bpfman_lock::AcquireOptions;
 use bpfman_model::StoredLink;
 use bpfman_store::{LinkStore, OpenStore};
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 
 mod real;
+mod tcx;
 #[cfg(test)]
 mod tests;
 
 trait Effects {
+    type Request;
     type Prepared;
     type Live;
     type Pin;
@@ -21,21 +23,22 @@ trait Effects {
     fn prepare(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        program: NonZeroU32,
+        request: &Self::Request,
     ) -> Result<Self::Prepared, LinkCause>;
 
     fn create(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        request: &TracepointAttach,
+        request: &Self::Request,
         created: &str,
+        prepared: &Self::Prepared,
     ) -> Result<(StoredLink, Self::Receipt), LinkCause>;
 
     fn attach(
         &mut self,
         writer: &RuntimeWriter<'_>,
         prepared: Self::Prepared,
-        request: &TracepointAttach,
+        request: &Self::Request,
     ) -> Result<Self::Live, LinkCause>;
 
     // A failed pin closes an unpinned local handle, or returns ownership of a
@@ -153,17 +156,15 @@ fn compensate<F: Effects>(
 fn attach<F: Effects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
-    request: &TracepointAttach,
+    request: &F::Request,
     created: &str,
     cancellation: &Cancellation,
 ) -> Result<StoredLink, Failed<F>> {
     check(cancellation).map_err(Failed::Before)?;
-    let prepared = effects
-        .prepare(writer, request.program_id)
-        .map_err(Failed::Before)?;
+    let prepared = effects.prepare(writer, request).map_err(Failed::Before)?;
     check(cancellation).map_err(Failed::Before)?;
     let (record, receipt) = effects
-        .create(writer, request, created)
+        .create(writer, request, created, &prepared)
         .map_err(Failed::Before)?;
     let id = record.id;
     let live = match check(cancellation).and_then(|()| effects.attach(writer, prepared, request)) {
@@ -260,6 +261,21 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Bpfman<S, K> {
         request: TracepointAttach,
         cancellation: &Cancellation,
     ) -> Result<StoredLink, LinkError<S, K>> {
+        self.attach_standalone(
+            request,
+            cancellation,
+            &mut real::Adapter(&self.store, &self.kernel),
+        )
+    }
+
+    fn attach_standalone<
+        F: Effects<Live = K::LiveTracepoint, Pin = K::LinkPin, Receipt = S::LinkReceipt>,
+    >(
+        &self,
+        request: F::Request,
+        cancellation: &Cancellation,
+        effects: &mut F,
+    ) -> Result<StoredLink, LinkError<S, K>> {
         let created = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
         self.store
             .runtime()
@@ -269,26 +285,21 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Bpfman<S, K> {
                     cancelled: Some(cancellation.flag()),
                 },
                 |writer| {
-                    attach(
-                        &writer,
-                        &mut real::Adapter(&self.store, &self.kernel),
-                        &request,
-                        &created,
-                        cancellation,
-                    )
-                    .map_err(|failure| match failure {
-                        Failed::Before(cause) => LinkError::from(cause),
-                        Failed::After {
-                            id,
-                            primary,
-                            report,
-                        } => LinkError {
-                            failure: super::link_error::Failure::After(Box::new(LinkReport {
+                    attach(&writer, effects, &request, &created, cancellation).map_err(|failure| {
+                        match failure {
+                            Failed::Before(cause) => LinkError::from(cause),
+                            Failed::After {
                                 id,
-                                primary: Some(primary),
-                                cleanup: report,
-                            })),
-                        },
+                                primary,
+                                report,
+                            } => LinkError {
+                                failure: super::link_error::Failure::After(Box::new(LinkReport {
+                                    id,
+                                    primary: Some(primary),
+                                    cleanup: report,
+                                })),
+                            },
+                        }
                     })
                 },
             )

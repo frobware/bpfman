@@ -29,7 +29,7 @@ pub trait LinkReader {
     fn read_links(&mut self) -> Result<Vec<StoredLink>, Error>;
 }
 
-/// Conditional mutations for the pending-link protocol. Receipts retain the
+/// Conditional mutations for standalone tracepoint and TCX pending intent. Receipts retain the
 /// exact observed state and runtime identity, and cannot be cloned or forged.
 /// Store operations do not acquire or release kernel attachments.
 ///
@@ -47,6 +47,13 @@ pub trait LinkReader {
 /// }
 /// ```
 pub trait LinkStore {
+    /// Allocate native TCX intent, validating the loaded program and hook uniqueness.
+    fn create_pending_tcx(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: PendingTcx<'_>,
+    ) -> Result<(StoredLink, Self::LinkReceipt), Error>;
+
     /// Owned evidence for one unchanged link record.
     type LinkReceipt: Send + Sync + 'static;
 
@@ -87,3 +94,15 @@ pub trait LinkStore {
 
 /// Absence or a stored link paired with backend-owned deletion evidence.
 pub type LinkObservation<S> = Option<(StoredLink, <S as LinkStore>::LinkReceipt)>;
+
+/// Native TCX intent admitted before kernel attachment.
+pub struct PendingTcx<'a> {
+    /// Managed native classifier.
+    pub program_id: NonZeroU32,
+    /// Resolved namespace and hook.
+    pub target: &'a bpfman_model::TcxLink,
+    /// Operator labels.
+    pub metadata: &'a BTreeMap<String, String>,
+    /// Caller-captured RFC3339 timestamp.
+    pub created_at: &'a str,
+}

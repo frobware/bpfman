@@ -155,6 +155,20 @@ pub trait TracepointLinks {
     ) -> Acquisition<Self::LinkPin>;
     /// Stable kernel identity of the acquired pin.
     fn link_id(pin: &Self::LinkPin) -> NonZeroU32;
+    /// Adopt a native TCX pin for the shared standalone teardown interpreter.
+    fn observe_tcx_pin(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        _target: &bpfman_model::TcxLink,
+        _program: NonZeroU32,
+        _kernel: Option<NonZeroU32>,
+    ) -> Result<Option<Self::LinkPin>, Error> {
+        Err(Error::new(
+            crate::ErrorKind::Unsupported,
+            "TCX pin adoption",
+            std::io::Error::other("TCX unsupported"),
+        ))
+    }
     /// Adopt a canonical existing pin only after identity validation.
     fn observe_link_pin(
         &self,

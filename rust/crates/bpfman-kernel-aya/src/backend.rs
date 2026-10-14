@@ -31,6 +31,21 @@ impl ProgramObservations for Kernel {
 }
 
 impl LinkObservations for Kernel {
+    fn tcx_link(&self, id: NonZeroU32) -> Result<KernelLink, Error> {
+        crate::tcx::observe(id)
+    }
+
+    fn tcx_pin(
+        &self,
+        runtime: &RuntimeDirectory,
+        target: &bpfman_model::TcxLink,
+        program: NonZeroU32,
+    ) -> Result<Option<KernelLink>, Error> {
+        runtime
+            .read_tcx_link_pin(self, target, program)
+            .map_err(filesystem)
+    }
+
     fn tc_pin(
         &self,
         runtime: &RuntimeDirectory,

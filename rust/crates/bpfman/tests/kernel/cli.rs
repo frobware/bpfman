@@ -405,3 +405,23 @@ fn run_dsl(
     );
     c.no_artifacts();
 }
+
+// Existing acceptance files remain immutable and separately selected until the
+// manifest policy permits admission. Keep them in the normal kernel gate.
+pub(super) fn tcx_scripts(store: &'static str) {
+    run_dsl(
+        store,
+        Some(&[
+            "TestTCX_LoadAndGet",
+            "TestTCX_LinkRoundTrip",
+            "TestTCX_DuplicateAttachRejected",
+            "TestTCX_PriorityOrdering",
+            "TestTCX_ZeroPriorityDefaultOrdering",
+            "TestTCX_NetnsVethPairLinkRoundTrip",
+            "TestMultiProgTCX_AllProceed_DefaultProceedOn",
+            "TestMultiProgTCX_ChainStopsAtOK_DefaultProceedOn",
+        ]),
+        &rust(),
+        true,
+    );
+}

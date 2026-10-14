@@ -10,6 +10,8 @@ pub(super) enum Cause {
     NotFound,
     #[error("attachment is outside the supported slice")]
     Unsupported,
+    #[error("program already attached to TCX hook as link {0}; detach it first")]
+    AlreadyAttached(std::num::NonZeroU64),
     #[error("invalid attachment state: {0}")]
     Invalid(&'static str),
     #[error(transparent)]
@@ -70,7 +72,9 @@ impl LinkCause {
             Cause::Cancelled => LinkErrorKind::Cancelled,
             Cause::NotFound => LinkErrorKind::NotFound,
             Cause::Unsupported => LinkErrorKind::Unsupported,
-            Cause::Invalid(_) | Cause::XdpPlan(_) => LinkErrorKind::InvalidState,
+            Cause::AlreadyAttached(_) | Cause::Invalid(_) | Cause::XdpPlan(_) => {
+                LinkErrorKind::InvalidState
+            }
             Cause::Kernel(cause) => match cause.kind() {
                 bpfman_kernel::ErrorKind::Unsupported => LinkErrorKind::Unsupported,
                 bpfman_kernel::ErrorKind::InvalidInput | bpfman_kernel::ErrorKind::InvalidData => {

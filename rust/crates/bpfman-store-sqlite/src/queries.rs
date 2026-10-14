@@ -25,6 +25,12 @@ pub(super) struct StoredLinkRow {
     pub(super) created_at: String,
     pub(super) group: Option<String>,
     pub(super) name: Option<String>,
+    pub(super) interface: Option<String>,
+    pub(super) ifindex: Option<i64>,
+    pub(super) direction: Option<String>,
+    pub(super) priority: Option<i64>,
+    pub(super) netns: Option<String>,
+    pub(super) nsid: Option<i64>,
 }
 
 pub(super) fn stored_links(
@@ -35,10 +41,12 @@ pub(super) fn stored_links(
         "SELECT l.id, l.kind, l.kernel_prog_id AS program_id,
                 p.program_type AS program_kind, l.kernel_link_id AS kernel_id,
                 l.pin_path, l.metadata_json AS metadata, l.created_at,
-                t.tp_group AS tp_group, t.tp_name AS tp_name
+                t.tp_group AS tp_group, t.tp_name AS tp_name,
+                x.interface, x.ifindex, x.direction, x.priority, x.netns, x.nsid
          FROM links l
          LEFT JOIN managed_programs p ON p.program_id = l.kernel_prog_id
          LEFT JOIN link_tracepoint_details t ON t.id = l.id
+         LEFT JOIN link_tcx_details x ON x.id = l.id
          WHERE (:id IS NULL OR l.id = :id) ORDER BY l.id",
     )?;
     statement
@@ -54,6 +62,12 @@ pub(super) fn stored_links(
                 created_at: row.get("created_at")?,
                 group: row.get("tp_group")?,
                 name: row.get("tp_name")?,
+                interface: row.get("interface")?,
+                ifindex: row.get("ifindex")?,
+                direction: row.get("direction")?,
+                priority: row.get("priority")?,
+                netns: row.get("netns")?,
+                nsid: row.get("nsid")?,
             })
         })?
         .collect()
@@ -374,3 +388,21 @@ pub(super) fn delete_map_set(
 
 #[cfg(test)]
 mod tests;
+
+pub(super) fn insert_pending_tcx(
+    tx: &Transaction<'_>,
+    input: &bpfman_store::PendingTcx<'_>,
+    metadata: &str,
+) -> rusqlite::Result<i64> {
+    let id = tx.prepare_cached("INSERT INTO links (kind, kernel_prog_id, metadata_json, created_at) VALUES ('tcx', :program, :metadata, :created) RETURNING id")?
+        .query_row(named_params! { ":program":input.program_id.get(), ":metadata":metadata, ":created":input.created_at }, |row| row.get("id"))?;
+    let d = input.target;
+    tx.prepare_cached("INSERT INTO link_tcx_details (id, interface, ifindex, direction, priority, netns, nsid) VALUES (:id,:interface,:ifindex,:direction,:priority,:netns,:nsid)")?
+        .execute(named_params!{ ":id":id, ":interface":d.interface.as_str(), ":ifindex":d.key.ifindex.get(), ":direction":d.key.direction.as_str(), ":priority":d.priority, ":netns":d.netns.as_str(), ":nsid":d.key.nsid.get() })?;
+    Ok(id)
+}
+
+pub(super) fn is_tcx(connection: &Connection, id: NonZeroU32) -> rusqlite::Result<bool> {
+    connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM managed_programs WHERE program_id=:id AND program_type='tcx') AS supported")?
+        .query_row(named_params!{":id":id.get()}, |row| row.get("supported"))
+}

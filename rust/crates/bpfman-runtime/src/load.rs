@@ -99,7 +99,10 @@ impl PreparedProgram {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         if !matches!(
             spec,
-            ProgramSpec::Tracepoint(_) | ProgramSpec::Xdp(_) | ProgramSpec::Tc(_)
+            ProgramSpec::Tracepoint(_)
+                | ProgramSpec::Xdp(_)
+                | ProgramSpec::Tc(_)
+                | ProgramSpec::Tcx(_)
         ) {
             return Err(LoadCause::Unsupported("program type").into());
         }

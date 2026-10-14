@@ -911,3 +911,23 @@ fn json_tc_egress_replacement() {
         bpfman_model::TcDirection::Egress,
     );
 }
+
+#[path = "kernel/tcx.rs"]
+mod tcx;
+
+#[test]
+fn sqlite_tcx_native_link_recovery() {
+    tcx::exercise(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_tcx_native_link_recovery() {
+    tcx::exercise(bpfman_store_json::Backend);
+}
+#[test]
+fn sqlite_tcx_script_corpus() {
+    cli::tcx_scripts("sqlite");
+}
+#[test]
+fn json_tcx_script_corpus() {
+    cli::tcx_scripts("json");
+}

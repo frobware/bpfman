@@ -11,6 +11,9 @@ use alloc::string::String;
 mod netns;
 pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
 
+mod tcx;
+pub use tcx::{TcxLink, TcxOrder, tcx_order, tcx_positions};
+
 mod tc;
 pub use tc::{
     InvalidTc, InvalidTcDirection, InvalidTcSnapshot, TcDirection, TcDispatcherSnapshot, TcKey,

@@ -16,6 +16,9 @@ mod tc_replace;
 #[path = "lifecycle/tc_unload.rs"]
 mod tc_unload;
 
+#[path = "lifecycle/tcx.rs"]
+mod tcx;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -982,3 +985,20 @@ macro_rules! backend_tests {
 }
 backend_tests!(sqlite, bpfman_store_sqlite::Backend);
 backend_tests!(json, bpfman_store_json::Backend);
+
+#[test]
+fn sqlite_tcx_ordering_and_scopes() {
+    tcx::ordering(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_tcx_ordering_and_scopes() {
+    tcx::ordering(bpfman_store_json::Backend);
+}
+#[test]
+fn sqlite_tcx_failure_recovery() {
+    tcx::recovery(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_tcx_failure_recovery() {
+    tcx::recovery(bpfman_store_json::Backend);
+}

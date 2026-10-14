@@ -106,11 +106,23 @@ impl LinkInspection for Kernel {
 impl LinkRetention for Kernel {
     type RetainedLink = std::os::fd::OwnedFd;
 
+    fn detach_retained(&self, link: &Self::RetainedLink) -> KernelResult<()> {
+        crate::pin_syscall::detach(link.as_fd()).map_err(Into::into)
+    }
+
     fn retain_link(&self, source: PinSource<'_>) -> KernelResult<(KernelLink, Self::RetainedLink)> {
         let fd = pin_syscall::open(source.path())?;
         let info = pin_syscall::info(fd.as_fd())?;
         let details = match info.kind {
             7 => KernelLinkDetails::PerfEvent,
+            11 => KernelLinkDetails::Tcx {
+                ifindex: info.data[0],
+                direction: match info.data[1] {
+                    46 => bpfman_model::TcDirection::Ingress,
+                    47 => bpfman_model::TcDirection::Egress,
+                    _ => return Err(invalid("unexpected TCX attach type")),
+                },
+            },
             2 => KernelLinkDetails::Tracing {
                 attach_type: info.data[0],
                 target_obj_id: info.data[1],

@@ -186,3 +186,32 @@ pub(super) fn enter_netns(fd: BorrowedFd<'_>) -> io::Result<()> {
         Err(io::Error::last_os_error())
     }
 }
+
+// Aya requires a valid ProgramId for ID-relative ordering. Validate its type and
+// retain its descriptor through attach, keeping this checked conversion inside
+// the existing narrow syscall boundary.
+pub(super) fn tcx_order(
+    order: bpfman_model::TcxOrder,
+) -> io::Result<(aya::programs::LinkOrder, Option<OwnedFd>)> {
+    use bpfman_model::TcxOrder;
+    let (id, before) = match order {
+        TcxOrder::First => return Ok((aya::programs::LinkOrder::first(), None)),
+        TcxOrder::Before(id) => (id, true),
+        TcxOrder::After(id) => (id, false),
+    };
+    let (fd, info, _, _, _) = crate::syscall::program(id.get())?;
+    if info.type_ != 3 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "TCX anchor is not a classifier",
+        ));
+    }
+    // SAFETY: GET_FD_BY_ID validated this program ID; fd keeps it live through attach.
+    let id = unsafe { aya::programs::ProgramId::new(id.get()) };
+    let order = if before {
+        aya::programs::LinkOrder::before_program_id(id)
+    } else {
+        aya::programs::LinkOrder::after_program_id(id)
+    };
+    Ok((order, Some(fd)))
+}

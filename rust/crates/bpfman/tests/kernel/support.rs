@@ -311,6 +311,8 @@ impl Context {
             "fs/xdp",
             "fs/tc-ingress",
             "fs/tc-egress",
+            "fs/tcx-ingress",
+            "fs/tcx-egress",
             "tc",
             "programs",
             ".staging",

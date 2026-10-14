@@ -9,7 +9,8 @@ mod kernel;
 pub use kernel::{
     ExtensionProgram, KernelResult, LinkInspection, LinkPinning, LinkRetention, MapPinning,
     OuterInfo, OuterLink, PinProgramKind, PinSource, PinTarget, PinnedProgram, ProgramInspection,
-    ProgramPinning, TracepointKernel, TracepointProgram, XdpKernel, XdpSwitchKernel,
+    ProgramPinning, TcxKernel, TcxProgram, TracepointKernel, TracepointProgram, XdpKernel,
+    XdpSwitchKernel,
 };
 
 mod xdp;
@@ -204,6 +205,7 @@ pub struct PreparedTracepointAttach<P: TracepointProgram> {
 pub struct LiveTracepoint<L: LinkPinning> {
     root: artifacts::Identity,
     links: OwnedFd,
+    location: link::Location,
     link: L,
     id: std::num::NonZeroU32,
 }
@@ -214,8 +216,19 @@ pub struct LiveTracepoint<L: LinkPinning> {
 pub struct LinkPin {
     entry: Box<artifacts::Entry>,
     id: std::num::NonZeroU32,
+    kind: removal::LinkKind,
 }
 
 mod tc;
 pub use kernel::TcKernel;
 pub use tc::{TcPins, TcProgram};
+
+/// Confined native classifier and pin collection, with a retained attach point.
+pub struct PreparedTcxAttach<P: TcxProgram> {
+    program: P,
+    program_pin: artifacts::Entry,
+    links: OwnedFd,
+    target: bpfman_model::TcxLink,
+    program_id: std::num::NonZeroU32,
+}
+mod tcx;

@@ -5,6 +5,7 @@ use super::*;
 use bpfman_core::LinkCleanupKind;
 use bpfman_model::{LinkDetails, LinkState};
 use std::collections::BTreeSet;
+use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Point {
@@ -73,12 +74,13 @@ fn request() -> TracepointAttach {
 }
 
 impl Effects for Fake {
+    type Request = TracepointAttach;
     type Prepared = ();
     type Live = Live;
     type Pin = Pin;
     type Receipt = Receipt;
 
-    fn prepare(&mut self, _: &RuntimeWriter<'_>, _: NonZeroU32) -> Result<(), LinkCause> {
+    fn prepare(&mut self, _: &RuntimeWriter<'_>, _: &TracepointAttach) -> Result<(), LinkCause> {
         self.hit(Point::Prepare)
     }
 
@@ -87,6 +89,7 @@ impl Effects for Fake {
         writer: &RuntimeWriter<'_>,
         request: &TracepointAttach,
         created: &str,
+        _: &Self::Prepared,
     ) -> Result<(StoredLink, Receipt), LinkCause> {
         self.hit(Point::Create)?;
         assert!(self.record.is_none());

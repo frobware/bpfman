@@ -37,11 +37,11 @@ fn connection(writer: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
 }
 
 fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
-    if row.kind != "tracepoint" {
+    if row.kind != "tracepoint" && row.kind != "tcx" {
         return Err(Failure::UnsupportedLink);
     }
 
-    if row.program_kind.as_deref() != Some("tracepoint") {
+    if row.program_kind.as_deref() != Some(row.kind.as_str()) {
         return Err(Failure::InvalidLink("missing or non-tracepoint program"));
     }
 
@@ -62,17 +62,63 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
                 .ok_or(Failure::InvalidLink("invalid kernel ID"))?,
         },
     };
-    let group = row
-        .group
-        .as_deref()
-        .ok_or(Failure::InvalidLink("missing tracepoint details"))?;
-    let name = row
-        .name
-        .as_deref()
-        .ok_or(Failure::InvalidLink("missing tracepoint details"))?;
-    let target = format!("{group}/{name}")
-        .parse()
-        .map_err(|_| Failure::InvalidLink("invalid tracepoint target"))?;
+    let details = if row.kind == "tcx" {
+        let nz32 = |v: Option<i64>| {
+            v.and_then(|v| u32::try_from(v).ok())
+                .and_then(NonZeroU32::new)
+                .ok_or(Failure::InvalidLink("invalid TCX interface identity"))
+        };
+        let nsid = row
+            .nsid
+            .and_then(|v| u64::try_from(v).ok())
+            .and_then(NonZeroU64::new)
+            .ok_or(Failure::InvalidLink("invalid TCX namespace identity"))?;
+        let priority = row
+            .priority
+            .and_then(|v| u32::try_from(v).ok())
+            .filter(|v| *v <= i32::MAX as u32)
+            .ok_or(Failure::InvalidLink("invalid TCX priority"))?;
+        LinkDetails::Tcx(bpfman_model::TcxLink {
+            key: bpfman_model::TcKey {
+                nsid,
+                ifindex: nz32(row.ifindex)?,
+                direction: row
+                    .direction
+                    .as_deref()
+                    .ok_or(Failure::InvalidLink("missing TCX direction"))?
+                    .parse()
+                    .map_err(|_| Failure::InvalidLink("invalid TCX direction"))?,
+            },
+            interface: row
+                .interface
+                .as_deref()
+                .ok_or(Failure::InvalidLink("missing TCX interface"))?
+                .parse()
+                .map_err(|_| Failure::InvalidLink("invalid TCX interface"))?,
+            netns: row
+                .netns
+                .as_deref()
+                .unwrap_or_default()
+                .parse()
+                .map_err(|_| Failure::InvalidLink("invalid TCX namespace"))?,
+            priority,
+            position: 0,
+        })
+    } else {
+        let group = row
+            .group
+            .as_deref()
+            .ok_or(Failure::InvalidLink("missing tracepoint details"))?;
+        let name = row
+            .name
+            .as_deref()
+            .ok_or(Failure::InvalidLink("missing tracepoint details"))?;
+        LinkDetails::Tracepoint(
+            format!("{group}/{name}")
+                .parse()
+                .map_err(|_| Failure::InvalidLink("invalid tracepoint target"))?,
+        )
+    };
     let metadata = serde_json::from_str::<Option<_>>(&row.metadata)
         .map_err(Failure::LinkMetadata)?
         .unwrap_or_default();
@@ -81,7 +127,7 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
         id,
         program_id,
         state,
-        details: LinkDetails::Tracepoint(target),
+        details,
         pin_path: row
             .pin_path
             .clone()
@@ -101,10 +147,18 @@ fn one(connection: &Connection, id: i64) -> Result<queries::StoredLinkRow, Failu
 fn canonical(
     writer: &RuntimeWriter<'_>,
     row: &queries::StoredLinkRow,
+    connection: &Connection,
 ) -> Result<StoredLink, Failure> {
-    let record = decode(row)?;
+    let mut record = decode(row)?;
+    if let LinkDetails::Tcx(d) = &mut record.details {
+        d.position = queries::stored_links(connection,None)?.iter().filter(|r| r.kind == "tcx").map(decode).collect::<Result<Vec<_>,_>>()?.iter().filter(|r| matches!(&r.details, LinkDetails::Tcx(x) if x.key == d.key && (x.priority,r.id) < (d.priority,record.id))).count();
+    }
 
-    if writer.layout().link_pin_path(record.id).to_str() != Some(record.pin_path.as_str()) {
+    let path = match &record.details {
+        LinkDetails::Tcx(d) => writer.layout().tcx_link_path(d.key, record.program_id),
+        _ => writer.layout().link_pin_path(record.id),
+    };
+    if path.to_str() != Some(record.pin_path.as_str()) {
         return Err(Failure::InvalidLink(
             "pin path differs from canonical runtime layout",
         ));
@@ -146,7 +200,7 @@ fn check(
     open::require_supported(open::schema_version(connection)?)?;
 
     let row = one(connection, receipt.evidence.row.id)?;
-    canonical(writer, &row)?;
+    canonical(writer, &row, connection)?;
 
     if row != receipt.evidence.row {
         return Err(Failure::InvalidLink("link changed since observation"));
@@ -194,6 +248,7 @@ impl LinkReader for Store {
                 for snapshot in crate::tc::snapshots(&tx)? {
                     links.extend(snapshot.members().iter().map(|m| m.member.clone()));
                 }
+                bpfman_model::tcx_positions(&mut links);
                 links.sort_by_key(|l| l.id);
                 Ok(links)
             })
@@ -246,7 +301,54 @@ impl LinkStore for Backend {
             }
 
             let row = one(&tx, id)?;
-            let record = canonical(writer, &row)?;
+            let record = canonical(writer, &row, &tx)?;
+            let receipt = evidence(writer, row)?;
+            tx.commit()?;
+
+            Ok((record, receipt))
+        })()
+        .map_err(crate::Error::from)
+        .map_err(Into::into)
+    }
+
+    #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
+    fn create_pending_tcx(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingTcx<'_>,
+    ) -> Result<(StoredLink, LinkReceipt), Error> {
+        (|| -> Result<_, Failure> {
+            let mut connection = connection(writer)?;
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            open::require_supported(open::schema_version(&tx)?)?;
+
+            if !queries::is_tcx(&tx, request.program_id)? {
+                return Err(Failure::InvalidLink("missing or non-TCX program"));
+            }
+
+            let metadata =
+                serde_json::to_string(request.metadata).map_err(Failure::LinkMetadata)?;
+            for row in queries::stored_links(&tx, None)? {
+                if row.kind == "tcx" && row.program_id == i64::from(request.program_id.get()) && matches!(decode(&row)?.details, LinkDetails::Tcx(ref d) if d.key == request.target.key) {
+                    return Err(Failure::InvalidLink("program already attached to TCX hook"));
+                }
+            }
+            let id = queries::insert_pending_tcx(&tx, &request, &metadata)?;
+            let _managed = u64::try_from(id)
+                .ok()
+                .and_then(NonZeroU64::new)
+                .ok_or(Failure::InvalidLink("invalid allocated ID"))?;
+            let path = writer.layout().tcx_link_path(request.target.key, request.program_id);
+            let path = path
+                .to_str()
+                .ok_or(Failure::InvalidLink("runtime path is not UTF-8"))?;
+
+            if queries::set_link_pin(&tx, id, path)? != 1 {
+                return Err(Failure::InvalidLink("pending link disappeared"));
+            }
+
+            let row = one(&tx, id)?;
+            let record = canonical(writer, &row, &tx)?;
             let receipt = evidence(writer, row)?;
             tx.commit()?;
 
@@ -277,7 +379,7 @@ impl LinkStore for Backend {
                 return Err(Failure::InvalidLink("link is not pending"));
             }
 
-            let record = canonical(writer, &one(&tx, receipt.evidence.row.id)?)?;
+            let record = canonical(writer, &one(&tx, receipt.evidence.row.id)?, &tx)?;
             tx.commit()?;
 
             Ok(record)
@@ -305,7 +407,7 @@ impl LinkStore for Backend {
             let Some(row) = queries::stored_links(&tx, Some(id))?.pop() else {
                 return Ok(None);
             };
-            let record = canonical(writer, &row)?;
+            let record = canonical(writer, &row, &tx)?;
 
             Ok(Some((record, evidence(writer, row)?)))
         })()

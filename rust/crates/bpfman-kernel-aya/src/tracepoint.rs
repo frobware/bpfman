@@ -42,6 +42,17 @@ impl TracepointLinks for Kernel {
         pin.kernel_id()
     }
 
+    fn observe_tcx_pin(
+        &self,
+        w: &RuntimeWriter<'_>,
+        target: &bpfman_model::TcxLink,
+        program: NonZeroU32,
+        kernel: Option<NonZeroU32>,
+    ) -> Result<Option<LinkPin>, Error> {
+        w.observe_tcx_link_pin(self, target, program, kernel)
+            .map_err(filesystem)
+    }
+
     fn observe_link_pin(
         &self,
         w: &RuntimeWriter<'_>,

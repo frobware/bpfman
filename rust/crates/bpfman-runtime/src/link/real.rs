@@ -4,7 +4,7 @@ use bpfman_core::EffectFailure;
 use bpfman_fs::RuntimeWriter;
 use bpfman_model::{LinkState, ProgramSpec, StoredLink};
 use bpfman_store::{LinkStore, OpenStore, PendingTracepoint, ProgramReader};
-use std::num::{NonZeroU32, NonZeroU64};
+use std::num::NonZeroU64;
 
 pub(super) struct Adapter<'a, S: OpenStore, K>(pub(super) &'a ActiveStore<S>, pub(super) &'a K);
 
@@ -16,6 +16,7 @@ fn failure<T>(error: EffectFailure<T, impl Into<LinkCause>>) -> EffectFailure<T,
 }
 
 impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Adapter<'_, S, K> {
+    type Request = TracepointAttach;
     type Prepared = K::PreparedTracepoint;
     type Live = K::LiveTracepoint;
     type Pin = K::LinkPin;
@@ -24,8 +25,9 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
     fn prepare(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        program: NonZeroU32,
+        request: &TracepointAttach,
     ) -> Result<Self::Prepared, LinkCause> {
+        let program = request.program_id;
         let mut reader = self.0.open(writer)?;
         let record = reader
             .read_records()?
@@ -51,6 +53,7 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
         writer: &RuntimeWriter<'_>,
         request: &TracepointAttach,
         created: &str,
+        _prepared: &Self::Prepared,
     ) -> Result<(StoredLink, Self::Receipt), LinkCause> {
         self.0
             .create_pending_tracepoint(
@@ -112,7 +115,14 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
         writer: &RuntimeWriter<'_>,
         record: &StoredLink,
     ) -> Result<Option<Self::Pin>, LinkCause> {
-        if writer.layout().link_pin_path(record.id).to_str() != Some(record.pin_path.as_str()) {
+        let path = match &record.details {
+            bpfman_model::LinkDetails::Tracepoint(_) => writer.layout().link_pin_path(record.id),
+            bpfman_model::LinkDetails::Tcx(d) => {
+                writer.layout().tcx_link_path(d.key, record.program_id)
+            }
+            _ => return Err(Cause::Unsupported.into()),
+        };
+        if path.to_str() != Some(record.pin_path.as_str()) {
             return Err(Cause::Invalid("link pin differs from canonical runtime layout").into());
         }
 
@@ -120,9 +130,15 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
             LinkState::Pending => None,
             LinkState::Attached { kernel_id } => Some(kernel_id),
         };
-        self.1
-            .observe_link_pin(writer, record.id, record.program_id, kernel)
-            .map_err(Into::into)
+        match &record.details {
+            bpfman_model::LinkDetails::Tcx(d) => {
+                self.1.observe_tcx_pin(writer, d, record.program_id, kernel)
+            }
+            _ => self
+                .1
+                .observe_link_pin(writer, record.id, record.program_id, kernel),
+        }
+        .map_err(Into::into)
     }
 
     fn release(

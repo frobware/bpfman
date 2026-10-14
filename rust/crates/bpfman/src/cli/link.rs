@@ -42,6 +42,20 @@ impl LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
+    /// Attach a native TCX classifier without a dispatcher.
+    Tcx {
+        program_id: NonZeroU32,
+        interface: bpfman_model::InterfaceName,
+        direction: bpfman_model::TcDirection,
+        #[arg(long, default_value = "")]
+        netns: bpfman_model::NetworkNamespace,
+        #[arg(short = 'p', long, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        priority: u32,
+        #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
+        metadata: Vec<(String, String)>,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
     /// Attach a TC extension through a legacy TC dispatcher.
     Tc {
         program_id: NonZeroU32,
@@ -112,6 +126,37 @@ impl LinkCommand {
         S::Reader: bpfman_store::LinkReader,
     {
         match self {
+            Self::Attach {
+                target:
+                    AttachCommand::Tcx {
+                        program_id,
+                        interface,
+                        direction,
+                        netns,
+                        priority,
+                        metadata,
+                        output,
+                    },
+            } => {
+                let record = app.attach_tcx_with_cancellation(
+                    bpfman_runtime::TcxAttach {
+                        program_id,
+                        interface,
+                        direction,
+                        netns,
+                        priority,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    cancellation,
+                )?;
+                let observed = app.get_link(record.id).map_err(|error| {
+                    anyhow::Error::from(error).context(format!(
+                        "link {} was committed but could not be observed; it remains attached",
+                        record.id
+                    ))
+                })?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+            }
             Self::Attach {
                 target:
                     AttachCommand::Tc {

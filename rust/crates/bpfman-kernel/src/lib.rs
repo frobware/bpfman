@@ -3,6 +3,9 @@
 //! Reads borrow one backend supplied at application construction. Implementations
 //! own resource reuse and synchronization; observations confer no removal authority.
 
+mod tcx;
+pub use tcx::TcxLinks;
+
 mod error;
 mod tc;
 pub use tc::{TcLifecycle, TcRemoval};
@@ -50,6 +53,27 @@ pub trait LinkObservations {
         ))
     }
 
+    /// Inspect a native TCX link by its kernel ID.
+    fn tcx_link(&self, _id: NonZeroU32) -> Result<KernelLink, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "TCX link observation",
+            std::io::Error::other("TCX unsupported"),
+        ))
+    }
+    /// Inspect a native TCX pin through confined traversal.
+    fn tcx_pin(
+        &self,
+        _runtime: &RuntimeDirectory,
+        _target: &bpfman_model::TcxLink,
+        _program: NonZeroU32,
+    ) -> Result<Option<KernelLink>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "TCX pin observation",
+            std::io::Error::other("TCX unsupported"),
+        ))
+    }
     /// Inspect a perf-event link by kernel identity.
     fn tracepoint_link(&self, id: NonZeroU32) -> Result<KernelLink, Error>;
 

@@ -131,9 +131,10 @@ impl LoadRequest {
                 bpfman_model::ProgramSpec::Tracepoint(_)
                     | bpfman_model::ProgramSpec::Xdp(_)
                     | bpfman_model::ProgramSpec::Tc(_)
+                    | bpfman_model::ProgramSpec::Tcx(_)
             )
         }) {
-            Some("program types other than tracepoint, xdp, and tc")
+            Some("program types other than tracepoint, xdp, tc, and tcx")
         } else if map_owner_id.is_some() {
             Some("map-owner sharing")
         } else {

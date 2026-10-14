@@ -89,7 +89,13 @@ where
             if current != record {
                 return Err(Cause::Invalid("link changed during unload preflight").into());
             }
-            if writer.layout().link_pin_path(record.id).to_str() != Some(record.pin_path.as_str()) {
+            let path = match &record.details {
+                bpfman_model::LinkDetails::Tcx(d) => {
+                    writer.layout().tcx_link_path(d.key, record.program_id)
+                }
+                _ => writer.layout().link_pin_path(record.id),
+            };
+            if path.to_str() != Some(record.pin_path.as_str()) {
                 return Err(
                     Cause::Invalid("link pin differs from canonical runtime layout").into(),
                 );
@@ -102,9 +108,15 @@ where
                 LinkState::Pending => None,
                 LinkState::Attached { kernel_id } => Some(kernel_id),
             };
-            let pin = self
-                .1
-                .observe_link_pin(writer, record.id, record.program_id, kernel)?;
+            let pin = match &record.details {
+                bpfman_model::LinkDetails::Tcx(d) => {
+                    self.1
+                        .observe_tcx_pin(writer, d, record.program_id, kernel)?
+                }
+                _ => self
+                    .1
+                    .observe_link_pin(writer, record.id, record.program_id, kernel)?,
+            };
             links.push(bpfman_core::UnloadLink {
                 id: record.id,
                 pin,

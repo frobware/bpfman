@@ -55,7 +55,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":10}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":11}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -70,7 +70,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     fs::write(layout.database_path(), &pristine).expect("restore");
     let mut reader = writer(&runtime, |w| Backend.open(w).expect("open"));
-    fs::write(layout.database_path(), b"{\"version\":10}").expect("change version");
+    fs::write(layout.database_path(), b"{\"version\":11}").expect("change version");
 
     assert_eq!(
         reader
@@ -388,7 +388,7 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
         });
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
-        assert_eq!(state["version"], 9);
+        assert_eq!(state["version"], 10);
         state["version"] = version.into();
         fs::write(
             layout.database_path(),
@@ -804,4 +804,73 @@ fn ingress_formats_refuse_egress_without_changing_the_snapshot() {
             );
         });
     }
+}
+
+#[test]
+fn tcx_requires_format_ten_without_implicit_upgrade() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let layout = RuntimeLayout::try_from(temp.path().to_owned()).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+    writer(&runtime, |w| Backend.open(w).expect("fresh store"));
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot")).expect("JSON");
+    state["version"] = 9.into();
+    let previous = serde_json::to_vec(&state).expect("format9 fixture");
+    fs::write(layout.database_path(), &previous).expect("write fixture");
+    writer(&runtime, |w| {
+        Backend.open(w).expect("format9 remains readable");
+        let error = Backend
+            .commit_program(
+                w,
+                LoadRecord {
+                    id: NonZeroU32::MIN,
+                    spec: &bpfman_model::ProgramSpec::Tcx("native".try_into().expect("symbol")),
+                    source: "/native.o",
+                    globals: &Default::default(),
+                    metadata: &Default::default(),
+                    license: "GPL",
+                    created_at: "2026-10-14T12:00:00Z",
+                },
+            )
+            .expect_err("TCX does not upgrade existing store");
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
+    });
+    assert_eq!(
+        fs::read(layout.database_path()).expect("unchanged"),
+        previous
+    );
+    state["version"] = 10.into();
+    fs::write(
+        layout.database_path(),
+        serde_json::to_vec(&state).expect("format10"),
+    )
+    .expect("fixture");
+    writer(&runtime, |w| {
+        Backend
+            .commit_program(
+                w,
+                LoadRecord {
+                    id: NonZeroU32::MIN,
+                    spec: &bpfman_model::ProgramSpec::Tcx("native".try_into().expect("symbol")),
+                    source: "/native.o",
+                    globals: &Default::default(),
+                    metadata: &Default::default(),
+                    license: "GPL",
+                    created_at: "2026-10-14T12:00:00Z",
+                },
+            )
+            .expect("native program")
+    });
+    let mut state: serde_json::Value =
+        serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot")).expect("JSON");
+    state["version"] = 9.into();
+    let invalid = serde_json::to_vec(&state).expect("unsupported fixture");
+    fs::write(layout.database_path(), &invalid).expect("fixture");
+    writer(&runtime, |w| {
+        assert!(Backend.open(w).is_err(), "old format cannot contain TCX")
+    });
+    assert_eq!(
+        fs::read(layout.database_path()).expect("unchanged"),
+        invalid
+    );
 }

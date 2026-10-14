@@ -52,6 +52,7 @@ impl LinkReader for Reader {
                 .map(|r| r.snapshot(&state, &self.layout).map(|s| s.member))
                 .collect::<Result<Vec<_>, _>>()?,
         );
+        bpfman_model::tcx_positions(&mut records);
         records.sort_by_key(|link| link.id);
 
         Ok(records)
@@ -103,12 +104,67 @@ impl LinkStore for Backend {
         let row = Link {
             id,
             program_id: request.program_id,
-            target: request.target.to_string(),
+            target: crate::state::LinkTarget::Tracepoint(request.target.to_string()),
             state: LinkProgress::Pending,
             metadata: request.metadata.clone(),
             created_at: request.created_at.into(),
         };
-        let record = row.record(writer.layout())?;
+        let record = row.record_at(writer.layout(), &state)?;
+        let receipt = LinkReceipt {
+            root: writer.identity().map_err(Failure::from)?,
+            store: state.identity.clone(),
+            row: row.clone(),
+        };
+        state.links.push(row);
+        publish(writer, &file, Some(&previous), &state)?;
+
+        Ok((record, receipt))
+    }
+
+    #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
+    fn create_pending_tcx(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingTcx<'_>,
+    ) -> Result<(StoredLink, LinkReceipt), Error> {
+        let file = writer.open_store_snapshot().map_err(Failure::from)?;
+        let (previous, mut state) = read(&file)?;
+
+        if state.version < 10 {
+            return Err(
+                Failure::Unsupported("TCX requires JSON format 10; no implicit upgrade").into(),
+            );
+        }
+
+        if !state.programs.iter().any(|program| {
+            program.id == request.program_id && program.kind == crate::state::Kind::Tcx
+        }) {
+            return Err(Failure::Invalid("missing TCX program").into());
+        }
+
+        if state.links.iter().any(|row| row.program_id == request.program_id && matches!(row.record(writer.layout()), Ok(r) if matches!(r.details, bpfman_model::LinkDetails::Tcx(ref d) if d.key == request.target.key))) {
+            return Err(Failure::Invalid("program already attached to TCX hook").into());
+        }
+        let id = NonZeroU64::new(state.next_link_id)
+            .filter(|id| id.get() <= i64::MAX as u64)
+            .ok_or(Failure::Invalid("link ID exhausted"))?;
+        state.next_link_id += 1;
+        let row = Link {
+            id,
+            program_id: request.program_id,
+            target: crate::state::LinkTarget::Tcx(crate::state::TcxTarget {
+                interface: request.target.interface.as_str().into(),
+                netns: request.target.netns.as_str().into(),
+                nsid: request.target.key.nsid,
+                ifindex: request.target.key.ifindex,
+                direction: request.target.key.direction.as_str().into(),
+                priority: request.target.priority,
+            }),
+            state: LinkProgress::Pending,
+            metadata: request.metadata.clone(),
+            created_at: request.created_at.into(),
+        };
+        let record = row.record_at(writer.layout(), &state)?;
         let receipt = LinkReceipt {
             root: writer.identity().map_err(Failure::from)?,
             store: state.identity.clone(),
@@ -145,7 +201,7 @@ impl LinkStore for Backend {
             }
 
             state.links[index].state = LinkProgress::Attached { kernel_id };
-            let record = state.links[index].record(writer.layout())?;
+            let record = state.links[index].record_at(writer.layout(), &state)?;
             publish(writer, &file, Some(&previous), &state)?;
 
             Ok(record)
@@ -175,7 +231,7 @@ impl LinkStore for Backend {
         let Some(row) = state.links.iter().find(|row| row.id == id) else {
             return Ok(None);
         };
-        let record = row.record(writer.layout())?;
+        let record = row.record_at(writer.layout(), &state)?;
         let receipt = LinkReceipt {
             root: writer.identity().map_err(Failure::from)?,
             store: state.identity.clone(),

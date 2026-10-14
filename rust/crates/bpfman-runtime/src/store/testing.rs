@@ -184,6 +184,14 @@ impl<R: bpfman_store::LinkReader> bpfman_store::LinkReader for Reader<R> {
 impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
     type LinkReceipt = S::LinkReceipt;
 
+    fn create_pending_tcx(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingTcx<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), bpfman_store::Error> {
+        self.backend.create_pending_tcx(writer, request)
+    }
+
     fn create_pending_tracepoint(
         &self,
         writer: &RuntimeWriter<'_>,

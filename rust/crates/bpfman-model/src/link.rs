@@ -72,6 +72,8 @@ impl fmt::Display for Tracepoint {
 pub enum LinkDetails {
     /// A standalone tracepoint attachment.
     Tracepoint(Tracepoint),
+    /// Native TCX attachment.
+    Tcx(crate::TcxLink),
     /// XDP extension attached through a dispatcher.
     Xdp(crate::XdpLink),
     /// Legacy TC dispatcher extension.
@@ -137,6 +139,13 @@ pub struct ObservedLink {
 pub enum KernelLinkDetails {
     /// Standalone tracepoint perf-event link.
     PerfEvent,
+    /// Native traffic-control link.
+    Tcx {
+        /// Attached interface, or zero after detach.
+        ifindex: u32,
+        /// Hook selected at attachment.
+        direction: crate::TcDirection,
+    },
     /// Dispatcher extension link.
     Tracing {
         /// Kernel attach-type numeric value.

@@ -9,6 +9,10 @@ fn record(link: &StoredLink) -> Value {
             "tracepoint",
             json!({"group": target.group(), "name": target.name()}),
         ),
+        LinkDetails::Tcx(d) => (
+            "tcx",
+            json!({"interface":d.interface.as_str(),"ifindex":d.key.ifindex.get(),"direction":d.key.direction.as_str(),"priority":d.priority,"position":d.position,"netns":d.netns.as_str(),"nsid":d.key.nsid.get()}),
+        ),
         LinkDetails::Tc(d) => (
             "tc",
             json!({
@@ -108,8 +112,8 @@ pub(crate) fn links(
 pub(super) fn observed(link: &ObservedLink) -> Value {
     // Type-specific fields come from actual kernel link observations.
     let kernel = link.kernel.as_ref().map(|k| {
-        let (kind, attach, target, btf) = match k.details {
-            bpfman_model::KernelLinkDetails::PerfEvent => ("perf_event", String::new(), 0, 0),
+        let (kind, attach, target, btf, ifindex) = match k.details {
+            bpfman_model::KernelLinkDetails::PerfEvent => ("perf_event", String::new(), 0, 0, 0),
             bpfman_model::KernelLinkDetails::Tracing {
                 attach_type,
                 target_obj_id,
@@ -119,11 +123,13 @@ pub(super) fn observed(link: &ObservedLink) -> Value {
                 attach_type.to_string(),
                 target_obj_id,
                 target_btf_id,
+                0,
             ),
+            bpfman_model::KernelLinkDetails::Tcx {ifindex,direction} => ("tcx",match direction {bpfman_model::TcDirection::Ingress=>"tcx_ingress", bpfman_model::TcDirection::Egress=>"tcx_egress"}.into(),0,0,ifindex),
         };
         json!({
             "id": k.id.get(), "program_id": k.program_id.get(), "link_type": kind,
-            "attach_type": attach, "ifindex": 0, "target_obj_id": target, "target_btf_id": btf,
+            "attach_type": attach, "ifindex": ifindex, "target_obj_id": target, "target_btf_id": btf,
             "cgroup_id": 0, "netns_ino": 0, "netfilter_pf": 0, "netfilter_hooknum": 0,
             "netfilter_priority": 0, "netfilter_flags": 0, "kprobe_multi_count": 0,
             "kprobe_multi_flags": 0, "kprobe_multi_missed": 0, "kprobe_address": 0,
@@ -138,6 +144,10 @@ pub(super) fn observed(link: &ObservedLink) -> Value {
 
 pub(super) fn attachment(details: &LinkDetails) -> (&'static str, String) {
     match details {
+        LinkDetails::Tcx(d) => (
+            "tcx",
+            format!("{}:{}", d.interface.as_str(), d.key.direction),
+        ),
         LinkDetails::Tc(d) => (
             "tc",
             format!("{}:{}", d.interface.as_str(), d.key.direction),

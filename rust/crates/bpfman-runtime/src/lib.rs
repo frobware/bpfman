@@ -341,3 +341,20 @@ mod sample;
 
 mod tc;
 pub use tc::{TcAttach, TcError, TcReport};
+
+/// Native TCX attachment request. Lower priority values run first; ties retain
+/// attachment order. Namespace and hook identity are resolved during admission.
+pub struct TcxAttach {
+    /// Loaded native classifier program.
+    pub program_id: std::num::NonZeroU32,
+    /// Selected interface.
+    pub interface: bpfman_model::InterfaceName,
+    /// Network namespace selector.
+    pub netns: bpfman_model::NetworkNamespace,
+    /// Ingress or egress hook.
+    pub direction: bpfman_model::TcDirection,
+    /// Nonnegative operator priority, at most i32::MAX.
+    pub priority: u32,
+    /// Operator labels.
+    pub metadata: std::collections::BTreeMap<String, String>,
+}

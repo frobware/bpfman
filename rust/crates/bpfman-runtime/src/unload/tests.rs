@@ -110,7 +110,6 @@ impl Fake {
 
         match name {
             "link-a-record" => assert!(!self.state.contains("link-a-pin")),
-            "link-b-pin" => assert!(!self.state.contains("link-a-record")),
             "link-b-record" => assert!(!self.state.contains("link-b-pin")),
             "pin" => assert!(
                 !self.state.contains("link-a-record") && !self.state.contains("link-b-record")
@@ -693,23 +692,44 @@ fn link_failures_block_dependents_and_explicit_retry_keeps_successes() {
             .expect("preflight");
 
             assert!(report.failed());
-            assert_eq!(&fake.calls[3..], &LINKS[..=index]);
-            assert_eq!(report.attempts().len(), index + 1);
-            assert_eq!(report.remaining().len(), WORK.len() + LINKS.len() - index);
+            let blocked_record = if index % 2 == 0 {
+                Some(index + 1)
+            } else {
+                None
+            };
+            let expected: Vec<_> = LINKS
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| Some(*i) != blocked_record)
+                .map(|(_, n)| *n)
+                .collect();
+            assert_eq!(&fake.calls[3..], expected);
+            let attempts = expected.len();
+            assert_eq!(report.attempts().len(), attempts);
+            assert_eq!(
+                report.remaining().len(),
+                WORK.len() + 1 + usize::from(blocked_record.is_some())
+            );
             assert_eq!(fake.residue(), WORK.into_iter().collect());
-            assert!(report.attempts()[..index].iter().all(|a| a.outcome.is_ok()));
-            assert!(report.attempts()[index].outcome.is_err());
+            for attempt in report.attempts() {
+                assert_eq!(attempt.outcome.is_err(), attempt.id == index);
+            }
 
             fake.calls.clear();
             let report = drain(writer, &mut fake, report.retry());
             assert_eq!(fake.calls, [*failure]);
-            assert_eq!(report.attempts().len(), index + 2);
-            assert_eq!(report.attempts()[index + 1].id, index);
+            assert_eq!(report.attempts().len(), attempts + 1);
+            assert_eq!(report.attempts()[attempts].id, index);
 
             fake.faults.clear();
             fake.calls.clear();
             let report = drain(writer, &mut fake, report.retry());
-            assert_eq!(fake.calls, [&LINKS[index..], &WORK].concat());
+            let mut expected = vec![*failure];
+            if let Some(blocked) = blocked_record {
+                expected.push(LINKS[blocked]);
+            }
+            expected.extend(WORK);
+            assert_eq!(fake.calls, expected);
             assert!(!report.failed());
             assert!(report.remaining().is_empty());
             assert_eq!(

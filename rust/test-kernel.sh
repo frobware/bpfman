@@ -14,7 +14,9 @@ binary=${1:?Kernel test binary required}
 shift
 [ "$#" -eq 0 ] || { echo 'kernel suites do not accept additional filters' >&2; exit 1; }
 # Independent contracts own private runtimes and fixture identities. Global
-# inventory checks and backend boundaries remain serial at every thread limit.
+# inventories and immediate lifetime controls run separately: concurrent subprocess
+# fork/exec can temporarily inherit another thread's CLOEXEC BPF descriptors.
+# Backend boundaries remain serial at every thread limit.
 threads=${BPFMAN_KERNEL_TEST_THREADS:-8}
 case "$threads" in 1|2|4|8) ;; *) echo 'kernel test threads must be 1, 2, 4 or 8' >&2; exit 1 ;; esac
 export BPFMAN_KERNEL_TEST_THREADS=$threads
@@ -42,8 +44,8 @@ for stage in corpus json-global json sqlite-global sqlite go; do
         case "$stage:$name" in
             corpus:*_script_corpus) set -- "$@" "$name" ;;
             *:*_script_corpus) ;;
-            json-global:json_xdp_load_lifecycle|sqlite-global:sqlite_xdp_load_lifecycle) set -- "$@" "$name" ;;
-            *:json_xdp_load_lifecycle|*:sqlite_xdp_load_lifecycle) ;;
+            json-global:json_xdp_load_lifecycle|json-global:json_tcx_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
+            *:json_xdp_load_lifecycle|*:json_tcx_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
             json:json_*|sqlite:sqlite_*|go:go_*) set -- "$@" "$name" ;;
         esac
     done < "$listing"

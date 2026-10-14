@@ -58,6 +58,7 @@ impl LocalObject {
         let selection = match spec {
             ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
             ProgramSpec::Tc(_) => Selection::Tc,
+            ProgramSpec::Tcx(_) => Selection::Tcx,
             ProgramSpec::Xdp(_) => Selection::Xdp(xdp_role(&self.bytes, spec.name().as_str())?),
             _ => return Err(LoadCause::Unsupported("program type")),
         };
@@ -89,6 +90,14 @@ impl LocalObject {
             .ok_or_else(|| LoadCause::Invalid("selected program disappeared during load".into()))?;
         match selection {
             Selection::Tc => crate::verification::load_tc(program)?,
+            Selection::Tcx => {
+                let program: &mut aya::programs::SchedClassifier = program
+                    .try_into()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+                program
+                    .load()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+            }
             Selection::Tracepoint => {
                 let program: &mut aya::programs::TracePoint = program
                     .try_into()
@@ -186,8 +195,8 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         ))
     })?;
     match (spec, &program.section) {
-        (ProgramSpec::Tc(_), ProgramSection::SchedClassifier) => Ok(()),
-        (ProgramSpec::Tc(_), _) => Err(LoadCause::Invalid(
+        (ProgramSpec::Tc(_) | ProgramSpec::Tcx(_), ProgramSection::SchedClassifier) => Ok(()),
+        (ProgramSpec::Tc(_) | ProgramSpec::Tcx(_), _) => Err(LoadCause::Invalid(
             "TC selection requires a classifier section".into(),
         )),
         (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint) => Ok(()),
@@ -263,6 +272,7 @@ enum XdpRole {
 
 enum Selection {
     Tc,
+    Tcx,
     Tracepoint,
     Xdp(XdpRole),
 }

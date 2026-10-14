@@ -111,7 +111,7 @@ where
         .expect_err("pending record deletion fails after unpin");
     let report = error.report().expect("unload report");
 
-    assert_eq!(report.attempts().len(), 2);
+    assert_eq!(report.attempts().len(), 4);
     assert_eq!(report.attempts()[0].kind, UnloadKind::LinkPin(pending_id));
     assert!(report.attempts()[0].outcome.is_ok());
     assert_eq!(
@@ -124,11 +124,15 @@ where
         app.list_link_records().expect("both records remain").len(),
         2
     );
+    let later = app.get_link(other.id).expect("independent intent remains");
     assert!(
-        app.get_link(other.id)
-            .expect("later link remains attached")
-            .pin_present
+        !later.pin_present && later.kernel.is_none(),
+        "later attachment gets its own teardown attempt"
     );
+    assert_eq!(report.attempts()[2].kind, UnloadKind::LinkPin(other.id));
+    assert!(report.attempts()[2].outcome.is_ok());
+    assert_eq!(report.attempts()[3].kind, UnloadKind::LinkRecord(other.id));
+    assert!(report.attempts()[3].outcome.is_err());
     c.present(id);
 
     let error = app
@@ -136,9 +140,10 @@ where
         .expect_err("unchanged deletion failure");
     let report = error.report().expect("retained receipts and history");
 
-    assert_eq!(report.attempts().len(), 3);
-    assert_eq!(report.attempts()[2].id, report.attempts()[1].id);
-    assert!(report.attempts()[2].outcome.is_err());
+    assert_eq!(report.attempts().len(), 6);
+    assert_eq!(report.attempts()[4].id, report.attempts()[1].id);
+    assert_eq!(report.attempts()[5].id, report.attempts()[3].id);
+    assert!(report.attempts()[4..].iter().all(|a| a.outcome.is_err()));
 
     let cancellation = Cancellation::new();
     cancellation.cancel();
@@ -149,7 +154,7 @@ where
     assert_eq!(error.kind(), UnloadErrorKind::Cancelled);
     assert_eq!(
         error.report().expect("history retained").attempts().len(),
-        3
+        6
     );
 
     store.set(None);
@@ -167,9 +172,9 @@ where
             .iter()
             .filter(|a| a.outcome.is_err())
             .count(),
-        2
+        4
     );
-    assert!(report.attempts()[3..].iter().all(|a| a.outcome.is_ok()));
+    assert!(report.attempts()[6..].iter().all(|a| a.outcome.is_ok()));
     assert!(app.list_link_records().expect("links gone").is_empty());
     assert!(
         app.list(&Default::default())

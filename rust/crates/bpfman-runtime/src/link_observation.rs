@@ -37,6 +37,9 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     cancellation: &Cancellation,
 ) -> Result<ObservedLink, LinkCause> {
     let path = match &record.details {
+        bpfman_model::LinkDetails::Tcx(d) => {
+            runtime.layout().tcx_link_path(d.key, record.program_id)
+        }
         bpfman_model::LinkDetails::Tc(d) => {
             runtime.layout().tc_slot_path(d.key, d.revision, d.slot)
         }
@@ -58,6 +61,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     let kernel = match kernel_id
         .map(|id| match &record.details {
             bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_link(id),
+            bpfman_model::LinkDetails::Tcx(_) => backend.tcx_link(id),
             bpfman_model::LinkDetails::Xdp(_) | bpfman_model::LinkDetails::Tc(_) => {
                 backend.extension_link(id)
             }
@@ -70,6 +74,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     };
     let pin = match &record.details {
         bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_pin(runtime, record.id)?,
+        bpfman_model::LinkDetails::Tcx(d) => backend.tcx_pin(runtime, d, record.program_id)?,
         bpfman_model::LinkDetails::Tc(details) => backend.tc_pin(runtime, details)?,
         bpfman_model::LinkDetails::Xdp(details) => backend.extension_pin(runtime, details)?,
     };
@@ -97,6 +102,14 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
             return Err(
                 Cause::Invalid("TC extension target differs from stored dispatcher").into(),
             );
+        }
+    }
+    if let bpfman_model::LinkDetails::Tcx(d) = &record.details {
+        for link in kernel.iter().chain(pin.iter()) {
+            if !matches!(link.details,bpfman_model::KernelLinkDetails::Tcx {ifindex,direction} if direction == d.key.direction && (ifindex == d.key.ifindex.get() || ifindex == 0))
+            {
+                return Err(Cause::Invalid("TCX hook differs from stored intent").into());
+            }
         }
     }
     cancellation.check().map_err(|_| Cause::Cancelled)?;

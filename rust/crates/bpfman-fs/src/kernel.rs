@@ -123,6 +123,11 @@ pub trait LinkInspection {
 pub trait LinkRetention {
     /// Owned descriptor whose close releases this attachment reference.
     type RetainedLink;
+    /// Explicitly detach a retained native link before unpinning. Unsupported
+    /// backends fail without filesystem effects.
+    fn detach_retained(&self, _link: &Self::RetainedLink) -> KernelResult<()> {
+        Err(std::io::Error::other("native link detach unsupported").into())
+    }
     /// Observe identity and acquire the descriptor from the same opened pin.
     fn retain_link(&self, source: PinSource<'_>) -> KernelResult<(KernelLink, Self::RetainedLink)>;
 }
@@ -213,4 +218,28 @@ pub trait TcKernel: ProgramInspection + LinkInspection {
         &self,
         source: PinSource<'_>,
     ) -> KernelResult<(PinnedProgram, Self::Extension)>;
+}
+
+/// Confined adoption of native classifiers and owned TCX attachments.
+pub trait TcxKernel: ProgramInspection + LinkInspection {
+    /// Retained native program and namespace evidence.
+    type Program: TcxProgram;
+    /// Adopt through a verified managed pin, binding namespace and interface.
+    fn tcx_at(
+        &self,
+        source: PinSource<'_>,
+        target: &bpfman_model::TcxLink,
+    ) -> KernelResult<(PinnedProgram, Self::Program)>;
+}
+
+/// Native classifier ready to attach within its retained namespace.
+pub trait TcxProgram {
+    /// Owned unpinned link.
+    type Link: LinkPinning;
+    /// Attach once, revalidating namespace/interface evidence first.
+    fn attach(
+        &mut self,
+        target: &bpfman_model::TcxLink,
+        order: bpfman_model::TcxOrder,
+    ) -> KernelResult<Self::Link>;
 }

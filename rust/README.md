@@ -45,7 +45,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Generic tracepoint/XDP/TC lifecycle interpreters, compensation, and observations |
+| `bpfman-runtime` | 4 | Generic tracepoint/XDP/TC/TCX lifecycle interpreters, compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -392,7 +392,7 @@ teardown.
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint, XDP, and TC batches with private maps and
+exits with status 2. Local tracepoint, XDP, TC, and TCX batches with private maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads, other program types,
 and map-owner sharing exit with status 1 before source access or runtime effects.
@@ -1918,7 +1918,7 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 9 for egress; format 8 retains ingress
+receipt. New JSON stores use format 10 for TCX; format 9 retains egress and format 8 retains ingress
 replacement and format 7 retains singleton ingress. Older formats retain their
 operations without upgrading.
 
@@ -1984,6 +1984,73 @@ cleanup ordering and warning/GC policy remain unchanged. All four cases pass the
 reduced Go change and Rust on both stores. Rust retains its stricter orphan
 validation and consuming recovery; the shared script adds no post-unload sleep.
 
-TCX, outer-filter status, and general orphan repair remain unsupported. Qdisc inspection/deletion
+Legacy TC outer-filter status and general orphan repair remain unsupported. Qdisc inspection/deletion
 uses separate netlink requests and is not atomic against privileged tools changing
 the same objects outside bpfman's writer lock.
+
+## Native TCX links
+
+TCX selections load as native SCHED_CLS programs rather than freplace extensions.
+`link attach tcx PROGRAM INTERFACE ingress|egress --priority PRIORITY` supports
+metadata and an explicit `--netns` selector. Both hooks and separate namespaces
+are independent. TCX creates no legacy dispatcher or clsact qdisc.
+
+Lower priority values execute first; zero is preserved and equal priorities retain
+attachment order. Insertion uses a live native program anchor, with its descriptor
+retained through the attach syscall. Missing or detached recorded links do not
+become anchors; failed inspection remains an error. A pending link requires explicit
+cleanup before further insertion on its hook. Duplicate program/hook attachment
+is refused before touching the original pin, and the diagnostic names that link.
+Stored `position` is the rank of managed intent in one snapshot, not a kernel dump
+or a claim about foreign programs.
+
+The same pending-intent, finalisation and consuming compensation interpreter serves
+tracepoint and TCX attachment. Canonical TCX pins use
+`fs/tcx-{direction}/link_{nsid}_{ifindex}_{program}`. Adoption validates the kernel
+link ID, program, type, direction and interface. Teardown explicitly detaches the
+validated native link before unpinning, retaining its FD until all owned pin
+references close. A retained external link FD can keep the object alive but cannot
+keep it executing after successful detach. Namespace-selector access is unnecessary
+for deleting an adopted native link; its own descriptor identifies the attachment.
+
+Standalone attached unload now attempts every independent link once per pass.
+A failed unpin blocks its own record deletion; any unresolved link blocks program
+teardown. Successful unpins do not repeat during record-only retries, including
+through a reopened application. This also strengthens tracepoint unload, with
+its fault and retry contracts updated to require independent progress.
+
+SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
+use format 10; existing formats 1–9 retain their previous operations and reject TCX
+without an implicit upgrade. Tracepoint target strings keep their existing JSON
+encoding; native targets have a typed object representation.
+
+`direnv exec . make rust-test-tcx` runs real kernel recovery and eight existing,
+unchanged TCX acceptance files on both stores. It is also part of `rust-check`.
+The files cover load/get, ordinary and namespace link round trips, duplicate
+rejection, priority ordering, zero/tie ordering, chain continuation and stopping.
+Their labels remain unchanged and their passes are recorded separately from the
+91-file manifest. Rust-specific contracts cover real store receipts, pin failures,
+foreign runtime rejection, cancellation, reopened retries, and immediate owned
+kernel release without post-unload sleeps or polling. Genuine external program
+references remain observable until their holders close.
+
+The parallel regression also removed a pre-existing tracepoint unload polling
+loop that enumerated all kernel programs. That enumeration could itself hold
+another fixture's program FD. The contract now requires immediate absence of its
+own ID, preserving independent fixture lifetimes. Go passes the same eight TCX
+scripts on both stores; Go sources remain unchanged.
+
+Immediate native lifetime controls run in the existing serial stage, separately
+from concurrently spawning contracts. A pipe-synchronized fork/exec experiment
+confirmed that CLOEXEC descriptors still keep programs alive in a child before
+exec; the Rust trace shows subprocesses copying the descriptor table. Isolation
+establishes the absence of unrelated inherited holders while retaining every
+immediate assertion and parallelizing ordinary contracts. Production teardown
+releases owned references; it cannot revoke an external child's descriptor.
+
+The TCX checkpoint passes `direnv exec . make rust-check lint-make`: all 112
+kernel cases and 68 stateful-fake cases, userspace/compile-fail checks,
+warnings-denied Clippy/Rustdoc, formatting and Makefile lint, with successful owned
+tmpfs cleanup. All 173 existing scripts remain byte-for-byte unchanged. Evidence
+and the lifetime investigation are in the
+[implementation record](../docs/design/rust-reimplementation.md#native-tcx-lifecycle-and-ordering-14-october-2026).
