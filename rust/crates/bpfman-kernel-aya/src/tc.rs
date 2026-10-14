@@ -1,5 +1,6 @@
 use crate::{
-    Kernel, PreparedTc, TcDispatcher, TcExtension, TcFilter, TcStage, TcSwitch, XdpNamespace,
+    Kernel, PreparedTc, TcDispatcher, TcExtension, TcFilter, TcOrphan, TcStage, TcSwitch,
+    XdpNamespace,
     failure::{filesystem, map},
     tc_netlink,
 };
@@ -11,7 +12,7 @@ use bpfman_core::EffectFailure;
 use bpfman_fs::{
     ExtensionProgram, KernelResult, PinSource, PinTarget, ProgramPinning, RuntimeWriter, TcKernel,
 };
-use bpfman_kernel::{Acquisition, Error, ErrorKind, Removal, TcLifecycle};
+use bpfman_kernel::{Acquisition, Error, ErrorKind, Removal, TcLifecycle, TcRemoval};
 use bpfman_model::{InterfaceName, NetworkNamespace, TcKey, TcProceedOn, TcSnapshot};
 use std::{io, num::NonZeroU32};
 
@@ -100,6 +101,7 @@ impl TcKernel for Kernel {
 impl TcLifecycle for Kernel {
     type Prepared = PreparedTc;
     type Stage = TcStage;
+    type Orphan = TcOrphan;
     type Filter = TcFilter;
     type Switch = TcSwitch;
 
@@ -344,43 +346,63 @@ impl TcLifecycle for Kernel {
         }
         let root = w.identity().map_err(filesystem)?;
         let namespace = XdpNamespace::open(&d.interface, &d.netns).map_err(kernel)?;
-        if TcKey::new(namespace.key(), d.key.direction) != d.key {
-            return Err(kernel(invalid(
-                "TC namespace/interface differs from snapshot",
-            )));
+        self.observe_live_tc(w, snapshot, root, namespace)
+    }
+
+    fn observe_tc_removal(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &bpfman_model::TcDispatcherSnapshot,
+    ) -> Result<TcRemoval<Self>, Error> {
+        let d = &snapshot
+            .members()
+            .first()
+            .ok_or_else(|| kernel(invalid("empty TC snapshot")))?
+            .details;
+        if d.filter_priority != 50 {
+            return Err(kernel(invalid("unsupported TC filter priority")));
         }
-        let pins = w
-            .observe_tc_dispatcher_pins(self, snapshot)
-            .map_err(filesystem)?;
-        let clsact_owned = pins.clsact_owned(w).map_err(filesystem)?;
-        let present = namespace
-            .run_tc(|| {
-                tc_netlink::filter(
-                    d.key.direction,
-                    d.key.ifindex.get(),
-                    d.filter_handle.get(),
-                    d.dispatcher_id.get(),
-                )
-            })
-            .map_err(kernel)?;
-        let filter = TcFilter {
-            direction: d.key.direction,
-            namespace: namespace.duplicate().map_err(kernel)?,
-            root,
-            dispatcher: d.dispatcher_id.get(),
-            handle: present.then_some(d.filter_handle),
-            clsact_owned,
-        };
-        Ok((
-            TcStage {
-                direction: d.key.direction,
-                pins,
-                dispatcher: None,
-                namespace,
-                root,
-            },
-            filter,
-        ))
+        let root = w.identity().map_err(filesystem)?;
+        match XdpNamespace::open_tc_removal(&d.interface, &d.netns).map_err(kernel)? {
+            Some(namespace) => self
+                .observe_live_tc(w, snapshot, root, namespace)
+                .map(|(stage, filter)| TcRemoval::Live(stage, filter)),
+            None => {
+                let pins = w
+                    .observe_tc_dispatcher_pins(self, snapshot)
+                    .map_err(filesystem)?;
+                Ok(TcRemoval::Orphan(TcOrphan {
+                    pins: Box::new(pins),
+                    selector: d.netns.clone(),
+                    root,
+                }))
+            }
+        }
+    }
+
+    fn remove_tc_orphan(&self, w: &RuntimeWriter<'_>, mut orphan: TcOrphan) -> Removal<TcOrphan> {
+        let admitted = (|| {
+            if w.identity().map_err(filesystem)? != orphan.root {
+                return Err(kernel(invalid("TC orphan belongs to another runtime")));
+            }
+            XdpNamespace::require_absent(&orphan.selector).map_err(kernel)
+        })();
+        if let Err(cause) = admitted {
+            return Err(EffectFailure {
+                cause,
+                remaining: orphan,
+            });
+        }
+        match w.remove_tc_pins(self, *orphan.pins) {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                orphan.pins = Box::new(failure.remaining);
+                Err(EffectFailure {
+                    cause: filesystem(failure.cause),
+                    remaining: orphan,
+                })
+            }
+        }
     }
 
     fn switch_tc(
@@ -570,6 +592,59 @@ impl TcLifecycle for Kernel {
                 root,
             },
         })
+    }
+}
+
+impl Kernel {
+    fn observe_live_tc(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &bpfman_model::TcDispatcherSnapshot,
+        root: bpfman_fs::RuntimeIdentity,
+        namespace: XdpNamespace,
+    ) -> Result<(TcStage, TcFilter), Error> {
+        let d = &snapshot
+            .members()
+            .first()
+            .ok_or_else(|| kernel(invalid("empty TC snapshot")))?
+            .details;
+        if TcKey::new(namespace.key(), d.key.direction) != d.key {
+            return Err(kernel(invalid(
+                "TC namespace/interface differs from snapshot",
+            )));
+        }
+        let pins = w
+            .observe_tc_dispatcher_pins(self, snapshot)
+            .map_err(filesystem)?;
+        let clsact_owned = pins.clsact_owned(w).map_err(filesystem)?;
+        let present = namespace
+            .run_tc(|| {
+                tc_netlink::filter(
+                    d.key.direction,
+                    d.key.ifindex.get(),
+                    d.filter_handle.get(),
+                    d.dispatcher_id.get(),
+                )
+            })
+            .map_err(kernel)?;
+        let filter = TcFilter {
+            direction: d.key.direction,
+            namespace: namespace.duplicate().map_err(kernel)?,
+            root,
+            dispatcher: d.dispatcher_id.get(),
+            handle: present.then_some(d.filter_handle),
+            clsact_owned,
+        };
+        Ok((
+            TcStage {
+                direction: d.key.direction,
+                pins,
+                dispatcher: None,
+                namespace,
+                root,
+            },
+            filter,
+        ))
     }
 }
 

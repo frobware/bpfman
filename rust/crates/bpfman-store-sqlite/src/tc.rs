@@ -382,12 +382,14 @@ impl TcStore for Backend {
             let first = receipt.rows.first().ok_or_else(invalid)?;
             let snapshot = canonical(first, w.layout())?;
             let rows = queries::rows(&tx, Some(snapshot.details.key), None)?;
-            if rows != receipt.rows || rows.len() != 1 {
+            if rows != receipt.rows {
                 return Err(Failure::InvalidLink(
                     "TC snapshot changed since observation",
                 ));
             }
-            queries::remove_member(&tx, first.id)?;
+            for row in &receipt.rows {
+                queries::remove_member(&tx, row.id)?;
+            }
             queries::remove_dispatcher(&tx, first)?;
             tx.commit()?;
             Ok(())

@@ -839,6 +839,16 @@ macro_rules! backend_tests {
             }
 
             #[test]
+            fn tc_orphan_recovery() {
+                super::tc_unload::orphan_recovery($backend);
+            }
+
+            #[test]
+            fn tc_orphan_unload() {
+                super::tc_unload::orphan_unload($backend);
+            }
+
+            #[test]
             fn tc_unload_preflight() {
                 super::tc_unload::preflight($backend);
             }

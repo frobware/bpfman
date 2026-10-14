@@ -4,7 +4,7 @@ use bpfman_fs::{RuntimeDirectory, RuntimeIdentity, RuntimeWriter};
 use bpfman_kernel::*;
 use bpfman_model::*;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     num::{NonZeroU32, NonZeroU64},
     sync::{Arc, Mutex},
 };
@@ -97,6 +97,7 @@ struct State {
     fault_at: BTreeMap<Point, usize>,
     cancellation: Option<(Point, bpfman_runtime::Cancellation)>,
     events: Vec<Point>,
+    missing_tc_namespaces: BTreeSet<NonZeroU64>,
 }
 
 #[derive(Clone)]
@@ -248,6 +249,7 @@ impl FakeKernel {
                 fault_at: BTreeMap::new(),
                 cancellation: None,
                 events: Vec::new(),
+                missing_tc_namespaces: BTreeSet::new(),
             })),
         }
     }
@@ -268,6 +270,18 @@ impl FakeKernel {
         s.fault.clear();
         s.fault_at.clear();
         s.cancellation = None;
+    }
+
+    pub(super) fn set_tc_namespace_present(&self, nsid: NonZeroU64, present: bool) {
+        let mut s = self.state.lock().expect("state");
+        if present {
+            s.missing_tc_namespaces.remove(&nsid);
+        } else {
+            s.missing_tc_namespaces.insert(nsid);
+            s.resources
+                .retain(|r, _| !matches!(r, Resource::TcFilter(k, _, _) if k.nsid == nsid));
+            s.collect();
+        }
     }
 
     pub(super) fn cancel_at(&self, point: Point, token: &bpfman_runtime::Cancellation) {
@@ -1284,6 +1298,7 @@ pub(super) struct TcSwitch {
 impl TcLifecycle for FakeKernel {
     type Prepared = PreparedTc;
     type Stage = Vec<Receipt>;
+    type Orphan = (NonZeroU64, Vec<Receipt>);
     type Filter = Receipt;
     type Switch = TcSwitch;
 
@@ -1463,6 +1478,70 @@ impl TcLifecycle for FakeKernel {
             }
         }
         Ok((stage, filter))
+    }
+
+    fn observe_tc_removal(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &TcDispatcherSnapshot,
+    ) -> Result<TcRemoval<Self>, Error> {
+        let d = &snapshot.members()[0].details;
+        if !d.netns.as_str().is_empty()
+            && self
+                .state
+                .lock()
+                .expect("state")
+                .missing_tc_namespaces
+                .contains(&d.key.nsid)
+        {
+            self.writer(w)?;
+            self.enter(Point::ObserveTc)?;
+            let mut stage = Vec::new();
+            for member in snapshot.members() {
+                let LinkState::Attached { kernel_id } = member.member.state else {
+                    return Err(error(ErrorKind::InvalidData, "pending TC link"));
+                };
+                stage.push(
+                    self.observed(Resource::TcStage(d.key, d.dispatcher_id, kernel_id))
+                        .ok_or_else(|| error(ErrorKind::Missing, "TC stage missing"))?,
+                );
+                if self.state.lock().expect("state").links[&kernel_id]
+                    .observation
+                    .program_id
+                    != member.member.program_id
+                {
+                    return Err(error(ErrorKind::InvalidData, "TC member changed"));
+                }
+            }
+            Ok(TcRemoval::Orphan((d.key.nsid, stage)))
+        } else {
+            self.observe_tc_dispatcher(w, snapshot)
+                .map(|(s, f)| TcRemoval::Live(s, f))
+        }
+    }
+
+    fn remove_tc_orphan(
+        &self,
+        w: &RuntimeWriter<'_>,
+        orphan: Self::Orphan,
+    ) -> Removal<Self::Orphan> {
+        if !self
+            .state
+            .lock()
+            .expect("state")
+            .missing_tc_namespaces
+            .contains(&orphan.0)
+        {
+            return Err(EffectFailure {
+                cause: error(ErrorKind::InvalidData, "TC namespace selector reappeared"),
+                remaining: orphan,
+            });
+        }
+        self.remove_tc_stage(w, orphan.1)
+            .map_err(|f| EffectFailure {
+                cause: f.cause,
+                remaining: (orphan.0, f.remaining),
+            })
     }
 
     fn switch_tc(

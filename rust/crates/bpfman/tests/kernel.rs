@@ -792,6 +792,21 @@ fn json_tc_ingress_lifecycle() {
 #[path = "kernel/tc_unload.rs"]
 mod tc_unload;
 
+#[path = "kernel/tc_orphan.rs"]
+mod tc_orphan;
+
+#[test]
+fn sqlite_tc_orphan_recovery() {
+    let _timing = support::TestTiming::start("sqlite_tc_orphan_recovery");
+    tc_orphan::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_tc_orphan_recovery() {
+    let _timing = support::TestTiming::start("json_tc_orphan_recovery");
+    tc_orphan::exercise(bpfman_store_json::Backend);
+}
+
 #[test]
 fn sqlite_tc_ingress_attached_unload() {
     let _timing = support::TestTiming::start("sqlite_tc_ingress_attached_unload");

@@ -81,6 +81,13 @@ pub struct TcStage {
     root: bpfman_fs::RuntimeIdentity,
 }
 
+/// Confined TC pins adopted while the explicit namespace selector was absent.
+pub struct TcOrphan {
+    pins: Box<bpfman_fs::TcPins>,
+    selector: bpfman_model::NetworkNamespace,
+    root: bpfman_fs::RuntimeIdentity,
+}
+
 /// Retained exact TC filter and both native targets across restoration attempts.
 pub struct TcSwitch {
     direction: bpfman_model::TcDirection,

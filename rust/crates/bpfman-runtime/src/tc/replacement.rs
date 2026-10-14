@@ -159,9 +159,15 @@ fn plan(
         })
         .collect::<Result<Vec<_>, LinkCause>>()?;
     // Only membership ordering and slots are shared; the XDP CONFIG is never used.
-    match plan_xdp_membership(Some(first.details.revision), &order)
-        .map_err(|_| invalid("TC membership exceeds ten slots or revision is exhausted"))?
-    {
+    match plan_xdp_membership(Some(first.details.revision), &order).map_err(|error| {
+        use bpfman_core::XdpPlanError;
+        invalid(match error {
+            XdpPlanError::Capacity => "no free dispatcher slots (all ten TC slots occupied)",
+            XdpPlanError::RevisionExhausted => "TC dispatcher revision exhausted",
+            XdpPlanError::DuplicateLink => "duplicate managed link in TC membership",
+            XdpPlanError::Membership => "invalid desired TC membership",
+        })
+    })? {
         XdpMembershipPlan::Revision(p) => Ok(p),
         XdpMembershipPlan::Remove => Err(invalid("empty TC replacement")),
     }
@@ -183,7 +189,18 @@ pub(super) fn observe_removal<S: TcStore, K: TcLifecycle>(
         .ok_or_else(|| invalid("missing TC member"))?
         .member
         .clone();
-    let (stage, filter) = app.kernel.observe_tc_dispatcher(w, &snapshot)?;
+    let (stage, filter) = match app.kernel.observe_tc_removal(w, &snapshot)? {
+        bpfman_kernel::TcRemoval::Live(stage, filter) => (stage, filter),
+        bpfman_kernel::TcRemoval::Orphan(orphan) => {
+            return Ok((
+                record,
+                Teardown(Detach::Last(vec![
+                    Resource::Record(receipt),
+                    Resource::Orphan(orphan),
+                ])),
+            ));
+        }
+    };
     if snapshot.members().len() == 1 {
         return Ok((
             record,

@@ -440,7 +440,6 @@ impl TcStore for Backend {
             let (previous, mut state) = read(&file)?;
             if w.identity()? != receipt.root
                 || state.identity != receipt.store
-                || receipt.rows.len() != 1
                 || !receipt.programs.iter().all(|p| state.programs.contains(p))
             {
                 return Err(Failure::Invalid(
@@ -461,7 +460,7 @@ impl TcStore for Backend {
             {
                 return Err(Failure::Invalid("TC snapshot changed"));
             }
-            state.tc.retain(|r| r.link_id != row.link_id);
+            state.tc.retain(|r| r.key() != row.key());
             publish(w, &file, Some(&previous), &state)
         })();
         result.map_err(|cause| EffectFailure {

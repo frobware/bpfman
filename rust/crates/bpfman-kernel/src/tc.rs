@@ -3,12 +3,22 @@ use bpfman_fs::RuntimeWriter;
 use bpfman_model::{InterfaceName, NetworkNamespace, TcKey, TcProceedOn, TcSnapshot};
 use std::num::NonZeroU32;
 
+/// Validated live attachment or pins whose explicit namespace selector is absent.
+pub enum TcRemoval<K: TcLifecycle + ?Sized> {
+    /// Exact filter and complete revision in the retained namespace.
+    Live(K::Stage, K::Filter),
+    /// Complete confined revision; no namespace or filter authority is invented.
+    Orphan(K::Orphan),
+}
+
 /// Legacy TC ownership; deliberately separate from TCX.
 pub trait TcLifecycle {
     /// Adopted extension and retained namespace/interface evidence.
     type Prepared;
     /// Owned dispatcher, extension pins, revision and durable clsact evidence.
     type Stage: Send + Sync + 'static;
+    /// Confined revision and missing explicit namespace evidence, retained on failure.
+    type Orphan: Send + Sync + 'static;
     /// Owned exact filter and clsact cleanup, including partial acquisitions.
     type Filter: Send + Sync + 'static;
     /// Retained exact filter and both native targets for restoration.
@@ -30,6 +40,19 @@ pub trait TcLifecycle {
         w: &RuntimeWriter<'_>,
         snapshot: &bpfman_model::TcDispatcherSnapshot,
     ) -> Result<(Self::Stage, Self::Filter), Error>;
+    /// Admit full-dispatcher orphan cleanup only for a missing explicit namespace.
+    /// Permission, interface and namespace identity errors remain failures.
+    fn observe_tc_removal(
+        &self,
+        w: &RuntimeWriter<'_>,
+        snapshot: &bpfman_model::TcDispatcherSnapshot,
+    ) -> Result<TcRemoval<Self>, Error>;
+    /// Remove confined orphan pins after rechecking namespace absence; retain partial work.
+    fn remove_tc_orphan(
+        &self,
+        w: &RuntimeWriter<'_>,
+        orphan: Self::Orphan,
+    ) -> Removal<Self::Orphan>;
     /// Read retained durable clsact ownership for the next revision.
     fn tc_clsact_owned(&self, w: &RuntimeWriter<'_>, stage: &Self::Stage) -> Result<bool, Error>;
     /// Replace the exact old filter, retaining restoration on any possible mutation.

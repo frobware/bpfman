@@ -1953,6 +1953,37 @@ egress acceptance gates and twelve Rust-only shared-clsact cases. Make lint pass
 after splitting its target alias declarations. See the
 [implementation record](../docs/design/rust-reimplementation.md#tc-ingress-parity-audit-and-independent-egress-14-october-2026).
 
-TCX, outer-filter status, and deleted-namespace/orphan repair remain unsupported. Qdisc inspection/deletion
+TC detach and attached-program unload now remove a complete dispatcher whose
+explicit namespace selector is absent. Only ENOENT while opening that selector
+admits this path; interface absence, permission errors and changed identities
+remain failures. The adapter validates the confined revision and durable clsact
+evidence, rechecks selector absence, removes owned pins, then deletes the unchanged
+complete store snapshot. Failures retain partial progress for explicit retry.
+Repeated members are consumed once per removed scope while independent hooks and
+namespaces still get a pass. Both stores retain their existing formats/schema.
+
+An absent name does not prove the kernel namespace was destroyed. Other holders
+may keep its native filter/qdisc alive. Orphan cleanup releases the validated
+managed freplace pins; it performs no filter or qdisc operation in an unverified
+namespace. The kernel contracts keep the original namespace alive under another
+name and require managed program-ID absence immediately after unload.
+
+The unchanged TC acceptance scripts also cover capacity rejection, last detach,
+multiple-interface independence, namespace round trips/rebuilds, signed UNSPEC,
+multi-priority continuation and foreign ingress-qdisc refusal. Their results are
+recorded separately from the parity manifest: script contents and labels remain
+unchanged. New shared scripts require Go and Rust acceptance on both stores;
+implementation-specific orphan lifetime and recovery coverage stays in Rust tests.
+The new shared `TestTC_DeletedNetnsLifecycle` exercises both hooks, repeated
+members, another program's orphan membership and an independent live namespace.
+It exposed a Go unload bookkeeping failure: complete dispatcher deletion consumed
+later members of the original unload list. Go now reports complete removal to
+that unload operation, which consumes those later members once. Unexpected missing
+snapshots and failed removals still fail. Go's namespace checks, kernel adapter,
+cleanup ordering and warning/GC policy remain unchanged. All four cases pass the
+reduced Go change and Rust on both stores. Rust retains its stricter orphan
+validation and consuming recovery; the shared script adds no post-unload sleep.
+
+TCX, outer-filter status, and general orphan repair remain unsupported. Qdisc inspection/deletion
 uses separate netlink requests and is not atomic against privileged tools changing
 the same objects outside bpfman's writer lock.

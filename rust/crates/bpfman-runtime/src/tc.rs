@@ -37,6 +37,7 @@ mod replacement;
 enum Resource<S: TcStore, K: TcLifecycle> {
     Filter(K::Filter),
     Stage(K::Stage),
+    Orphan(K::Orphan),
     Record(S::TcReceipt),
 }
 
@@ -44,7 +45,7 @@ impl<S: TcStore, K: TcLifecycle> XdpResource for Resource<S, K> {
     fn kind(&self) -> XdpCleanupKind {
         match self {
             Self::Filter(_) => XdpCleanupKind::Outer,
-            Self::Stage(_) => XdpCleanupKind::Program,
+            Self::Stage(_) | Self::Orphan(_) => XdpCleanupKind::Program,
             Self::Record(_) => XdpCleanupKind::Record,
         }
     }
@@ -273,6 +274,14 @@ fn cleanup<S: TcStore, K: TcLifecycle>(
                         cause: e.cause.into(),
                         remaining: Resource::Record(e.remaining),
                     }),
+                    Resource::Orphan(r) => {
+                        app.kernel
+                            .remove_tc_orphan(w, r)
+                            .map_err(|e| EffectFailure {
+                                cause: e.cause.into(),
+                                remaining: Resource::Orphan(e.remaining),
+                            })
+                    }
                 };
                 next.completed(outcome)
             }

@@ -89,6 +89,43 @@ fn run<T: Send>(
 impl XdpNamespace {
     pub(super) fn open(interface: &InterfaceName, selector: &NetworkNamespace) -> io::Result<Self> {
         let fd = open(selector)?;
+        Self::from_fd(fd, interface, selector)
+    }
+
+    pub(super) fn open_tc_removal(
+        interface: &InterfaceName,
+        selector: &NetworkNamespace,
+    ) -> io::Result<Option<Self>> {
+        match open(selector) {
+            Ok(fd) => Self::from_fd(fd, interface, selector).map(Some),
+            Err(error)
+                if !selector.as_str().is_empty() && error.raw_os_error() == Some(libc::ENOENT) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(super) fn require_absent(selector: &NetworkNamespace) -> io::Result<()> {
+        match open(selector) {
+            Err(error)
+                if !selector.as_str().is_empty() && error.raw_os_error() == Some(libc::ENOENT) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+            Ok(_) => Err(invalid(
+                "TC namespace selector reappeared since orphan admission",
+            )),
+        }
+    }
+
+    fn from_fd(
+        fd: File,
+        interface: &InterfaceName,
+        selector: &NetworkNamespace,
+    ) -> io::Result<Self> {
         let metadata = fd.metadata()?;
         let nsid =
             NonZeroU64::new(metadata.ino()).ok_or_else(|| invalid("zero namespace identity"))?;

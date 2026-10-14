@@ -317,6 +317,68 @@ fn contract<S: OpenStore + CommitLoad + TcStore + Clone>(
             .map_err(|f| f.cause)
             .expect("last delete");
         assert!(reader.read_tc_dispatchers().expect("empty").is_empty());
+
+        // Orphan cleanup conditionally deletes the complete revision, rather
+        // than truncating a multi-member receipt to its first row.
+        let first = backend.commit_tc(w, request()).expect("new dispatcher");
+        let (_, receipt) = backend
+            .observe_tc_dispatcher(w, key)
+            .expect("observe")
+            .expect("present");
+        let valid = desired(request(), &next, &second, first.id);
+        let published = backend
+            .replace_tc(
+                w,
+                receipt,
+                bpfman_store::TcReplace {
+                    updated_at: "2026-10-08T00:02:00Z",
+                    members: &valid,
+                },
+            )
+            .map_err(|f| f.cause)
+            .expect("two members");
+        let (_, receipt) = backend
+            .observe_tc_member_dispatcher(w, published.members()[1].member.id)
+            .expect("second member lookup")
+            .expect("present");
+        let (_, stale) = backend
+            .observe_tc_dispatcher(w, key)
+            .expect("observe stale")
+            .expect("present");
+        let receipt = writer(&other, |other| backend.delete_tc(other, receipt))
+            .expect_err("foreign full-dispatcher receipt refused")
+            .remaining;
+        assert_eq!(
+            reader.read_tc_dispatchers().expect("unchanged"),
+            [published]
+        );
+        backend
+            .delete_tc(w, receipt)
+            .map_err(|f| f.cause)
+            .expect("complete dispatcher deletion");
+        assert!(
+            reader
+                .read_tc_dispatchers()
+                .expect("empty dispatchers")
+                .is_empty()
+        );
+        assert!(
+            reader
+                .read_links()
+                .expect("all members removed atomically")
+                .is_empty()
+        );
+        assert!(
+            reader
+                .read_records()
+                .expect("program retained")
+                .iter()
+                .all(|p| p.links.is_empty())
+        );
+        assert!(
+            backend.delete_tc(w, stale).is_err(),
+            "consumed snapshot cannot delete again"
+        );
     });
 }
 

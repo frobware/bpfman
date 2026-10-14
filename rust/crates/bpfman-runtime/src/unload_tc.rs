@@ -79,11 +79,17 @@ impl<S: TcStore, K: TcLifecycle> Progress<S, K> {
         // of one dispatcher reobserve its latest revision after preceding detaches.
         let mut retained = Vec::new();
         let mut blocked = std::collections::BTreeSet::new();
+        let mut removed = std::collections::BTreeSet::new();
         for (record, teardown) in self.pending.drain(..) {
             let LinkDetails::Tc(details) = &record.details else {
                 return Err(Cause::Invalid("non-TC unload member").into());
             };
             let key = details.key;
+            // Orphan cleanup consumes the whole dispatcher, including other
+            // admitted members of this program. Their unused receipts have no effects.
+            if removed.contains(&key) {
+                continue;
+            }
             if blocked.contains(&key) {
                 retained.push((record, teardown));
                 continue;
@@ -131,6 +137,12 @@ impl<S: TcStore, K: TcLifecycle> Progress<S, K> {
             let detached = outcome
                 .as_ref()
                 .is_ok_and(|r| r.primary_failure().is_none() || r.committed_snapshot().is_some());
+            if outcome
+                .as_ref()
+                .is_ok_and(|r| r.primary_failure().is_none() && r.committed_snapshot().is_none())
+            {
+                removed.insert(key);
+            }
             if let Some(index) = self.attempts.iter().position(|a| a.link_id == record.id) {
                 self.attempts.remove(index);
             }

@@ -5,7 +5,7 @@
 
 mod error;
 mod tc;
-pub use tc::TcLifecycle;
+pub use tc::{TcLifecycle, TcRemoval};
 mod lifecycle;
 mod xdp_replace;
 pub use lifecycle::{

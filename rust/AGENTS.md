@@ -145,6 +145,15 @@ The architecture and compatibility goals are in
   `make rust-test-tc` runs both hooks and both stores, including replacement and attached
   unload. Members of one dispatcher use its latest revision; a failed member blocks
   later members of that dispatcher while independent interfaces/hooks continue one pass.
+- A missing explicit namespace selector admits complete TC orphan cleanup. Require
+  ENOENT from opening the selector itself; interface absence, permission errors and
+  changed namespace/interface identity remain failures. Adopt confined pins and
+  durable ownership before effects, recheck selector absence before removing pins,
+  then conditionally delete the unchanged complete dispatcher snapshot. Retain
+  consuming receipts and partial progress on failure. Unload consumes repeated
+  members once per removed scope while other hooks/namespaces get their pass.
+  Missing a name does not prove kernel namespace destruction: external holders
+  may preserve it. Do not invent filter/qdisc authority in an unreachable namespace.
 - The unchanged Go clsact script has a production-policy guard. Rust's test harness
   explicitly sets `BPFMAN_E2E_CLSACT_RECLAIM=true`, forwarded by Make, to run its
   assertions against Rust without changing Go's reclaim policy.
@@ -364,11 +373,15 @@ The architecture and compatibility goals are in
   Every new store backend must run the existing generic lifecycle, CLI, and DSL
   scenarios by changing backend selection in test setup. Add backend-specific
   tests only for its persistence guarantees; do not duplicate behavioural suites.
-- Put externally observable behavioural scenarios in `.bpfman` scripts, using
-  the existing Go corpus first. Add scripts for implemented gaps; reuse existing
-  syntax/helpers before introducing runner support. Keep Rust unit tests quick
-  and focused on internal validation and transitions. Filesystem, persistence,
-  process and kernel tests are integration contracts, not unit tests.
+- Treat existing `.bpfman` scripts as immutable acceptance contracts during this
+  Rust reimplementation. Run them unchanged and record newly passing cases in the
+  implementation document. New scripts must pass the same assertions against the
+  Go binary and Rust with both stores before admission; do not use a Rust-only
+  label to bypass that comparison. Keep implementation-specific receipt, retry
+  and immediate kernel-lifetime coverage in Rust integration contracts.
+  Keep Rust unit tests quick and focused
+  on internal validation and transitions. Filesystem, persistence, process and
+  kernel tests are integration contracts, not unit tests.
 - `rust-test-unit` runs library/binary unit targets without integration tests or
   doctests. Keep process-wide signal fixtures in `tests/signal_policy.rs`.
 - Keep real-kernel tests for guarantees the fake cannot establish: verifier,
@@ -376,9 +389,10 @@ The architecture and compatibility goals are in
 - Reuse the unchanged `e2e/scripts/*.bpfman` corpus via the Go shell runner.
   Select a CLI using `BPFMAN_UNDER_TEST`, which sets both `BPFMAN_BIN` and `PATH`.
   Do not claim parity from decoding alone or weaken scripts for Rust.
-  Passing file-bytecode scripts carry `#pragma labels={"rust":"ok"}`; add the label
-  only after execution against Rust with both stores. Preserve other labels and
-  assertions. Use `BPFMAN_E2E_SCRIPT_SELECTOR='rust=ok,!external'` to batch the set
+  Existing file-bytecode parity scripts carry `#pragma labels={"rust":"ok"}`.
+  Keep these labels unchanged; run additional acceptance cases with explicit
+  filename selection on both stores and record the results separately. Use
+  `BPFMAN_E2E_SCRIPT_SELECTOR='rust=ok,!external'` to batch the established set
   through the existing Go runner and its pooled interfaces/parallel scheduler.
   Rust-only scripts additionally declare `rust-only=true`; always select Rust
   explicitly with `BPFMAN_E2E_IMPLEMENTATION=rust` alongside `BPFMAN_UNDER_TEST`.

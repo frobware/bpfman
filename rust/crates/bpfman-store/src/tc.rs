@@ -59,7 +59,7 @@ pub trait TcStore: OpenStore {
         receipt: Self::TcReceipt,
         request: TcReplace<'_>,
     ) -> Result<bpfman_model::TcDispatcherSnapshot, EffectFailure<Self::TcReceipt, Error>>;
-    /// Delete only unchanged intent after all kernel/filesystem prerequisites.
+    /// Delete the unchanged complete dispatcher and all members after kernel/filesystem prerequisites.
     fn delete_tc(
         &self,
         w: &RuntimeWriter<'_>,

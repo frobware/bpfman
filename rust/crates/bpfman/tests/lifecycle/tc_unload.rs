@@ -30,6 +30,138 @@ fn request(id: std::num::NonZeroU32, interface: &str, hook: bpfman_model::TcDire
     }
 }
 
+pub(super) fn orphan_recovery<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        let f = Fixture::new(backend);
+        let id = load(&f);
+        let other = load(&f);
+        let mut r = request(id, "fake0", hook);
+        r.netns = "/fake/netns/a".parse().expect("namespace");
+        let first = f.app.attach_tc(r).expect("first");
+        let mut r = request(other, "fake0", hook);
+        r.netns = "/fake/netns/a".parse().expect("namespace");
+        f.app.attach_tc(r).expect("second");
+        let before = f.app.list_link_records().expect("snapshot");
+        let nsid = std::num::NonZeroU64::new(2).expect("namespace");
+        f.kernel.set_tc_namespace_present(nsid, false);
+        f.kernel.fail(Point::RemoveTcStage, Phase::Before);
+        let offset = f.kernel.events().len();
+        let error = f.app.detach_tc(first.id).expect_err("pins failure");
+        assert_eq!(error.unresolved(), 2);
+        assert_eq!(error.attempts().len(), 1);
+        assert!(!f.kernel.events()[offset..].contains(&Point::RemoveTcFilter));
+        assert_eq!(f.app.list_link_records().expect("records retained"), before);
+        f.kernel.clear();
+        f.kernel.set_tc_namespace_present(nsid, true);
+        let error = f
+            .app
+            .retry_tc_cleanup(error)
+            .expect_err("selector reappeared");
+        assert_eq!(error.unresolved(), 2);
+        assert_eq!(f.app.list_link_records().expect("still retained"), before);
+        f.kernel.set_tc_namespace_present(nsid, false);
+        f.app
+            .retry_tc_cleanup(error)
+            .expect("retry complete orphan");
+        assert!(
+            f.app
+                .list_link_records()
+                .expect("all members removed")
+                .is_empty()
+        );
+        assert_eq!(
+            f.app
+                .unload(id)
+                .expect("first program survives detach")
+                .unresolved(),
+            0
+        );
+        assert_eq!(
+            f.app
+                .unload(other)
+                .expect("second program survives detach")
+                .unresolved(),
+            0
+        );
+        f.clean();
+    }
+}
+
+pub(super) fn orphan_unload<S: Store>(backend: S) {
+    for hook in [
+        bpfman_model::TcDirection::Ingress,
+        bpfman_model::TcDirection::Egress,
+    ] {
+        for fail_record in [false, true] {
+            let f = Fixture::new(backend);
+            let id = load(&f);
+            let mut ids = Vec::new();
+            for (ns, direction) in [
+                ("a", hook),
+                ("a", hook),
+                ("a", hook.opposite()),
+                ("b", hook),
+            ] {
+                let mut r = request(id, "fake0", direction);
+                r.netns = format!("/fake/netns/{ns}").parse().expect("namespace");
+                ids.push(f.app.attach_tc(r).expect("attach").id);
+            }
+            f.kernel
+                .set_tc_namespace_present(std::num::NonZeroU64::new(2).expect("namespace"), false);
+            if fail_record {
+                f.store.set(Some(StorePoint::TcDelete));
+            }
+            let offset = f.kernel.events().len();
+            let report = match f.app.unload(id) {
+                Ok(report) => {
+                    assert!(!fail_record);
+                    report
+                }
+                Err(error) => {
+                    assert!(fail_record);
+                    let r = error.report().expect("retained");
+                    assert!(r.attempts().is_empty());
+                    assert_eq!(r.tc_attempts().len(), 3, "one attempt per dispatcher");
+                    assert_eq!(
+                        r.tc_attempts()[0]
+                            .outcome()
+                            .expect_err("record")
+                            .unresolved(),
+                        1
+                    );
+                    assert_eq!(
+                        r.tc_attempts()[2]
+                            .outcome()
+                            .expect_err("live record failure")
+                            .attempts()
+                            .len(),
+                        3,
+                        "independent live namespace completed its kernel prerequisites"
+                    );
+                    f.store.set(None);
+                    f.app
+                        .retry_unload(error)
+                        .expect("retry record, skip consumed peers")
+                }
+            };
+            assert_eq!(report.unresolved(), 0);
+            assert_eq!(report.tc_attempts().len(), 3);
+            assert_eq!(report.tc_attempts()[0].link_id(), ids[0]);
+            assert_eq!(
+                f.kernel.events()[offset..]
+                    .iter()
+                    .filter(|p| **p == Point::RemoveTcFilter)
+                    .count(),
+                1
+            );
+            f.clean();
+        }
+    }
+}
+
 pub(super) fn lifecycle<S: Store>(backend: S) {
     for hook in [
         bpfman_model::TcDirection::Ingress,

@@ -106,7 +106,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
-| TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, dispatcher get/list | TCX, outer-filter status and orphan repair |
+| TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | TCX, outer-filter status and general orphan repair |
 | Persistence | Go-compatible SQLite schema 2; new JSON stores use format 9 for TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
@@ -4208,3 +4208,129 @@ the aliases into separate declarations left their dependencies unchanged;
 probes. Final logs are `gate.stdout.log`, `gate.stderr.log` and
 `make-lint-final.log`; `final-report.json` records the unique kernel-test count
 and admitted manifest counts. `git diff --check` is clean.
+
+### TC parity audit and missing-namespace cleanup (14 October 2026)
+
+Eleven existing scripts passed unchanged against Rust with both JSON and SQLite
+on owned tmpfs fixtures, including successful runner inventory/artifact checks and
+cleanup:
+
+- `TestDispatcher_AttachExceedsMaxProgramsTC`
+- `TestDispatcher_LifecycleAfterLastDetachTC`
+- `TestDispatcher_MultipleInterfacesIndependentTC`
+- `TestTC_NetnsVethPairLinkRoundTrip`
+- `TestTC_NetnsDispatcherRebuild`
+- `TestTC_MultiPriorityChainWithOKProceedOn`
+- `TestTC_MultiPriorityChainDefaultProceedOn`
+- `TestTC_ProceedOnUnspecEncoding`
+- `TestTC_RejectsAttachOverForeignIngressQdisc`
+- `TestTC_DeletedNetnsDetachRemovesDispatcher`
+- `TestTC_NetnsVethPairDeletedNetnsDetachRemovesDispatcher`
+
+The capacity script exposed a diagnostic mismatch: Rust rejected the eleventh
+member before staging, but combined full membership with exhausted revision space
+in one message. TC now translates the pure planner's distinct errors, including
+`no free dispatcher slots` for capacity. Neither its assertion nor the planner's
+admission ordering changed.
+
+The two deleted-namespace gates required a separate consuming kernel observation.
+`TcRemoval` distinguishes a validated live stage/filter from an opaque `TcOrphan`.
+Only ENOENT from opening an explicit namespace selector admits Rust orphan cleanup.
+Interface absence, permission/inspection errors and changed namespace/interface
+identity remain failures. Attachment/replacement still requires live namespace
+evidence. Orphan admission validates the complete confined revision, each present
+native/EXT pin and durable clsact ownership before effects. The adapter rechecks
+selector absence before removing pins through the same held-descriptor teardown
+and partial-progress removal as ordinary TC retirement. A reappeared selector or
+foreign runtime returns the unconsumed receipt.
+
+Pin cleanup precedes conditional store deletion. JSON and SQLite can now delete
+an unchanged complete dispatcher receipt atomically, including every member;
+stale and foreign receipts remain invalid. Neither the Go schema nor JSON formats
+change. Other programs' member records in that orphan scope disappear, while the
+programs themselves remain loaded. Other hooks and namespaces remain untouched by
+detach. Attached unload consumes repeated target-program members of a successfully
+removed scope once; failed cleanup blocks that scope's later members while other
+scopes still get a pass. Record-only retry does not repeat successful pin removal.
+
+An absent name does not prove kernel namespace destruction. Other holders or
+another name may keep the original namespace, native filter and qdisc alive.
+Rust orphan cleanup removes validated managed pins and intent without inventing
+filter/qdisc authority. Its real-kernel contract keeps the original namespace
+alive under another name and requires managed program-ID absence immediately
+after unload. No post-unload sleep or polling was added. Fake and real contracts
+cover repeated members, multiple programs, both hooks, pin/store failures,
+reappeared selectors, changed namespace identity, wrong runtime, malformed
+ownership before effects, detach isolation and reopened recovery. Shared store
+contracts cover complete deletion and stale/foreign receipt rejection.
+
+The new shared `TestTC_DeletedNetnsLifecycle` adds four cases combining both hooks,
+repeated attachments, another program's orphan membership and an independent live
+namespace. That live attachment uses a separate veth pair: deleting either
+endpoint of the orphan pair also destroys its peer. Go initially passed both
+detach cases but failed both attached-unload cases on both stores: its first
+member removed the complete dispatcher snapshot, then the next member attempted
+to rebuild that missing snapshot (`record not found`). Rust passed all four.
+
+Review of the original Rust implementation in `bpfman/src/lib.rs` found historical
+precedent for accepting an already-removed dispatcher. That is evidence of intent,
+not a correctness specification: the old code uses `Path::exists`, deletes its
+dispatcher database tree before filesystem cleanup, ignores namespace-entry
+failures and leaves other members' records until individually removed. Its
+`test_netns_delete` does not cover repeated attachments; the legacy binary was not
+executed during this review.
+
+The Go fix is deliberately limited to unload bookkeeping. The existing rebuild
+and removal operations now return a private typed result indicating whether they
+rebuilt or removed the dispatcher. Unload records successful removals within its
+own writer-locked operation and skips later admitted members only for those keys.
+A missing snapshot at the first lookup and a failed removal still fail; arbitrary
+`ErrRecordNotFound` results are not suppressed. Its real-SQLite/fake-kernel tests
+verify that both failures retain the program and unchanged member records, and
+that a repaired retry consumes the removed scope once.
+
+Go's namespace checks, kernel adapter, cleanup ordering, warning/GC policy and
+existing fake-kernel behavior remain unchanged. The broader proposed Go namespace
+validation and strict orphan cleanup changes were removed after review. Rust
+retains its stricter validation and explicit consuming recovery. This slice does
+not claim identical failure-reporting or physical reclamation across implementations.
+
+All four new script cases pass with the reduced Go change and with Rust on both
+stores, using identical assertions and successful normal tmpfs cleanup. Only the
+new shared file gains `rust=ok`; it has no Rust-only label. All 172 pre-existing
+scripts, including their labels, remain byte-for-byte unchanged. The eleven older
+scripts above remain outside the unchanged manifest and their passes are recorded
+separately. The admitted set now has 91 files per store: 58 shared Go/Rust and 33
+existing Rust-only files; 26 case files expand to 80 named cases.
+
+Evidence is in `/tmp/bpfman-tc-parity-orphans/`. `final-{json,sqlite}.log` records
+the eleven unchanged Rust acceptance passes. `shared-go-{json,sqlite}.log` records
+the original Go failure. The final reduced-patch matrix is
+`reduced-{go,rust}-{json,sqlite}.log`. `go-reduced.stdout.log` and
+`go-reduced.stderr.log` retain the passing complete Go unit suite, vet and build:
+`direnv exec . make test bpfman-vet bpfman-compile` with
+`EXTRA_GOFLAGS=-ldflags=-linkmode=external`. The override is required for Go's cgo
+test binaries in the Nix dynamic shell; the default-link attempt failed at the
+linker. Earlier exploratory logs are retained separately, and do not describe the
+final reduced Go patch.
+
+The latest full `direnv exec . make rust-check lint-make` exited zero, with all
+108 unique real-kernel tests, 64 fake-kernel tests, warnings-denied Clippy/Rustdoc,
+userspace/compile-fail checks and successful owned tmpfs cleanup. Both stores
+passed all 91 admitted files and the four additional shared-runtime scripts.
+`shared-gate.stdout.log` and `shared-gate.stderr.log` retain that run. Its kernel
+stage took 106.41 seconds while Go validation was also running, not a controlled
+performance comparison. Rust code and script assertions are unchanged by the
+subsequent Go reduction; the final targeted matrix verifies the reduced Go binary.
+
+Broader Go acceptance found a separate existing attach-rollback issue:
+`TestTC_RejectsAttachOverForeignIngressQdisc` passes its refusal assertions but
+leaves empty ingress/egress revision directories. It reproduces on JSON with an
+unmodified Go build constructed through a source overlay. See
+`baseline-go/overlay.json`, `baseline-go/foreign-qdisc-json.log` and
+`contract-go-json.log`. Rust passes this unchanged script. That separate Go issue
+is recorded and deferred; it is not fixed or labelled as passing here.
+
+TCX, outer-filter status, general orphan reconciliation and cross-implementation
+TC teardown remain outside this slice. Missing a live interface in an otherwise
+accessible namespace is not treated as missing-namespace cleanup in Rust.

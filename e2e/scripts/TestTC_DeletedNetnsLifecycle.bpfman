@@ -1,4 +1,5 @@
 # -*- mode: bpfman -*-
+#pragma labels={"rust":"ok"}
 #pragma cases=[{"name":"ingress-detach","params":{"hook":"ingress","operation":"detach"}},{"name":"egress-detach","params":{"hook":"egress","operation":"detach"}},{"name":"ingress-unload","params":{"hook":"ingress","operation":"unload"}},{"name":"egress-unload","params":{"hook":"egress","operation":"unload"}}]
 # Missing-namespace detach removes the complete selected dispatcher. Attached unload
 # handles repeated members, both hooks and a separate live namespace.
