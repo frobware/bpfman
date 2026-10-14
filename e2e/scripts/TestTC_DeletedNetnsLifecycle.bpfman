@@ -1,0 +1,67 @@
+# -*- mode: bpfman -*-
+#pragma cases=[{"name":"ingress-detach","params":{"hook":"ingress","operation":"detach"}},{"name":"egress-detach","params":{"hook":"egress","operation":"detach"}},{"name":"ingress-unload","params":{"hook":"ingress","operation":"unload"}},{"name":"egress-unload","params":{"hook":"egress","operation":"unload"}}]
+# Missing-namespace detach removes the complete selected dispatcher. Attached unload
+# handles repeated members, both hooks and a separate live namespace.
+
+import ../lib.bpfman
+
+def deleted_tc_lifecycle(hook operation) {
+    guard pair <- net netns-veth-pair
+    defer net release $pair
+    guard live_pair <- net netns-veth-pair
+    defer net release $live_pair
+    let netns = "/var/run/netns/${pair.a.ns}"
+    let live_netns = "/var/run/netns/${live_pair.a.ns}"
+    let opposite = $hook |> jq 'if . == "ingress" then "egress" else "ingress" end'
+    guard loaded <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+    let prog = $loaded.programs[0]
+    guard other_loaded <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+    let other = $other_loaded.programs[0]
+    guard first <- bpfman link attach tc $prog $pair.a.link $hook --priority 50 --netns $netns
+    guard repeated <- bpfman link attach tc $prog $pair.a.link $hook --priority 60 --netns $netns
+    guard other_member <- bpfman link attach tc $other $pair.a.link $hook --priority 70 --netns $netns
+    guard opposite_first <- bpfman link attach tc $prog $pair.a.link $opposite --priority 50 --netns $netns
+    guard opposite_tail <- bpfman link attach tc $prog $pair.a.link $opposite --priority 60 --netns $netns
+    guard live <- bpfman link attach tc $prog $live_pair.a.link $hook --priority 50 --netns $live_netns
+    guard opposite_before <- bpfman dispatcher get "tc-${opposite}" $pair.a.nsid $pair.a.ifindex
+    guard live_before <- bpfman dispatcher get "tc-${hook}" $live_pair.a.nsid $live_pair.a.ifindex
+    guard _ <- exec ip netns del $pair.a.ns
+
+    if $operation == detach {
+        bpfman link detach $first
+        assert fail bpfman dispatcher get "tc-${hook}" $pair.a.nsid $pair.a.ifindex
+        guard listed <- bpfman link list -o json
+        assert_link_absent $listed $first.record.id
+        assert_link_absent $listed $repeated.record.id
+        assert_link_absent $listed $other_member.record.id
+        guard opposite_after <- bpfman dispatcher get "tc-${opposite}" $pair.a.nsid $pair.a.ifindex
+        guard live_after <- bpfman dispatcher get "tc-${hook}" $live_pair.a.nsid $live_pair.a.ifindex
+        assert ($opposite_after |> jq tojson) == ($opposite_before |> jq tojson)
+        assert ($live_after |> jq tojson) == ($live_before |> jq tojson)
+        bpfman link detach $opposite_first
+    }
+    bpfman program unload $prog
+    assert fail bpfman dispatcher get "tc-${hook}" $pair.a.nsid $pair.a.ifindex
+    assert fail bpfman dispatcher get "tc-${opposite}" $pair.a.nsid $pair.a.ifindex
+    assert fail bpfman dispatcher get "tc-${hook}" $live_pair.a.nsid $live_pair.a.ifindex
+    guard final <- bpfman link list -o json
+    foreach link in [$first $repeated $other_member $opposite_first $opposite_tail $live] {
+        assert_link_absent $final $link.record.id
+    }
+    guard surviving_program <- bpfman program get $other
+    assert ($surviving_program |> jq ".status.links | length") == 0
+    bpfman program unload $other
+}
+
+guard input <- exec sh -c 'printf "%s\n" "${BPFMAN_E2E_CASE:-null}"'
+let params = $input.stdout |> jq fromjson
+let all_cases = $params |> jq ". == null"
+if $all_cases {
+    foreach hook in [ingress egress] {
+        foreach operation in [detach unload] {
+            deleted_tc_lifecycle $hook $operation
+        }
+    }
+} else {
+    deleted_tc_lifecycle $params.hook $params.operation
+}

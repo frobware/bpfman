@@ -179,25 +179,35 @@ func (m *Manager) gcMapSetIfUnused(ctx context.Context, mapSetID kernel.ProgramI
 // dropped when its program is unloaded.
 func (m *Manager) detachAllLinks(ctx context.Context, links []bpfman.LinkRecord) (map[dispatcher.Key]struct{}, error) {
 	rebuiltDispatchers := make(map[dispatcher.Key]struct{})
+	removedDispatchers := make(map[dispatcher.Key]struct{})
 	for _, link := range links {
 		if link.PinPath == nil {
 			continue
 		}
-		if err := m.kernel.DetachLink(ctx, *link.PinPath); err != nil {
-			return rebuiltDispatchers, fmt.Errorf("detach link %d: %w", link.ID, err)
-		}
-
 		dispType, nsid, ifindex, err := extractDispatcherKey(link.Details)
 		if err != nil {
 			return rebuiltDispatchers, fmt.Errorf("extract dispatcher key for link %d: %w", link.ID, err)
 		}
 
+		key := dispatcher.Key{Type: dispType, Nsid: nsid, Ifindex: ifindex}
+		if _, removed := removedDispatchers[key]; removed {
+			// A preceding successful action removed this complete snapshot
+			// and its member records. Only this operation's own completed
+			// removals authorize skipping an admitted member.
+			continue
+		}
+		if err := m.kernel.DetachLink(ctx, *link.PinPath); err != nil {
+			return rebuiltDispatchers, fmt.Errorf("detach link %d: %w", link.ID, err)
+		}
 		if dispType == (dispatcher.DispatcherType{}) {
 			continue
 		}
-		key := dispatcher.Key{Type: dispType, Nsid: nsid, Ifindex: ifindex}
-		if err := m.executor.Execute(ctx, action.RebuildDispatcherForDetach{Key: key, ExcludeLinkID: link.ID}); err != nil {
+		result, err := action.Produce[dispatcherDetachResult](ctx, m.executor, action.RebuildDispatcherForDetach{Key: key, ExcludeLinkID: link.ID})
+		if err != nil {
 			return rebuiltDispatchers, fmt.Errorf("rebuild dispatcher after detaching link %d: %w", link.ID, err)
+		}
+		if result == dispatcherRemoved {
+			removedDispatchers[key] = struct{}{}
 		}
 
 		rebuiltDispatchers[key] = struct{}{}

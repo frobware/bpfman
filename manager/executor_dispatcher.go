@@ -650,11 +650,12 @@ func (e *executor) removeDispatcherIfEmpty(ctx context.Context, key dispatcher.K
 
 // rebuildDispatcherForDetach rebuilds the dispatcher after an
 // extension has been detached. If no extensions remain, the
-// dispatcher is removed entirely.
-func (e *executor) rebuildDispatcherForDetach(ctx context.Context, key dispatcher.Key, excludeLinkID bpfman.LinkID) error {
+// dispatcher is removed entirely. The result identifies the completed mutation
+// so unload can consume later members of a successfully removed dispatcher.
+func (e *executor) rebuildDispatcherForDetach(ctx context.Context, key dispatcher.Key, excludeLinkID bpfman.LinkID) (dispatcherDetachResult, error) {
 	snap, err := e.store.GetDispatcherSnapshot(ctx, key)
 	if err != nil {
-		return fmt.Errorf("get dispatcher snapshot: %w", err)
+		return 0, fmt.Errorf("get dispatcher snapshot: %w", err)
 	}
 
 	// Filter out the excluded member.
@@ -667,11 +668,11 @@ func (e *executor) rebuildDispatcherForDetach(ctx context.Context, key dispatche
 	snap.Members = filtered
 
 	if len(snap.Members) == 0 {
-		return e.removeEmptyDispatcher(ctx, snap)
+		return dispatcherRemoved, e.removeEmptyDispatcher(ctx, snap)
 	}
 	if snap.Runtime.NetnsPath != "" {
 		if _, err := os.Stat(snap.Runtime.NetnsPath); errors.Is(err, os.ErrNotExist) {
-			return e.removeEmptyDispatcher(ctx, snap)
+			return dispatcherRemoved, e.removeEmptyDispatcher(ctx, snap)
 		}
 	}
 
@@ -698,10 +699,17 @@ func (e *executor) rebuildDispatcherForDetach(ctx context.Context, key dispatche
 	e.logger.InfoContext(ctx, "rebuilding dispatcher for detach", "type", key.Type, "nsid", key.Nsid, "ifindex", key.Ifindex, "revision", revision, "remaining", len(rebuildSlots))
 
 	if key.Type == dispatcher.DispatcherTypeXDP {
-		return e.rebuildXDPForDetach(ctx, snap, rebuildSlots, revision, progPinPath)
+		return dispatcherRebuilt, e.rebuildXDPForDetach(ctx, snap, rebuildSlots, revision, progPinPath)
 	}
-	return e.rebuildTCForDetach(ctx, snap, rebuildSlots, revision, progPinPath)
+	return dispatcherRebuilt, e.rebuildTCForDetach(ctx, snap, rebuildSlots, revision, progPinPath)
 }
+
+type dispatcherDetachResult uint8
+
+const (
+	dispatcherRebuilt dispatcherDetachResult = iota
+	dispatcherRemoved
+)
 
 // rebuildXDPForDetach handles the XDP-specific rebuild after detach.
 func (e *executor) rebuildXDPForDetach(

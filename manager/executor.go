@@ -126,7 +126,7 @@ func (e *executor) ExecuteResult(ctx context.Context, a action.Action) (any, err
 			a.ProgPinPath, a.ProgramName, a.Priority, a.ProceedOn, a.Metadata)
 
 	case action.RebuildDispatcherForDetach:
-		return nil, e.rebuildDispatcherForDetach(ctx, a.Key, a.ExcludeLinkID)
+		return e.rebuildDispatcherForDetach(ctx, a.Key, a.ExcludeLinkID)
 
 	case action.RemoveDispatcher:
 		return nil, e.removeDispatcherIfEmpty(ctx, a.Key)

@@ -438,6 +438,8 @@ func (RebuildTCDispatcher) isAction() {}
 // an extension has been detached. ExcludeLinkID identifies the member
 // being detached; the rebuild filters it out before deciding whether
 // to rebuild with remaining members or remove the empty dispatcher.
+// ExecuteResult reports whether the completed mutation rebuilt or removed
+// the dispatcher; unload uses removal to consume its remaining admitted members.
 type RebuildDispatcherForDetach struct {
 	// Key identifies the dispatcher whose chain this action rebuilds after a detach.
 	Key dispatcher.Key
