@@ -6,13 +6,18 @@
 
 use crate::{
     Bytecode, Error, LinkPin, MapDirectory, MapPin, ProgramPin, RuntimeWriter,
-    artifacts::{Entry, identity},
+    artifacts::{Entry, identity, proc_path},
     directory::CONFINED,
     error::{Failure, io},
 };
 use bpfman_core::EffectFailure;
 use rustix::fs::{AtFlags, FileType, Mode, OFlags, fstat, openat2, unlinkat};
 use std::os::fd::OwnedFd;
+
+pub(super) enum LinkKind {
+    PerfEvent,
+    Extension,
+}
 
 pub(super) fn open_owned(entry: &Entry) -> Result<OwnedFd, Error> {
     let flags = if entry.directory {
@@ -59,11 +64,56 @@ pub(super) fn remove(writer: &RuntimeWriter<'_>, entry: &Entry) -> Result<(), Er
     unlinkat(&entry.parent, &entry.name, flags).map_err(|e| io("remove owned artifact", e))
 }
 
+pub(super) fn remove_link(
+    writer: &RuntimeWriter<'_>,
+    kernel: &impl crate::LinkRetention,
+    entry: &Entry,
+    id: std::num::NonZeroU32,
+    kind: LinkKind,
+) -> Result<(), Error> {
+    entry.check_writer(writer)?;
+    let (info, retained) = {
+        let owned = open_owned(entry)?;
+        kernel
+            .retain_link(crate::PinSource(&proc_path(&owned)))
+            .map_err(Failure::Kernel)?
+    };
+    let expected_kind = match kind {
+        LinkKind::PerfEvent => info.details == bpfman_model::KernelLinkDetails::PerfEvent,
+        // EXT selects freplace; Aya creates its tracing link with attach type zero.
+        LinkKind::Extension => matches!(
+            info.details,
+            bpfman_model::KernelLinkDetails::Tracing { attach_type: 0, .. }
+        ),
+    };
+    if info.id != id || !expected_kind {
+        return Err(Failure::Unsafe("owned link identity or type changed").into());
+    }
+
+    // Every O_PATH descriptor to the pin must close before the live
+    // descriptor: it can keep the unlinked inode's pin reference alive.
+    remove(writer, entry)?;
+    drop(retained);
+    Ok(())
+}
+
 impl RuntimeWriter<'_> {
-    /// Remove an owned link pin. No live descriptor is retained by this receipt;
-    /// success releases this runtime's attachment reference before record deletion.
-    pub fn remove_link_pin(&self, receipt: LinkPin) -> Result<(), EffectFailure<LinkPin, Error>> {
-        remove(self, &receipt.entry).map_err(|cause| EffectFailure {
+    /// Remove an owned standalone pin while retaining its live link descriptor.
+    /// Closing that descriptor afterward releases the last managed reference
+    /// through the kernel's direct close path rather than queued pin release.
+    pub fn remove_link_pin(
+        &self,
+        kernel: &impl crate::LinkRetention,
+        receipt: LinkPin,
+    ) -> Result<(), EffectFailure<LinkPin, Error>> {
+        let result = remove_link(
+            self,
+            kernel,
+            &receipt.entry,
+            receipt.id,
+            LinkKind::PerfEvent,
+        );
+        result.map_err(|cause| EffectFailure {
             cause,
             remaining: receipt,
         })

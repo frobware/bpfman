@@ -26,10 +26,15 @@ pub struct TcProgram<E: ExtensionProgram> {
 pub struct TcPins {
     directory: Option<Box<Entry>>,
     program: Option<Box<Entry>>,
-    extensions: Vec<Option<Box<Entry>>>,
+    extensions: Vec<Option<TcExtensionPin>>,
     ownership: Option<Box<Entry>>,
     dispatcher_id: Option<NonZeroU32>,
     extension_ids: Vec<NonZeroU32>,
+}
+
+struct TcExtensionPin {
+    entry: Box<Entry>,
+    id: NonZeroU32,
 }
 
 fn name(key: XdpKey, revision: NonZeroU32) -> String {
@@ -164,8 +169,8 @@ impl RuntimeWriter<'_> {
             }
             for (member, name) in snapshot.members().iter().zip(expected) {
                 let pin = observe(self, &fd, &parent, &name, false)?.map(Box::new);
-                if let Some(pin) = &pin {
-                    let owned = open_owned(pin)?;
+                let pin = if let Some(pin) = pin {
+                    let owned = open_owned(&pin)?;
                     let info = kernel
                         .link_at(crate::PinSource(&proc_path(&owned)))
                         .map_err(Failure::Kernel)?;
@@ -180,7 +185,13 @@ impl RuntimeWriter<'_> {
                         return Err(Failure::Unsafe("TC extension link identity changed").into());
                     }
                     pins.extension_ids.push(kernel_id);
-                }
+                    Some(TcExtensionPin {
+                        entry: pin,
+                        id: kernel_id,
+                    })
+                } else {
+                    None
+                };
                 pins.extensions.push(pin);
             }
         }
@@ -188,12 +199,22 @@ impl RuntimeWriter<'_> {
     }
 
     /// Remove only owned entries, in dependency order, retaining progress on failure.
-    pub fn remove_tc_pins(&self, mut pins: TcPins) -> Result<(), EffectFailure<TcPins, Error>> {
+    pub fn remove_tc_pins(
+        &self,
+        kernel: &impl crate::LinkRetention,
+        mut pins: TcPins,
+    ) -> Result<(), EffectFailure<TcPins, Error>> {
         let result = (|| {
             let mut failures = Vec::new();
             for slot in &mut pins.extensions {
-                if let Some(entry) = slot {
-                    match crate::removal::remove(self, entry) {
+                if let Some(pin) = slot {
+                    match crate::removal::remove_link(
+                        self,
+                        kernel,
+                        &pin.entry,
+                        pin.id,
+                        crate::removal::LinkKind::Extension,
+                    ) {
                         Ok(()) => *slot = None,
                         Err(cause) => failures.push(cause),
                     }
@@ -321,12 +342,15 @@ impl<E: ExtensionProgram> TcProgram<E> {
                     .extension
                     .attach(dispatcher, slot)
                     .map_err(Failure::Kernel)?;
-                pins.extension_ids
-                    .push(nz(link.id().map_err(Failure::Kernel)?)?);
+                let id = nz(link.id().map_err(Failure::Kernel)?)?;
+                pins.extension_ids.push(id);
                 link.pin(crate::PinTarget(&proc_path(&fd).join(&name)))
                     .map_err(Failure::Kernel)?;
                 let observed = extension_pin.observe();
-                pins.extensions.push(Some(Box::new(extension_pin)));
+                pins.extensions.push(Some(TcExtensionPin {
+                    entry: Box::new(extension_pin),
+                    id,
+                }));
                 observed?;
             }
             Ok(())

@@ -7,9 +7,9 @@ use std::{os::fd::OwnedFd, path::PathBuf};
 
 mod kernel;
 pub use kernel::{
-    ExtensionProgram, KernelResult, LinkInspection, LinkPinning, MapPinning, OuterInfo, OuterLink,
-    PinProgramKind, PinSource, PinTarget, PinnedProgram, ProgramInspection, ProgramPinning,
-    TracepointKernel, TracepointProgram, XdpKernel, XdpSwitchKernel,
+    ExtensionProgram, KernelResult, LinkInspection, LinkPinning, LinkRetention, MapPinning,
+    OuterInfo, OuterLink, PinProgramKind, PinSource, PinTarget, PinnedProgram, ProgramInspection,
+    ProgramPinning, TracepointKernel, TracepointProgram, XdpKernel, XdpSwitchKernel,
 };
 
 mod xdp;

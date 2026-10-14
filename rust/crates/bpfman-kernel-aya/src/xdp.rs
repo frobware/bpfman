@@ -139,7 +139,7 @@ impl XdpLifecycle for Kernel {
         w: &RuntimeWriter<'_>,
         r: XdpExtensionPin,
     ) -> Removal<XdpExtensionPin> {
-        w.remove_xdp_extension(r).map_err(map)
+        w.remove_xdp_extension(self, r).map_err(map)
     }
 
     fn remove_dispatcher(&self, w: &RuntimeWriter<'_>, r: XdpProgramPin) -> Removal<XdpProgramPin> {

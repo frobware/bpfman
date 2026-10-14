@@ -3,7 +3,7 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The latest
-production checkpoint adds complete multi-member legacy TC ingress replacement on
+capability checkpoint adds complete multi-member legacy TC ingress replacement on
 both stores.
 One to ten EXT members are rebuilt in priority order around a native TC dispatcher,
 using the same exact legacy filter handle. Publication failures restore the old
@@ -78,6 +78,15 @@ before expanding Rust-specific packet scenarios; corpus failures should drive
 subsequent implementation. TC egress remains one known gap. Compare performance
 on the same scripts after behavior matches.
 Full behavioural parity remains unfinished.
+
+The 14 October tmpfs reassessment fixes tracepoint detach/reattach ordering by
+retaining a validated live link FD across unpinning and closing it afterward.
+XDP and TC cleanup now applies the same ordering to freplace links, with immediate
+program-ID assertions when no additional holders remain. Physical kernel
+reclamation and map-held native egress references remain asynchronous. Fake and
+real kernel suites now prefer owned
+tmpfs fixture scopes while preserving synchronization and explicit disk comparison
+lanes. See the [release investigation](#reassessing-real-kernel-tmpfs-release-failures-14-october-2026).
 
 The runtime uses pure membership planning and consuming ownership transitions to
 stage a complete revision, conditionally switch the durable outer link, and
@@ -3881,3 +3890,227 @@ kernel/corpus timing difference from the previous gate is not an attributed
 optimization. Evidence is in `/tmp/bpfman-sqlite-fixture-gate/`, including raw
 separate gate logs, the script timeline, coverage reports,
 `userspace-comparison.json` and the post-change fixture phase/sync probes.
+
+### Reassessing real-kernel tmpfs release failures (14 October 2026)
+
+The earlier tmpfs failure is reproducible on the current code and is a race
+between the test's immediate program observation and queued kernel link release.
+It is not evidence that SQLite loses a commit or that application cleanup retains
+the program indefinitely. This conclusion combines an unchanged baseline,
+observation before fixture teardown, matching kernel sources and live tracing.
+
+Four alternating disk/tmpfs pairs ran the exact JSON and SQLite XDP attached-unload
+tests serially, using supplementary Make targets and owned fixture scopes. All
+eight disk-backed tests passed; seven of eight tmpfs tests failed at the immediate
+program-ID absence assertion. Managed program/map/bytecode absence had already
+passed. Both stores failed, and the serial reproductions exclude concurrent test
+fixtures as a necessary trigger. These are diagnostic repetitions, not a benchmark.
+
+A temporary observation loop then required absence within five seconds while
+keeping the application, completed unload report, interface and mounted runtime
+alive. Five alternating pairs produced 20 release observations per filesystem,
+covering both survivor choices on each store. All disk observations found the
+program absent immediately. On tmpfs, six were immediately absent; fourteen
+first observed a live program and found it absent on the next observation after
+a one-millisecond sleep. The longest observation interval was 1.221 ms. These
+intervals include querying and scheduling; they are upper observations of release,
+not exact kernel destruction times. No fixture teardown or additional mutation
+was needed to make absence pass. All owned scopes passed empty-directory cleanup.
+
+The running kernel is Linux 6.18.54. The older reference checkout is v6.12, so
+the mechanism was checked against matching 6.18.54 sources:
+
+- [bpffs inode eviction](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/inode.c)
+  releases a pinned link through `bpf_any_put` and `bpf_link_put`.
+- [BPF link release](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/syscall.c)
+  queues `bpf_link_put_deferred` when the link reference count reaches zero.
+  `bpf_link_free` invokes tracing-link release and drops the link's program
+  reference during deallocation. Final program release removes the program ID;
+  later RCU memory freeing is a separate step.
+
+Temporary bpftrace probes observed the exact affected program and extension-link
+IDs. Three delayed cases showed the last extension link queued from the test
+process, then freed by a different kernel worker with link reference count zero
+and program reference count one. The same worker subsequently entered
+`bpf_prog_put_deferred` with program reference count zero. The queued-link-to-final-
+program-release intervals in these traced cases were approximately 0.755, 1.742
+and 1.694 ms. Tracing changes scheduling, so those values are mechanism evidence,
+not substitutes for the untraced observations. The tracer exited successfully and
+removed its probes. This identifies asynchronous link teardown, rather than merely
+inferring an unspecified RCU delay from eventual disappearance.
+
+The observations support disk-backed persistence hiding the invalid immediate-
+release assumption by adding time between extension unpinning and the final
+program observation. The experiments do not apportion every filesystem delay
+or guarantee that disk-backed tests cannot also race.
+
+The XDP attached-unload test now retains immediate managed-file absence checks
+and requires exact kernel-ID absence within a bounded five-second deadline.
+Unexpected observation errors still fail. The application, report, interface
+and runtime remain alive throughout this check. One survivor choice additionally
+retains a real program descriptor before unload: managed teardown must succeed,
+but a 20 ms bounded observation must still find the program alive. After closing
+that descriptor, the same absence check must pass. This control ensures waiting
+cannot silently accept a genuine retained reference. Production unload,
+persistence, synchronization and packet assertions are unchanged by that test
+correction. The production tracepoint fix and runner follow-up are described below.
+
+Raw baseline, untraced observation, corrected-test and kernel-trace evidence is
+in `/tmp/bpfman-tmpfs-reassessment/`, including `baseline.json`,
+`release-summary.json`, `corrected.json`, `trace.log`, separate stdout/stderr
+logs, matching kernel source files and the temporary supplementary Make/runner
+tools.
+
+Five further alternating pairs passed all 20 corrected XDP unload tests across
+both stores and filesystems, including the held-descriptor control. The broader
+eight-worker tmpfs contract run then exposed a separate tracepoint reattachment
+race: JSON's `tracepoint_attachment_lifecycle` failed at `commit wins` with
+`bpf_link_create` returning `EEXIST`. All 46 other independent JSON tests passed,
+including the corrected XDP unload test. The runner correctly stopped before the
+SQLite stages, and its owned scope passed cleanup; this is a failed experiment,
+not a successful complete tmpfs gate.
+
+Ten alternating serial tracepoint pairs reproduced four failures in ten JSON
+tmpfs tests, with all ten SQLite tmpfs and all twenty disk tests passing. These
+failures were all the same reattachment error. An additional eight traced pairs
+reproduced four JSON tmpfs failures, again with SQLite and disk passing. The
+kernel trace identifies the affected old link and program: old-link release was
+queued, insertion of that same program into the tracepoint array returned
+`-EEXIST`, and only afterward did a kernel worker run `bpf_link_free` and
+`bpf_perf_link_release` for the old link. The kretprobe prints the 32-bit error
+as `4294967279`, which is signed `-17`; it must not be read as success.
+
+[The matching program-array code](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/core.c)
+rejects insertion of a program already present. This is a real detach/reattach
+ordering gap, distinct from XDP's eventual object-reclamation assertion.
+Rust's tracepoint `remove_link` currently delegates to filesystem pin removal
+without retaining a live link descriptor across unpinning. The Go
+`platform/ebpf/pin.go` implementation already opens a link FD, removes its pin
+while retaining that FD, then closes it. With no additional holders, that final
+FD close invokes `bpf_link_put_direct` and finishes hook release synchronously.
+Perf-event links have no `bpf_link_ops.detach` callback on this kernel, so adding
+`BPF_LINK_DETACH` alone would not address them. Any Rust fix must preserve
+descriptor confinement, exact identity checks, receipt retention on failure and
+the existing policy for other descriptor holders. Do not add sleeps or automatic
+attach retries to make this contract pass.
+
+The first broader tmpfs run established this separate implementation gap.
+Additional evidence
+includes `tmpfs-contracts.*.log`, `tracepoint.json`, `tracepoint-traced.json` and
+`tracepoint-trace.log`, with successful tracer exits and owned-scope cleanup.
+
+The production tracepoint removal path now retains a live link descriptor through
+a narrow filesystem/kernel bridge. Adoption uses an opened, confined pin and
+validates the exact kernel ID and perf-event type before effects. All temporary
+O_PATH descriptors close before the retained live FD, including the descriptor
+used by the removal boundary: an O_PATH handle can keep the unlinked bpffs inode
+and its pin reference alive. Unpin failures retain the original ownership receipt.
+With no additional link holders, final FD close invokes direct kernel link release,
+matching Go's remove-then-close ordering. This fixes detach/reattach without sleeps
+or automatic attach retries. Other holders can still retain kernel objects; this
+does not introduce a synchronous kernel detach API for perf-event links.
+
+Ten alternating pairs with this fix passed all forty tracepoint tests on both
+stores and filesystems (`tracepoint-fixed.json`). The real-kernel runner now
+prefers an owned tmpfs fixture scope as well. Fake and real suites share
+`test-fixtures.sh`, preserving actual stores, files, locks and synchronization
+calls. It requires an empty owned scope after child termination, fails on residue,
+forwards signals and falls back to the normal temporary filesystem if tmpfs is
+unavailable. `BPFMAN_FAKE_KERNEL_TMPFS=0` and `BPFMAN_KERNEL_TMPFS=0` retain explicit
+disk-backed comparison lanes. Other test targets keep their incoming `TMPDIR`.
+Kernel privilege, mount namespace, backend ordering and concurrency limits are
+unchanged. Fast shell contracts exercise both scope selections and cleanup.
+
+The next tmpfs run exposed the identical immediate extension-program release
+assumption in TC attached unload. Its owned pins and managed files were already
+gone, while the EXT program was still observable. TC now uses the same bounded
+exact-ID observation helper as XDP, before dropping the report or fixtures;
+immediate artifact and filter/clsact assertions remain. The complete normal
+`rust-test-kernel-load` target then passed all 98 retained contracts on tmpfs in
+38.66 s, with both backend stages completing and successful empty-scope cleanup.
+The timing is a local sample, not an attributed optimization or full-gate time.
+The script runner also forwards `TMPDIR` through sudo, so its owned case/cohort
+fixtures inherit the kernel suite's selected storage scope.
+
+The final normal `direnv exec . env BPFMAN_KERNEL_TIMINGS=1
+BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-tmpfs-reassessment/final-gate-timeline.jsonl
+make rust-check lint-make` exited zero. Formatting, warnings-denied Clippy and
+Rustdoc, userspace/compile-fail and runner contracts, real-kernel acceptance and
+Make lint/undefined-variable checks passed. ShellCheck passed for the fixture and
+Cargo runners. Both fake and real suites reported tmpfs selection and successful
+empty-scope cleanup.
+
+All 100 kernel tests ran exactly once in 90.71 s. Both stores passed all 84
+admitted files, 64 named cases and four additional shared scripts: all 257 script
+process exits, 250 owned-runtime cleanup markers and four cohort outcomes passed.
+The 32/four script limits and scope overlap remain intact. The complete per-test
+phase matrix is identical to the preceding gate: 1032 completed records, including
+832 forwarding, 160 broadcast and 40 worker phases. This confirms retained
+coverage, not a controlled speed comparison.
+
+A final trace of one disk/tmpfs pair passed all four tracepoint tests. All twenty
+observed links had two references at unpin and were subsequently freed in the
+same calling process, confirming the intended direct-close ordering rather than
+merely observing that reattachment stopped failing. The tracer exited zero and
+removed its probes. Final evidence includes `final-report.json`, separate final
+gate logs, the final script timeline, `tracepoint-final-trace.log` and its summary.
+
+### Deterministic owned-link teardown and kernel reclamation (14 October 2026)
+
+The bounded post-unload checks above were an intermediate checkpoint. Rust now
+uses retained descriptor ordering for managed XDP and TC freplace links as well
+as standalone perf-event links. The filesystem adapter adopts the link through
+its verified pin, validates its exact ID and kind, removes the owned pin, closes
+all pin O_PATH descriptors, then closes the retained live descriptor. A private
+removal helper owns that ordering; runtime and pure lifecycle policy remain
+unchanged. TC retains each extension's ID with its individual removal receipt,
+so partial retirement and retries cannot shift an ID onto another remaining slot.
+Independent removals still get one attempt each and dependent native/evidence/
+directory cleanup remains blocked by any failure.
+
+Aya's freplace links have tracing attach type zero: the EXT program type selects
+replacement. An initial test run rejected these links because the new removal
+check used a wrong nonzero attach type. That exploratory run is retained in the
+evidence. The check was corrected against Aya 0.14's actual extension attachment
+implementation before the successful complete retained-contract run.
+
+XDP and TC attached-unload tests now query program-ID absence immediately after
+successful teardown, while reports, applications, interfaces and mounted runtimes
+remain alive. The retained-program control makes one direct presence observation,
+closes its FD, then makes one direct absence observation. XDP last-detach likewise
+requires immediate extension-link ID absence. Native egress programs which never
+acquired a map-held reference also use immediate program observations. The added
+`program_absent_within` polling helper and its 20 ms held-reference wait are gone.
+The complete retained kernel suite passed all 98 tests on tmpfs in 39.68 s before
+the final native-egress assertion follow-up; this is local test time, not a benchmark.
+
+A fresh trace of the immediate XDP unload tests observed 44 managed freplace links:
+each had two references at pin release and was freed in the same calling process.
+Both stores passed, and the trace and fixture scopes exited/cleaned successfully.
+This confirms the release mechanism rather than relying on a delay before querying.
+
+This is a deterministic ownership boundary, not a general kernel reclamation
+barrier. Extra descriptors or pins can retain a link or program. Program-ID absence
+does not prove all program memory and referenced maps have been freed. Linux's
+program destruction releases used maps through deferred work after RCU; DEVMAP
+entry removal and map destruction can also defer their egress-program references.
+The existing map/native-egress lifetime contracts retain bounded observation of
+that genuinely asynchronous kernel work. They remain separate from checking that
+Rust finished its owned teardown; no fixed sleep replaces a completion guarantee.
+An event-driven reclamation test would require a suitable kernel notification or
+explicit synchronization boundary, not merely another descriptor held by Rust.
+
+Evidence is in `/tmp/bpfman-deterministic-release/`: initial failed and corrected
+contract logs, the direct-release trace and `direct-extension-release.json`, and
+the full gate's separate stdout/stderr and script timeline.
+
+The final `direnv exec . env BPFMAN_KERNEL_TIMINGS=1
+BPFMAN_E2E_SCRIPT_TIMELINE=/tmp/bpfman-deterministic-release/gate-timeline.jsonl
+make rust-check lint-make` exited zero on tmpfs. All 100 kernel tests passed
+exactly once, including the immediate native-egress assertions, along with
+formatting, warnings-denied Clippy/Rustdoc, userspace/compile-fail and runner
+contracts, and Make lint/undefined-variable checks. Both stores passed all 84
+admitted files, 64 named cases and four additional shared scripts. All 257 script
+process exits, 250 owned-runtime cleanup outcomes and four cohort outcomes passed.
+The complete retained per-test phase matrix is unchanged at 1032 records. Kernel
+stage time was 88.10 s; this local sample is not a benchmark or full Make duration.

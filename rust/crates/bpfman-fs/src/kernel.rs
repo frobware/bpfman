@@ -119,6 +119,14 @@ pub trait LinkInspection {
     fn link_at(&self, source: PinSource<'_>) -> KernelResult<KernelLink>;
 }
 
+/// Retain a link across filesystem-authorized pin removal.
+pub trait LinkRetention {
+    /// Owned descriptor whose close releases this attachment reference.
+    type RetainedLink;
+    /// Observe identity and acquire the descriptor from the same opened pin.
+    fn retain_link(&self, source: PinSource<'_>) -> KernelResult<(KernelLink, Self::RetainedLink)>;
+}
+
 /// Adopt a tracepoint while retaining its live program handle.
 pub trait TracepointKernel: LinkInspection {
     /// Opaque owned program.

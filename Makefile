@@ -194,6 +194,8 @@ BPFMAN_E2E_SCRIPT_SELECTOR ?=
 BPFMAN_E2E_SCRIPT_TIMEOUT ?=
 BPFMAN_E2E_SCRIPT_REPEATS ?=
 BPFMAN_E2E_SCRIPT_TIMELINE ?=
+# Preserve the caller's owned fixture scope through the script runner's sudo.
+TMPDIR ?=
 BPFMAN_E2E_SCRIPT_STRESS_REPEATS ?= 16
 BPFMAN_E2E_SCRIPT_STRESS_PARALLEL ?= 128
 
@@ -986,6 +988,7 @@ endif
 # BIN_DIR is passed explicitly below rather than via this list
 # because the value gets abspath'd at the call site.
 E2E_SCRIPTS_FORWARD_VARS := \
+	TMPDIR \
 	BPFMAN_RUNTIME_DIR \
 	BPFMAN_STORE \
 	BPFMAN_CONFIG \

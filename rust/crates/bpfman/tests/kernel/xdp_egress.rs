@@ -386,7 +386,7 @@ where
             .unresolved(),
         0
     );
-    program_released(incompatible);
+    assert_program_absent(incompatible);
     assert_eq!(app.unload(tail).expect("tail cleanup").unresolved(), 0);
     app.detach_xdp(receiving.id).expect("receiver detach");
     assert_eq!(
@@ -488,7 +488,7 @@ where
         "rejected egress never executes"
     );
     assert_eq!(app.unload(egress).expect("egress cleanup").unresolved(), 0);
-    program_released(egress);
+    assert_program_absent(egress);
     app.detach_xdp(link.id).expect("last detach");
     assert_eq!(
         app.unload(redirect)

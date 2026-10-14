@@ -1433,7 +1433,8 @@ instances. Bytecode publication, runtime locking, and persistence remain real;
 no bpffs mount or kernel privileges are needed for these tests. Store fault
 injection uses the existing forwarding `Faults<S>` decorator.
 
-The Cargo test runner gives only this suite a private temporary directory on
+The Cargo test runner gives this suite and the privileged kernel binary separate
+owned temporary directories on
 `/dev/shm` when it is writable tmpfs. Real stores, files, locks and synchronization
 calls remain enabled. If tmpfs is unavailable, the runner creates an owned
 directory under the usual `TMPDIR` (or `/tmp`). Other test targets retain their
@@ -1452,6 +1453,18 @@ To exercise the default-filesystem fallback explicitly:
 ```sh
 direnv exec . env BPFMAN_FAKE_KERNEL_TMPFS=0 TMPDIR=/tmp make rust-test-kernel-fake
 ```
+
+Real-kernel targets also prefer tmpfs inside their private mount namespace.
+`BPFMAN_KERNEL_TMPFS=0` selects their disk-backed comparison lane. Both scopes
+use the same cleanup and signal-forwarding helper; production persistence and
+synchronization calls stay enabled. Standalone tracepoint teardown holds a
+validated link FD across unpinning, then closes it after the pin descriptors,
+preventing immediate reattachment from racing queued link release. XDP attached
+unload closes its owned freplace links through the same direct-close ordering.
+XDP/TC tests check program-ID absence immediately when no additional references
+remain. A deliberately held program FD proves presence before close and immediate
+absence afterward. Physical map reclamation and map-held native egress references
+remain asynchronous kernel lifetime contracts.
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
 confinement tests, the real-kernel tests, and the unchanged admitted DSL corpus

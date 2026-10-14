@@ -245,12 +245,10 @@ where
         );
         c.absent(id);
         c.no_artifacts();
-        assert_eq!(
-            bpfman_kernel::ProgramObservations::program(&bpfman_kernel_aya::Kernel, id)
-                .expect_err("extension released")
-                .kind(),
-            bpfman_kernel::ErrorKind::Missing
-        );
+        // Managed freplace references are released before return; the report
+        // and both networks are still alive during this immediate observation.
+        assert_program_absent(id);
+        assert_eq!(report.unresolved(), 0);
         for network in [&first, &second] {
             traffic(network, 3);
             assert_eq!(clsact(network), ownership != "owned");

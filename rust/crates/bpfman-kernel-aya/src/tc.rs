@@ -528,7 +528,7 @@ impl TcLifecycle for Kernel {
             namespace,
             root,
         } = stage;
-        w.remove_tc_pins(pins).map_err(|f| EffectFailure {
+        w.remove_tc_pins(self, pins).map_err(|f| EffectFailure {
             cause: filesystem(f.cause),
             remaining: TcStage {
                 pins: f.remaining,

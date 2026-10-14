@@ -31,12 +31,26 @@ The architecture and compatibility goals are in
   this stage before the complete real-kernel binary, so cheap admission
   or persistence failures are found before the long packet suites. Keep automatic
   CLI test discovery in `test-userspace.sh`; do not replace it with a partial list.
-- The Cargo runner scopes owned tmpfs fixtures to `kernel_lifecycle` only,
-  in both `rust-test-kernel-fake` and the automatic userspace gate. Preserve real
+- The Cargo runner scopes owned tmpfs fixtures to `kernel_lifecycle` and the
+  privileged `kernel` binary. Preserve real
   stores, locks and synchronization calls. Missing or unwritable `/dev/shm`
   falls back to the normal temporary filesystem; `BPFMAN_FAKE_KERNEL_TMPFS=0`
-  forces that fallback. Require an empty owned scope before removal and fail on
+  forces the fake-suite fallback; `BPFMAN_KERNEL_TMPFS=0` selects the real-suite
+  disk fallback for comparisons. Require an empty owned scope before removal and fail on
   residue. Other targets retain their incoming `TMPDIR`.
+- Attached XDP/TC unload proves managed-file removal and, without extra holders,
+  program-ID absence immediately. Retain a validated live freplace descriptor
+  across unpinning and close it after every pin O_PATH descriptor; do not poll
+  around queued release of Rust-owned links. Keep the retained program-descriptor
+  control and observe presence before close and absence after close, before
+  dropping the application, unload report, interface or mounted runtime.
+  Kernel-owned DEVMAP/RCU lifetime contracts are separate: managed teardown does
+  not promise physical reclamation or release of genuinely external references.
+- Standalone tracepoint teardown retains a validated live link descriptor across
+  pin removal and closes it after all pin O_PATH descriptors. This makes the last
+  managed reference use direct link release and prevents immediate reattachment
+  racing queued perf-event teardown. Preserve confined adoption and return the
+  original pin receipt if adoption, identity validation or removal fails.
 - On NixOS, Go and Rust tests share `e2e-kmod-build` and
   `e2e/kmod/prepare-kdir.sh`. If `/lib/modules/$(uname -r)/build` is absent, the
   helper discovers the matching `kernel.dev` output from

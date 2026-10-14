@@ -98,4 +98,22 @@ EXPECTED_FIXTURE=original sh "$runner" "$root/ordinary-test" > "$root/output" 2>
 rm "$FAKE_FIXTURE_LOG"
 if BPFMAN_FAKE_KERNEL_TMPFS=invalid sh "$runner" "$root/kernel_lifecycle-fake" > "$root/output" 2>&1; then exit 1; fi
 [ ! -f "$FAKE_FIXTURE_LOG" ]
+
+# Real kernel commands use the same ownership, fallback and residue guarantees.
+# Exercise the scope directly without requesting privileged kernel resources.
+fixtures="${0%/*}/test-fixtures.sh"
+for selection in 1 0; do
+    if [ "$selection" = 1 ]; then EXPECTED_FIXTURE=ram; else EXPECTED_FIXTURE=disk; fi
+    export EXPECTED_FIXTURE
+    sh "$fixtures" real-kernel "$selection" "$root/kernel_lifecycle-fake" --exact 'real case' > "$root/output" 2>&1
+    [ ! -d "$(sed -n '1p' "$FAKE_FIXTURE_LOG")" ]
+    [ "$(tail -n 1 "$root/output")" = "$(printf 'real-kernel-cleanup\tpassed')" ]
+done
+EXPECTED_FIXTURE=ram; export EXPECTED_FIXTURE
+if FAKE_RESIDUE=1 sh "$fixtures" real-kernel 1 "$root/kernel_lifecycle-fake" > "$root/output" 2>&1; then exit 1; fi
+[ -f "$(sed -n '1p' "$FAKE_FIXTURE_LOG")/residue" ]
+rm -rf "$(sed -n '1p' "$FAKE_FIXTURE_LOG")"
+rm "$FAKE_FIXTURE_LOG"
+if sh "$fixtures" real-kernel invalid "$root/kernel_lifecycle-fake" > "$root/output" 2>&1; then exit 1; fi
+[ ! -f "$FAKE_FIXTURE_LOG" ]
 printf 'fake kernel fixture runner contracts passed\n'

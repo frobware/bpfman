@@ -84,8 +84,8 @@ impl RuntimeWriter<'_> {
         let id = NonZeroU32::new(info.id.get()).ok_or(Failure::Unsafe("zero kernel link ID"))?;
         open_owned(&entry)?;
 
-        // Closing this observation descriptor must happen before returning the
-        // receipt. Unpin can then release our last managed attachment reference.
+        // Observations retain no live descriptor. Teardown adopts one again
+        // under writer authority and holds it across removal of the owned pin.
         Ok(Some(LinkPin {
             entry: Box::new(entry),
             id,

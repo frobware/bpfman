@@ -81,21 +81,9 @@ fn request(program_id: NonZeroU32, interface: &Interface) -> XdpAttach {
 }
 
 fn gone(id: NonZeroU32) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        match bpfman_kernel::LinkObservations::extension_link(&bpfman_kernel_aya::Kernel, id) {
-            Err(e) if e.kind() == bpfman_kernel::ErrorKind::Missing => return,
-            Ok(_) => {}
-            Err(e) => {
-                panic!("unexpected observation: {e}");
-            }
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "extension link leaked"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let error = bpfman_kernel::LinkObservations::extension_link(&bpfman_kernel_aya::Kernel, id)
+        .expect_err("owned extension link must be released before return");
+    assert_eq!(error.kind(), bpfman_kernel::ErrorKind::Missing);
 }
 
 pub(super) fn exercise<S>(backend: S)

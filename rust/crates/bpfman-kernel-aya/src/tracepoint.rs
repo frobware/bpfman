@@ -61,6 +61,6 @@ impl TracepointLinks for Kernel {
     }
 
     fn remove_link(&self, w: &RuntimeWriter<'_>, p: LinkPin) -> Removal<LinkPin> {
-        w.remove_link_pin(p).map_err(map)
+        w.remove_link_pin(self, p).map_err(map)
     }
 }

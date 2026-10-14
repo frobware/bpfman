@@ -102,16 +102,29 @@ where
             before
         );
         std::fs::rename(&moved, &pin).expect("restore managed pin");
+        // A real reference must keep the program alive even after successful
+        // managed teardown. Exercise this control for one survivor choice.
+        let held = unload_first.then(|| {
+            aya::programs::ProgramInfo::from_pin(&pin)
+                .expect("managed program")
+                .fd()
+                .expect("retain program descriptor")
+        });
         let report = app.retry_unload(error).expect("resume detach and unload");
         assert_eq!(report.unresolved(), 0);
         assert_eq!(report.xdp_attempts().len(), 3); // failed attempt plus two successful detaches
         c.absent(removed);
-        assert_eq!(
-            bpfman_kernel::ProgramObservations::program(&bpfman_kernel_aya::Kernel, removed)
-                .expect_err("unloaded extension is released")
-                .kind(),
-            bpfman_kernel::ErrorKind::Missing
-        );
+        if held.is_some() {
+            let (program, _) =
+                bpfman_kernel::ProgramObservations::program(&bpfman_kernel_aya::Kernel, removed)
+                    .expect("retained descriptor must prevent program release");
+            assert_eq!(program.id, removed);
+        }
+        drop(held);
+        // Managed extension links close directly before unload returns. Observe
+        // ID absence while the report, application, interface and runtime stay alive.
+        assert_program_absent(removed);
+        assert_eq!(report.unresolved(), 0);
         let after = app.get_xdp_dispatcher(details.key).expect("survivor");
         assert_eq!(after.members().len(), 1);
         assert_eq!(after.members()[0].member.id, survivor_link);

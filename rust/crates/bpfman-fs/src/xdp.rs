@@ -326,12 +326,20 @@ impl RuntimeWriter<'_> {
         })
     }
 
-    /// Remove the owned extension pin after traffic is stopped.
+    /// Remove the owned extension pin and close its retained descriptor after traffic stops.
     pub fn remove_xdp_extension(
         &self,
+        kernel: &impl crate::LinkRetention,
         receipt: XdpExtensionPin,
     ) -> Result<(), EffectFailure<XdpExtensionPin, Error>> {
-        crate::removal::remove(self, &receipt.entry).map_err(|cause| EffectFailure {
+        crate::removal::remove_link(
+            self,
+            kernel,
+            &receipt.entry,
+            receipt.id,
+            crate::removal::LinkKind::Extension,
+        )
+        .map_err(|cause| EffectFailure {
             cause,
             remaining: receipt,
         })

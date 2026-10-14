@@ -171,7 +171,7 @@ where
             .expect("observe pin")
             .expect("pin");
         writer
-            .remove_link_pin(pin)
+            .remove_link_pin(&bpfman_kernel_aya::Kernel, pin)
             .map_err(|e| e.cause)
             .expect("externally unpin");
     });

@@ -99,6 +99,14 @@ impl LinkPinning for AyaLink {
 
 impl LinkInspection for Kernel {
     fn link_at(&self, source: PinSource<'_>) -> KernelResult<KernelLink> {
+        self.retain_link(source).map(|(info, _)| info)
+    }
+}
+
+impl LinkRetention for Kernel {
+    type RetainedLink = std::os::fd::OwnedFd;
+
+    fn retain_link(&self, source: PinSource<'_>) -> KernelResult<(KernelLink, Self::RetainedLink)> {
         let fd = pin_syscall::open(source.path())?;
         let info = pin_syscall::info(fd.as_fd())?;
         let details = match info.kind {
@@ -110,11 +118,14 @@ impl LinkInspection for Kernel {
             },
             _ => return Err(invalid("unexpected pinned link type")),
         };
-        Ok(KernelLink {
-            id: nz(info.id)?,
-            program_id: nz(info.program)?,
-            details,
-        })
+        Ok((
+            KernelLink {
+                id: nz(info.id)?,
+                program_id: nz(info.program)?,
+                details,
+            },
+            fd,
+        ))
     }
 }
 
