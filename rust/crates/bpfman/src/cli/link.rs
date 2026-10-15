@@ -30,6 +30,24 @@ pub(crate) enum LinkCommand {
 }
 
 impl LinkCommand {
+    pub(super) fn validate(&self) -> Result<(), crate::error::Error> {
+        if let Self::Attach {
+            target:
+                AttachCommand::Uprobe {
+                    target,
+                    fn_name,
+                    offset,
+                    pid,
+                    ..
+                },
+        } = self
+        {
+            bpfman_model::UprobeTarget::new(target, fn_name.clone(), offset.unwrap_or(0), *pid)
+                .map_err(anyhow::Error::from)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn xdp_interface(&self) -> Option<&bpfman_model::InterfaceName> {
         match self {
             Self::Attach {
@@ -42,6 +60,22 @@ impl LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
+    /// Attach a host user-space entry or return probe, as selected when loading.
+    Uprobe {
+        program_id: NonZeroU32,
+        #[arg(value_parser = host_target)]
+        target: String,
+        #[arg(long, short = 'f', required_unless_present = "offset", required_if_eq("offset", "0"), value_parser = user_symbol)]
+        fn_name: Option<bpfman_model::Symbol>,
+        #[arg(long, value_parser = clap::value_parser!(u64).range(0..=i64::MAX as u64))]
+        offset: Option<u64>,
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        pid: u32,
+        #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
+        metadata: Vec<(String, String)>,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
     /// Attach a kernel entry or return probe, as selected when loading.
     Kprobe {
         program_id: NonZeroU32,
@@ -137,6 +171,37 @@ impl LinkCommand {
         S::Reader: bpfman_store::LinkReader,
     {
         match self {
+            Self::Attach {
+                target:
+                    AttachCommand::Uprobe {
+                        program_id,
+                        target,
+                        fn_name,
+                        offset,
+                        pid,
+                        metadata,
+                        output,
+                    },
+            } => {
+                let target =
+                    bpfman_model::UprobeTarget::new(&target, fn_name, offset.unwrap_or(0), pid)
+                        .map_err(anyhow::Error::from)?;
+                let record = app.attach_uprobe_with_cancellation(
+                    bpfman_runtime::UprobeAttach {
+                        program_id,
+                        target,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    cancellation,
+                )?;
+                let observed = app.get_link(record.id).map_err(|error| {
+                    anyhow::Error::from(error).context(format!(
+                        "attachment committed as link {}; observation failed",
+                        record.id
+                    ))
+                })?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+            }
             Self::Attach {
                 target:
                     AttachCommand::Kprobe {
@@ -352,4 +417,13 @@ fn tc_action(raw: &str) -> Result<i32, String> {
         "dispatcher_return" => Ok(30),
         _ => Err("expected unspec, ok, reclassify, shot, pipe, stolen, queued, repeat, redirect, trap, or dispatcher_return".into()),
     }
+}
+
+fn host_target(raw: &str) -> Result<String, String> {
+    bpfman_model::UprobeTarget::new(raw, None, 1, 0).map_err(|e| e.to_string())?;
+    Ok(raw.into())
+}
+
+fn user_symbol(raw: &str) -> Result<bpfman_model::Symbol, bpfman_model::InvalidSymbol> {
+    raw.try_into()
 }

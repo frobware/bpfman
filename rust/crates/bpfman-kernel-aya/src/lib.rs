@@ -18,6 +18,7 @@ mod tc;
 mod tc_netlink;
 mod tcx;
 mod tracepoint;
+mod uprobe;
 mod verification;
 mod xdp;
 
@@ -51,6 +52,9 @@ pub struct AyaTracepoint(aya::programs::TracePoint);
 
 /// Opaque adopted kernel probe handle.
 pub struct AyaKprobe(aya::programs::KProbe);
+
+/// Adopted native user-space probe program.
+pub struct AyaUprobe(aya::programs::UProbe);
 
 /// Opaque adopted extension handle.
 pub struct AyaExtension(aya::programs::Extension);

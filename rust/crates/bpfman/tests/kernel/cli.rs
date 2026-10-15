@@ -472,3 +472,22 @@ pub(super) fn map_sharing_scripts(store: &'static str) {
         true,
     );
 }
+
+pub(super) fn uprobe_scripts(store: &'static str) {
+    run_dsl(
+        store,
+        Some(&[
+            "TestUprobe_LoadAndGet",
+            "TestUretprobe_LoadAndGet",
+            "TestUprobe_LinkRoundTrip",
+            "TestUretprobe_LinkRoundTrip",
+            "TestMultiProgUprobe_LoadAttachDetachUnload",
+            "TestMultiProgUretprobe_LoadAttachDetachUnload",
+            "TestUprobe_OffsetOnlyTraffic",
+            "TestUprobe_PidFilterTraffic",
+            "TestUprobe_GoSymbolTraffic",
+        ]),
+        &rust(),
+        true,
+    );
+}

@@ -65,6 +65,7 @@ impl Command {
             Self::Program { command } => command,
             Self::Dispatcher { command } => return Ok(PreparedCommand::Dispatcher(command)),
             Self::Link { command } => {
+                command.validate()?;
                 let mode = match command.xdp_interface() {
                     Some(interface) => config::Config::load(config)?.xdp_mode(interface)?,
                     None => Default::default(),

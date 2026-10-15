@@ -974,3 +974,26 @@ fn sqlite_map_sharing_native_recovery() {
 fn json_map_sharing_native_recovery() {
     map_sharing::exercise(bpfman_store_json::Backend);
 }
+
+#[test]
+fn sqlite_uprobe_script_corpus() {
+    cli::uprobe_scripts("sqlite");
+}
+
+#[test]
+fn json_uprobe_script_corpus() {
+    cli::uprobe_scripts("json");
+}
+
+#[path = "kernel/uprobe.rs"]
+mod uprobe;
+
+#[test]
+fn sqlite_uprobe_native_link_recovery() {
+    uprobe::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_uprobe_native_link_recovery() {
+    uprobe::exercise(bpfman_store_json::Backend);
+}

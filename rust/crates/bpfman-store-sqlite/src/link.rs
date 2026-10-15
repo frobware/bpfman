@@ -39,7 +39,7 @@ fn connection(writer: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
 fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
     if !matches!(
         row.kind.as_str(),
-        "tracepoint" | "tcx" | "kprobe" | "kretprobe"
+        "tracepoint" | "tcx" | "kprobe" | "kretprobe" | "uprobe" | "uretprobe"
     ) {
         return Err(Failure::UnsupportedLink);
     }
@@ -67,7 +67,40 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
                 .ok_or(Failure::InvalidLink("invalid kernel ID"))?,
         },
     };
-    let details = if matches!(row.kind.as_str(), "kprobe" | "kretprobe") {
+    let details = if matches!(row.kind.as_str(), "uprobe" | "uretprobe") {
+        if row.container_pid.unwrap_or(0) != 0 {
+            return Err(Failure::UnsupportedLink);
+        }
+        let retprobe = match row.user_retprobe {
+            Some(0) if row.kind == "uprobe" => false,
+            Some(1) if row.kind == "uretprobe" => true,
+            _ => {
+                return Err(Failure::InvalidLink(
+                    "user probe selection differs from program",
+                ));
+            }
+        };
+        LinkDetails::Uprobe(
+            bpfman_model::UprobeLink::new(
+                row.user_target
+                    .as_deref()
+                    .ok_or(Failure::InvalidLink("missing user target"))?,
+                row.user_function
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .map(bpfman_model::Symbol::try_from)
+                    .transpose()
+                    .map_err(|_| Failure::InvalidLink("invalid user function"))?,
+                row.user_offset
+                    .and_then(|v| u64::try_from(v).ok())
+                    .ok_or(Failure::InvalidLink("invalid user probe offset"))?,
+                u32::try_from(row.user_pid.unwrap_or(0))
+                    .map_err(|_| Failure::InvalidLink("invalid user PID"))?,
+                retprobe,
+            )
+            .map_err(|_| Failure::InvalidLink("invalid host probe target"))?,
+        )
+    } else if matches!(row.kind.as_str(), "kprobe" | "kretprobe") {
         let retprobe = match row.retprobe {
             Some(0) if row.kind == "kprobe" => false,
             Some(1) if row.kind == "kretprobe" => true,
@@ -287,6 +320,52 @@ impl LinkReader for Store {
 
 impl LinkStore for Backend {
     type LinkReceipt = LinkReceipt;
+
+    #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
+    fn create_pending_uprobe(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingUprobe<'_>,
+    ) -> Result<(StoredLink, LinkReceipt), Error> {
+        (|| -> Result<_, Failure> {
+            let mut connection = connection(writer)?;
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            open::require_supported(open::schema_version(&tx)?)?;
+
+            if !queries::is_uprobe(&tx, request.program_id, request.target.retprobe())? {
+                return Err(Failure::InvalidLink(
+                    "missing or mismatched standalone program",
+                ));
+            }
+
+            let metadata =
+                serde_json::to_string(request.metadata).map_err(Failure::LinkMetadata)?;
+            let offset = i64::try_from(request.target.offset())
+                .map_err(|_| Failure::InvalidLink("user probe offset exceeds persistence range"))?;
+            let id = queries::insert_pending_uprobe(&tx, &request, &metadata, offset)?;
+            let managed = u64::try_from(id)
+                .ok()
+                .and_then(NonZeroU64::new)
+                .ok_or(Failure::InvalidLink("invalid allocated ID"))?;
+            let path = writer.layout().link_pin_path(managed);
+            let path = path
+                .to_str()
+                .ok_or(Failure::InvalidLink("runtime path is not UTF-8"))?;
+
+            if queries::set_link_pin(&tx, id, path)? != 1 {
+                return Err(Failure::InvalidLink("pending link disappeared"));
+            }
+
+            let row = one(&tx, id)?;
+            let record = canonical(writer, &row, &tx)?;
+            let receipt = evidence(writer, row)?;
+            tx.commit()?;
+
+            Ok((record, receipt))
+        })()
+        .map_err(crate::Error::from)
+        .map_err(Into::into)
+    }
 
     #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
     fn create_pending_kprobe(

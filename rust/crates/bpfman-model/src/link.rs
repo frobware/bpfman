@@ -74,6 +74,8 @@ pub enum LinkDetails {
     Tracepoint(Tracepoint),
     /// Standalone kernel entry or return probe.
     Kprobe(crate::KprobeLink),
+    /// Host user-space entry or return probe.
+    Uprobe(crate::UprobeLink),
     /// Native TCX attachment.
     Tcx(crate::TcxLink),
     /// XDP extension attached through a dispatcher.

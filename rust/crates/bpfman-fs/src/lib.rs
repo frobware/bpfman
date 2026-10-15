@@ -12,7 +12,7 @@ pub use kernel::{
     ExtensionProgram, KernelResult, KprobeKernel, KprobeProgram, LinkInspection, LinkPinning,
     LinkRetention, MapPinning, OuterInfo, OuterLink, PinProgramKind, PinSource, PinTarget,
     PinnedProgram, ProgramInspection, ProgramPinning, TcxKernel, TcxProgram, TracepointKernel,
-    TracepointProgram, XdpKernel, XdpSwitchKernel,
+    TracepointProgram, UprobeKernel, UprobeProgram, XdpKernel, XdpSwitchKernel,
 };
 
 mod xdp;
@@ -235,9 +235,18 @@ pub struct PreparedTcxAttach<P: TcxProgram> {
 }
 mod kprobe;
 mod tcx;
+mod uprobe;
 
 /// Confined kernel probe program and collection, ready for one attachment.
 pub struct PreparedKprobeAttach<P: KprobeProgram> {
+    program: P,
+    program_pin: artifacts::Entry,
+    links: OwnedFd,
+    retprobe: bool,
+}
+
+/// Confined user-space probe program and collection, ready for one attachment.
+pub struct PreparedUprobeAttach<P: UprobeProgram> {
     program: P,
     program_pin: artifacts::Entry,
     links: OwnedFd,

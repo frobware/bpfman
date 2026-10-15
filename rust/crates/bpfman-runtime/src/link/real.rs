@@ -116,9 +116,9 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
         record: &StoredLink,
     ) -> Result<Option<Self::Pin>, LinkCause> {
         let path = match &record.details {
-            bpfman_model::LinkDetails::Tracepoint(_) | bpfman_model::LinkDetails::Kprobe(_) => {
-                writer.layout().link_pin_path(record.id)
-            }
+            bpfman_model::LinkDetails::Tracepoint(_)
+            | bpfman_model::LinkDetails::Kprobe(_)
+            | bpfman_model::LinkDetails::Uprobe(_) => writer.layout().link_pin_path(record.id),
             bpfman_model::LinkDetails::Tcx(d) => {
                 writer.layout().tcx_link_path(d.key, record.program_id)
             }

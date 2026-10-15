@@ -1,3 +1,4 @@
+//! Version 13 adds host user-space probes.
 //! Version 12 adds shared map sets and PinByName references.
 //! Version 11 adds native kernel entry and return probes.
 //! Version 10 adds native TCX programs and links.
@@ -102,7 +103,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 12,
+            version: 13,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -124,7 +125,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=12) {
+        if !matches!(header.version, 1..=13) {
             return Err(Failure::Version(header.version));
         }
 
@@ -183,6 +184,11 @@ impl State {
                 return Err(Failure::Invalid("self-referencing map owner"));
             }
 
+            if self.version < 13 && matches!(row.kind, Kind::Uprobe | Kind::Uretprobe) {
+                return Err(Failure::Unsupported(
+                    "user probes require JSON format 13; no implicit upgrade",
+                ));
+            }
             if self.version < 11 && matches!(row.kind, Kind::Kprobe | Kind::Kretprobe) {
                 return Err(Failure::Unsupported(
                     "kernel probes require JSON format 11; no implicit upgrade",
@@ -250,6 +256,11 @@ impl State {
                 }
             }
 
+            if self.version < 13 && matches!(link.target.kind(), Kind::Uprobe | Kind::Uretprobe) {
+                return Err(Failure::Unsupported(
+                    "user probes require JSON format 13; no implicit upgrade",
+                ));
+            }
             if self.version < 11 && matches!(link.target.kind(), Kind::Kprobe | Kind::Kretprobe) {
                 return Err(Failure::Unsupported(
                     "kernel probes require JSON format 11; no implicit upgrade",
@@ -405,6 +416,13 @@ impl State {
             shared_maps: record.shared_maps.to_vec(),
             kind: match record.spec {
                 ProgramSpec::Tracepoint(_) => Kind::Tracepoint,
+                ProgramSpec::Uprobe(_) if self.version >= 13 => Kind::Uprobe,
+                ProgramSpec::Uretprobe(_) if self.version >= 13 => Kind::Uretprobe,
+                ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_) => {
+                    return Err(Failure::Unsupported(
+                        "user probes require JSON format 13; no implicit upgrade",
+                    ));
+                }
                 ProgramSpec::Kprobe(_) if self.version >= 11 => Kind::Kprobe,
                 ProgramSpec::Kretprobe(_) if self.version >= 11 => Kind::Kretprobe,
                 ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => {
@@ -518,6 +536,8 @@ impl Program {
                     Kind::Tcx => ProgramSpec::Tcx(name),
                     Kind::Kprobe => ProgramSpec::Kprobe(name),
                     Kind::Kretprobe => ProgramSpec::Kretprobe(name),
+                    Kind::Uprobe => ProgramSpec::Uprobe(name),
+                    Kind::Uretprobe => ProgramSpec::Uretprobe(name),
                 }
             },
             source: ProgramSource::File(Some(self.source.clone())),
@@ -580,7 +600,9 @@ impl Link {
     pub(super) fn record(&self, layout: &RuntimeLayout) -> Result<StoredLink, Failure> {
         let details = self.target.details()?;
         let pin_path = match &details {
-            LinkDetails::Tracepoint(_) | LinkDetails::Kprobe(_) => layout.link_pin_path(self.id),
+            LinkDetails::Tracepoint(_) | LinkDetails::Kprobe(_) | LinkDetails::Uprobe(_) => {
+                layout.link_pin_path(self.id)
+            }
             LinkDetails::Tcx(d) => layout.tcx_link_path(d.key, self.program_id),
             _ => return Err(Failure::Invalid("invalid standalone target")),
         };
@@ -641,6 +663,8 @@ pub(super) enum Kind {
     Tcx,
     Kprobe,
     Kretprobe,
+    Uprobe,
+    Uretprobe,
 }
 
 impl Kind {
@@ -656,6 +680,8 @@ impl Kind {
             Self::Tcx => ProgramType::Tcx,
             Self::Kprobe => ProgramType::Kprobe,
             Self::Kretprobe => ProgramType::Kretprobe,
+            Self::Uprobe => ProgramType::Uprobe,
+            Self::Uretprobe => ProgramType::Uretprobe,
         }
     }
 }
@@ -666,6 +692,7 @@ pub(super) enum LinkTarget {
     Tracepoint(String),
     Tcx(TcxTarget),
     Kprobe(KprobeTarget),
+    Uprobe(UprobeTarget),
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -687,11 +714,28 @@ pub(super) struct KprobeTarget {
     pub(super) retprobe: bool,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct UprobeTarget {
+    pub(super) target: String,
+    pub(super) function: Option<String>,
+    pub(super) offset: u64,
+    pub(super) pid: u32,
+    pub(super) retprobe: bool,
+}
+
 impl LinkTarget {
     fn kind(&self) -> Kind {
         match self {
             Self::Tracepoint(_) => Kind::Tracepoint,
             Self::Tcx(_) => Kind::Tcx,
+            Self::Uprobe(d) => {
+                if d.retprobe {
+                    Kind::Uretprobe
+                } else {
+                    Kind::Uprobe
+                }
+            }
             Self::Kprobe(d) => {
                 if d.retprobe {
                     Kind::Kretprobe
@@ -704,6 +748,20 @@ impl LinkTarget {
 
     fn details(&self) -> Result<LinkDetails, Failure> {
         match self {
+            Self::Uprobe(d) => Ok(LinkDetails::Uprobe(
+                bpfman_model::UprobeLink::new(
+                    &d.target,
+                    d.function
+                        .as_deref()
+                        .map(Symbol::try_from)
+                        .transpose()
+                        .map_err(|_| Failure::Invalid("invalid user function"))?,
+                    d.offset,
+                    d.pid,
+                    d.retprobe,
+                )
+                .map_err(|_| Failure::Invalid("invalid host probe target"))?,
+            )),
             Self::Kprobe(d) => {
                 if d.offset > i64::MAX as u64 {
                     return Err(Failure::Invalid(

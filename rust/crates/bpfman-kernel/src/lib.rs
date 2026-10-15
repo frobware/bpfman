@@ -4,7 +4,9 @@
 //! own resource reuse and synchronization; observations confer no removal authority.
 
 mod kprobe;
+mod uprobe;
 pub use kprobe::KprobeLinks;
+pub use uprobe::UprobeLinks;
 
 mod tcx;
 pub use tcx::TcxLinks;

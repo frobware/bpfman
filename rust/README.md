@@ -396,7 +396,8 @@ remains; shared-name pins survive while any recorded user remains.
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe and kretprobe batches with private or shared maps and
+exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe and uretprobe batches
+with private or shared maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads and other program types
 exit with status 1 before source access or runtime effects.
@@ -1926,7 +1927,8 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 12 for sharing; format 11 retains probes, format 10 retains TCX, format 9
+receipt. New JSON stores use format 13 for host uprobes; format 12 retains
+sharing; format 11 retains kernel probes, format 10 retains TCX, format 9
 retains egress and format 8 retains ingress
 replacement and format 7 retains singleton ingress. Older formats retain their
 operations without upgrading.
@@ -2029,7 +2031,8 @@ through a reopened application. This also strengthens tracepoint unload, with
 its fault and retry contracts updated to require independent progress.
 
 SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
-use format 12; format 11 retains probes and format 10 retains TCX. Existing formats 1–9 retain their previous
+use format 13; format 12 retains sharing, format 11 retains kernel probes and
+format 10 retains TCX. Existing formats 1–9 retain their previous
 operations and reject TCX
 without an implicit upgrade. Tracepoint target strings keep their existing JSON
 encoding; native targets have a typed object representation.
@@ -2085,7 +2088,8 @@ exact kernel identity. Perf-event teardown holds a live descriptor across unpinn
 and closes it after pin descriptors. External holders retain their ordinary kernel
 lifetime semantics.
 
-SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 12; format 11 retains probes.
+SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 13;
+format 11 introduced kernel probes.
 older snapshots retain existing operations and refuse probe loads/links without
 implicit conversion. `make rust-test-kprobe` runs native recovery contracts and
 seven unchanged acceptance files per store: kprobe/kretprobe load/get and link
@@ -2126,7 +2130,8 @@ Unload follows the same rule for map-set aliases, containers and shared names.
 Changed inode or runtime evidence still refuses cleanup.
 
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
-`shared_map_pins`. New JSON stores use format 12 with map-owner and shared-name
+`shared_map_pins`. New JSON stores use format 13; format 12 introduced map-owner
+and shared-name
 references. Formats 1–11 keep their previous operations and refuse sharing without
 changing bytes or upgrading. Older artifacts without a map inventory retain
 conservative program-reference validation; broader orphan adoption is separate.
@@ -2145,3 +2150,37 @@ BTF, incompatible-map refusal, swapped-pin preflight refusal, attached owner-fir
 unload and successful cleanup after a new member joins during recovery. A retained
 map descriptor remains usable after managed pins disappear; physical kernel map
 reclamation remains outside the synchronous teardown promise.
+
+## Host uprobes and uretprobes
+
+Local `uprobe:ENTRY` and `uretprobe:ENTRY` selections load native KPROBE programs.
+Either userspace-probe ELF section can supply the program; its stored selection
+chooses entry or return attachment. Attach a host file by symbol or absolute file
+offset, optionally filtering one positive host PID:
+
+```sh
+bpfman program load file probe.o --programs uprobe:uprobe_counter
+bpfman link attach uprobe PROGRAM_ID /path/to/binary --fn-name entry --pid PID
+bpfman link attach uprobe PROGRAM_ID /path/to/binary --offset FILE_OFFSET
+```
+
+`-f` aliases `--fn-name`. With a symbol, offset is relative to its entry; without
+one, a nonzero offset is required. PID zero or omission selects all processes.
+File targets must contain a directory separator; bare library names and
+`--container-pid` remain unsupported pending namespace-aware target resolution.
+The target is opened nonblocking and must be a regular file. Symbol resolution
+and attachment use the same retained file through `/proc/self/fd`.
+
+Link get/list, detach and attached-program unload use the standalone pending-intent
+protocol, confined pins, cancellation and consuming compensation. Independent
+links make progress after another record deletion fails; record-only retries
+retain their exact evidence and never remove completed pins again. SQLite keeps
+Go schema 2 and `link_uprobe_details`. Host probes require JSON format 13; formats
+1–12 retain their existing capabilities without upgrading implicitly.
+
+`make rust-test-uprobe` runs native identity/recovery/lifetime contracts and nine
+unchanged scripts per store, covering entry/return load/get, link round trips,
+multi-program lifecycle, absolute offsets, positive PID filtering and dotted Go
+symbols. The full gate also selects them. Native lifetime controls run in serial
+global stages and require immediate owned-program absence, with an explicit
+external descriptor control.

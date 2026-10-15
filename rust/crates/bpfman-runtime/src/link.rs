@@ -13,6 +13,7 @@ mod real;
 mod tcx;
 #[cfg(test)]
 mod tests;
+mod uprobe;
 
 trait Effects {
     type Request;

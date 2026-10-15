@@ -136,7 +136,7 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 12 for map sharing; format 11 retains kernel probes;
+- New JSON stores use format 13 for host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
   format 10 retains native TCX,
   format 9 retains independent TC egress chains, format 8 retains ingress
   replacement, and format 7 retains singleton ingress.
@@ -525,3 +525,22 @@ The architecture and compatibility goals are in
   `rust-test-map-sharing` selects the three unchanged sharing scripts and native
   recovery contracts on both stores. Native immediate program-lifetime assertions
   belong in the serial global stages; keep them free of sleeps and polling.
+
+
+## Host user-space probes
+
+- Load uprobe and uretprobe sections as native KPROBE programs; stored program
+  selection determines entry versus return attachment. Keep target/PID admission
+  independent of this derived selection.
+- Host file targets contain a directory separator. Open nonblocking, require a
+  regular file and retain its descriptor across symbol resolution and attachment
+  through `/proc/self/fd`. Bare library names and container namespaces remain
+  explicit unsupported boundaries until their resolution helper is implemented.
+- PID zero means all processes, rather than Aya's calling-process scope. Reject
+  unrepresentable PIDs/offsets and location-less requests before store creation.
+- Keep SQLite schema 2 and existing user-probe details. JSON uprobes require
+  format 13, without implicitly upgrading formats 1–12.
+- Reuse standalone receipts, cancellation and independent cleanup/retry rules.
+  `rust-test-uprobe` selects nine unchanged scripts and native recovery on both
+  stores; include them in the full gate. Immediate lifetime contracts run in the
+  serial global stages with retained external-descriptor controls.

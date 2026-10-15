@@ -629,7 +629,10 @@ impl ProgramLoad for FakeKernel {
         let kind = match spec {
             ProgramSpec::Tracepoint(_) => "tracepoint",
             ProgramSpec::Tcx(_) => "schedcls",
-            ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => "kprobe",
+            ProgramSpec::Kprobe(_)
+            | ProgramSpec::Kretprobe(_)
+            | ProgramSpec::Uprobe(_)
+            | ProgramSpec::Uretprobe(_) => "kprobe",
             ProgramSpec::Xdp(_) | ProgramSpec::Tc(_) => "extension",
             _ => return Err(error(ErrorKind::Unsupported, "program type")),
         };
@@ -733,7 +736,10 @@ impl ProgramLoad for FakeKernel {
                 .collect::<Result<BTreeMap<_, _>, Error>>()?
         };
         let kind = match spec {
-            ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => "kprobe",
+            ProgramSpec::Kprobe(_)
+            | ProgramSpec::Kretprobe(_)
+            | ProgramSpec::Uprobe(_)
+            | ProgramSpec::Uretprobe(_) => "kprobe",
             ProgramSpec::Tracepoint(_) => "tracepoint",
             ProgramSpec::Tcx(_) => "schedcls",
             _ => "extension",
@@ -2074,6 +2080,29 @@ impl KprobeLinks for FakeKernel {
         w: &RuntimeWriter<'_>,
         p: Loaded,
         _target: &KprobeLink,
+    ) -> Result<Live, Error> {
+        self.attach_tracepoint(w, p, &"fake/event".parse().expect("tracepoint"))
+    }
+}
+
+impl UprobeLinks for FakeKernel {
+    type PreparedUprobe = Loaded;
+
+    fn prepare_uprobe(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+        _target: &UprobeLink,
+    ) -> Result<Loaded, Error> {
+        self.enter(Point::PrepareLink)?;
+        self.adopt(w, id, "kprobe")
+    }
+
+    fn attach_uprobe(
+        &self,
+        w: &RuntimeWriter<'_>,
+        p: Loaded,
+        _target: &UprobeLink,
     ) -> Result<Live, Error> {
         self.attach_tracepoint(w, p, &"fake/event".parse().expect("tracepoint"))
     }

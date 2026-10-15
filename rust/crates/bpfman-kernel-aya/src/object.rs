@@ -99,6 +99,7 @@ impl LocalObject {
         let selection = match spec {
             ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
             ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => Selection::Kprobe,
+            ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_) => Selection::Uprobe,
             ProgramSpec::Tc(_) => Selection::Tc,
             ProgramSpec::Tcx(_) => Selection::Tcx,
             ProgramSpec::Xdp(_) => Selection::Xdp(xdp_role(&self.bytes, spec.name().as_str())?),
@@ -142,6 +143,14 @@ impl LocalObject {
             }
             Selection::Kprobe => {
                 let program: &mut aya::programs::KProbe = program
+                    .try_into()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+                program
+                    .load()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+            }
+            Selection::Uprobe => {
+                let program: &mut aya::programs::UProbe = program
                     .try_into()
                     .map_err(|e| LoadCause::Program(Box::new(e)))?;
                 program
@@ -244,6 +253,13 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         (ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_), _) => Err(LoadCause::Invalid(
             "kernel probe selection requires a kprobe or kretprobe section".into(),
         )),
+        (
+            ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_),
+            ProgramSection::UProbe { .. } | ProgramSection::URetProbe { .. },
+        ) => Ok(()),
+        (ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_), _) => Err(LoadCause::Invalid(
+            "user probe selection requires a uprobe or uretprobe section".into(),
+        )),
         (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint) => Ok(()),
         (ProgramSpec::Xdp(_), section @ ProgramSection::Xdp { .. }) => {
             XdpRole::from_section(section).map(|_| ())
@@ -324,6 +340,7 @@ enum XdpRole {
 
 enum Selection {
     Kprobe,
+    Uprobe,
     Tc,
     Tcx,
     Tracepoint,

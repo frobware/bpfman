@@ -1045,3 +1045,21 @@ fn sqlite_map_sharing_recovery() {
 fn json_map_sharing_recovery() {
     map_sharing::recovery(bpfman_store_json::Backend);
 }
+#[path = "lifecycle/uprobe.rs"]
+mod uprobe;
+#[test]
+fn sqlite_uprobe_lifecycle() {
+    uprobe::lifecycle(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_uprobe_lifecycle() {
+    uprobe::lifecycle(bpfman_store_json::Backend);
+}
+#[test]
+fn sqlite_uprobe_failure_recovery() {
+    uprobe::recovery(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_uprobe_failure_recovery() {
+    uprobe::recovery(bpfman_store_json::Backend);
+}

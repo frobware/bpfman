@@ -16,6 +16,7 @@ mod link;
 
 pub use link::{
     LinkObservation, LinkReader, LinkStore, PendingKprobe, PendingTcx, PendingTracepoint,
+    PendingUprobe,
 };
 
 use bpfman_core::EffectFailure;

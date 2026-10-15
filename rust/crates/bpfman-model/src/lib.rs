@@ -8,6 +8,9 @@ extern crate alloc;
 
 use alloc::string::String;
 
+mod uprobe;
+pub use uprobe::{InvalidUprobe, UprobeLink, UprobeTarget};
+
 mod kprobe;
 pub use kprobe::{InvalidKernelFunction, KernelFunction, KprobeLink};
 

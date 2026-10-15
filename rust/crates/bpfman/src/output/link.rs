@@ -5,6 +5,10 @@ use std::io::{self, Write};
 
 fn record(link: &StoredLink) -> Value {
     let (kind, details) = match &link.details {
+        LinkDetails::Uprobe(d) => (
+            if d.retprobe() { "uretprobe" } else { "uprobe" },
+            json!({"target": d.target(), "fn_name": d.function().unwrap_or_default(), "offset": d.offset(), "pid": d.pid().map_or(0, std::num::NonZeroU32::get), "container_pid": 0, "retprobe": d.retprobe()}),
+        ),
         LinkDetails::Kprobe(d) => (
             if d.retprobe { "kretprobe" } else { "kprobe" },
             json!({"fn_name": d.function.as_str(), "offset": d.offset, "retprobe": d.retprobe}),
@@ -155,6 +159,15 @@ pub(super) fn attachment(details: &LinkDetails) -> (&'static str, String) {
         LinkDetails::Tc(d) => (
             "tc",
             format!("{}:{}", d.interface.as_str(), d.key.direction),
+        ),
+        LinkDetails::Uprobe(d) => (
+            if d.retprobe() { "uretprobe" } else { "uprobe" },
+            format!(
+                "{}:{}+{}",
+                d.target(),
+                d.function().unwrap_or_default(),
+                d.offset()
+            ),
         ),
         LinkDetails::Kprobe(d) => (
             if d.retprobe { "kretprobe" } else { "kprobe" },

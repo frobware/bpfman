@@ -134,6 +134,16 @@ pub struct KprobeAttach {
     pub metadata: std::collections::BTreeMap<String, String>,
 }
 
+/// Host user-space attachment intent. Entry/return selection comes from the program.
+pub struct UprobeAttach {
+    /// Managed program identity.
+    pub program_id: std::num::NonZeroU32,
+    /// Validated host target, symbol/offset and PID filter.
+    pub target: bpfman_model::UprobeTarget,
+    /// Operator labels.
+    pub metadata: std::collections::BTreeMap<String, String>,
+}
+
 /// Validated tracepoint attachment intent for an already loaded program.
 pub struct TracepointAttach {
     /// Managed program identity.

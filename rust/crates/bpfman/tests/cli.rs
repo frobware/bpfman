@@ -261,3 +261,129 @@ fn invalid_xdp_config_fails_before_runtime_creation() -> Result<(), Box<dyn std:
 
     Ok(())
 }
+
+#[test]
+fn host_probe_admission_precedes_runtime_creation() -> Result<(), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
+    let runtime = temp.path().join("absent");
+    for args in [
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "libc",
+            "--fn-name",
+            "malloc",
+        ],
+        vec!["link", "attach", "uprobe", "42", "/bin/target"],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "0",
+            "/bin/target",
+            "--fn-name",
+            "entry",
+        ],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--fn-name",
+            "bad:symbol",
+        ],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--offset",
+            "0",
+        ],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--offset",
+            "-1",
+        ],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--offset",
+            "18446744073709551615",
+        ],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--fn-name",
+            "entry",
+            "--pid",
+            "-1",
+        ],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--fn-name",
+            "entry",
+            "--pid",
+            "2147483648",
+        ],
+        vec![
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--fn-name",
+            "entry",
+            "--container-pid",
+            "1",
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env("BPFMAN_RUNTIME_DIR", &runtime)
+            .args(&args)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!runtime.exists());
+    }
+    // Noncanonical zero spellings bypass Clap's literal conditional but must
+    // still fail domain preparation before any store/runtime effects.
+    let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env("BPFMAN_RUNTIME_DIR", &runtime)
+        .args([
+            "link",
+            "attach",
+            "uprobe",
+            "42",
+            "/bin/target",
+            "--offset",
+            "00",
+        ])
+        .output()?;
+    assert_eq!(output.status.code(), Some(1));
+    assert!(!runtime.exists());
+
+    Ok(())
+}

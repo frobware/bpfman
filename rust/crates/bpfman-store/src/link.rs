@@ -29,8 +29,8 @@ pub trait LinkReader {
     fn read_links(&mut self) -> Result<Vec<StoredLink>, Error>;
 }
 
-/// Conditional mutations for standalone tracepoint and TCX pending intent. Receipts retain the
-/// exact observed state and runtime identity, and cannot be cloned or forged.
+/// Conditional mutations for standalone tracepoint, probe and TCX pending intent.
+/// Receipts retain exact observed state and runtime identity, and cannot be cloned or forged.
 /// Store operations do not acquire or release kernel attachments.
 ///
 /// ```compile_fail
@@ -47,6 +47,13 @@ pub trait LinkReader {
 /// }
 /// ```
 pub trait LinkStore {
+    /// Publish host probe intent, validating loaded entry/return selection.
+    fn create_pending_uprobe(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: PendingUprobe<'_>,
+    ) -> Result<(StoredLink, Self::LinkReceipt), Error>;
+
     /// Publish probe intent, validating the loaded program and entry/return selection.
     fn create_pending_kprobe(
         &self,
@@ -120,6 +127,18 @@ pub struct PendingKprobe<'a> {
     pub program_id: NonZeroU32,
     /// Kernel function, offset and derived entry/return selection.
     pub target: &'a bpfman_model::KprobeLink,
+    /// Operator labels.
+    pub metadata: &'a BTreeMap<String, String>,
+    /// Caller-captured RFC3339 timestamp.
+    pub created_at: &'a str,
+}
+
+/// Standalone user-space probe intent admitted before kernel attachment.
+pub struct PendingUprobe<'a> {
+    /// Managed native probe program.
+    pub program_id: NonZeroU32,
+    /// Host file, symbol/offset, PID and derived entry/return selection.
+    pub target: &'a bpfman_model::UprobeLink,
     /// Operator labels.
     pub metadata: &'a BTreeMap<String, String>,
     /// Caller-captured RFC3339 timestamp.

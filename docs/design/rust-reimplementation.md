@@ -104,15 +104,15 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
-| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
-| Kernel probe links | Entry/return selection from the loaded program; function and offset intent; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | Uprobes and mount-namespace target resolution |
+| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
+| Kernel and host user-space probe links | Entry/return selection from the loaded program; function and offset intent; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | Library-name and mount-namespace target resolution |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 12 for map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 13 for host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2694,8 +2694,8 @@ wrong, change it here before broadening feature coverage.
 
 - Explicit map-owner sharing and ordinary PinByName coordination are implemented;
   shared map-of-maps definitions remain pending.
-- Kprobe/kretprobe lifecycle is implemented; uprobe, fentry, fexit, LSM,
-  and remaining attachment types are pending.
+- Kprobe/kretprobe and host uprobe/uretprobe lifecycle are implemented; fentry,
+  fexit, LSM, and remaining attachment types are pending.
 - OCI pull, cache, authentication, and signature verification.
 - Namespace helper and CSI integration.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
@@ -4620,3 +4620,61 @@ opt-level-two override. This is not a controlled benchmark. No Go source,
 existing script, root dependency or legacy Rust source changed. The independent
 Rust lockfile only records the Aya adapter's new edge to the already-used
 serde_json package; dependency versions are unchanged.
+
+
+### Host uprobe and uretprobe lifecycle (15 October 2026)
+
+Host file targets now extend the standalone probe lifecycle on both stores.
+Local ELF loading accepts uprobe and uretprobe sections as native KPROBE programs;
+the stored selection determines entry versus return attachment, including when
+one entry is loaded in both roles. Validated pure target intent admits symbol
+attachment with a relative offset or a nonzero absolute file offset, plus an
+optional positive host PID. PID zero means all processes. CLI admission includes
+`-f`/`--fn-name`, rejects invalid ranges and missing locations before runtime
+creation, and explicitly refuses bare library names and container selection.
+
+The Aya adapter opens the target nonblocking, requires a regular file and holds
+its descriptor while Aya resolves the symbol and attaches through
+`/proc/self/fd`. Target failures consume pending intent through the existing
+production interpreter. Program/link pins retain descriptor-confined adoption,
+identity checks and consuming cleanup receipts. Attached unload continues
+independent links after record failures, preserves blocked program teardown and
+supports reopened record-only retries without repeating successful pin removal.
+
+SQLite retains Go schema 2 and its existing `link_uprobe_details`. New JSON
+stores use format 13; formats 1–12 refuse user-probe publication without modifying
+or implicitly upgrading snapshots. Shared real-store contracts cover pending
+intent, derived entry/return selection, process filters, absolute offsets,
+foreign/stale receipts, finalisation and reopened conditional deletion. JSON
+contracts reject malformed persisted targets, ranges and selection relationships.
+
+Nine unchanged scripts are explicitly selected per store: uprobe/uretprobe
+load/get, link round trips, both multi-program lifecycles, offset-only traffic,
+PID-filtered traffic and dotted Go-symbol traffic. `make rust-test-uprobe` selects
+these batches and native recovery; the normal full gate includes every case.
+Stateful-fake coverage runs both roles through real SQLite/JSON stores with
+acquisition/publication faults, cancellation, failed cleanup and reopened retry.
+Native recovery verifies target failures, swapped-pin refusal before effects,
+finalisation failure, cancellation after pending intent, independent link cleanup
+and immediate object release, with an external program-descriptor control.
+
+Library-name lookup, the planned mount-namespace helper and its SCM_RIGHTS handoff,
+container targets, general reconciliation, other program families and OCI remain
+subsequent work. The host implementation adds no dependencies or unsafe boundary
+and leaves Go, legacy Rust and existing script contents/labels unchanged.
+
+Final validation: `direnv exec . make rust-fmt-fix rust-check lint-make` exited
+zero, including formatting, warnings-denied Clippy/Rustdoc, userspace/store/CLI
+and compile-fail checks, all 80 stateful-fake cases and all 124 discovered kernel
+cases. Owned fake and real tmpfs scopes passed normal cleanup. The established
+corpus and separately selected TCX/kernel-probe/sharing files remain passing on
+both stores; all nine additional user-probe scripts passed unchanged on Rust and
+the Go reference binary with JSON and SQLite. Existing script contents and labels
+are unchanged.
+
+Evidence: `/tmp/bpfman-uprobe-gate.log` records the complete passing gate;
+`/tmp/bpfman-uprobe-go-json.log` and `/tmp/bpfman-uprobe-go-sqlite.log` record the
+Go comparison. The kernel stage took 112.47 seconds locally on Linux 6.18.54,
+with eight ordinary contract workers and the existing development/test `aya-obj`
+opt-level-two override; this is not a controlled benchmark. No Go source,
+dependency, lockfile or legacy Rust source changed.

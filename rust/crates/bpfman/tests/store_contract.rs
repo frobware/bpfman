@@ -206,7 +206,12 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
     let tcx = ProgramSpec::Tcx(name.clone());
     let kprobe = ProgramSpec::Kprobe(name.clone());
     let kretprobe = ProgramSpec::Kretprobe(name.clone());
-    let unsupported = ProgramSpec::Uprobe(name);
+    let uprobe = ProgramSpec::Uprobe(name.clone());
+    let uretprobe = ProgramSpec::Uretprobe(name.clone());
+    let unsupported = ProgramSpec::Fentry {
+        name: name.clone(),
+        target: name,
+    };
     let metadata = BTreeMap::new();
     let globals = BTreeMap::new();
     let record = |id, spec| LoadRecord {
@@ -238,6 +243,8 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                     record(4, &tcx),
                     record(5, &kprobe),
                     record(6, &kretprobe),
+                    record(7, &uprobe),
+                    record(8, &uretprobe),
                 ],
             )
             .expect("mixed batch");
@@ -250,7 +257,9 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                 tc.clone(),
                 tcx.clone(),
                 kprobe.clone(),
-                kretprobe.clone()
+                kretprobe.clone(),
+                uprobe.clone(),
+                uretprobe.clone()
             ]
         );
         assert_eq!(
@@ -266,7 +275,9 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                 ProgramType::Tc,
                 ProgramType::Tcx,
                 ProgramType::Kprobe,
-                ProgramType::Kretprobe
+                ProgramType::Kretprobe,
+                ProgramType::Uprobe,
+                ProgramType::Uretprobe
             ]
         );
         assert!(

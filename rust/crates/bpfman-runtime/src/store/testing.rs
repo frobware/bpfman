@@ -210,6 +210,14 @@ impl<R: bpfman_store::LinkReader> bpfman_store::LinkReader for Reader<R> {
 impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
     type LinkReceipt = S::LinkReceipt;
 
+    fn create_pending_uprobe(
+        &self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        request: bpfman_store::PendingUprobe<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), bpfman_store::Error> {
+        self.backend.create_pending_uprobe(writer, request)
+    }
+
     fn create_pending_kprobe(
         &self,
         writer: &bpfman_fs::RuntimeWriter<'_>,

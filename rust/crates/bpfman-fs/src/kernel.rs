@@ -265,3 +265,23 @@ pub trait KprobeProgram {
     /// Attach at the selected kernel function and offset.
     fn attach(&mut self, target: &bpfman_model::KprobeLink) -> KernelResult<Self::Link>;
 }
+
+/// Adopt a user-space probe through a confined program pin.
+pub trait UprobeKernel: ProgramInspection + LinkInspection {
+    /// Owned adopted program.
+    type Uprobe: UprobeProgram;
+    /// Inspect and adopt the requested entry/return probe.
+    fn uprobe_at(
+        &self,
+        source: PinSource<'_>,
+        retprobe: bool,
+    ) -> KernelResult<(PinnedProgram, Self::Uprobe)>;
+}
+
+/// Adopted user-space probe, independent of its library representation.
+pub trait UprobeProgram {
+    /// Owned unpinned attachment.
+    type Link: LinkPinning;
+    /// Attach at the selected host file location and process scope.
+    fn attach(&mut self, target: &bpfman_model::UprobeLink) -> KernelResult<Self::Link>;
+}
