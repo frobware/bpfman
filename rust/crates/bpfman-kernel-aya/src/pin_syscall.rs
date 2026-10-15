@@ -1,4 +1,4 @@
-//! Narrow Linux BPF boundary for attachments, owned pinning and shared-map BTF.
+//! Narrow Linux BPF boundary for links, owned pins, BTF and module tracing loads.
 #![allow(unsafe_code)]
 
 use std::{
@@ -264,4 +264,100 @@ pub(super) fn load_btf(bytes: &[u8]) -> io::Result<OwnedFd> {
     }
     // SAFETY: a successful BPF_BTF_LOAD returns one new, uniquely owned fd.
     fd_result(fd)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("function tracing verifier rejection: {log}")]
+struct TracingLoadError {
+    #[source]
+    error: io::Error,
+    log: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn load_tracing(
+    name: &str,
+    program: &aya_obj::Program,
+    code: &aya_obj::Function,
+    btf: Option<BorrowedFd<'_>>,
+    module: BorrowedFd<'_>,
+    target: u32,
+    kind: bpfman_model::TracingKind,
+    flags: u32,
+) -> io::Result<OwnedFd> {
+    use aya_obj::generated::bpf_attr__bindgen_ty_4;
+    // SAFETY: generated Linux BPF_PROG_LOAD input contains only integers/unions
+    // of integers. Zero initializes reserved fields and unused pointer pairs.
+    let mut attr: bpf_attr__bindgen_ty_4 = unsafe { std::mem::zeroed() };
+    let count = |len| {
+        u32::try_from(len).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "tracing data exceeds kernel size range",
+            )
+        })
+    };
+    let mut log = vec![0u8; 1024 * 1024];
+    attr.prog_type = 26;
+    attr.insn_cnt = count(code.instructions.len())?;
+    attr.insns = code.instructions.as_ptr() as u64;
+    attr.license = program.license.as_ptr() as u64;
+    attr.kern_version = program.kernel_version.unwrap_or(0);
+    attr.prog_flags = flags;
+    for (out, byte) in attr.prog_name.iter_mut().take(15).zip(name.bytes()) {
+        *out = byte as libc::c_char;
+    }
+    attr.expected_attach_type = crate::function_tracing::attach_type(kind);
+    attr.attach_btf_id = target;
+    attr.__bindgen_anon_1.attach_btf_obj_fd = module.as_raw_fd() as u32;
+    if let Some(btf) = btf {
+        attr.prog_btf_fd = btf.as_raw_fd() as u32;
+        attr.func_info_rec_size = size_of::<aya_obj::generated::bpf_func_info>() as u32;
+        attr.func_info = code.func_info.func_info.as_ptr() as u64;
+        attr.func_info_cnt = count(code.func_info.func_info.len())?;
+        attr.line_info_rec_size = size_of::<aya_obj::generated::bpf_line_info>() as u32;
+        attr.line_info = code.line_info.line_info.as_ptr() as u64;
+        attr.line_info_cnt = count(code.line_info.line_info.len())?;
+    }
+    attr.log_buf = log.as_mut_ptr() as u64;
+    attr.log_size = log.len() as u32;
+    attr.log_level = 1;
+    // SAFETY: initialized generated BPF_PROG_LOAD ABI. All instructions, BTF
+    // records, license and writable log buffers remain live through this call.
+    // Borrowed map, BTF and module descriptors are held by the caller.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_bpf,
+            5u32,
+            &attr,
+            size_of::<bpf_attr__bindgen_ty_4>(),
+        )
+    };
+    if result < 0 {
+        let error = io::Error::last_os_error();
+        let end = log.iter().position(|b| *b == 0).unwrap_or(log.len());
+        return Err(io::Error::new(
+            error.kind(),
+            TracingLoadError {
+                error,
+                log: String::from_utf8_lossy(&log[..end]).into_owned(),
+            },
+        ));
+    }
+    fd_result(result)
+}
+
+pub(super) fn attach_tracing(
+    program: BorrowedFd<'_>,
+    kind: bpfman_model::TracingKind,
+) -> io::Result<OwnedFd> {
+    let attr = [
+        program.as_raw_fd() as u32,
+        0,
+        crate::function_tracing::attach_type(kind),
+        0,
+    ];
+    // SAFETY: fixed initialized BPF_LINK_CREATE prefix. Target is bound at load;
+    // the kernel verifies the requested attach type against that program.
+    fd_result(unsafe { libc::syscall(libc::SYS_bpf, 28u32, attr.as_ptr(), size_of::<[u32; 4]>()) })
 }

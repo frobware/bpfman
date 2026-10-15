@@ -23,6 +23,8 @@ pub enum PinProgramKind {
     Tracepoint,
     /// Kernel entry or return probe.
     Kprobe,
+    /// Native BTF function tracing.
+    Tracing,
     /// Dispatcher extension.
     Extension,
     /// XDP dispatcher.
@@ -288,4 +290,24 @@ pub trait UprobeProgram {
         target: &bpfman_model::UprobeLink,
         file: &std::fs::File,
     ) -> KernelResult<Self::Link>;
+}
+
+/// Adopt native function tracing through a confined program pin.
+pub trait TracingKernel: ProgramInspection + LinkInspection {
+    /// Adopted native program, with its load-time target validated.
+    type Tracing: TracingProgram;
+    /// Validate the program's target and selection before pending publication.
+    fn tracing_at(
+        &self,
+        source: PinSource<'_>,
+        target: &bpfman_model::TracingLink,
+    ) -> KernelResult<(PinnedProgram, Self::Tracing)>;
+}
+
+/// A function tracing program bound to its target at load time.
+pub trait TracingProgram {
+    /// Owned unpinned link.
+    type Link: LinkPinning;
+    /// Attach the already bound program.
+    fn attach(&mut self) -> KernelResult<Self::Link>;
 }

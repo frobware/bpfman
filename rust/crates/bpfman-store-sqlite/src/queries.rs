@@ -34,6 +34,8 @@ pub(super) struct StoredLinkRow {
     pub(super) function: Option<String>,
     pub(super) offset: Option<i64>,
     pub(super) retprobe: Option<i64>,
+    pub(super) tracing_function: Option<String>,
+    pub(super) attach_func: Option<String>,
     pub(super) user_target: Option<String>,
     pub(super) user_function: Option<String>,
     pub(super) user_offset: Option<i64>,
@@ -53,13 +55,16 @@ pub(super) fn stored_links(
                 t.tp_group AS tp_group, t.tp_name AS tp_name,
                 x.interface, x.ifindex, x.direction, x.priority, x.netns, x.nsid, k.fn_name, k.offset, k.retprobe,
                 u.target AS user_target, u.fn_name AS user_function, u.offset AS user_offset,
-                u.pid AS user_pid, u.container_pid, u.retprobe AS user_retprobe
+                u.pid AS user_pid, u.container_pid, u.retprobe AS user_retprobe,
+                CASE l.kind WHEN 'fentry' THEN fe.fn_name WHEN 'fexit' THEN fx.fn_name END AS tracing_function, p.attach_func
          FROM links l
          LEFT JOIN managed_programs p ON p.program_id = l.kernel_prog_id
          LEFT JOIN link_tracepoint_details t ON t.id = l.id
          LEFT JOIN link_tcx_details x ON x.id = l.id
          LEFT JOIN link_kprobe_details k ON k.id = l.id
          LEFT JOIN link_uprobe_details u ON u.id = l.id
+         LEFT JOIN link_fentry_details fe ON fe.id = l.id
+         LEFT JOIN link_fexit_details fx ON fx.id = l.id
          WHERE (:id IS NULL OR l.id = :id) ORDER BY l.id",
     )?;
     statement
@@ -84,6 +89,8 @@ pub(super) fn stored_links(
                 function: row.get("fn_name")?,
                 offset: row.get("offset")?,
                 retprobe: row.get("retprobe")?,
+                tracing_function: row.get("tracing_function")?,
+                attach_func: row.get("attach_func")?,
                 user_target: row.get("user_target")?,
                 user_function: row.get("user_function")?,
                 user_offset: row.get("user_offset")?,
@@ -198,6 +205,7 @@ pub(super) struct ProgramRow {
 
 #[derive(PartialEq, Eq)]
 pub(super) struct UnloadRow {
+    pub(super) attach_func: Option<String>,
     pub(super) kind: String,
     pub(super) object: String,
     pub(super) pin: String,
@@ -313,7 +321,7 @@ pub(super) fn unload(
 ) -> rusqlite::Result<Option<UnloadRow>> {
     connection
         .prepare_cached(
-            "SELECT p.program_type, p.object_path, p.pin_path, p.map_set_id,
+            "SELECT p.program_type, p.attach_func, p.object_path, p.pin_path, p.map_set_id,
                     m.pin_path AS map_path, p.created_at, m.created_at AS map_created,
                     (SELECT count(*) FROM links
                      WHERE kernel_prog_id = p.program_id) AS links,
@@ -327,6 +335,7 @@ pub(super) fn unload(
         )?
         .query_row(named_params! { ":program_id": id.get() }, |row| {
             Ok(UnloadRow {
+                attach_func: row.get("attach_func")?,
                 kind: row.get("program_type")?,
                 object: row.get("object_path")?,
                 pin: row.get("pin_path")?,
@@ -367,15 +376,16 @@ pub(super) fn insert_program(
     tx.prepare_cached(
         "INSERT INTO managed_programs
          (program_id, program_name, program_type, object_path, source_path, pin_path,
-          map_set_id, license, gpl_compatible, metadata_json, created_at, global_data)
+          map_set_id, license, gpl_compatible, metadata_json, created_at, global_data, attach_func)
          VALUES (:program_id, :name, :kind, :object_path, :source_path, :pin_path,
-                 :map_set, :license, :gpl_compatible, :metadata, :created_at, :globals)",
+                 :map_set, :license, :gpl_compatible, :metadata, :created_at, :globals, :attach_func)",
     )?
     .execute(named_params! {
         ":program_id": record.id.get(),
         ":map_set": record.map_owner.unwrap_or(record.id).get(),
         ":name": record.spec.name().as_str(),
         ":kind": record.spec.kind().as_str(),
+        ":attach_func": match record.spec { bpfman_model::ProgramSpec::Fentry { target, .. } | bpfman_model::ProgramSpec::Fexit { target, .. } => Some(target.as_str()), _ => None },
         ":object_path": program.object_path,
         ":source_path": record.source,
         ":pin_path": program.pin_path,
@@ -536,5 +546,33 @@ pub(super) fn insert_pending_uprobe(
         .query_row(named_params! { ":kind": if input.target.retprobe() { "uretprobe" } else { "uprobe" }, ":program": input.program_id.get(), ":metadata": metadata, ":created": input.created_at }, |row| row.get("id"))?;
     tx.prepare_cached("INSERT INTO link_uprobe_details (id, target, fn_name, offset, pid, container_pid, retprobe) VALUES (:id, :target, :function, :offset, :pid, :container_pid, :retprobe)")?
         .execute(named_params! { ":id": id, ":target": input.target.target(), ":function": input.target.function(), ":offset": offset, ":pid": input.target.pid().map_or(0, NonZeroU32::get), ":container_pid": input.target.container_pid().map_or(0, NonZeroU32::get), ":retprobe": input.target.retprobe() })?;
+    Ok(id)
+}
+
+pub(super) fn is_tracing(
+    connection: &Connection,
+    input: &bpfman_store::PendingTracing<'_>,
+) -> rusqlite::Result<bool> {
+    connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM managed_programs WHERE program_id = :id AND program_type = :kind AND attach_func = :function) AS supported")?
+        .query_row(named_params! { ":id": input.program_id.get(), ":kind": input.target.kind.program_type().as_str(), ":function": input.target.function.as_str() }, |row| row.get("supported"))
+}
+
+pub(super) fn insert_pending_tracing(
+    tx: &Transaction<'_>,
+    input: &bpfman_store::PendingTracing<'_>,
+    metadata: &str,
+) -> rusqlite::Result<i64> {
+    let id = tx.prepare_cached("INSERT INTO links (kind, kernel_prog_id, metadata_json, created_at) VALUES (:kind, :program, :metadata, :created) RETURNING id")?
+        .query_row(named_params! { ":kind": input.target.kind.program_type().as_str(), ":program": input.program_id.get(), ":metadata": metadata, ":created": input.created_at }, |row| row.get("id"))?;
+    let sql = match input.target.kind {
+        bpfman_model::TracingKind::Fentry => {
+            "INSERT INTO link_fentry_details (id, fn_name) VALUES (:id, :function)"
+        }
+        bpfman_model::TracingKind::Fexit => {
+            "INSERT INTO link_fexit_details (id, fn_name) VALUES (:id, :function)"
+        }
+    };
+    tx.prepare_cached(sql)?
+        .execute(named_params! { ":id": id, ":function": input.target.function.as_str() })?;
     Ok(id)
 }

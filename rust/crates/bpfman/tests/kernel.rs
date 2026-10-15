@@ -1033,3 +1033,22 @@ fn sqlite_uprobe_library_resolution() {
 fn json_uprobe_library_resolution() {
     library_uprobe::exercise("json");
 }
+
+#[path = "kernel/function_tracing.rs"]
+mod function_tracing;
+#[test]
+fn sqlite_function_tracing_native_link_recovery() {
+    function_tracing::exercise(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_function_tracing_native_link_recovery() {
+    function_tracing::exercise(bpfman_store_json::Backend);
+}
+#[test]
+fn sqlite_function_tracing_script_corpus() {
+    cli::function_tracing_scripts("sqlite");
+}
+#[test]
+fn json_function_tracing_script_corpus() {
+    cli::function_tracing_scripts("json");
+}

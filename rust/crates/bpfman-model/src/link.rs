@@ -70,6 +70,8 @@ impl fmt::Display for Tracepoint {
 /// Attachment-specific intent, separate from its persistence and kernel identities.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum LinkDetails {
+    /// Native BTF function entry or exit tracing.
+    Tracing(crate::TracingLink),
     /// A standalone tracepoint attachment.
     Tracepoint(Tracepoint),
     /// Standalone kernel entry or return probe.

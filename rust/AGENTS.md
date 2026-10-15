@@ -136,7 +136,7 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 15 for library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
+- New JSON stores use format 16 for function tracing; format 15 retains library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
   format 10 retains native TCX,
   format 9 retains independent TC egress chains, format 8 retains ingress
   replacement, and format 7 retains singleton ingress.
@@ -563,3 +563,30 @@ The architecture and compatibility goals are in
   host-PID maps across PID namespaces, and the five unchanged library scripts
   remain in the focused/full gates. The host-cache script may take its existing
   no-cache branch; synthetic fixtures must still prove the cache tier actively.
+
+
+## Native function tracing
+
+- Fentry/fexit bind their requested function at load time. Require the matching
+  ELF family; preserve the target in stored program intent and refuse different
+  functions or families when publishing links. Attach accepts no replacement target.
+- Search vmlinux BTF first, then kernel module objects in BTF-ID order. Exclude
+  userspace BTF, validate split record/string extents and reject ambiguous matches.
+  Retain the selected module descriptor through loading and revalidate the native
+  BTF target during confined program-pin adoption. Keep optional BTF kinds in
+  aya-obj's portable forms. Do not fork Aya or access its private representation.
+- Vmlinux uses Aya's public loader. Module loads reuse Aya's maps and public
+  aya-obj relocation; the missing attach_btf_obj_fd operation belongs in the
+  existing private syscall boundary. All managed pin mutation stays in bpfman-fs.
+- Preserve tracing entry/exit selection in link receipts. Keep a live descriptor
+  across unpinning and close pin descriptors first. The kernel refuses duplicate
+  links for one loaded tracing program; compensate that pending intent while
+  retaining the original. Separately loaded programs may share a function.
+  Trampoline execution quiescence remains subject to kernel RCU.
+- SQLite retains Go schema 2 and existing tracing-detail/load-target fields; JSON
+  tracing requires format 16 without upgrading formats 1–15. Both stores validate
+  link function names against stored load targets.
+- `rust-test-function-tracing` runs six unchanged acceptance files plus native
+  vmlinux/module traffic and recovery contracts on both stores. Keep immediate
+  lifetime tests in the serial global stages. Retain generic real-store and
+  stateful-fake failure/cancellation/consuming retry coverage. LSM is separate.

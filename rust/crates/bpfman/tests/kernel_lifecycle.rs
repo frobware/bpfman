@@ -1063,3 +1063,22 @@ fn sqlite_uprobe_failure_recovery() {
 fn json_uprobe_failure_recovery() {
     uprobe::recovery(bpfman_store_json::Backend);
 }
+
+#[path = "lifecycle/function_tracing.rs"]
+mod function_tracing;
+#[test]
+fn sqlite_function_tracing_lifecycle() {
+    function_tracing::lifecycle(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_function_tracing_lifecycle() {
+    function_tracing::lifecycle(bpfman_store_json::Backend);
+}
+#[test]
+fn sqlite_function_tracing_failure_recovery() {
+    function_tracing::recovery(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_function_tracing_failure_recovery() {
+    function_tracing::recovery(bpfman_store_json::Backend);
+}

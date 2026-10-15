@@ -136,10 +136,12 @@ impl LoadRequest {
                     | bpfman_model::ProgramSpec::Kretprobe(_)
                     | bpfman_model::ProgramSpec::Uprobe(_)
                     | bpfman_model::ProgramSpec::Uretprobe(_)
+                    | bpfman_model::ProgramSpec::Fentry { .. }
+                    | bpfman_model::ProgramSpec::Fexit { .. }
             )
         }) {
             Some(
-                "program types other than tracepoint, xdp, tc, tcx, kprobe, kretprobe, uprobe, and uretprobe",
+                "program types other than tracepoint, xdp, tc, tcx, kprobe, kretprobe, uprobe, uretprobe, fentry, and fexit",
             )
         } else {
             None

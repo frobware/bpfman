@@ -40,11 +40,25 @@ fn invalid(id: NonZeroU32, reason: &str) -> Failure {
 fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Result<(), Failure> {
     if !matches!(
         row.kind.as_str(),
-        "tracepoint" | "xdp" | "tc" | "tcx" | "kprobe" | "kretprobe" | "uprobe" | "uretprobe"
+        "tracepoint"
+            | "xdp"
+            | "tc"
+            | "tcx"
+            | "kprobe"
+            | "kretprobe"
+            | "uprobe"
+            | "uretprobe"
+            | "fentry"
+            | "fexit"
     ) {
         return Err(Failure::Unsupported(
-            "only tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, and uretprobe programs are implemented",
+            "only tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry, and fexit programs are implemented",
         ));
+    }
+
+    if matches!(row.kind.as_str(), "fentry" | "fexit") {
+        bpfman_model::Symbol::try_from(row.attach_func.as_deref().unwrap_or_default())
+            .map_err(|_| invalid(id, "missing or invalid tracing load target"))?;
     }
 
     if u32::try_from(row.map_set)

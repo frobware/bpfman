@@ -117,7 +117,7 @@ impl TcxProgram for AyaTcx {
                     .map_err(std::io::Error::other)?
                     .try_into()
                     .map_err(std::io::Error::other)?;
-                Ok(AyaLink(link))
+                Ok(AyaLink::from_aya(link))
             })
             .map_err(Into::into)
     }

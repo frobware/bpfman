@@ -83,6 +83,8 @@ fn insert(
             | ProgramSpec::Kretprobe(_)
             | ProgramSpec::Uprobe(_)
             | ProgramSpec::Uretprobe(_)
+            | ProgramSpec::Fentry { .. }
+            | ProgramSpec::Fexit { .. }
     ) {
         return Err(Failure::Unsupported("program type"));
     }

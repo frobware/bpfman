@@ -57,7 +57,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":16}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":17}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -72,7 +72,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     fs::write(layout.database_path(), &pristine).expect("restore");
     let mut reader = writer(&runtime, |w| Backend.open(w).expect("open"));
-    fs::write(layout.database_path(), b"{\"version\":16}").expect("change version");
+    fs::write(layout.database_path(), b"{\"version\":17}").expect("change version");
 
     assert_eq!(
         reader
@@ -390,7 +390,7 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
         });
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
-        assert_eq!(state["version"], 15);
+        assert_eq!(state["version"], 16);
         state["version"] = version.into();
         fs::write(
             layout.database_path(),
@@ -1462,5 +1462,109 @@ fn library_intent_requires_format_fifteen_without_upgrade() {
             fs::read(layout.database_path()).expect("unchanged"),
             previous
         );
+    }
+}
+
+#[test]
+fn function_tracing_requires_format_sixteen_and_consistent_load_targets() {
+    use bpfman_model::{ProgramSpec, TracingKind, TracingLink};
+    for kind in [TracingKind::Fentry, TracingKind::Fexit] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let layout = RuntimeLayout::try_from(temp.path().to_owned()).expect("layout");
+        let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+        writer(&runtime, |w| {
+            Backend.open(w).expect("fresh");
+        });
+        let pristine: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot"))
+                .expect("JSON");
+        let name = "entry".try_into().expect("name");
+        let function: Symbol = "bpfman_e2e_target_1".try_into().expect("function");
+        let spec = match kind {
+            TracingKind::Fentry => ProgramSpec::Fentry {
+                name,
+                target: function.clone(),
+            },
+            TracingKind::Fexit => ProgramSpec::Fexit {
+                name,
+                target: function.clone(),
+            },
+        };
+        let target = TracingLink { function, kind };
+        let commit = |w: &RuntimeWriter<'_>| {
+            Backend.commit_program(
+                w,
+                LoadRecord {
+                    id: NonZeroU32::MIN,
+                    spec: &spec,
+                    map_owner: None,
+                    shared_maps: &[],
+                    source: "/tracing.o",
+                    license: "GPL",
+                    created_at: "2026-10-15T12:00:00Z",
+                    metadata: &Default::default(),
+                    globals: &Default::default(),
+                },
+            )
+        };
+        let pending = |w: &RuntimeWriter<'_>| {
+            Backend.create_pending_tracing(
+                w,
+                bpfman_store::PendingTracing {
+                    program_id: NonZeroU32::MIN,
+                    target: &target,
+                    metadata: &Default::default(),
+                    created_at: "2026-10-15T12:00:00Z",
+                },
+            )
+        };
+        for version in 1..=15 {
+            let mut state = pristine.clone();
+            state["version"] = version.into();
+            let before = serde_json::to_vec(&state).expect("encode");
+            fs::write(layout.database_path(), &before).expect("old format");
+            writer(&runtime, |w| {
+                Backend.open(w).expect("old snapshot still readable");
+                assert_eq!(
+                    commit(w).expect_err("no load upgrade").kind(),
+                    ErrorKind::Unsupported
+                );
+                assert_eq!(
+                    pending(w).map(|_| ()).expect_err("no link upgrade").kind(),
+                    ErrorKind::Unsupported
+                );
+            });
+            assert_eq!(fs::read(layout.database_path()).expect("unchanged"), before);
+        }
+        fs::write(
+            layout.database_path(),
+            serde_json::to_vec(&pristine).expect("encode"),
+        )
+        .expect("restore");
+        writer(&runtime, |w| {
+            commit(w).expect("load");
+            pending(w).expect("pending");
+        });
+        let valid: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot"))
+                .expect("JSON");
+        assert_eq!(valid["version"], 16);
+        for change in 0..5 {
+            let mut invalid = valid.clone();
+            match change {
+                0 => invalid["version"] = 15.into(),
+                1 => invalid["programs"][0]["attach_func"] = serde_json::Value::Null,
+                2 => invalid["programs"][0]["attach_func"] = "different_function".into(),
+                3 => invalid["links"][0]["target"]["function"] = "different_function".into(),
+                _ => invalid["links"][0]["target"]["exit"] = (kind == TracingKind::Fentry).into(),
+            }
+            let bytes = serde_json::to_vec(&invalid).expect("encode");
+            fs::write(layout.database_path(), &bytes).expect("invalid fixture");
+            assert!(
+                Backend.open_reader(&runtime).is_err(),
+                "invalid tracing state {change}"
+            );
+            assert_eq!(fs::read(layout.database_path()).expect("unchanged"), bytes);
+        }
     }
 }

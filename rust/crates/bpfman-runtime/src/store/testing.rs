@@ -218,6 +218,14 @@ impl<S: bpfman_store::LinkStore> bpfman_store::LinkStore for Faults<S> {
         self.backend.create_pending_uprobe(writer, request)
     }
 
+    fn create_pending_tracing(
+        &self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        request: bpfman_store::PendingTracing<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), bpfman_store::Error> {
+        self.backend.create_pending_tracing(writer, request)
+    }
+
     fn create_pending_kprobe(
         &self,
         writer: &bpfman_fs::RuntimeWriter<'_>,

@@ -217,6 +217,15 @@ impl<S: OpenStore + bpfman_store::LinkStore> bpfman_store::LinkStore for ActiveS
         self.backend.create_pending_uprobe(writer, request)
     }
 
+    fn create_pending_tracing(
+        &self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        request: bpfman_store::PendingTracing<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), bpfman_store::Error> {
+        self.check_writer(writer)?;
+        self.backend.create_pending_tracing(writer, request)
+    }
+
     fn create_pending_kprobe(
         &self,
         writer: &bpfman_fs::RuntimeWriter<'_>,

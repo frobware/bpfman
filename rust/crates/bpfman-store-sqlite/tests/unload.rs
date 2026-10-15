@@ -68,7 +68,9 @@ fn counts(db: &Connection) -> (usize, usize) {
 #[test]
 fn preflight_rejects_unsupported_kinds_invalid_sharing_and_noncanonical_paths() -> Result {
     for sql in [
+        "UPDATE managed_programs SET program_type='lsm'",
         "UPDATE managed_programs SET program_type='fentry'",
+        "UPDATE managed_programs SET program_type='fexit', attach_func=''",
         "INSERT INTO shared_map_pins VALUES ('../shared',42)",
         "PRAGMA foreign_keys=OFF; UPDATE managed_programs SET map_set_id=-1",
         "INSERT INTO map_sets VALUES(99,'unused','now'); UPDATE managed_programs SET map_set_id=99",

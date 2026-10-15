@@ -107,7 +107,7 @@ impl UprobeProgram for AyaUprobe {
         let path = format!("/proc/self/fd/{}", file.as_raw_fd());
         let id = self.0.attach(point, path, scope)?;
         let link: aya::programs::links::FdLink = self.0.take_link(id)?.try_into()?;
-        Ok(AyaLink(link))
+        Ok(AyaLink::from_aya(link))
     }
 }
 

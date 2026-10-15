@@ -2,6 +2,8 @@ use bpfman_kernel::{Error, ErrorKind};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum LoadCause {
+    #[error("resolve or load function tracing target")]
+    Tracing(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("parse local ELF")]
     Parse(#[source] Box<aya_obj::ParseError>),
     #[error("load ELF maps and relocations")]

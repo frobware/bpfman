@@ -208,9 +208,17 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
     let kretprobe = ProgramSpec::Kretprobe(name.clone());
     let uprobe = ProgramSpec::Uprobe(name.clone());
     let uretprobe = ProgramSpec::Uretprobe(name.clone());
-    let unsupported = ProgramSpec::Fentry {
+    let fentry = ProgramSpec::Fentry {
         name: name.clone(),
-        target: name,
+        target: "entry_target".try_into().expect("target"),
+    };
+    let fexit = ProgramSpec::Fexit {
+        name: name.clone(),
+        target: "exit_target".try_into().expect("target"),
+    };
+    let unsupported = ProgramSpec::Lsm {
+        name: name.clone(),
+        hook: name,
     };
     let metadata = BTreeMap::new();
     let globals = BTreeMap::new();
@@ -245,6 +253,8 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                     record(6, &kretprobe),
                     record(7, &uprobe),
                     record(8, &uretprobe),
+                    record(9, &fentry),
+                    record(10, &fexit),
                 ],
             )
             .expect("mixed batch");
@@ -259,7 +269,9 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                 kprobe.clone(),
                 kretprobe.clone(),
                 uprobe.clone(),
-                uretprobe.clone()
+                uretprobe.clone(),
+                fentry.clone(),
+                fexit.clone()
             ]
         );
         assert_eq!(
@@ -277,7 +289,9 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                 ProgramType::Kprobe,
                 ProgramType::Kretprobe,
                 ProgramType::Uprobe,
-                ProgramType::Uretprobe
+                ProgramType::Uretprobe,
+                ProgramType::Fentry,
+                ProgramType::Fexit
             ]
         );
         assert!(

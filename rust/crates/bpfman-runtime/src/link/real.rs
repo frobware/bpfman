@@ -117,6 +117,7 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
     ) -> Result<Option<Self::Pin>, LinkCause> {
         let path = match &record.details {
             bpfman_model::LinkDetails::Tracepoint(_)
+            | bpfman_model::LinkDetails::Tracing(_)
             | bpfman_model::LinkDetails::Kprobe(_)
             | bpfman_model::LinkDetails::Uprobe(_) => writer.layout().link_pin_path(record.id),
             bpfman_model::LinkDetails::Tcx(d) => {
@@ -133,6 +134,10 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
             LinkState::Attached { kernel_id } => Some(kernel_id),
         };
         match &record.details {
+            bpfman_model::LinkDetails::Tracing(d) => {
+                self.1
+                    .observe_tracing_pin(writer, record.id, record.program_id, kernel, d.kind)
+            }
             bpfman_model::LinkDetails::Tcx(d) => {
                 self.1.observe_tcx_pin(writer, d, record.program_id, kernel)
             }

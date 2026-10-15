@@ -104,15 +104,16 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
-| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
+| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | General reconciliation and lost-report recovery |
+| Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup on both stores | LSM and other tracing families |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 15 for library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 16 for function tracing; format 15 retains library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2696,10 +2697,10 @@ wrong, change it here before broadening feature coverage.
 
 - Explicit map-owner sharing and ordinary PinByName coordination are implemented;
   shared map-of-maps definitions remain pending.
-- Kprobe/kretprobe and host uprobe/uretprobe lifecycle are implemented; fentry,
-  fexit, LSM, and remaining attachment types are pending.
+- Kprobe/kretprobe, host/container uprobe/uretprobe and native fentry/fexit
+  lifecycle are implemented; LSM and remaining attachment types are pending.
 - OCI pull, cache, authentication, and signature verification.
-- Namespace helper and CSI integration.
+- The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
 
@@ -4830,3 +4831,72 @@ seconds locally on Linux 6.18.54, with eight ordinary contract workers and the
 existing development/test `aya-obj` opt-level-two override. This is local evidence,
 not a controlled benchmark. No dependency, lockfile or unsafe-boundary changes
 were needed for this slice.
+
+
+### Native fentry/fexit lifecycle (15 October 2026)
+
+Native function entry/exit tracing now follows the same standalone pending-intent,
+owned attachment, pin, finalisation, observation and consuming teardown protocol
+as the earlier attachment families. `fentry:ENTRY:FUNCTION` and
+`fexit:ENTRY:FUNCTION` require matching ELF sections. The requested function is
+bound at load time and overrides the ELF target. Attach takes a program ID and
+metadata; the loaded family and function remain authoritative.
+
+The adapter searches vmlinux first, then kernel module BTF by kernel BTF ID,
+excluding userspace objects. A checked native-endian scanner handles complete
+record extents, split type numbering and base/module string offsets, and refuses
+ambiguous function matches. Vmlinux type counts are computed once per resolution,
+then reused for each module. Module BTF descriptors remain owned through load.
+Aya's public API handles vmlinux; its private module-attach field requires a narrow
+bridge for module loads. Those loads retain Aya-created/reused maps, use aya-obj's
+public BTF/map/call relocation and portable BTF sanitization, and issue the final
+TRACING load through the existing private syscall boundary. Aya internals and
+versions are unchanged; pure crate dependency closures remain empty.
+
+Canonical pin adoption validates program identity, native type and actual BTF
+object/function against stored load intent. Link creation enforces the requested
+entry/exit attach type. Scoped filesystem APIs remain the only managed pin mutation
+boundary. Tracing cleanup receipts preserve the family, retain a live native
+link descriptor across unpinning and close every pin descriptor before it. Kernel
+trampoline quiescence remains subject to RCU, matching Go; tests preserve the
+unchanged acceptance scripts' quiescence checks. A duplicate link for one loaded
+tracing program fails in the kernel and compensates its own pending intent;
+separately loaded programs can attach to the same function.
+
+SQLite retains Go schema 2 and its existing load-target and tracing-detail columns.
+New JSON stores use format 16, with stored load targets and tracing intent. Older
+formats refuse tracing publication or persisted tracing state without upgrading
+or rewriting snapshots. Both stores reject intent whose function/family differs
+from the loaded program. Generic receipt contracts cover pending/finalised state,
+foreign/stale receipts, metadata, reopened reads, protection against unload and
+conditional deletion. The stateful fake covers both families through acquisition
+and publication faults, cancellation, failed compensation and reopened record-only
+cleanup retries, including duplicate refusal.
+
+Native contracts exercise vmlinux execution, module entry/exit counters and
+requested-target override from slot zero to slot one. They also cover missing BTF
+targets, load publication failure, cancelled intent, failed link finalisation,
+duplicate compensation, replaced pins, record-only cleanup retries and external
+program holders. Their immediate object-lifetime controls join the existing serial
+global stages. The six unchanged acceptance files are explicitly selected on both
+stores: `TestFentry_LoadAndGet`, `TestFexit_LoadAndGet`,
+`TestFentry_LinkRoundTrip`, `TestFexit_LinkRoundTrip`,
+`TestMultiProgFentry_LoadAttachDetachUnload`, and
+`TestMultiProgFexit_LoadAttachDetachUnload`. These pass against Rust and Go;
+existing script contents and labels are untouched. LSM remains a separate slice.
+
+
+Validation: `direnv exec . make rust-check lint-make` exited zero, including
+formatting, warnings-denied Clippy/Rustdoc, all userspace/store/CLI and compile-fail
+checks, all 84 stateful-fake cases and all 134 discovered/selected real-kernel
+cases. Both owned fixture scopes passed normal cleanup. The focused
+`rust-test-function-tracing rust-test-kernel-fake` run also passed, and the six
+unchanged scripts passed separately against Go with JSON and SQLite.
+
+Evidence: `/tmp/tracing-final-gate.log`, `/tmp/tracing-focused.log`,
+`/tmp/bpfman-function-tracing-go-json.log`, and
+`/tmp/bpfman-function-tracing-go-sqlite.log`. The full kernel stage took 120.82
+seconds locally on Linux 6.18.54, with eight ordinary contract workers and the
+existing development/test aya-obj opt-level-two override. This is local evidence,
+not a controlled benchmark. No dependency, lockfile, Go, legacy Rust or acceptance
+script changes were needed.

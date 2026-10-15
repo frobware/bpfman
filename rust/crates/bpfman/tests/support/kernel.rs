@@ -629,6 +629,7 @@ impl ProgramLoad for FakeKernel {
         let kind = match spec {
             ProgramSpec::Tracepoint(_) => "tracepoint",
             ProgramSpec::Tcx(_) => "schedcls",
+            ProgramSpec::Fentry { .. } | ProgramSpec::Fexit { .. } => "tracing",
             ProgramSpec::Kprobe(_)
             | ProgramSpec::Kretprobe(_)
             | ProgramSpec::Uprobe(_)
@@ -742,6 +743,7 @@ impl ProgramLoad for FakeKernel {
             | ProgramSpec::Uretprobe(_) => "kprobe",
             ProgramSpec::Tracepoint(_) => "tracepoint",
             ProgramSpec::Tcx(_) => "schedcls",
+            ProgramSpec::Fentry { .. } | ProgramSpec::Fexit { .. } => "tracing",
             _ => "extension",
         };
         Ok(self.new_program_with_maps(spec.name().as_str(), kind, maps, &reused))
@@ -1051,6 +1053,17 @@ impl TracepointLinks for FakeKernel {
         Ok(self.observed(Resource::Link(found)))
     }
 
+    fn observe_tracing_pin(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+        program: NonZeroU32,
+        kernel: Option<NonZeroU32>,
+        kind: TracingKind,
+    ) -> Result<Option<Receipt>, Error> {
+        self.adopt_standalone_pin(w, id, program, kernel, Some(kind))
+    }
+
     fn observe_link_pin(
         &self,
         w: &RuntimeWriter<'_>,
@@ -1058,16 +1071,7 @@ impl TracepointLinks for FakeKernel {
         program: NonZeroU32,
         kernel: Option<NonZeroU32>,
     ) -> Result<Option<Receipt>, Error> {
-        self.writer(w)?;
-        let s = self.state.lock().expect("state");
-        let Some(found) = s.tracepoint_pins.get(&id).copied() else {
-            return Ok(None);
-        };
-        if s.links[&found].observation.program_id != program || kernel.is_some_and(|k| k != found) {
-            return Err(error(ErrorKind::InvalidData, "link mismatch"));
-        }
-        drop(s);
-        Ok(self.observed(Resource::Link(found)))
+        self.adopt_standalone_pin(w, id, program, kernel, None)
     }
 
     fn release_tracepoint(&self, w: &RuntimeWriter<'_>, live: Live) -> Removal<Live> {
@@ -1159,6 +1163,15 @@ impl LinkObservations for FakeKernel {
 
     fn extension_link(&self, id: NonZeroU32) -> Result<KernelLink, Error> {
         self.tracepoint_link(id)
+    }
+
+    fn tracing_pin(
+        &self,
+        runtime: &RuntimeDirectory,
+        id: NonZeroU64,
+        _kind: TracingKind,
+    ) -> Result<Option<KernelLink>, Error> {
+        self.tracepoint_pin(runtime, id)
     }
 
     fn tracepoint_pin(
@@ -2105,5 +2118,92 @@ impl UprobeLinks for FakeKernel {
         _target: &UprobeLink,
     ) -> Result<Live, Error> {
         self.attach_tracepoint(w, p, &"fake/event".parse().expect("tracepoint"))
+    }
+}
+
+impl TracingLinks for FakeKernel {
+    type PreparedTracing = Loaded;
+    fn prepare_tracing(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+        _target: &TracingLink,
+    ) -> Result<Loaded, Error> {
+        self.enter(Point::PrepareLink)?;
+        self.adopt(w, id, "tracing")
+    }
+    fn attach_tracing(
+        &self,
+        w: &RuntimeWriter<'_>,
+        program: Loaded,
+        target: &TracingLink,
+    ) -> Result<Live, Error> {
+        if self
+            .state
+            .lock()
+            .expect("state")
+            .links
+            .values()
+            .any(|link| link.attached && link.observation.program_id == program.id)
+        {
+            return Err(error(
+                ErrorKind::Unavailable,
+                "tracing program already attached",
+            ));
+        }
+        let live = self.attach_tracepoint(w, program, &"fake/event".parse().expect("target"))?;
+        let Resource::Link(id) = live.receipt.resource else {
+            unreachable!()
+        };
+        self.state
+            .lock()
+            .expect("state")
+            .links
+            .get_mut(&id)
+            .expect("link")
+            .observation
+            .details = KernelLinkDetails::Tracing {
+            attach_type: match target.kind {
+                TracingKind::Fentry => 24,
+                TracingKind::Fexit => 25,
+            },
+            target_obj_id: 0,
+            target_btf_id: 123,
+        };
+        Ok(live)
+    }
+}
+
+impl FakeKernel {
+    fn adopt_standalone_pin(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+        program: NonZeroU32,
+        kernel: Option<NonZeroU32>,
+        kind: Option<TracingKind>,
+    ) -> Result<Option<Receipt>, Error> {
+        self.writer(w)?;
+        let s = self.state.lock().expect("state");
+        let Some(found) = s.tracepoint_pins.get(&id).copied() else {
+            return Ok(None);
+        };
+        if s.links[&found].observation.program_id != program || kernel.is_some_and(|k| k != found) {
+            return Err(error(ErrorKind::InvalidData, "link mismatch"));
+        }
+        let matches_kind = match kind {
+            None => s.links[&found].observation.details == KernelLinkDetails::PerfEvent,
+            Some(kind) => {
+                matches!(s.links[&found].observation.details, KernelLinkDetails::Tracing { attach_type, .. } if attach_type == match kind { TracingKind::Fentry => 24, TracingKind::Fexit => 25 })
+            }
+        };
+        if !matches_kind {
+            return Err(error(
+                ErrorKind::InvalidData,
+                "standalone link family mismatch",
+            ));
+        }
+        drop(s);
+        Ok(self.observed(Resource::Link(found)))
     }
 }

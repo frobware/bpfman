@@ -11,6 +11,9 @@ use alloc::string::String;
 mod uprobe;
 pub use uprobe::{InvalidUprobe, UprobeLink, UprobeTarget};
 
+mod tracing;
+pub use tracing::{TracingKind, TracingLink};
+
 mod kprobe;
 pub use kprobe::{InvalidKernelFunction, KernelFunction, KprobeLink};
 

@@ -115,7 +115,7 @@ fn valid_requests_fail_explicitly_without_creating_runtime_or_accessing_source()
                     source,
                     name,
                     "--programs",
-                    "tracepoint:trace,fentry:enter:do_open",
+                    "tracepoint:trace,lsm:check:socket_connect",
                     "-m",
                     "owner=test",
                     "-g",
@@ -223,7 +223,7 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
     let runtime = temporary.path().join("runtime");
 
     {
-        let options = ["--programs", "tracepoint:a,fentry:b:do_open"];
+        let options = ["--programs", "tracepoint:a,lsm:b:socket_connect"];
         assert_failure(
             command(&runtime)
                 .args(["file", "not-opened.o"])
@@ -382,5 +382,29 @@ fn internal_map_names_cannot_request_implicit_pinning() -> Result {
         !runtime.exists(),
         "refuse before filesystem or kernel effects"
     );
+    Ok(())
+}
+
+#[test]
+fn tracing_family_mismatches_fail_before_runtime_creation() -> Result {
+    let temporary = tempfile::tempdir()?;
+    let runtime = temporary.path().join("runtime");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../e2e/testdata/bpf/fentry_counter.bpf.o");
+    for spec in [
+        "fentry:test_fexit:do_unlinkat",
+        "fexit:test_fentry:do_unlinkat",
+    ] {
+        assert_failure(
+            command(&runtime)
+                .arg("file")
+                .arg(&source)
+                .args(["--programs", spec])
+                .output()?,
+            1,
+            "matching fentry/fexit section",
+        )?;
+        assert!(!runtime.exists());
+    }
     Ok(())
 }

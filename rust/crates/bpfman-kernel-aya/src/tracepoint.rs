@@ -53,6 +53,18 @@ impl TracepointLinks for Kernel {
             .map_err(filesystem)
     }
 
+    fn observe_tracing_pin(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+        program: NonZeroU32,
+        kernel: Option<NonZeroU32>,
+        kind: bpfman_model::TracingKind,
+    ) -> Result<Option<LinkPin>, Error> {
+        w.observe_tracing_link_pin(self, id, program, kernel, kind)
+            .map_err(filesystem)
+    }
+
     fn observe_link_pin(
         &self,
         w: &RuntimeWriter<'_>,

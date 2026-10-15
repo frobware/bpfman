@@ -97,6 +97,12 @@ impl LocalObject {
             loader.map_pin_path(name.as_str(), source.path());
         }
         let selection = match spec {
+            ProgramSpec::Fentry { target, .. } => {
+                Selection::Tracing(target, bpfman_model::TracingKind::Fentry)
+            }
+            ProgramSpec::Fexit { target, .. } => {
+                Selection::Tracing(target, bpfman_model::TracingKind::Fexit)
+            }
             ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
             ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => Selection::Kprobe,
             ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_) => Selection::Uprobe,
@@ -131,7 +137,17 @@ impl LocalObject {
         let program = bpf
             .program_mut(spec.name().as_str())
             .ok_or_else(|| LoadCause::Invalid("selected program disappeared during load".into()))?;
+        let mut native = None;
         match selection {
+            Selection::Tracing(target, kind) => {
+                native = crate::function_tracing::load(
+                    &mut bpf,
+                    &self.bytes,
+                    spec.name().as_str(),
+                    target.as_str(),
+                    kind,
+                )?;
+            }
             Selection::Tc => crate::verification::load_tc(program)?,
             Selection::Tcx => {
                 let program: &mut aya::programs::SchedClassifier = program
@@ -183,6 +199,7 @@ impl LocalObject {
         let maps = self.maps.clone();
 
         Ok(LoadedObject {
+            native,
             bpf,
             maps,
             name: spec.name().as_str().into(),
@@ -192,9 +209,9 @@ impl LocalObject {
 
 // Aya exposes MapData::info but has no corresponding method on its Map enum.
 // Match exhaustively so newly supported map variants require an explicit review.
-pub(super) fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
+pub(super) fn map_data(map: &aya::maps::Map) -> &aya::maps::MapData {
     use aya::maps::Map;
-    let data = match map {
+    match map {
         Map::Array(data)
         | Map::ArrayOfMaps(data)
         | Map::BloomFilter(data)
@@ -225,9 +242,12 @@ pub(super) fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
         | Map::StackTraceMap(data)
         | Map::Unsupported(data)
         | Map::XskMap(data) => data,
-    };
+    }
+}
 
-    data.info()
+pub(super) fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
+    map_data(map)
+        .info()
         .map(|info| info.id())
         .map_err(|e| LoadCause::Map(Box::new(e)))
 }
@@ -242,6 +262,11 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         ))
     })?;
     match (spec, &program.section) {
+        (ProgramSpec::Fentry { .. }, ProgramSection::FEntry { .. })
+        | (ProgramSpec::Fexit { .. }, ProgramSection::FExit { .. }) => Ok(()),
+        (ProgramSpec::Fentry { .. } | ProgramSpec::Fexit { .. }, _) => Err(LoadCause::Invalid(
+            "function tracing selection requires its matching fentry/fexit section".into(),
+        )),
         (ProgramSpec::Tc(_) | ProgramSpec::Tcx(_), ProgramSection::SchedClassifier) => Ok(()),
         (ProgramSpec::Tc(_) | ProgramSpec::Tcx(_), _) => Err(LoadCause::Invalid(
             "TC selection requires a classifier section".into(),
@@ -338,7 +363,8 @@ enum XdpRole {
     DevMap,
 }
 
-enum Selection {
+enum Selection<'a> {
+    Tracing(&'a bpfman_model::Symbol, bpfman_model::TracingKind),
     Kprobe,
     Uprobe,
     Tc,

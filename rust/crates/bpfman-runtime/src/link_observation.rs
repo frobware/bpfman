@@ -44,6 +44,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
             runtime.layout().tc_slot_path(d.key, d.revision, d.slot)
         }
         bpfman_model::LinkDetails::Tracepoint(_)
+        | bpfman_model::LinkDetails::Tracing(_)
         | bpfman_model::LinkDetails::Kprobe(_)
         | bpfman_model::LinkDetails::Uprobe(_) => runtime.layout().link_pin_path(record.id),
         bpfman_model::LinkDetails::Xdp(details) => {
@@ -65,6 +66,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
             bpfman_model::LinkDetails::Tracepoint(_)
             | bpfman_model::LinkDetails::Kprobe(_)
             | bpfman_model::LinkDetails::Uprobe(_) => backend.tracepoint_link(id),
+            bpfman_model::LinkDetails::Tracing(_) => backend.extension_link(id),
             bpfman_model::LinkDetails::Tcx(_) => backend.tcx_link(id),
             bpfman_model::LinkDetails::Xdp(_) | bpfman_model::LinkDetails::Tc(_) => {
                 backend.extension_link(id)
@@ -80,6 +82,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
         bpfman_model::LinkDetails::Tracepoint(_)
         | bpfman_model::LinkDetails::Kprobe(_)
         | bpfman_model::LinkDetails::Uprobe(_) => backend.tracepoint_pin(runtime, record.id)?,
+        bpfman_model::LinkDetails::Tracing(d) => backend.tracing_pin(runtime, record.id, d.kind)?,
         bpfman_model::LinkDetails::Tcx(d) => backend.tcx_pin(runtime, d, record.program_id)?,
         bpfman_model::LinkDetails::Tc(details) => backend.tc_pin(runtime, details)?,
         bpfman_model::LinkDetails::Xdp(details) => backend.extension_pin(runtime, details)?,
@@ -115,6 +118,18 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
             if !matches!(link.details,bpfman_model::KernelLinkDetails::Tcx {ifindex,direction} if direction == d.key.direction && (ifindex == d.key.ifindex.get() || ifindex == 0))
             {
                 return Err(Cause::Invalid("TCX hook differs from stored intent").into());
+            }
+        }
+    }
+    if let bpfman_model::LinkDetails::Tracing(d) = &record.details {
+        for link in kernel.iter().chain(pin.iter()) {
+            let expected = match d.kind {
+                bpfman_model::TracingKind::Fentry => 24,
+                bpfman_model::TracingKind::Fexit => 25,
+            };
+            if !matches!(link.details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if attach_type == expected)
+            {
+                return Err(Cause::Invalid("tracing selection differs from stored intent").into());
             }
         }
     }

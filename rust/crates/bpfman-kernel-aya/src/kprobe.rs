@@ -57,6 +57,6 @@ impl KprobeProgram for AyaKprobe {
     fn attach(&mut self, target: &KprobeLink) -> KernelResult<AyaLink> {
         let id = self.0.attach(target.function.as_str(), target.offset)?;
         let link: aya::programs::links::FdLink = self.0.take_link(id)?.try_into()?;
-        Ok(AyaLink(link))
+        Ok(AyaLink::from_aya(link))
     }
 }

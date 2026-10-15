@@ -1,3 +1,4 @@
+//! Version 16 adds load-bound native fentry/fexit programs and links.
 //! Version 15 adds bare library-name user-space targets.
 //! Version 14 adds container mount-namespace user-space targets.
 //! Version 13 adds host user-space probes.
@@ -76,6 +77,8 @@ pub(super) enum LinkProgress {
 #[serde(deny_unknown_fields)]
 pub(super) struct Program {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) attach_func: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) map_owner: Option<NonZeroU32>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) shared_maps: Vec<String>,
@@ -105,7 +108,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 15,
+            version: 16,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -127,7 +130,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=15) {
+        if !matches!(header.version, 1..=16) {
             return Err(Failure::Version(header.version));
         }
 
@@ -168,6 +171,21 @@ impl State {
         let mut program_generations = BTreeSet::new();
 
         for row in &self.programs {
+            let tracing = matches!(row.kind, Kind::Fentry | Kind::Fexit);
+            if tracing && self.version < 16 {
+                return Err(Failure::Unsupported(
+                    "function tracing requires JSON format 16; no implicit upgrade",
+                ));
+            }
+            if tracing != row.attach_func.is_some() {
+                return Err(Failure::Invalid(
+                    "missing or unexpected load-bound function",
+                ));
+            }
+            if let Some(function) = &row.attach_func {
+                Symbol::try_from(function.as_str())
+                    .map_err(|_| Failure::Invalid("invalid load-bound function"))?;
+            }
             if self.version < 12 && (row.map_owner.is_some() || !row.shared_maps.is_empty()) {
                 return Err(Failure::Unsupported(
                     "map sharing requires JSON format 12; no implicit upgrade",
@@ -290,6 +308,20 @@ impl State {
             if let LinkDetails::Tcx(d) = link.target.details()? {
                 if !tcx_keys.insert((d.key, link.program_id)) {
                     return Err(Failure::Invalid("duplicate TCX program/hook"));
+                }
+            }
+            if let LinkTarget::Tracing(d) = &link.target {
+                if self.version < 16 {
+                    return Err(Failure::Unsupported(
+                        "function tracing requires JSON format 16; no implicit upgrade",
+                    ));
+                }
+                if !self.programs.iter().any(|p| {
+                    p.id == link.program_id && p.attach_func.as_deref() == Some(d.function.as_str())
+                }) {
+                    return Err(Failure::Invalid(
+                        "tracing function differs from loaded program",
+                    ));
                 }
             }
             timestamp(&link.created_at)?;
@@ -428,9 +460,22 @@ impl State {
             .checked_add(1)
             .ok_or(Failure::Invalid("generation exhausted"))?;
         let row = Program {
+            attach_func: match record.spec {
+                ProgramSpec::Fentry { target, .. } | ProgramSpec::Fexit { target, .. } => {
+                    Some(target.as_str().into())
+                }
+                _ => None,
+            },
             map_owner: record.map_owner,
             shared_maps: record.shared_maps.to_vec(),
             kind: match record.spec {
+                ProgramSpec::Fentry { .. } if self.version >= 16 => Kind::Fentry,
+                ProgramSpec::Fexit { .. } if self.version >= 16 => Kind::Fexit,
+                ProgramSpec::Fentry { .. } | ProgramSpec::Fexit { .. } => {
+                    return Err(Failure::Unsupported(
+                        "function tracing requires JSON format 16; no implicit upgrade",
+                    ));
+                }
                 ProgramSpec::Tracepoint(_) => Kind::Tracepoint,
                 ProgramSpec::Uprobe(_) if self.version >= 13 => Kind::Uprobe,
                 ProgramSpec::Uretprobe(_) if self.version >= 13 => Kind::Uretprobe,
@@ -546,6 +591,24 @@ impl Program {
                 let name = Symbol::try_from(self.name.as_str())
                     .map_err(|_| Failure::Invalid("invalid ELF symbol"))?;
                 match self.kind {
+                    Kind::Fentry => ProgramSpec::Fentry {
+                        name,
+                        target: self
+                            .attach_func
+                            .as_deref()
+                            .ok_or(Failure::Invalid("missing tracing function"))?
+                            .try_into()
+                            .map_err(|_| Failure::Invalid("invalid tracing function"))?,
+                    },
+                    Kind::Fexit => ProgramSpec::Fexit {
+                        name,
+                        target: self
+                            .attach_func
+                            .as_deref()
+                            .ok_or(Failure::Invalid("missing tracing function"))?
+                            .try_into()
+                            .map_err(|_| Failure::Invalid("invalid tracing function"))?,
+                    },
                     Kind::Tracepoint => ProgramSpec::Tracepoint(name),
                     Kind::Xdp => ProgramSpec::Xdp(name),
                     Kind::Tc => ProgramSpec::Tc(name),
@@ -616,9 +679,10 @@ impl Link {
     pub(super) fn record(&self, layout: &RuntimeLayout) -> Result<StoredLink, Failure> {
         let details = self.target.details()?;
         let pin_path = match &details {
-            LinkDetails::Tracepoint(_) | LinkDetails::Kprobe(_) | LinkDetails::Uprobe(_) => {
-                layout.link_pin_path(self.id)
-            }
+            LinkDetails::Tracing(_)
+            | LinkDetails::Tracepoint(_)
+            | LinkDetails::Kprobe(_)
+            | LinkDetails::Uprobe(_) => layout.link_pin_path(self.id),
             LinkDetails::Tcx(d) => layout.tcx_link_path(d.key, self.program_id),
             _ => return Err(Failure::Invalid("invalid standalone target")),
         };
@@ -681,6 +745,8 @@ pub(super) enum Kind {
     Kretprobe,
     Uprobe,
     Uretprobe,
+    Fentry,
+    Fexit,
 }
 
 impl Kind {
@@ -690,6 +756,8 @@ impl Kind {
 
     pub(super) fn model(self) -> ProgramType {
         match self {
+            Self::Fentry => ProgramType::Fentry,
+            Self::Fexit => ProgramType::Fexit,
             Self::Tracepoint => ProgramType::Tracepoint,
             Self::Xdp => ProgramType::Xdp,
             Self::Tc => ProgramType::Tc,
@@ -705,6 +773,7 @@ impl Kind {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(super) enum LinkTarget {
+    Tracing(TracingTarget),
     Tracepoint(String),
     Tcx(TcxTarget),
     Kprobe(KprobeTarget),
@@ -720,6 +789,13 @@ pub(super) struct TcxTarget {
     pub(super) ifindex: NonZeroU32,
     pub(super) direction: String,
     pub(super) priority: u32,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TracingTarget {
+    pub(super) function: String,
+    pub(super) exit: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -749,6 +825,13 @@ fn is_zero(value: &u32) -> bool {
 impl LinkTarget {
     fn kind(&self) -> Kind {
         match self {
+            Self::Tracing(d) => {
+                if d.exit {
+                    Kind::Fexit
+                } else {
+                    Kind::Fentry
+                }
+            }
             Self::Tracepoint(_) => Kind::Tracepoint,
             Self::Tcx(_) => Kind::Tcx,
             Self::Uprobe(d) => {
@@ -770,6 +853,18 @@ impl LinkTarget {
 
     fn details(&self) -> Result<LinkDetails, Failure> {
         match self {
+            Self::Tracing(d) => Ok(LinkDetails::Tracing(bpfman_model::TracingLink {
+                function: d
+                    .function
+                    .as_str()
+                    .try_into()
+                    .map_err(|_| Failure::Invalid("invalid tracing function"))?,
+                kind: if d.exit {
+                    bpfman_model::TracingKind::Fexit
+                } else {
+                    bpfman_model::TracingKind::Fentry
+                },
+            })),
             Self::Uprobe(d) => Ok(LinkDetails::Uprobe(
                 bpfman_model::UprobeLink::new(
                     &d.target,

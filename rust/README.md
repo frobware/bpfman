@@ -45,7 +45,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Generic tracepoint/XDP/TC/TCX/kernel-probe lifecycle interpreters, compensation, and observations |
+| `bpfman-runtime` | 4 | Generic attachment lifecycle interpreters, consuming compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -396,7 +396,7 @@ remains; shared-name pins survive while any recorded user remains.
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe and uretprobe batches
+exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry and fexit batches
 with private or shared maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads and other program types
@@ -1927,7 +1927,7 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 15 for library names; format 14 retains container targets; format 13 retains host uprobes; format 12 retains
+receipt. New JSON stores use format 16 for function tracing; format 15 retains library names; format 14 retains container targets; format 13 retains host uprobes; format 12 retains
 sharing; format 11 retains kernel probes, format 10 retains TCX, format 9
 retains egress and format 8 retains ingress
 replacement and format 7 retains singleton ingress. Older formats retain their
@@ -2031,7 +2031,7 @@ through a reopened application. This also strengthens tracepoint unload, with
 its fault and retry contracts updated to require independent progress.
 
 SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
-use format 15; format 14 retains container targets and format 13 retains host uprobes and format 12 retains sharing, format 11 retains kernel probes and
+use format 16; format 15 retains library names; format 14 retains container targets and format 13 retains host uprobes and format 12 retains sharing, format 11 retains kernel probes and
 format 10 retains TCX. Existing formats 1–9 retain their previous
 operations and reject TCX
 without an implicit upgrade. Tracepoint target strings keep their existing JSON
@@ -2088,7 +2088,7 @@ exact kernel identity. Perf-event teardown holds a live descriptor across unpinn
 and closes it after pin descriptors. External holders retain their ordinary kernel
 lifetime semantics.
 
-SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 15 for library names; format 14 retains container targets; format 13 retains host uprobes;
+SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 16 for function tracing; format 15 retains library names; format 14 retains container targets; format 13 retains host uprobes;
 format 11 introduced kernel probes.
 older snapshots retain existing operations and refuse probe loads/links without
 implicit conversion. `make rust-test-kprobe` runs native recovery contracts and
@@ -2130,7 +2130,7 @@ Unload follows the same rule for map-set aliases, containers and shared names.
 Changed inode or runtime evidence still refuses cleanup.
 
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
-`shared_map_pins`. New JSON stores use format 15 for library names; format 14 retains container targets; format 13 retains host uprobes; format 12 introduced map-owner
+`shared_map_pins`. New JSON stores use format 16 for function tracing; format 15 retains library names; format 14 retains container targets; format 13 retains host uprobes; format 12 introduced map-owner
 and shared-name
 references. Formats 1–11 keep their previous operations and refuse sharing without
 changing bytes or upgrading. Older artifacts without a map inventory retain
@@ -2211,7 +2211,7 @@ has disappeared. Reusable callers inject target opening through
 `Kernel::with_uprobe_target_opener`; `Kernel::default()` supports host targets.
 
 SQLite keeps schema 2 and `link_uprobe_details.container_pid`. New JSON stores use
-format 15 for library names; format 14 retains container file targets and format
+format 16 for function tracing; format 15 retains library names; format 14 retains container file targets and format
 13 retains host file targets, without implicit upgrades. Container PID zero retains host lookup and remains separate
 from the optional `--pid` process filter.
 
@@ -2268,3 +2268,62 @@ and `TestContainerUprobe_HostProcDaemonView`. All five also pass against Go on
 both stores. The host-cache file takes its existing no-cache branch on this
 NixOS host; active synthetic host/container cache fixtures prove that tier.
 The external `TestContainerUprobe_AppTestImage` still depends on OCI loading.
+
+
+## Native fentry and fexit
+
+Local `fentry:ENTRY:FUNCTION` and `fexit:ENTRY:FUNCTION` selections load native
+TRACING programs. Each selection requires its corresponding ELF section; an
+fentry selection cannot load an fexit section. The requested function overrides
+the section's target and is bound at load time. Attach takes the loaded program
+ID, with no replacement function argument:
+
+```sh
+bpfman program load file object.bpf.o --programs fentry:entry:do_unlinkat
+bpfman link attach fentry PROGRAM_ID -m owner=example
+bpfman link get LINK_ID -o json
+bpfman link detach LINK_ID
+bpfman program unload PROGRAM_ID
+```
+
+Use `fexit` for both load and attach when selecting function exits. Get/list retain
+that family and the requested function. `Bpfman::attach_tracing` and its
+cancellation variant take a typed `TracingKind`; loading and attachment preserve
+the same function through both stores and CLI process boundaries.
+
+Resolution searches vmlinux BTF first, then kernel module BTF in kernel BTF-ID
+order. Missing functions and ambiguous matches within a BTF object are errors.
+The checked record scanner handles split module type IDs and string offsets
+against the vmlinux base. Userspace BTF objects are excluded. Module descriptors
+stay owned through loading. Pinned-program adoption verifies the actual program
+ID, native type and load-bound BTF object/function before pending publication;
+the kernel checks the entry/exit attach type at link creation.
+
+Aya's public loader handles vmlinux targets. Aya 0.14 does not expose the module
+BTF descriptor for FEntry/FExit loading, so module loads reuse Aya's maps and
+aya-obj's public BTF/map/call relocation, with the final load in the existing
+private syscall boundary. Optional newer object-BTF kinds use aya-obj's portable
+sanitization. No Aya fork, private-layout access or dependency changes are needed.
+
+Attachment, pinning, compensation, cancellation, detach and attached-program
+unload use the standalone consuming interpreter. Tracing receipts retain their
+entry/exit kind, validate canonical confined pins and keep a live link descriptor
+across pin removal. A second attachment of one loaded tracing program receives
+the kernel's refusal and compensates its pending intent, preserving the original
+link. Separate loaded programs can trace the same function. Failed record cleanup
+retains program ownership for an explicit reopened retry. Trampoline execution
+quiescence follows kernel RCU behavior, as in Go.
+
+SQLite retains Go schema 2, `managed_programs.attach_func` and the existing
+`link_fentry_details`/`link_fexit_details` tables. New JSON stores use format 16;
+formats 1–15 retain their earlier capabilities and reject tracing writes or
+persisted tracing state without implicit upgrade. Link function names must match
+the corresponding program's stored load target.
+
+`make rust-test-function-tracing` selects six unchanged fentry/fexit acceptance
+files on both stores, plus native vmlinux/module traffic and recovery contracts.
+The native tests verify requested-target override, missing-target and publication
+failure cleanup, cancellation, pin identity refusal, duplicate compensation,
+reopened record-only retries and external descriptor lifetime controls. Immediate
+lifetime contracts run in the serial global stages of the full gate. LSM remains
+separate work.

@@ -81,6 +81,22 @@ pub(crate) enum AttachCommand {
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
     },
+    /// Attach an fentry program to its load-time function.
+    Fentry {
+        program_id: NonZeroU32,
+        #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
+        metadata: Vec<(String, String)>,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
+    /// Attach an fexit program to its load-time function.
+    Fexit {
+        program_id: NonZeroU32,
+        #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
+        metadata: Vec<(String, String)>,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
     /// Attach a kernel entry or return probe, as selected when loading.
     Kprobe {
         program_id: NonZeroU32,
@@ -197,6 +213,54 @@ impl LinkCommand {
                     bpfman_runtime::UprobeAttach {
                         program_id,
                         target,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    cancellation,
+                )?;
+                let observed = app.get_link(record.id).map_err(|error| {
+                    anyhow::Error::from(error).context(format!(
+                        "attachment committed as link {}; observation failed",
+                        record.id
+                    ))
+                })?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+            }
+            Self::Attach {
+                target:
+                    AttachCommand::Fentry {
+                        program_id,
+                        metadata,
+                        output,
+                    },
+            } => {
+                let record = app.attach_tracing_with_cancellation(
+                    bpfman_runtime::TracingAttach {
+                        program_id,
+                        kind: bpfman_model::TracingKind::Fentry,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    cancellation,
+                )?;
+                let observed = app.get_link(record.id).map_err(|error| {
+                    anyhow::Error::from(error).context(format!(
+                        "attachment committed as link {}; observation failed",
+                        record.id
+                    ))
+                })?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+            }
+            Self::Attach {
+                target:
+                    AttachCommand::Fexit {
+                        program_id,
+                        metadata,
+                        output,
+                    },
+            } => {
+                let record = app.attach_tracing_with_cancellation(
+                    bpfman_runtime::TracingAttach {
+                        program_id,
+                        kind: bpfman_model::TracingKind::Fexit,
                         metadata: metadata.into_iter().collect(),
                     },
                     cancellation,

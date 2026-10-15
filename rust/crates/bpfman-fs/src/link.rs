@@ -57,6 +57,41 @@ impl RuntimeWriter<'_> {
         program: NonZeroU32,
         kernel: Option<NonZeroU32>,
     ) -> Result<Option<LinkPin>, Error> {
+        self.observe_standalone_pin(
+            backend,
+            id,
+            program,
+            kernel,
+            crate::removal::LinkKind::PerfEvent,
+        )
+    }
+
+    /// Adopt a native tracing pin, preserving its entry/exit selection in the receipt.
+    pub fn observe_tracing_link_pin(
+        &self,
+        backend: &impl crate::LinkInspection,
+        id: NonZeroU64,
+        program: NonZeroU32,
+        kernel: Option<NonZeroU32>,
+        kind: bpfman_model::TracingKind,
+    ) -> Result<Option<LinkPin>, Error> {
+        self.observe_standalone_pin(
+            backend,
+            id,
+            program,
+            kernel,
+            crate::removal::LinkKind::Tracing(kind),
+        )
+    }
+
+    fn observe_standalone_pin(
+        &self,
+        backend: &impl crate::LinkInspection,
+        id: NonZeroU64,
+        program: NonZeroU32,
+        kernel: Option<NonZeroU32>,
+        kind: crate::removal::LinkKind,
+    ) -> Result<Option<LinkPin>, Error> {
         let Some(bpffs) = optional_dir(&self.runtime.root, "fs", BENEATH)? else {
             return Ok(None);
         };
@@ -72,7 +107,7 @@ impl RuntimeWriter<'_> {
             .map_err(Failure::Kernel)?;
 
         if info.program_id.get() != program.get()
-            || info.details != bpfman_model::KernelLinkDetails::PerfEvent
+            || !matches_standalone(&info.details, kind)
             || kernel.is_some_and(|id| id.get() != info.id.get())
         {
             return Err(Failure::Unsafe(
@@ -89,7 +124,7 @@ impl RuntimeWriter<'_> {
         Ok(Some(LinkPin {
             entry: Box::new(entry),
             id,
-            kind: crate::removal::LinkKind::PerfEvent,
+            kind,
         }))
     }
 
@@ -204,6 +239,25 @@ impl crate::RuntimeDirectory {
         backend: &impl crate::LinkInspection,
         id: NonZeroU64,
     ) -> Result<Option<bpfman_model::KernelLink>, Error> {
+        self.read_standalone_pin(backend, id, crate::removal::LinkKind::PerfEvent)
+    }
+
+    /// Read a native tracing pin with its requested entry/exit selection.
+    pub fn read_tracing_link_pin(
+        &self,
+        backend: &impl crate::LinkInspection,
+        id: NonZeroU64,
+        kind: bpfman_model::TracingKind,
+    ) -> Result<Option<bpfman_model::KernelLink>, Error> {
+        self.read_standalone_pin(backend, id, crate::removal::LinkKind::Tracing(kind))
+    }
+
+    fn read_standalone_pin(
+        &self,
+        backend: &impl crate::LinkInspection,
+        id: NonZeroU64,
+        kind: crate::removal::LinkKind,
+    ) -> Result<Option<bpfman_model::KernelLink>, Error> {
         use rustix::fs::{FileType, Mode, OFlags, fstat, openat2};
         let Some(bpffs) = optional_dir(&self.root, "fs", BENEATH)? else {
             return Ok(None);
@@ -231,15 +285,15 @@ impl crate::RuntimeDirectory {
         let info = backend
             .link_at(crate::PinSource(&proc_path(&pin)))
             .map_err(Failure::Kernel)?;
-        if info.details != bpfman_model::KernelLinkDetails::PerfEvent {
-            return Err(Failure::Unsafe("link pin is not a perf-event link").into());
+        if !matches_standalone(&info.details, kind) {
+            return Err(Failure::Unsafe("link pin differs from expected standalone type").into());
         }
         let id = NonZeroU32::new(info.id.get()).ok_or(Failure::Unsafe("zero kernel link ID"))?;
         let program_id =
             NonZeroU32::new(info.program_id.get()).ok_or(Failure::Unsafe("zero program ID"))?;
 
         Ok(Some(bpfman_model::KernelLink {
-            details: bpfman_model::KernelLinkDetails::PerfEvent,
+            details: info.details,
             id,
             program_id,
         }))
@@ -249,6 +303,7 @@ impl crate::RuntimeDirectory {
 #[derive(Debug)]
 pub(super) enum Location {
     Tracepoint,
+    Tracing(bpfman_model::TracingKind),
     Tcx {
         key: bpfman_model::TcKey,
         program: NonZeroU32,
@@ -263,11 +318,31 @@ impl Location {
                 id.to_string(),
                 crate::removal::LinkKind::PerfEvent,
             ),
+            Self::Tracing(kind) => (
+                "fs/links".into(),
+                id.to_string(),
+                crate::removal::LinkKind::Tracing(kind),
+            ),
             Self::Tcx { key, program } => (
                 format!("fs/tcx-{}", key.direction),
                 format!("link_{}_{}_{}", key.nsid, key.ifindex, program),
                 crate::removal::LinkKind::Tcx(key),
             ),
         }
+    }
+}
+
+fn matches_standalone(
+    details: &bpfman_model::KernelLinkDetails,
+    kind: crate::removal::LinkKind,
+) -> bool {
+    match kind {
+        crate::removal::LinkKind::PerfEvent => {
+            *details == bpfman_model::KernelLinkDetails::PerfEvent
+        }
+        crate::removal::LinkKind::Tracing(kind) => {
+            matches!(details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if *attach_type == match kind { bpfman_model::TracingKind::Fentry => 24, bpfman_model::TracingKind::Fexit => 25 })
+        }
+        _ => false,
     }
 }

@@ -509,3 +509,19 @@ pub(super) fn container_uprobe_scripts(store: &'static str) {
         true,
     );
 }
+
+pub(super) fn function_tracing_scripts(store: &'static str) {
+    run_dsl(
+        store,
+        Some(&[
+            "TestFentry_LoadAndGet",
+            "TestFexit_LoadAndGet",
+            "TestFentry_LinkRoundTrip",
+            "TestFexit_LinkRoundTrip",
+            "TestMultiProgFentry_LoadAttachDetachUnload",
+            "TestMultiProgFexit_LoadAttachDetachUnload",
+        ]),
+        &rust(),
+        true,
+    );
+}

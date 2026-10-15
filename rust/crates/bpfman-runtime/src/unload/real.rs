@@ -136,6 +136,13 @@ where
                 LinkState::Attached { kernel_id } => Some(kernel_id),
             };
             let pin = match &record.details {
+                bpfman_model::LinkDetails::Tracing(d) => self.1.observe_tracing_pin(
+                    writer,
+                    record.id,
+                    record.program_id,
+                    kernel,
+                    d.kind,
+                )?,
                 bpfman_model::LinkDetails::Tcx(d) => {
                     self.1
                         .observe_tcx_pin(writer, d, record.program_id, kernel)?

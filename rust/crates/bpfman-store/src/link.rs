@@ -47,6 +47,13 @@ pub trait LinkReader {
 /// }
 /// ```
 pub trait LinkStore {
+    /// Publish function tracing intent matching the program's load-time target.
+    fn create_pending_tracing(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: PendingTracing<'_>,
+    ) -> Result<(StoredLink, Self::LinkReceipt), Error>;
+
     /// Publish host probe intent, validating loaded entry/return selection.
     fn create_pending_uprobe(
         &self,
@@ -139,6 +146,18 @@ pub struct PendingUprobe<'a> {
     pub program_id: NonZeroU32,
     /// Host file, symbol/offset, PID and derived entry/return selection.
     pub target: &'a bpfman_model::UprobeLink,
+    /// Operator labels.
+    pub metadata: &'a BTreeMap<String, String>,
+    /// Caller-captured RFC3339 timestamp.
+    pub created_at: &'a str,
+}
+
+/// Function tracing intent admitted before kernel attachment.
+pub struct PendingTracing<'a> {
+    /// Managed native tracing program.
+    pub program_id: NonZeroU32,
+    /// Load-bound function and entry/exit selection.
+    pub target: &'a bpfman_model::TracingLink,
     /// Operator labels.
     pub metadata: &'a BTreeMap<String, String>,
     /// Caller-captured RFC3339 timestamp.

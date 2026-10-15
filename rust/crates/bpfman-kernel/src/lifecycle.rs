@@ -285,6 +285,22 @@ pub trait TracepointLinks {
         ))
     }
 
+    /// Adopt a load-bound tracing pin for standalone teardown.
+    fn observe_tracing_pin(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        _id: NonZeroU64,
+        _program: NonZeroU32,
+        _kernel: Option<NonZeroU32>,
+        _kind: bpfman_model::TracingKind,
+    ) -> Result<Option<Self::LinkPin>, Error> {
+        Err(Error::new(
+            crate::ErrorKind::Unsupported,
+            "tracing pin adoption",
+            std::io::Error::other("function tracing unsupported"),
+        ))
+    }
+
     /// Adopt a canonical existing pin only after identity validation.
     fn observe_link_pin(
         &self,

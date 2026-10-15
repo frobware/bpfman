@@ -12,7 +12,8 @@ pub use kernel::{
     ExtensionProgram, KernelResult, KprobeKernel, KprobeProgram, LinkInspection, LinkPinning,
     LinkRetention, MapPinning, OuterInfo, OuterLink, PinProgramKind, PinSource, PinTarget,
     PinnedProgram, ProgramInspection, ProgramPinning, TcxKernel, TcxProgram, TracepointKernel,
-    TracepointProgram, UprobeKernel, UprobeProgram, XdpKernel, XdpSwitchKernel,
+    TracepointProgram, TracingKernel, TracingProgram, UprobeKernel, UprobeProgram, XdpKernel,
+    XdpSwitchKernel,
 };
 
 mod xdp;
@@ -232,6 +233,14 @@ pub struct PreparedTcxAttach<P: TcxProgram> {
     links: OwnedFd,
     target: bpfman_model::TcxLink,
     program_id: std::num::NonZeroU32,
+}
+mod tracing;
+/// Confined load-bound function tracing program, ready for one attachment.
+pub struct PreparedTracingAttach<P: TracingProgram> {
+    program: P,
+    program_pin: artifacts::Entry,
+    links: OwnedFd,
+    target: bpfman_model::TracingLink,
 }
 mod kprobe;
 mod tcx;

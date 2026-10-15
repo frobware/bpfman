@@ -3,6 +3,8 @@
 //! Reads borrow one backend supplied at application construction. Implementations
 //! own resource reuse and synchronization; observations confer no removal authority.
 
+mod tracing;
+pub use tracing::TracingLinks;
 mod kprobe;
 mod uprobe;
 pub use kprobe::KprobeLinks;
@@ -79,6 +81,20 @@ pub trait LinkObservations {
             std::io::Error::other("TCX unsupported"),
         ))
     }
+    /// Read a canonical native tracing pin without granting teardown authority.
+    fn tracing_pin(
+        &self,
+        _runtime: &RuntimeDirectory,
+        _id: NonZeroU64,
+        _kind: bpfman_model::TracingKind,
+    ) -> Result<Option<KernelLink>, Error> {
+        Err(Error::new(
+            ErrorKind::Unsupported,
+            "tracing pin observation",
+            std::io::Error::other("function tracing unsupported"),
+        ))
+    }
+
     /// Inspect a perf-event link by kernel identity.
     fn tracepoint_link(&self, id: NonZeroU32) -> Result<KernelLink, Error>;
 

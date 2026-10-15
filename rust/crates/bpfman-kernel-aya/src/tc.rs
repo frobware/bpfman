@@ -67,7 +67,9 @@ impl ExtensionProgram for TcExtension {
         let id = self
             .0
             .attach_to_program(target.fd()?, &format!("prog{}", slot.index()))?;
-        Ok(crate::AyaLink(self.0.take_link(id)?.into()))
+        Ok(crate::AyaLink::from_aya(
+            aya::programs::links::FdLink::from(self.0.take_link(id)?),
+        ))
     }
 }
 

@@ -1,5 +1,6 @@
 //! Minimal read-only BPF ABI bridge for fields Aya's public API does not expose.
-//! Only GET_FD_BY_ID and OBJ_GET_INFO_BY_FD are supported. No arbitrary command
+//! Only object-ID enumeration/adoption and OBJ_GET_INFO_BY_FD are supported.
+//! No arbitrary command
 //! or caller-supplied pointer can enter this module's safe interface.
 #![allow(unsafe_code)]
 
@@ -167,4 +168,85 @@ pub(super) fn extension(id: u32) -> io::Result<(u32, u32, u32, u32)> {
         target.target_obj_id,
         target.target_btf_id,
     ))
+}
+
+pub(super) fn program_info(fd: BorrowedFd<'_>) -> io::Result<bpf_prog_info> {
+    // SAFETY: all-integer generated C output; null buffers request fixed fields.
+    let mut result = unsafe { zeroed() };
+    info(fd, &mut result)?;
+    Ok(result)
+}
+
+pub(super) fn btf_next(start: u32) -> io::Result<Option<u32>> {
+    let mut attr = IdAttr {
+        id: start,
+        next_id: 0,
+        open_flags: 0,
+    };
+    // SAFETY: BPF_BTF_GET_NEXT_ID reads start_id and writes next_id in this
+    // initialized fixed ABI layout. The exclusive buffer remains live.
+    let rc = unsafe { libc::syscall(libc::SYS_bpf, 23u32, &mut attr, size_of::<IdAttr>()) };
+    if rc < 0 {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ENOENT) {
+            Ok(None)
+        } else {
+            Err(error)
+        };
+    }
+    if attr.next_id <= start {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "non-increasing BTF ID",
+        ));
+    }
+    Ok(Some(attr.next_id))
+}
+
+pub(super) fn btf(id: u32) -> io::Result<(OwnedFd, Vec<u8>, String, bool)> {
+    use aya_obj::generated::bpf_btf_info;
+    use std::os::fd::AsFd;
+    let fd = by_id(id, 19)?;
+    // SAFETY: all-integer generated BTF-info ABI; no input pointers.
+    let mut initial: bpf_btf_info = unsafe { zeroed() };
+    info(fd.as_fd(), &mut initial)?;
+    if initial.btf_size > 64 * 1024 * 1024 || initial.name_len > 4096 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "unreasonable kernel BTF size",
+        ));
+    }
+    let mut bytes = vec![0u8; initial.btf_size as usize];
+    let mut name = vec![0u8; initial.name_len as usize + 1];
+    // SAFETY: generated integer layout. Buffers below stay exclusively borrowed
+    // through info(); only their declared extents can be written by the kernel.
+    let mut result: bpf_btf_info = unsafe { zeroed() };
+    result.btf = bytes.as_mut_ptr() as u64;
+    result.btf_size = bytes.len() as u32;
+    result.name = name.as_mut_ptr() as u64;
+    result.name_len = name.len() as u32;
+    info(fd.as_fd(), &mut result)?;
+    if result.id != id
+        || result.btf_size as usize != bytes.len()
+        || result.name_len as usize >= name.len()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "kernel BTF identity or size changed",
+        ));
+    }
+    let end = name
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unterminated BTF name"))?;
+    let name = String::from_utf8(name[..end].to_vec())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    Ok((fd, bytes, name, result.kernel_btf != 0))
+}
+
+pub(super) fn btf_id(fd: BorrowedFd<'_>) -> io::Result<u32> {
+    // SAFETY: all-integer output, with null buffer pointers.
+    let mut value: aya_obj::generated::bpf_btf_info = unsafe { zeroed() };
+    info(fd, &mut value)?;
+    Ok(value.id)
 }

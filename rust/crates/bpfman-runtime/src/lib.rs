@@ -381,3 +381,13 @@ pub struct TcxAttach {
     /// Operator labels.
     pub metadata: std::collections::BTreeMap<String, String>,
 }
+
+/// Attach a function tracing program to its load-time target.
+pub struct TracingAttach {
+    /// Loaded program ID.
+    pub program_id: std::num::NonZeroU32,
+    /// Required entry or exit program family.
+    pub kind: bpfman_model::TracingKind,
+    /// Operator labels.
+    pub metadata: std::collections::BTreeMap<String, String>,
+}

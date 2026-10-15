@@ -18,6 +18,7 @@ use std::os::fd::OwnedFd;
 pub(super) enum LinkKind {
     Tcx(bpfman_model::TcKey),
     PerfEvent,
+    Tracing(bpfman_model::TracingKind),
     Extension,
 }
 
@@ -83,6 +84,9 @@ pub(super) fn remove_link(
     let expected_kind = match kind {
         LinkKind::Tcx(key) => {
             matches!(info.details, bpfman_model::KernelLinkDetails::Tcx { ifindex, direction } if direction == key.direction && (ifindex == 0 || ifindex == key.ifindex.get()))
+        }
+        LinkKind::Tracing(kind) => {
+            matches!(info.details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if attach_type == match kind { bpfman_model::TracingKind::Fentry => 24, bpfman_model::TracingKind::Fexit => 25 })
         }
         LinkKind::PerfEvent => info.details == bpfman_model::KernelLinkDetails::PerfEvent,
         // EXT selects freplace; Aya creates its tracing link with attach type zero.

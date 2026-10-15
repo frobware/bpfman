@@ -9,6 +9,10 @@ fn record(link: &StoredLink) -> Value {
             if d.retprobe() { "uretprobe" } else { "uprobe" },
             json!({"target": d.target(), "fn_name": d.function().unwrap_or_default(), "offset": d.offset(), "pid": d.pid().map_or(0, std::num::NonZeroU32::get), "container_pid": d.container_pid().map_or(0, std::num::NonZeroU32::get), "retprobe": d.retprobe()}),
         ),
+        LinkDetails::Tracing(d) => (
+            d.kind.program_type().as_str(),
+            json!({"fn_name": d.function.as_str()}),
+        ),
         LinkDetails::Kprobe(d) => (
             if d.retprobe { "kretprobe" } else { "kprobe" },
             json!({"fn_name": d.function.as_str(), "offset": d.offset, "retprobe": d.retprobe}),
@@ -169,6 +173,7 @@ pub(super) fn attachment(details: &LinkDetails) -> (&'static str, String) {
                 d.offset()
             ),
         ),
+        LinkDetails::Tracing(d) => (d.kind.program_type().as_str(), d.function.as_str().into()),
         LinkDetails::Kprobe(d) => (
             if d.retprobe { "kretprobe" } else { "kprobe" },
             format!("{}+{}", d.function.as_str(), d.offset),

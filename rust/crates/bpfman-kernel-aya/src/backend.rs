@@ -62,6 +62,17 @@ impl LinkObservations for Kernel {
         observe::observe_extension_link(id)
     }
 
+    fn tracing_pin(
+        &self,
+        runtime: &RuntimeDirectory,
+        id: NonZeroU64,
+        kind: bpfman_model::TracingKind,
+    ) -> Result<Option<KernelLink>, Error> {
+        runtime
+            .read_tracing_link_pin(self, id, kind)
+            .map_err(filesystem)
+    }
+
     fn tracepoint_pin(
         &self,
         runtime: &RuntimeDirectory,

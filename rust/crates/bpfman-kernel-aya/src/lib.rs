@@ -5,6 +5,7 @@
 
 mod backend;
 mod failure;
+mod function_tracing;
 mod kprobe;
 mod maps;
 mod netns;
@@ -18,6 +19,7 @@ mod tc;
 mod tc_netlink;
 mod tcx;
 mod tracepoint;
+mod tracing_btf;
 mod uprobe;
 mod verification;
 mod xdp;
@@ -39,7 +41,7 @@ pub struct PreparedUprobe {
     intent: bpfman_model::UprobeLink,
 }
 
-/// Owned Aya program and maps; its representation is private to this adapter.
+/// Owned loaded program and maps; representation stays private to this adapter.
 ///
 /// Concrete library objects cannot escape through the public handle:
 /// ```compile_fail,E0616
@@ -48,6 +50,7 @@ pub struct PreparedUprobe {
 /// }
 /// ```
 pub struct LoadedObject {
+    native: Option<std::os::fd::OwnedFd>,
     bpf: aya::Ebpf,
     name: String,
     maps: Vec<String>,
@@ -58,6 +61,12 @@ pub struct Dispatcher(aya::Ebpf);
 
 /// Opaque adopted tracepoint handle.
 pub struct AyaTracepoint(aya::programs::TracePoint);
+
+/// Adopted BTF tracing program with its validated entry/exit selection.
+pub struct AyaTracing {
+    fd: std::os::fd::OwnedFd,
+    kind: bpfman_model::TracingKind,
+}
 
 /// Opaque adopted kernel probe handle.
 pub struct AyaKprobe(aya::programs::KProbe);
@@ -70,7 +79,13 @@ pub struct AyaExtension(aya::programs::Extension);
 
 /// Opaque owned, unpinned attachment.
 #[derive(Debug)]
-pub struct AyaLink(aya::programs::links::FdLink);
+pub struct AyaLink(NativeLink);
+
+#[derive(Debug)]
+enum NativeLink {
+    Aya(aya::programs::links::FdLink),
+    Tracing(std::os::fd::OwnedFd),
+}
 
 /// Opaque owned outer-link descriptor.
 pub struct AyaOuter(std::os::fd::OwnedFd);

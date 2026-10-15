@@ -19,6 +19,7 @@ fn program(info: &ProgramInfo) -> KernelResult<PinnedProgram> {
     let kind = match info.program_type() {
         k if k == ProgramType::TracePoint.into() => PinProgramKind::Tracepoint,
         k if k == ProgramType::KProbe.into() => PinProgramKind::Kprobe,
+        k if k == ProgramType::Tracing.into() => PinProgramKind::Tracing,
         k if k == ProgramType::Extension.into() => PinProgramKind::Extension,
         k if k == ProgramType::SchedClassifier.into() => PinProgramKind::Tc,
         k if k == ProgramType::Xdp.into() => PinProgramKind::Xdp,
@@ -43,6 +44,9 @@ impl ProgramInspection for Kernel {
 
 impl ProgramPinning for LoadedObject {
     fn id(&self) -> KernelResult<u32> {
+        if let Some(fd) = &self.native {
+            return Ok(crate::syscall::program_info(fd.as_fd())?.id);
+        }
         Ok(self
             .bpf
             .program(&self.name)
@@ -52,6 +56,9 @@ impl ProgramPinning for LoadedObject {
     }
 
     fn pin(&mut self, target: PinTarget<'_>) -> KernelResult<()> {
+        if let Some(fd) = &self.native {
+            return crate::pin_syscall::pin(fd.as_fd(), target.path()).map_err(Into::into);
+        }
         self.bpf
             .program_mut(&self.name)
             .ok_or_else(|| invalid("loaded program missing"))?
@@ -87,13 +94,25 @@ impl ProgramPinning for Dispatcher {
     }
 }
 
+impl AyaLink {
+    pub(super) fn from_aya(link: aya::programs::links::FdLink) -> Self {
+        Self(crate::NativeLink::Aya(link))
+    }
+}
+
 impl LinkPinning for AyaLink {
     fn id(&self) -> KernelResult<u32> {
-        Ok(self.0.info()?.id())
+        match &self.0 {
+            crate::NativeLink::Aya(link) => Ok(link.info()?.id()),
+            crate::NativeLink::Tracing(fd) => Ok(pin_syscall::info(fd.as_fd())?.id),
+        }
     }
 
     fn pin(self, target: PinTarget<'_>) -> KernelResult<()> {
-        drop(self.0.pin(target.path())?);
+        match self.0 {
+            crate::NativeLink::Aya(link) => drop(link.pin(target.path())?),
+            crate::NativeLink::Tracing(fd) => pin_syscall::pin(fd.as_fd(), target.path())?,
+        }
         Ok(())
     }
 }
@@ -159,7 +178,7 @@ impl TracepointProgram for AyaTracepoint {
     fn attach(&mut self, target: &Tracepoint) -> KernelResult<AyaLink> {
         let id = self.0.attach(target.group(), target.name())?;
         let link: FdLink = self.0.take_link(id)?.try_into()?;
-        Ok(AyaLink(link))
+        Ok(AyaLink::from_aya(link))
     }
 }
 
@@ -180,7 +199,9 @@ impl ExtensionProgram for AyaExtension {
         let id = self
             .0
             .attach_to_program(program.fd()?, &format!("prog{}", slot.index()))?;
-        Ok(AyaLink(self.0.take_link(id)?.into()))
+        Ok(AyaLink::from_aya(aya::programs::links::FdLink::from(
+            self.0.take_link(id)?,
+        )))
     }
 }
 

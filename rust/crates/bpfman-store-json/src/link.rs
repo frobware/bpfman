@@ -150,6 +150,57 @@ impl LinkStore for Backend {
     }
 
     #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
+    fn create_pending_tracing(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingTracing<'_>,
+    ) -> Result<(StoredLink, LinkReceipt), Error> {
+        let file = writer.open_store_snapshot().map_err(Failure::from)?;
+        let (previous, mut state) = read(&file)?;
+
+        if state.version < 16 {
+            return Err(Failure::Unsupported(
+                "function tracing requires JSON format 16; no implicit upgrade",
+            )
+            .into());
+        }
+
+        if !state.programs.iter().any(|program| {
+            program.id == request.program_id
+                && program.kind.model() == request.target.kind.program_type()
+                && program.attach_func.as_deref() == Some(request.target.function.as_str())
+        }) {
+            return Err(Failure::Invalid("missing or mismatched kernel probe program").into());
+        }
+
+        let id = NonZeroU64::new(state.next_link_id)
+            .filter(|id| id.get() <= i64::MAX as u64)
+            .ok_or(Failure::Invalid("link ID exhausted"))?;
+        state.next_link_id += 1;
+        let row = Link {
+            id,
+            program_id: request.program_id,
+            target: crate::state::LinkTarget::Tracing(crate::state::TracingTarget {
+                function: request.target.function.as_str().into(),
+                exit: request.target.kind == bpfman_model::TracingKind::Fexit,
+            }),
+            state: LinkProgress::Pending,
+            metadata: request.metadata.clone(),
+            created_at: request.created_at.into(),
+        };
+        let record = row.record_at(writer.layout(), &state)?;
+        let receipt = LinkReceipt {
+            root: writer.identity().map_err(Failure::from)?,
+            store: state.identity.clone(),
+            row: row.clone(),
+        };
+        state.links.push(row);
+        publish(writer, &file, Some(&previous), &state)?;
+
+        Ok((record, receipt))
+    }
+
+    #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
     fn create_pending_kprobe(
         &self,
         writer: &RuntimeWriter<'_>,
