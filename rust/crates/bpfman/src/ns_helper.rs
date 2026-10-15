@@ -1,21 +1,25 @@
 //! Private, synchronous mount-namespace target handoff. No BPF or store effects.
+use anyhow::Context;
 use bpfman_runtime::Cancellation;
+use clap::builder::{PathBufValueParser, TypedValueParser};
 use rustix::net::{
     self, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags, SendAncillaryBuffer,
     SendAncillaryMessage, SendFlags,
 };
 use std::{
+    ffi::OsStr,
     fs::{File, OpenOptions},
     io::{self, IoSlice, IoSliceMut},
     mem::MaybeUninit,
     os::{
         fd::{AsFd, OwnedFd},
         unix::{
+            ffi::OsStrExt,
             fs::{MetadataExt, OpenOptionsExt},
             net::UnixDatagram,
         },
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
@@ -25,10 +29,10 @@ mod inherited;
 
 #[derive(clap::Subcommand)]
 pub(crate) enum Helper {
-    /// Open one absolute regular-file target in an inherited mount namespace.
+    /// Resolve and open one regular-file target in an inherited mount namespace.
     OpenUprobeTarget {
-        #[arg(value_parser = absolute_target)]
-        target: String,
+        #[arg(value_parser = PathBufValueParser::new().try_map(helper_target))]
+        target: PathBuf,
         #[arg(long, value_parser = clap::value_parser!(i32).range(3..))]
         socket_fd: i32,
         #[arg(long, value_parser = clap::value_parser!(i32).range(3..))]
@@ -36,11 +40,35 @@ pub(crate) enum Helper {
     },
 }
 
-fn absolute_target(raw: &str) -> Result<String, String> {
-    if !raw.starts_with('/') || raw.ends_with('/') || raw.contains('\0') {
-        return Err("expected an absolute file target".into());
+fn helper_target(path: PathBuf) -> Result<PathBuf, String> {
+    if path.is_absolute() && !path.as_os_str().as_bytes().ends_with(b"/") {
+        return Ok(path);
     }
-    Ok(raw.into())
+    let name = path
+        .to_str()
+        .ok_or("expected an absolute path or bare library name")?;
+    let target =
+        bpfman_model::UprobeTarget::new(name, None, 1, 0).map_err(|error| error.to_string())?;
+    if !target.is_library() {
+        return Err("expected an absolute path or bare library name".into());
+    }
+    Ok(path)
+}
+
+fn cache_target(target: &Path) -> io::Result<PathBuf> {
+    if target.is_absolute() {
+        return Ok(target.to_owned());
+    }
+    let name = target
+        .to_str()
+        .ok_or_else(|| io::Error::other("invalid library name"))?;
+    let bytes = resolution_bytes(Path::new("/etc/ld.so.cache"))?;
+    let path = bpfman_core::uprobe_library_from_cache(&bytes, name)
+        .map_err(io::Error::other)?
+        .ok_or_else(|| {
+            io::Error::other(format!("library {name:?} not found in /etc/ld.so.cache"))
+        })?;
+    Ok(PathBuf::from(OsStr::from_bytes(path)))
 }
 
 impl Helper {
@@ -78,7 +106,7 @@ impl Helper {
         let file = OpenOptions::new()
             .read(true)
             .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
-            .open(target)?;
+            .open(cache_target(&target)?)?;
         require_regular(&file)?;
         send_target(&socket, &file)?;
         Ok(())
@@ -106,13 +134,23 @@ impl Launcher {
         let pid = target
             .container_pid()
             .ok_or_else(|| io::Error::other("missing container PID"))?;
-        let namespace = open_namespace(pid.get())?;
+        let (namespace, proc_root) = open_namespace(pid.get())?;
+        // Host PID maps must be interpreted before entering a container's mount
+        // namespace, whose procfs can use a different PID numbering.
+        let mapped = if let Some(pid) = target.pid() {
+            let bytes = resolution_bytes(&proc_root.join(pid.to_string()).join("maps"))?;
+            bpfman_core::uprobe_library_from_maps(&bytes, target.target())
+                .map(|path| PathBuf::from(OsStr::from_bytes(path)))
+        } else {
+            None
+        };
+        let lookup = mapped.unwrap_or_else(|| target.target().into());
         let lock = writer.duplicate_lock_fd().map_err(io::Error::other)?;
-        self.launch(target.target(), namespace, lock)
+        self.launch(&lookup, namespace, lock)
     }
 
-    fn launch(&self, target: &str, namespace: File, lock: OwnedFd) -> io::Result<File> {
-        absolute_target(target).map_err(io::Error::other)?;
+    fn launch(&self, target: &Path, namespace: File, lock: OwnedFd) -> io::Result<File> {
+        helper_target(target.to_owned()).map_err(io::Error::other)?;
         if self.cancellation.is_cancelled() {
             return Err(cancelled());
         }
@@ -122,12 +160,13 @@ impl Launcher {
             .args([
                 "__ns-helper",
                 "open-uprobe-target",
-                target,
                 "--socket-fd",
                 "3",
                 "--namespace-fd",
                 "5",
+                "--",
             ])
+            .arg(target)
             .env(bpfman_lock::WRITER_LOCK_FD_ENV, "4")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -172,12 +211,12 @@ impl Launcher {
     }
 }
 
-fn open_namespace(pid: u32) -> io::Result<File> {
+fn open_namespace(pid: u32) -> io::Result<(File, PathBuf)> {
     match File::open(format!("/proc/{pid}/ns/mnt")) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            File::open(format!("/host/proc/{pid}/ns/mnt"))
+            File::open(format!("/host/proc/{pid}/ns/mnt")).map(|file| (file, "/host/proc".into()))
         }
-        result => result,
+        result => result.map(|file| (file, "/proc".into())),
     }
 }
 
@@ -257,4 +296,15 @@ fn receive_target(socket: impl AsFd) -> io::Result<File> {
         .pop()
         .ok_or_else(|| io::Error::other("missing target descriptor"))?;
     Ok(File::from(fd))
+}
+
+fn resolution_bytes(path: &Path) -> io::Result<Vec<u8>> {
+    std::fs::read(path)
+        .with_context(|| {
+            format!(
+                "read user-space target resolution data at {}",
+                path.display()
+            )
+        })
+        .map_err(io::Error::other)
 }

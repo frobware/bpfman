@@ -57,7 +57,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":15}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":16}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -72,7 +72,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     fs::write(layout.database_path(), &pristine).expect("restore");
     let mut reader = writer(&runtime, |w| Backend.open(w).expect("open"));
-    fs::write(layout.database_path(), b"{\"version\":15}").expect("change version");
+    fs::write(layout.database_path(), b"{\"version\":16}").expect("change version");
 
     assert_eq!(
         reader
@@ -390,7 +390,7 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
         });
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
-        assert_eq!(state["version"], 14);
+        assert_eq!(state["version"], 15);
         state["version"] = version.into();
         fs::write(
             layout.database_path(),
@@ -1243,7 +1243,7 @@ fn user_probes_require_format_thirteen_and_validate_persisted_intent() {
             2 => invalid["links"][0]["target"]["offset"] = u64::MAX.into(),
             3 => invalid["links"][0]["target"]["function"] = "bad:symbol".into(),
             4 => invalid["links"][0]["target"]["pid"] = u32::MAX.into(),
-            5 => invalid["links"][0]["target"]["target"] = "libc".into(),
+            5 => invalid["links"][0]["target"]["target"] = ".".into(),
             _ => invalid["links"][0]["target"]["function"] = serde_json::Value::Null,
         }
         let previous = serde_json::to_vec(&invalid).expect("invalid snapshot");
@@ -1349,6 +1349,114 @@ fn container_intent_requires_format_fourteen_without_upgrade() {
         assert!(
             Backend.open_reader(&runtime).is_err(),
             "invalid container intent"
+        );
+        assert_eq!(
+            fs::read(layout.database_path()).expect("unchanged"),
+            previous
+        );
+    }
+}
+
+#[test]
+fn library_intent_requires_format_fifteen_without_upgrade() {
+    use bpfman_model::{ProgramSpec, UprobeLink};
+    let temp = tempfile::tempdir().expect("tempdir");
+    let layout = RuntimeLayout::try_from(temp.path().to_owned()).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+    writer(&runtime, |w| {
+        Backend.open(w).expect("fresh");
+        Backend
+            .commit_program(
+                w,
+                LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
+                    id: NonZeroU32::MIN,
+                    spec: &ProgramSpec::Uprobe("probe".try_into().expect("symbol")),
+                    source: "/probe.o",
+                    globals: &Default::default(),
+                    metadata: &Default::default(),
+                    license: "GPL",
+                    created_at: "2026-10-15T12:00:00Z",
+                },
+            )
+            .expect("program");
+    });
+    let pristine: serde_json::Value =
+        serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot")).expect("JSON");
+    for version in [13, 14] {
+        let mut older = pristine.clone();
+        older["version"] = version.into();
+        let previous = serde_json::to_vec(&older).expect("older snapshot");
+        fs::write(layout.database_path(), &previous).expect("fixture");
+        writer(&runtime, |w| {
+            Backend.open(w).expect("older format readable");
+            for container_pid in [0, 1234] {
+                let target = UprobeLink::new(
+                    "libc",
+                    Some("getpid".try_into().expect("symbol")),
+                    0,
+                    0,
+                    false,
+                )
+                .expect("library")
+                .with_container_pid(container_pid)
+                .expect("container selector");
+                let error = Backend
+                    .create_pending_uprobe(
+                        w,
+                        bpfman_store::PendingUprobe {
+                            program_id: NonZeroU32::MIN,
+                            target: &target,
+                            metadata: &Default::default(),
+                            created_at: "2026-10-15T12:00:00Z",
+                        },
+                    )
+                    .map(|_| ())
+                    .expect_err("no implicit upgrade");
+                assert_eq!(error.kind(), ErrorKind::Unsupported);
+                assert_eq!(
+                    fs::read(layout.database_path()).expect("unchanged"),
+                    previous
+                );
+            }
+        });
+    }
+    fs::write(
+        layout.database_path(),
+        serde_json::to_vec(&pristine).expect("restore"),
+    )
+    .expect("restore");
+    writer(&runtime, |w| {
+        Backend
+            .create_pending_uprobe(
+                w,
+                bpfman_store::PendingUprobe {
+                    program_id: NonZeroU32::MIN,
+                    target: &UprobeLink::new(
+                        "libc.so.6",
+                        Some("getpid".try_into().expect("symbol")),
+                        0,
+                        1234,
+                        false,
+                    )
+                    .expect("soname"),
+                    metadata: &Default::default(),
+                    created_at: "2026-10-15T12:00:00Z",
+                },
+            )
+            .expect("library intent");
+    });
+    let valid: serde_json::Value =
+        serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot")).expect("JSON");
+    for version in [13, 14] {
+        let mut invalid = valid.clone();
+        invalid["version"] = version.into();
+        let previous = serde_json::to_vec(&invalid).expect("encode");
+        fs::write(layout.database_path(), &previous).expect("fixture");
+        assert!(
+            Backend.open_reader(&runtime).is_err(),
+            "older formats refuse library intent"
         );
         assert_eq!(
             fs::read(layout.database_path()).expect("unchanged"),

@@ -378,7 +378,7 @@ object cleanup must never manipulate SQLite's journal, WAL, or shared-memory fil
 `500ms`; the default is 30 seconds and `0` waits indefinitely. It bounds only
 acquisition, never work under the lock. The lock adapter supports cooperative
 cancellation and owned inherited descriptors. CLI signal cancellation is wired;
-the planned uprobe mount-namespace subprocess helper is not yet implemented.
+the uprobe mount-namespace subprocess helper inherits its writer descriptor.
 No privileges are needed for text/quiet listing in a writable temporary runtime.
 Loading requires BPF and mount privileges; `/run/bpfman` will normally require sudo.
 
@@ -1058,8 +1058,8 @@ its namespace; synchronous joins keep the existing writer lock held. The worker
 returns an owned link descriptor. Pinning, persistence, conditional dispatcher
 switching, restoration, and removal stay with the caller under the same runtime
 authority. Entry/spawn failures return errors before attachment, and no worker
-or descriptor remains detached from its owning operation. This does not implement
-the separate planned mount-namespace subprocess helper for uprobes.
+or descriptor remains detached from its owning operation. Uprobes use the separate
+mount-namespace subprocess helper described below.
 
 Namespace paths are persisted in Go-compatible SQLite columns and JSON format 6,
 and appear in link details and dispatcher runtime JSON. Rebuilds retain the
@@ -1927,7 +1927,7 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 14 for container targets; format 13 retains host uprobes; format 12 retains
+receipt. New JSON stores use format 15 for library names; format 14 retains container targets; format 13 retains host uprobes; format 12 retains
 sharing; format 11 retains kernel probes, format 10 retains TCX, format 9
 retains egress and format 8 retains ingress
 replacement and format 7 retains singleton ingress. Older formats retain their
@@ -2031,7 +2031,7 @@ through a reopened application. This also strengthens tracepoint unload, with
 its fault and retry contracts updated to require independent progress.
 
 SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
-use format 14; format 13 retains host uprobes and format 12 retains sharing, format 11 retains kernel probes and
+use format 15; format 14 retains container targets and format 13 retains host uprobes and format 12 retains sharing, format 11 retains kernel probes and
 format 10 retains TCX. Existing formats 1–9 retain their previous
 operations and reject TCX
 without an implicit upgrade. Tracepoint target strings keep their existing JSON
@@ -2088,7 +2088,7 @@ exact kernel identity. Perf-event teardown holds a live descriptor across unpinn
 and closes it after pin descriptors. External holders retain their ordinary kernel
 lifetime semantics.
 
-SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 14 for container targets; format 13 retains host uprobes;
+SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 15 for library names; format 14 retains container targets; format 13 retains host uprobes;
 format 11 introduced kernel probes.
 older snapshots retain existing operations and refuse probe loads/links without
 implicit conversion. `make rust-test-kprobe` runs native recovery contracts and
@@ -2130,7 +2130,7 @@ Unload follows the same rule for map-set aliases, containers and shared names.
 Changed inode or runtime evidence still refuses cleanup.
 
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
-`shared_map_pins`. New JSON stores use format 14 for container targets; format 13 retains host uprobes; format 12 introduced map-owner
+`shared_map_pins`. New JSON stores use format 15 for library names; format 14 retains container targets; format 13 retains host uprobes; format 12 introduced map-owner
 and shared-name
 references. Formats 1–11 keep their previous operations and refuse sharing without
 changing bytes or upgrading. Older artifacts without a map inventory retain
@@ -2166,9 +2166,9 @@ bpfman link attach uprobe PROGRAM_ID /path/to/binary --offset FILE_OFFSET
 
 `-f` aliases `--fn-name`. With a symbol, offset is relative to its entry; without
 one, a nonzero offset is required. PID zero or omission selects all processes.
-File targets must contain a directory separator; bare library names remain
-unsupported. `--container-pid HOST_PID` selects a container mount namespace
-for an absolute file target.
+File targets contain a directory separator; bare library names resolve through
+process maps or the dynamic linker cache. `--container-pid HOST_PID` selects a
+container mount namespace for an absolute file target or library name.
 The target is opened nonblocking and must be a regular file. Symbol resolution
 and attachment use the same retained file through `/proc/self/fd`.
 
@@ -2198,7 +2198,8 @@ before signal handling or thread creation. The parent opens the target mount
 namespace (using `/host/proc` if the host PID is absent from `/proc`) and duplicates
 its held writer lock. Explicit inherited descriptor slots carry the namespace,
 lock and Unix socket. The single-threaded child validates them, enters the mount
-namespace, opens one absolute regular-file target nonblocking, and returns its
+namespace, resolves any remaining library name against its cache, opens the
+regular-file target nonblocking, and returns its
 FD through `SCM_RIGHTS`. It performs no BPF operations.
 
 The parent reaps the child and attaches through its own `/proc/self/fd`, retaining
@@ -2210,8 +2211,8 @@ has disappeared. Reusable callers inject target opening through
 `Kernel::with_uprobe_target_opener`; `Kernel::default()` supports host targets.
 
 SQLite keeps schema 2 and `link_uprobe_details.container_pid`. New JSON stores use
-format 14 for container intent; host links remain supported in format 13 without
-an implicit upgrade. Container PID zero retains host lookup and remains separate
+format 15 for library names; format 14 retains container file targets and format
+13 retains host file targets, without implicit upgrades. Container PID zero retains host lookup and remains separate
 from the optional `--pid` process filter.
 
 The focused `rust-test-uprobe` target and full gate include three unchanged
@@ -2221,5 +2222,49 @@ container scripts on both stores: `TestContainerUprobe_LinkIDAndTraffic`,
 namespace-only target from its host spelling for both entry and return probes,
 check failed symbol lookup and missing namespaces, and reopen/tear down persisted
 links after the namespace exits. Process contracts exercise malformed messages,
-failed child exits, descriptor closure, cancellation and reaping. Bare library
-lookup and its cache/pod/host-proc acceptance scripts remain subsequent work.
+failed child exits, descriptor closure, cancellation and reaping. Library-name
+lookup and its cache/pod/host-proc acceptance are described below.
+
+
+## Bare library-name uprobe targets
+
+```sh
+bpfman link attach uprobe PROGRAM_ID libc --fn-name malloc --pid HOST_PID
+bpfman link attach uprobe PROGRAM_ID libc.so.6 --fn-name malloc --container-pid HOST_PID
+```
+
+Resolution follows the Go reference: positive-PID maps first, then the dynamic linker's
+`/etc/ld.so.cache` for an unresolved library name. A maps read failure is terminal.
+Matching supports `libc`, `libc.so`, exact sonames such as `libc.so.6`, and the
+older `libold-VERSION.so` layout. The first matching mapping/cache entry wins.
+Explicit host file paths retain their existing direct lookup.
+
+For containers, the parent reads host PID maps through the proc root that opened
+the namespace (`/proc` or `/host/proc`). The helper opens that resolved path after
+entering the mount namespace; unresolved bare names use the container's cache.
+The helper never tries to reinterpret a host PID through container procfs. Native
+path bytes survive resolution and the helper's typed pathname argument. The
+stored target remains the requested name; detach/unload need no repeated lookup.
+
+Maps/cache parsers are pure functions in `bpfman-core`. The cache parser supports
+new-format glibc caches with native-endian offsets, validates the full entry table
+and all NUL-terminated strings, rejects overlapping/out-of-range offsets and
+non-absolute cache paths, and explicitly rejects standalone old-format caches.
+No `dlopen` or library constructors run. Attachment still holds one opened regular
+file through symbol resolution and BPF attachment.
+
+JSON library-name links require format 15. Formats 13/14 keep their prior file
+capabilities and refuse library intent without modifying or upgrading snapshots.
+SQLite keeps schema 2. Pure tests cover malformed/truncated caches, matching and
+ordering; real-store/fake-kernel matrices cover raw-name persistence and recovery.
+Native tests actively install synthetic host caches, test maps precedence and
+fallback, refuse missing maps, and resolve host PID mappings into a separate PID
+namespace with no cache. Helper lookup failures leave no pending links.
+
+Five unchanged files join `rust-test-uprobe` and the full gate on both stores:
+`TestUprobe_LibraryNameCacheTraffic`, `TestContainerUprobe_LibraryNameTarget`,
+`TestContainerUprobe_SyntheticLdSoCache`, `TestContainerUprobe_PodStyleNamespaces`,
+and `TestContainerUprobe_HostProcDaemonView`. All five also pass against Go on
+both stores. The host-cache file takes its existing no-cache branch on this
+NixOS host; active synthetic host/container cache fixtures prove that tier.
+The external `TestContainerUprobe_AppTestImage` still depends on OCI loading.

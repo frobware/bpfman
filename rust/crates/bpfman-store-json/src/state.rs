@@ -1,3 +1,4 @@
+//! Version 15 adds bare library-name user-space targets.
 //! Version 14 adds container mount-namespace user-space targets.
 //! Version 13 adds host user-space probes.
 //! Version 12 adds shared map sets and PinByName references.
@@ -104,7 +105,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 14,
+            version: 15,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -126,7 +127,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=14) {
+        if !matches!(header.version, 1..=15) {
             return Err(Failure::Version(header.version));
         }
 
@@ -257,6 +258,13 @@ impl State {
                 }
             }
 
+            if self.version < 15
+                && matches!(&link.target, LinkTarget::Uprobe(d) if !d.target.contains('/'))
+            {
+                return Err(Failure::Unsupported(
+                    "library-name probes require JSON format 15; no implicit upgrade",
+                ));
+            }
             if self.version < 14
                 && matches!(&link.target, LinkTarget::Uprobe(d) if d.container_pid != 0)
             {

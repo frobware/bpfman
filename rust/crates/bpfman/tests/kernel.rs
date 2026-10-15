@@ -1020,3 +1020,16 @@ fn sqlite_container_uprobe_namespace_lookup() {
 fn json_container_uprobe_namespace_lookup() {
     container_uprobe::exercise("json");
 }
+
+#[path = "kernel/library_uprobe.rs"]
+mod library_uprobe;
+
+#[test]
+fn sqlite_uprobe_library_resolution() {
+    library_uprobe::exercise("sqlite");
+}
+
+#[test]
+fn json_uprobe_library_resolution() {
+    library_uprobe::exercise("json");
+}

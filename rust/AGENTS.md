@@ -136,7 +136,7 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 14 for container uprobes; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
+- New JSON stores use format 15 for library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
   format 10 retains native TCX,
   format 9 retains independent TC egress chains, format 8 retains ingress
   replacement, and format 7 retains singleton ingress.
@@ -534,7 +534,7 @@ The architecture and compatibility goals are in
   independent of this derived selection.
 - Host file targets contain a directory separator. Open nonblocking, require a
   regular file and retain its descriptor across symbol resolution and attachment
-  through `/proc/self/fd`. Bare library names remain unsupported. Container absolute targets use the
+  through `/proc/self/fd`. Bare library names use pure maps/cache lookup. Container targets use the
   private single-threaded re-exec helper and SCM_RIGHTS handoff; BPF effects stay
   in the parent. Inherit a duplicate writer-lock FD, reap on every outcome and
   close rejected/transferred descriptors. Dispatch before signals start threads.
@@ -552,3 +552,14 @@ The architecture and compatibility goals are in
   Three unchanged container traffic/persistence/PID-namespace scripts join the
   focused and full gates. Keep namespace-only target lookup and vanished-namespace
   teardown contracts on both stores, plus process failure/cancellation/FD tests.
+
+- Bare library intent requires JSON format 15. Preserve the requested name in
+  stored details. Resolve positive-PID maps first; read errors never fall through.
+  Container maps are read in the parent using the same proc root as namespace
+  lookup; unresolved names use the target namespace's cache in the helper.
+  Parse new-format glibc caches without dlopen, check all entries/offsets/strings,
+  and preserve first-match order and native path bytes. Keep old formats explicit
+  unsupported errors. Pure parser tests, synthetic host-cache native contracts,
+  host-PID maps across PID namespaces, and the five unchanged library scripts
+  remain in the focused/full gates. The host-cache script may take its existing
+  no-cache branch; synthetic fixtures must still prove the cache tier actively.

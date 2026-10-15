@@ -26,11 +26,11 @@ fn load<S: Store>(f: &Fixture<S>, retprobe: bool) -> NonZeroU32 {
         .id
 }
 
-fn request(id: NonZeroU32, container_pid: u32) -> UprobeAttach {
+fn request(id: NonZeroU32, container_pid: u32, target: &str) -> UprobeAttach {
     UprobeAttach {
         program_id: id,
         target: bpfman_model::UprobeTarget::new(
-            "/host/target",
+            target,
             Some("entry".try_into().expect("symbol")),
             0,
             1234,
@@ -43,12 +43,21 @@ fn request(id: NonZeroU32, container_pid: u32) -> UprobeAttach {
 }
 
 pub(super) fn lifecycle<S: Store>(backend: S) {
-    for (retprobe, container_pid) in [(false, 0), (true, 0), (false, 9876), (true, 9876)] {
+    for (retprobe, container_pid, target) in [
+        (false, 0, "/host/target"),
+        (true, 0, "/host/target"),
+        (false, 9876, "/host/target"),
+        (true, 9876, "/host/target"),
+        (false, 0, "libc"),
+        (true, 0, "libc.so.6"),
+        (false, 9876, "libold"),
+        (true, 9876, "libstdc++"),
+    ] {
         let f = Fixture::new(backend);
         let id = load(&f, retprobe);
         let link = f
             .app
-            .attach_uprobe(request(id, container_pid))
+            .attach_uprobe(request(id, container_pid, target))
             .expect("attach");
         let observed = f.app.get_link(link.id).expect("observation");
         let LinkDetails::Uprobe(d) = observed.record.details else {
@@ -58,7 +67,7 @@ pub(super) fn lifecycle<S: Store>(backend: S) {
         assert_eq!(d.container_pid().map_or(0, NonZeroU32::get), container_pid);
         assert_eq!(d.function(), Some("entry"));
         assert_eq!(d.pid().map(NonZeroU32::get), Some(1234));
-        assert_eq!(d.target(), "/host/target");
+        assert_eq!(d.target(), target);
         assert_eq!(d.offset(), 0);
         assert_eq!(observed.record.metadata["owner"], "probe-contract");
         assert!(observed.kernel.is_some() && observed.pin_present);
@@ -67,11 +76,11 @@ pub(super) fn lifecycle<S: Store>(backend: S) {
         assert_eq!(report.unresolved(), 0);
         assert!(f.app.get(id).expect("program retained").links.is_empty());
 
-        let mut second = request(id, container_pid);
+        let mut second = request(id, container_pid, target);
         second.target =
             bpfman_model::UprobeTarget::new("/host/other", None, 42, 0).expect("offset target");
         f.app
-            .attach_uprobe(request(id, container_pid))
+            .attach_uprobe(request(id, container_pid, target))
             .expect("reattach");
         f.app.attach_uprobe(second).expect("independent attachment");
         let app = Bpfman::new(
@@ -85,7 +94,7 @@ pub(super) fn lifecycle<S: Store>(backend: S) {
 
         let wrong = f.app.load(f.request(false)).expect("tracepoint").record.id;
         f.app
-            .attach_uprobe(request(wrong, container_pid))
+            .attach_uprobe(request(wrong, container_pid, target))
             .expect_err("wrong family");
         assert!(f.app.list_link_records().expect("no intent").is_empty());
         let report = f.app.unload(wrong).expect("unload tracepoint");
@@ -95,7 +104,16 @@ pub(super) fn lifecycle<S: Store>(backend: S) {
 }
 
 pub(super) fn recovery<S: Store>(backend: S) {
-    for (retprobe, container_pid) in [(false, 0), (true, 0), (false, 9876), (true, 9876)] {
+    for (retprobe, container_pid, target) in [
+        (false, 0, "/host/target"),
+        (true, 0, "/host/target"),
+        (false, 9876, "/host/target"),
+        (true, 9876, "/host/target"),
+        (false, 0, "libc"),
+        (true, 0, "libc.so.6"),
+        (false, 9876, "libold"),
+        (true, 9876, "libstdc++"),
+    ] {
         for (point, phase) in [
             (Point::PrepareLink, Phase::Before),
             (Point::Attach, Phase::Before),
@@ -107,7 +125,7 @@ pub(super) fn recovery<S: Store>(backend: S) {
             f.kernel.fail(point, phase);
             let error = f
                 .app
-                .attach_uprobe(request(id, container_pid))
+                .attach_uprobe(request(id, container_pid, target))
                 .expect_err("acquisition failure");
             assert_eq!(error.report().map_or(0, |r| r.unresolved()), 0);
             f.kernel.clear();
@@ -121,7 +139,7 @@ pub(super) fn recovery<S: Store>(backend: S) {
             let id = load(&f, retprobe);
             f.store.set(Some(point));
             f.app
-                .attach_uprobe(request(id, container_pid))
+                .attach_uprobe(request(id, container_pid, target))
                 .expect_err("publication failure");
             f.store.set(None);
             assert!(f.app.list_link_records().expect("compensated").is_empty());
@@ -135,7 +153,7 @@ pub(super) fn recovery<S: Store>(backend: S) {
             let token = Cancellation::new();
             f.kernel.cancel_at(point, &token);
             f.app
-                .attach_uprobe_with_cancellation(request(id, container_pid), &token)
+                .attach_uprobe_with_cancellation(request(id, container_pid, target), &token)
                 .expect_err("cancelled");
             f.kernel.clear();
             assert!(
@@ -155,7 +173,7 @@ pub(super) fn recovery<S: Store>(backend: S) {
         f.kernel.fail(Point::RemoveLink, Phase::Before);
         let error = f
             .app
-            .attach_uprobe(request(id, container_pid))
+            .attach_uprobe(request(id, container_pid, target))
             .expect_err("publication plus cleanup failure");
         assert_eq!(
             error
@@ -169,13 +187,13 @@ pub(super) fn recovery<S: Store>(backend: S) {
         let report = f.app.retry_link_cleanup(error).expect("consuming retry");
         assert_eq!(report.unresolved(), 0);
         f.app
-            .attach_uprobe(request(id, container_pid))
+            .attach_uprobe(request(id, container_pid, target))
             .expect("first");
         f.app
-            .attach_uprobe(request(id, container_pid))
+            .attach_uprobe(request(id, container_pid, target))
             .expect("second");
         f.app
-            .attach_uprobe(request(id, container_pid))
+            .attach_uprobe(request(id, container_pid, target))
             .expect("third");
         f.store.fail_after(StorePoint::DeleteLink, 1);
         let error = f

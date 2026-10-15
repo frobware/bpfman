@@ -87,6 +87,12 @@ impl LinkStore for Backend {
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
         let (previous, mut state) = read(&file)?;
 
+        if state.version < 15 && request.target.is_library() {
+            return Err(Failure::Unsupported(
+                "library-name probes require JSON format 15; no implicit upgrade",
+            )
+            .into());
+        }
         if state.version < 14 && request.target.container_pid().is_some() {
             return Err(Failure::Unsupported(
                 "container probes require JSON format 14; no implicit upgrade",

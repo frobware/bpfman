@@ -105,14 +105,14 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
-| Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; absolute container file targets through the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | Bare library-name target resolution |
+| Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | General reconciliation and lost-report recovery |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 14 for container uprobes; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 15 for library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -1295,8 +1295,9 @@ Preserve the current Go helper's division of responsibility:
 The legacy Rust helper instead attached inside the target mount namespace and
 switched back to pin the link. Retaining Go's file-descriptor handoff keeps BPF
 effects and their cleanup in the parent while isolating target filesystem lookup
-in the child. The absolute-file-target helper is implemented; bare library-name resolution
-remains subsequent work.
+in the child. File and bare library-name lookup are implemented. For a positive
+process filter, the parent reads maps through the proc root that opened the namespace.
+The child resolves remaining library names from the target namespace cache.
 
 ### Object creation and deletion boundary
 
@@ -4754,3 +4755,78 @@ Evidence: `/tmp/container-gate.log`, `/tmp/container-final-userspace.log`,
 seconds locally on Linux 6.18.54, using eight ordinary contract workers and the
 existing development/test `aya-obj` opt-level-two override; this is local evidence,
 not a controlled benchmark.
+
+
+### Bare library-name uprobe resolution (15 October 2026)
+
+Host and container user-space probes now accept bare names, `.so` forms and exact
+sonames, retaining the requested name in stored intent. The Go reference's tier
+order is preserved: positive-PID process maps first, then direct file lookup or
+new-format glibc `ld.so.cache` lookup for an unresolved name. Maps read failures
+are terminal, even if the cache could answer. Host relative file paths retain
+their prior direct lookup. Library names preserve their requested spelling;
+container file paths remain absolute.
+
+Pure `bpfman-core` functions select the first matching absolute mapped library
+and parse/resolve cache bytes. Matching includes the old `libname-VERSION.so`
+layout and avoids prefix bleed and plain executable-basename matches. Cache
+parsing checks table arithmetic, every string offset/terminator and absolute path
+values before returning a first match; malformed later entries cannot hide behind
+a valid earlier match. Old standalone cache format remains explicitly unsupported,
+as in Go. Parsers return borrowed native path bytes without filesystem access,
+new dependencies or library execution.
+
+Host effects read maps/cache and open the selected regular file nonblocking.
+Container effects choose `/proc` or `/host/proc` with namespace adoption, read
+host PID maps in the parent, and pass any resolved path to the helper. Remaining
+bare names resolve against the container cache after setns. The helper accepts
+native path arguments, preserving non-UTF-8 resolved file paths. It never reads
+host PID maps through the target's differently numbered procfs. The existing
+SCM_RIGHTS handoff, inherited writer lock, cancellation, reaping and parent-owned
+BPF attachment/compensation remain unchanged. No dlopen or constructors run.
+
+SQLite retains schema 2 and raw requested targets in existing user-probe details.
+New JSON stores use format 15; formats 13/14 retain host/container file links and
+refuse library-name publication or malformed persisted library state without
+modifying or implicitly upgrading snapshots. Generic store and stateful-fake
+entry/return matrices now include host/container library intent through pending
+publication, foreign/stale receipts, cancellation and independent consuming
+cleanup/reopened retries.
+
+Native contracts actively exercise host maps, `.so` and exact soname matches,
+synthetic host cache lookup, readable-unmatched maps falling back to cache, and
+terminal maps read failures. A namespace-private executable with a library-shaped
+basename runs as PID 1 under an empty `/etc`; host PID-filtered entry/return
+attachments prove parent-side maps resolution, and omitting that filter proves
+failed child cache lookup leaves no pending links. Pins persist across CLI exits.
+
+Five unchanged acceptance files are added to the existing uprobe corpus batch:
+`TestUprobe_LibraryNameCacheTraffic`, `TestContainerUprobe_LibraryNameTarget`,
+`TestContainerUprobe_SyntheticLdSoCache`, `TestContainerUprobe_PodStyleNamespaces`,
+and `TestContainerUprobe_HostProcDaemonView`. They pass against Rust and Go with
+both stores. The host-cache file takes its existing no-cache branch locally;
+synthetic native host-cache and container traffic fixtures actively prove lookup.
+The external app-test image fixture remains outside this slice because it needs
+OCI loading. Existing script contents/labels, Go, legacy Rust and dependency
+versions are unchanged.
+
+Validation: `direnv exec . make rust-fmt-fix rust-check lint-make` exited zero,
+including warnings-denied Clippy/Rustdoc, formatting, userspace/store/CLI and
+compile-fail checks, all 80 fake-kernel cases and all 130 discovered/selected
+kernel cases. Owned fake and real tmpfs fixtures passed normal cleanup. The
+native PID-namespace fixture uses a non-UTF-8 parent directory, actively proving
+that native resolved paths survive the helper argument handoff.
+
+A final userspace plus focused `rust-test-uprobe` rerun passed after placing the
+helper's target after `--`; a library-shaped operand can never become a helper
+option. Process tests include a `--help` operand that must reach descriptor
+validation rather than invoke help. All ten focused kernel cases passed, including
+all existing host/container/library scripts on both stores.
+
+Evidence: `/tmp/library-final-gate.log`, `/tmp/library-final-lint.log`,
+`/tmp/library-handoff-check.log`, `/tmp/bpfman-library-uprobe-go-json.log`, and
+`/tmp/bpfman-library-uprobe-go-sqlite.log`. The final full kernel stage took 118.29
+seconds locally on Linux 6.18.54, with eight ordinary contract workers and the
+existing development/test `aya-obj` opt-level-two override. This is local evidence,
+not a controlled benchmark. No dependency, lockfile or unsafe-boundary changes
+were needed for this slice.

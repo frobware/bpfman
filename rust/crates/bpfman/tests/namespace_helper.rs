@@ -210,6 +210,7 @@ fn helper_cli_rejects_invalid_inherited_descriptors_before_runtime() -> anyhow::
         ("/bin/a", "900", "901", "902"),
         ("relative/a", "3", "5", "4"),
         ("/bin/a", "3", "5", "invalid"),
+        ("--help", "3", "5", "invalid"),
     ] {
         let output = Command::new(binary)
             .env("BPFMAN_RUNTIME_DIR", &runtime)
@@ -217,11 +218,12 @@ fn helper_cli_rejects_invalid_inherited_descriptors_before_runtime() -> anyhow::
             .args([
                 "__ns-helper",
                 "open-uprobe-target",
-                target,
                 "--socket-fd",
                 socket,
                 "--namespace-fd",
                 namespace,
+                "--",
+                target,
             ])
             .output()?;
         assert!(!output.status.success());

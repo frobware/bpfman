@@ -65,7 +65,7 @@ pub(crate) enum AttachCommand {
     /// Attach a user-space entry or return probe, as selected when loading.
     Uprobe {
         program_id: NonZeroU32,
-        #[arg(value_parser = host_target)]
+        #[arg(value_parser = user_target)]
         target: String,
         #[arg(long, short = 'f', required_unless_present = "offset", required_if_eq("offset", "0"), value_parser = user_symbol)]
         fn_name: Option<bpfman_model::Symbol>,
@@ -73,7 +73,7 @@ pub(crate) enum AttachCommand {
         offset: Option<u64>,
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
         pid: u32,
-        /// Host PID selecting the target mount namespace (absolute targets only).
+        /// Host PID selecting the target mount namespace (absolute paths or library names).
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
         container_pid: u32,
         #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
@@ -426,7 +426,7 @@ fn tc_action(raw: &str) -> Result<i32, String> {
     }
 }
 
-fn host_target(raw: &str) -> Result<String, String> {
+fn user_target(raw: &str) -> Result<String, String> {
     bpfman_model::UprobeTarget::new(raw, None, 1, 0).map_err(|e| e.to_string())?;
     Ok(raw.into())
 }

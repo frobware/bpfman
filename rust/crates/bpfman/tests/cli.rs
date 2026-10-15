@@ -267,15 +267,7 @@ fn host_probe_admission_precedes_runtime_creation() -> Result<(), Box<dyn std::e
     let temp = tempfile::tempdir()?;
     let runtime = temp.path().join("absent");
     for args in [
-        vec![
-            "link",
-            "attach",
-            "uprobe",
-            "42",
-            "libc",
-            "--fn-name",
-            "malloc",
-        ],
+        vec!["link", "attach", "uprobe", "42", ".", "--fn-name", "malloc"],
         vec!["link", "attach", "uprobe", "42", "/bin/target"],
         vec![
             "link",

@@ -31,6 +31,8 @@ mod load;
 mod rollback;
 mod store;
 mod unload;
+mod uprobe_resolve;
+pub use uprobe_resolve::{InvalidUprobeCache, uprobe_library_from_cache, uprobe_library_from_maps};
 
 pub use link::{
     LinkAttempt, LinkCleanup, LinkCleanupContinuation, LinkCleanupKind, LinkCleanupReport,

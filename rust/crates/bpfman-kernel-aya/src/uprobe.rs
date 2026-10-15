@@ -7,8 +7,13 @@ use bpfman_fs::{
 use bpfman_kernel::{Error, UprobeLinks};
 use bpfman_model::UprobeLink;
 use std::{
+    ffi::OsStr,
     num::NonZeroU32,
-    os::{fd::AsRawFd, unix::fs::OpenOptionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::{ffi::OsStrExt, fs::OpenOptionsExt},
+    },
+    path::PathBuf,
 };
 
 impl UprobeLinks for Kernel {
@@ -56,9 +61,7 @@ impl UprobeLinks for Kernel {
         }
         let file = match prepared.target {
             Some(file) => file,
-            None => open_host(target.target())
-                .and_then(regular)
-                .map_err(target_error)?,
+            None => open_host(target).and_then(regular).map_err(target_error)?,
         };
         prepared
             .program
@@ -127,7 +130,30 @@ impl Kernel {
     }
 }
 
-fn open_host(path: &str) -> std::io::Result<std::fs::File> {
+fn open_host(target: &UprobeLink) -> std::io::Result<std::fs::File> {
+    let mapped = if let Some(pid) = target.pid() {
+        let bytes = resolution_bytes(std::path::Path::new(&format!("/proc/{pid}/maps")))?;
+        bpfman_core::uprobe_library_from_maps(&bytes, target.target())
+            .map(|path| PathBuf::from(OsStr::from_bytes(path)))
+    } else {
+        None
+    };
+    let path = match mapped {
+        Some(path) => path,
+        None if target.is_library() => {
+            let bytes = resolution_bytes(std::path::Path::new("/etc/ld.so.cache"))?;
+            let path = bpfman_core::uprobe_library_from_cache(&bytes, target.target())
+                .map_err(std::io::Error::other)?
+                .ok_or_else(|| {
+                    std::io::Error::other(format!(
+                        "library {:?} not found in /etc/ld.so.cache",
+                        target.target()
+                    ))
+                })?;
+            PathBuf::from(OsStr::from_bytes(path))
+        }
+        None => PathBuf::from(target.target()),
+    };
     std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
@@ -155,4 +181,21 @@ impl std::fmt::Debug for Kernel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Kernel").finish_non_exhaustive()
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("read user-space target resolution data at {path:?}")]
+struct ResolutionReadError {
+    path: PathBuf,
+    #[source]
+    cause: std::io::Error,
+}
+
+fn resolution_bytes(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    std::fs::read(path).map_err(|cause| {
+        std::io::Error::other(ResolutionReadError {
+            path: path.into(),
+            cause,
+        })
+    })
 }

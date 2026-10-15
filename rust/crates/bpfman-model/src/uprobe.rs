@@ -3,8 +3,7 @@ use crate::Symbol;
 use alloc::string::String;
 use core::{fmt, num::NonZeroU32};
 
-/// Validated file target and probe location. Bare library-name lookup is
-/// a separate capability; file paths must contain a directory separator.
+/// Validated file or bare library target and probe location.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UprobeTarget {
     target: String,
@@ -21,7 +20,7 @@ pub struct InvalidUprobe;
 impl fmt::Display for InvalidUprobe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
-            "expected a file path (absolute for containers), a symbol or nonzero offset, and representable offset/PIDs",
+            "expected a file path (absolute for containers) or bare library name, a symbol or nonzero offset, and representable offset/PIDs",
         )
     }
 }
@@ -29,7 +28,7 @@ impl fmt::Display for InvalidUprobe {
 impl core::error::Error for InvalidUprobe {}
 
 impl UprobeTarget {
-    /// Validate file-target syntax, attachment location and persistence ranges.
+    /// Validate file/library-target syntax, attachment location and persistence ranges.
     /// PID zero selects all processes, matching the public bpfman interface.
     pub fn new(
         target: &str,
@@ -37,7 +36,8 @@ impl UprobeTarget {
         offset: u64,
         pid: u32,
     ) -> Result<Self, InvalidUprobe> {
-        if !target.contains('/')
+        if target.is_empty()
+            || matches!(target, "." | "..")
             || target.ends_with('/')
             || target.contains('\0')
             || offset > i64::MAX as u64
@@ -57,9 +57,11 @@ impl UprobeTarget {
     }
 
     /// Select a container mount namespace by positive host PID. Container file
-    /// targets must be absolute; zero retains host lookup.
+    /// paths must be absolute; bare libraries resolve inside it. Zero retains host lookup.
     pub fn with_container_pid(mut self, pid: u32) -> Result<Self, InvalidUprobe> {
-        if pid > i32::MAX as u32 || (pid != 0 && !self.target.starts_with('/')) {
+        if pid > i32::MAX as u32
+            || (pid != 0 && self.target.contains('/') && !self.target.starts_with('/'))
+        {
             return Err(InvalidUprobe);
         }
         self.container_pid = NonZeroU32::new(pid);
@@ -71,7 +73,12 @@ impl UprobeTarget {
         self.container_pid
     }
 
-    /// File target spelling retained as operator intent.
+    /// Whether lookup requires resolving a bare library name.
+    pub fn is_library(&self) -> bool {
+        !self.target().contains('/')
+    }
+
+    /// Requested file path or library name retained as operator intent.
     pub fn target(&self) -> &str {
         &self.target
     }
@@ -130,7 +137,12 @@ impl UprobeLink {
         self.target.container_pid()
     }
 
-    /// File target spelling retained as operator intent.
+    /// Whether lookup requires resolving a bare library name.
+    pub fn is_library(&self) -> bool {
+        !self.target().contains('/')
+    }
+
+    /// Requested file path or library name retained as operator intent.
     pub fn target(&self) -> &str {
         self.target.target()
     }
@@ -163,7 +175,7 @@ mod tests {
     #[test]
     fn admission_rejects_ambiguous_targets_and_unrepresentable_values() -> Result<(), InvalidUprobe>
     {
-        for path in ["", "libc", "/tmp/", "/tmp/a\0"] {
+        for path in ["", ".", "..", "/tmp/", "/tmp/a\0"] {
             assert!(
                 UprobeLink::new(
                     path,
@@ -193,6 +205,19 @@ mod tests {
                 .map(NonZeroU32::get),
             Some(123)
         );
+        for name in [
+            "libc",
+            "libc.so",
+            "libc.so.6",
+            "libstdc++",
+            "libold-2.31.so",
+            "libname@version.so",
+            "libélan.so.1",
+        ] {
+            let target = UprobeTarget::new(name, None, 17, 0)?.with_container_pid(123)?;
+            assert!(target.is_library());
+            assert_eq!(target.into_link(false).target(), name);
+        }
         Ok(())
     }
 }

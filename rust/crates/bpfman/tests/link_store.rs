@@ -639,7 +639,16 @@ where
     S: OpenStore + CommitLoad + LinkStore + UnloadStore + Copy,
     S::Reader: LinkReader,
 {
-    for (retprobe, container_pid) in [(false, 0), (true, 0), (false, 4567), (true, 4567)] {
+    for (retprobe, container_pid, raw_target) in [
+        (false, 0, "/host/binary"),
+        (true, 0, "/host/binary"),
+        (false, 4567, "/host/binary"),
+        (true, 4567, "/host/binary"),
+        (false, 0, "libc"),
+        (true, 0, "libc.so.6"),
+        (false, 4567, "libold"),
+        (true, 4567, "libstdc++"),
+    ] {
         let temp = tempfile::tempdir().expect("tempdir");
         let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
         let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
@@ -655,7 +664,7 @@ where
             bpfman_model::ProgramSpec::Uprobe(name)
         };
         let target = bpfman_model::UprobeLink::new(
-            "/host/binary",
+            raw_target,
             if retprobe {
                 Some("entry".try_into().expect("symbol"))
             } else {
