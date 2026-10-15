@@ -21,6 +21,8 @@ fn seed(writer: &RuntimeWriter<'_>, id: NonZeroU32) -> Result {
     persist_program(
         writer,
         LoadRecord {
+            map_owner: None,
+            shared_maps: &[],
             globals: &Default::default(),
             id,
             spec: &bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from("trace")?),
@@ -64,11 +66,11 @@ fn counts(db: &Connection) -> (usize, usize) {
 }
 
 #[test]
-fn preflight_rejects_every_unsupported_relationship_and_noncanonical_path() -> Result {
+fn preflight_rejects_unsupported_kinds_invalid_sharing_and_noncanonical_paths() -> Result {
     for sql in [
         "UPDATE managed_programs SET program_type='uprobe'",
-        "INSERT INTO shared_map_pins VALUES ('shared',42)",
-        "INSERT INTO managed_programs(program_id,program_name,program_type,object_path,pin_path,map_set_id,created_at) VALUES (99,'borrower','tracepoint','unused','unused',42,'now')",
+        "INSERT INTO shared_map_pins VALUES ('../shared',42)",
+        "PRAGMA foreign_keys=OFF; UPDATE managed_programs SET map_set_id=-1",
         "INSERT INTO map_sets VALUES(99,'unused','now'); UPDATE managed_programs SET map_set_id=99",
         "UPDATE managed_programs SET pin_path='/'",
         "UPDATE managed_programs SET object_path='/tmp/outside'",
@@ -130,7 +132,7 @@ fn changed_records_are_never_deleted_using_old_evidence() -> Result {
         "UPDATE managed_programs SET created_at='replaced'",
         "UPDATE managed_programs SET pin_path='/outside'",
         "INSERT INTO links(kind,kernel_prog_id,created_at) VALUES ('tracepoint',42,'now')",
-        "INSERT INTO shared_map_pins VALUES ('shared',42)",
+        "INSERT INTO shared_map_pins VALUES ('../shared',42)",
     ] {
         scope(|writer, db| {
             let (record, _) = observe_unload(writer, id())?.expect("record").into_parts();

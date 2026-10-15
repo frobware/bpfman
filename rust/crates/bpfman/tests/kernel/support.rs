@@ -307,6 +307,7 @@ impl Context {
 
         for path in [
             "fs/maps",
+            "fs/shared",
             "fs/links",
             "fs/xdp",
             "fs/tc-ingress",

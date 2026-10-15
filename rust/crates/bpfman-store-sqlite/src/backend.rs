@@ -47,6 +47,65 @@ impl OpenStore for Backend {
 }
 
 impl ProgramReader for Store {
+    fn validate_map_sharing(&mut self) -> Result<(), Error> {
+        self.validate()
+    }
+
+    fn read_map_sets(&mut self) -> Result<Vec<NonZeroU32>, Error> {
+        self.reader
+            .read(|connection| {
+                let tx = connection.transaction()?;
+                crate::open::require_supported(crate::open::schema_version(&tx)?)?;
+                crate::queries::map_sets(&tx)?
+                    .into_iter()
+                    .map(|row| {
+                        let id = row.id;
+                        u32::try_from(id).ok().and_then(NonZeroU32::new).ok_or(
+                            crate::error::Failure::InvalidRecord {
+                                id,
+                                reason: "invalid map-set ID".into(),
+                            },
+                        )
+                    })
+                    .collect::<Result<Vec<_>, crate::error::Failure>>()
+            })
+            .map_err(crate::Error::from)
+            .map_err(Into::into)
+    }
+
+    fn read_shared_maps(
+        &mut self,
+    ) -> Result<std::collections::BTreeMap<String, Vec<NonZeroU32>>, Error> {
+        self.reader
+            .read(|connection| {
+                let tx = connection.transaction()?;
+                crate::open::require_supported(crate::open::schema_version(&tx)?)?;
+                let mut maps = std::collections::BTreeMap::<String, Vec<NonZeroU32>>::new();
+                for row in crate::queries::shared_maps(&tx)? {
+                    let name = row.name;
+                    let raw = row.program;
+                    let id = u32::try_from(raw).ok().and_then(NonZeroU32::new).ok_or(
+                        crate::error::Failure::InvalidRecord {
+                            id: raw,
+                            reason: "invalid shared-map user".into(),
+                        },
+                    )?;
+                    if name.is_empty()
+                        || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    {
+                        return Err(crate::error::Failure::InvalidRecord {
+                            id: raw,
+                            reason: "invalid shared map name".into(),
+                        });
+                    }
+                    maps.entry(name).or_default().push(id);
+                }
+                Ok(maps)
+            })
+            .map_err(crate::Error::from)
+            .map_err(Into::into)
+    }
+
     #[tracing::instrument(name = "store.validate", level = "debug", skip_all, err)]
     fn validate(&mut self) -> Result<(), Error> {
         self.reader
@@ -109,6 +168,15 @@ impl UnloadStore for Backend {
         receipt: Self::ProgramReceipt,
     ) -> Result<(), EffectFailure<Self::ProgramReceipt, Error>> {
         crate::delete_unloaded_program(writer, receipt).map_err(failure)
+    }
+
+    #[tracing::instrument(name = "store.retire_map_set", level = "debug", skip_all)]
+    fn retire_map_set(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::MapSetReceipt,
+    ) -> Result<(), EffectFailure<Self::MapSetReceipt, Error>> {
+        crate::unload::retire_map_set(writer, receipt).map_err(failure)
     }
 
     #[tracing::instrument(name = "store.delete_map_set", level = "debug", skip_all)]

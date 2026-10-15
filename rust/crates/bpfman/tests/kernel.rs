@@ -954,3 +954,23 @@ fn sqlite_kprobe_native_link_recovery() {
 fn json_kprobe_native_link_recovery() {
     kprobe::exercise(bpfman_store_json::Backend);
 }
+
+#[test]
+fn sqlite_map_sharing_script_corpus() {
+    cli::map_sharing_scripts("sqlite");
+}
+#[test]
+fn json_map_sharing_script_corpus() {
+    cli::map_sharing_scripts("json");
+}
+
+#[path = "kernel/map_sharing.rs"]
+mod map_sharing;
+#[test]
+fn sqlite_map_sharing_native_recovery() {
+    map_sharing::exercise(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_map_sharing_native_recovery() {
+    map_sharing::exercise(bpfman_store_json::Backend);
+}

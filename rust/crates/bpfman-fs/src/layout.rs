@@ -75,6 +75,11 @@ impl RuntimeLayout {
         self.root.join("fs/maps").join(id.to_string())
     }
 
+    /// Go-compatible shared-name map collection, for presentation only.
+    pub fn shared_maps_path(&self) -> PathBuf {
+        self.root.join("fs/shared")
+    }
+
     /// Published local ELF path, for stored records only.
     pub fn bytecode_path(&self, id: std::num::NonZeroU32) -> PathBuf {
         self.root

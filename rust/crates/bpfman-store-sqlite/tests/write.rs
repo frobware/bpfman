@@ -21,7 +21,7 @@ fn atomic_load_records_are_go_readable_and_failures_leave_no_partial_map_set() -
         let metadata = BTreeMap::from([("bpfman.io/application".into(), "rust-slice".into())]);
         let globals = Default::default();
         let spec = bpfman_model::ProgramSpec::Tracepoint(name.clone());
-    let record = |id| LoadRecord { globals: &globals, id: NonZeroU32::new(id).expect("nonzero fixture"), spec: &spec,
+    let record = |id| LoadRecord { map_owner: None, shared_maps: &[], globals: &globals, id: NonZeroU32::new(id).expect("nonzero fixture"), spec: &spec,
             source: "./original.o", license: "Dual BSD/GPL", created_at: "2026-10-03T12:00:00Z", metadata: &metadata };
         persist_program(&writer, record(42))?;
         let db = Connection::open(layout.database_path())?;

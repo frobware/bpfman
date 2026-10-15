@@ -84,6 +84,19 @@ fn insert(
     ) {
         return Err(Failure::Unsupported("program type"));
     }
+    let mut shared_names = std::collections::BTreeSet::new();
+    if record.map_owner == Some(record.id)
+        || record.shared_maps.iter().any(|name| {
+            name.is_empty()
+                || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                || !shared_names.insert(name)
+        })
+    {
+        return Err(Failure::InvalidRecord {
+            id: i64::from(record.id.get()),
+            reason: "invalid map sharing intent".into(),
+        });
+    }
     let layout = writer.layout();
     let object_path = layout.bytecode_path(record.id);
     let pin_path = layout.program_pin_path(record.id);
@@ -105,14 +118,26 @@ fn insert(
         source,
     })?;
 
-    queries::insert_map_set(
-        tx,
-        queries::MapSetIdentity {
-            id: record.id,
-            pin_path: map_path,
-            created_at: record.created_at,
-        },
-    )?;
+    if record.map_owner.is_none() {
+        queries::insert_map_set(
+            tx,
+            queries::MapSetIdentity {
+                id: record.id,
+                pin_path: map_path,
+                created_at: record.created_at,
+            },
+        )?;
+    } else if let Some(owner) = record.map_owner {
+        if !queries::map_sets(tx)?.iter().any(|row| {
+            row.id == i64::from(owner.get())
+                && Some(row.pin_path.as_str()) == layout.map_directory_path(owner).to_str()
+        }) {
+            return Err(Failure::InvalidRecord {
+                id: i64::from(record.id.get()),
+                reason: "map owner does not name a canonical map set".into(),
+            });
+        }
+    }
     let gpl = matches!(
         record.license,
         "GPL"
@@ -134,6 +159,7 @@ fn insert(
         },
     )?;
 
+    queries::insert_shared_maps(tx, record.id, record.shared_maps)?;
     Ok(())
 }
 

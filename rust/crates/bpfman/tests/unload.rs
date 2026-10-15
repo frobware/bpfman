@@ -59,7 +59,7 @@ fn missing_program_is_an_error_and_leaves_the_initialized_store_empty()
 }
 
 #[test]
-fn unsupported_stored_state_is_unchanged() -> Result<(), Box<dyn std::error::Error>> {
+fn noncanonical_stored_state_is_unchanged() -> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     support::seed(&db)?;
     let before = std::fs::read(&db.path)?;
@@ -73,7 +73,10 @@ fn unsupported_stored_state_is_unchanged() -> Result<(), Box<dyn std::error::Err
 
         assert_eq!(result.status.code(), Some(1));
         assert!(result.stdout.is_empty());
-        assert!(String::from_utf8(result.stderr)?.contains("unsupported unload"));
+        assert!(
+            String::from_utf8(result.stderr)?
+                .contains("stored artifact path differs from canonical runtime layout")
+        );
         assert_eq!(std::fs::read(&db.path)?, before);
         assert!(!db.runtime.join("fs").exists());
     }

@@ -1,4 +1,4 @@
-//! Narrow Linux BPF and namespace boundary for XDP attachment and owned pinning.
+//! Narrow Linux BPF boundary for attachments, owned pinning and shared-map BTF.
 #![allow(unsafe_code)]
 
 use std::{
@@ -214,4 +214,54 @@ pub(super) fn tcx_order(
         aya::programs::LinkOrder::after_program_id(id)
     };
     Ok((order, Some(fd)))
+}
+
+// Aya exposes map creation with a BTF descriptor, but keeps BTF loading private.
+#[repr(C)]
+struct BtfAttr {
+    btf: u64,
+    log: u64,
+    size: u32,
+    log_size: u32,
+    log_level: u32,
+    log_true_size: u32,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("BTF verifier rejection: {log}")]
+struct BtfLoadError {
+    #[source]
+    error: io::Error,
+    log: String,
+}
+
+pub(super) fn load_btf(bytes: &[u8]) -> io::Result<OwnedFd> {
+    let size = u32::try_from(bytes.len()).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "BTF exceeds kernel size range")
+    })?;
+    let mut log = vec![0u8; 1024 * 1024];
+    let attr = BtfAttr {
+        btf: bytes.as_ptr() as u64,
+        log: log.as_mut_ptr() as u64,
+        size,
+        log_size: log.len() as u32,
+        log_level: 1,
+        log_true_size: 0,
+    };
+    // SAFETY: initialized BPF_BTF_LOAD ABI; bytes and the exclusive writable log
+    // buffer stay live for this synchronous call. No pointer escapes or persists.
+    let fd = unsafe { libc::syscall(libc::SYS_bpf, 18u32, &attr, size_of::<BtfAttr>()) };
+    if fd < 0 {
+        let error = io::Error::last_os_error();
+        let end = log.iter().position(|b| *b == 0).unwrap_or(log.len());
+        return Err(io::Error::new(
+            error.kind(),
+            BtfLoadError {
+                error,
+                log: String::from_utf8_lossy(&log[..end]).into_owned(),
+            },
+        ));
+    }
+    // SAFETY: a successful BPF_BTF_LOAD returns one new, uniquely owned fd.
+    fd_result(fd)
 }

@@ -45,6 +45,15 @@ pub trait OpenStore {
 /// Clone the opened handle for independent callers. Backends own connection
 /// reuse and snapshot acquisition; cloning must not perform I/O.
 pub trait ProgramReader {
+    /// Validate support for shared-map operations, without upgrading state.
+    fn validate_map_sharing(&mut self) -> Result<(), Error>;
+
+    /// Existing first-class map sets, including sets whose original program is gone.
+    fn read_map_sets(&mut self) -> Result<Vec<NonZeroU32>, Error>;
+
+    /// Durable PinByName users, observed in one snapshot.
+    fn read_shared_maps(&mut self) -> Result<BTreeMap<String, Vec<NonZeroU32>>, Error>;
+
     /// Validate current store compatibility without retaining a snapshot.
     /// Mutation preflight uses this when reusing an already-opened handle.
     fn validate(&mut self) -> Result<(), Error>;
@@ -57,9 +66,13 @@ pub trait ProgramReader {
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error>;
 }
 
-/// Inputs for committing one private, local program.
+/// Inputs for committing one local program and its map relationships.
 /// Managed paths are derived from writer authority, never supplied as targets.
 pub struct LoadRecord<'a> {
+    /// Existing map set to join; absence creates a private map set.
+    pub map_owner: Option<NonZeroU32>,
+    /// PinByName maps referenced by this load, for durable lifetime coordination.
+    pub shared_maps: &'a [String],
     /// Kernel-assigned identity.
     pub id: NonZeroU32,
     /// Validated ELF selection.
@@ -76,7 +89,7 @@ pub struct LoadRecord<'a> {
     pub globals: &'a BTreeMap<String, Vec<u8>>,
 }
 
-/// Atomic publication of loaded programs and their private map-set memberships.
+/// Atomic publication of loaded programs and their map-set/name-pin memberships.
 ///
 /// An unlocked runtime cannot authorize a commit, regardless of backend:
 /// ```compile_fail
@@ -116,7 +129,7 @@ pub trait CommitLoad {
     ) -> Result<(), Error>;
 }
 
-/// Conditional teardown of a program with exclusively owned maps.
+/// Conditional teardown of a program and its map-set ownership evidence.
 /// Observation may precede link teardown; deletion must refuse remaining links.
 /// Receipts must retain backend and runtime identity, remain non-cloneable, and
 /// be revalidated atomically on deletion. They are evidence, not bare IDs.
@@ -156,6 +169,16 @@ pub trait UnloadStore {
         writer: &RuntimeWriter<'_>,
         receipt: Self::ProgramReceipt,
     ) -> Result<(), EffectFailure<Self::ProgramReceipt, Error>>;
+    /// Finish map-set ownership after cleanup. If a new user joined during an
+    /// explicit retry, validate the original evidence and relinquish cleanup
+    /// authority while preserving the now-used set. Otherwise delete it.
+    fn retire_map_set(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::MapSetReceipt,
+    ) -> Result<(), EffectFailure<Self::MapSetReceipt, Error>> {
+        self.delete_map_set(writer, receipt)
+    }
     /// Delete only after program deletion and map-pin cleanup, and only if still
     /// unused. Err retains ownership; never swallow errors or retry automatically.
     fn delete_map_set(

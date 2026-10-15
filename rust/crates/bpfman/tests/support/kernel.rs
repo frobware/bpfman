@@ -12,6 +12,8 @@ use std::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum Point {
     Prepare,
+    PrepareMaps,
+    PinSharedMap,
     Load,
     PinProgram,
     Directory,
@@ -58,7 +60,8 @@ pub(super) enum Phase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 enum Resource {
     Program(NonZeroU32),
-    Map(u32),
+    Map(NonZeroU32, u32),
+    SharedMap(u32),
     Directory(NonZeroU32),
     Link(NonZeroU32),
     Revision(XdpKey, NonZeroU32),
@@ -89,6 +92,7 @@ struct State {
     links: BTreeMap<NonZeroU32, Link>,
     resources: BTreeMap<Resource, u64>,
     map_names: BTreeMap<(NonZeroU32, String), u32>,
+    shared_names: BTreeMap<String, u32>,
     tracepoint_pins: BTreeMap<NonZeroU64, NonZeroU32>,
     tcx_pins: BTreeMap<(TcKey, NonZeroU32), NonZeroU32>,
     tcx_chains: BTreeMap<TcKey, Vec<NonZeroU32>>,
@@ -113,6 +117,7 @@ pub(super) struct Receipt {
     state: Arc<Mutex<State>>,
     resource: Resource,
     generation: u64,
+    shared_name: Option<String>,
 }
 
 pub(super) struct Loaded {
@@ -153,7 +158,9 @@ impl State {
             || self.resources.keys().any(|r| matches!(r, Resource::TcStage(_, n, _) | Resource::TcFilter(_, n, _) if n == id))
             || self.links.values().any(|l| l.observation.program_id == *id || matches!(l.observation.details, KernelLinkDetails::Tracing { target_obj_id, .. } if target_obj_id == id.get())));
         self.maps.retain(|id, _| {
-            self.resources.contains_key(&Resource::Map(*id))
+            self.resources
+                .keys()
+                .any(|r| matches!(r, Resource::Map(_, n) | Resource::SharedMap(n) if n == id))
                 || self.programs.values().any(|p| {
                     p.observation
                         .map_ids
@@ -161,6 +168,8 @@ impl State {
                         .is_some_and(|ids| ids.contains(id))
                 })
         });
+        self.shared_names
+            .retain(|_, map| self.resources.contains_key(&Resource::SharedMap(*map)));
         self.map_names.retain(|(program, _), map| {
             self.programs.contains_key(program) || self.maps.contains_key(map)
         });
@@ -249,6 +258,7 @@ impl FakeKernel {
                 links: BTreeMap::new(),
                 resources: BTreeMap::new(),
                 map_names: BTreeMap::new(),
+                shared_names: BTreeMap::new(),
                 tracepoint_pins: BTreeMap::new(),
                 tcx_pins: BTreeMap::new(),
                 tcx_chains: BTreeMap::new(),
@@ -391,21 +401,33 @@ impl FakeKernel {
             state: self.state.clone(),
             resource,
             generation,
+            shared_name: if let Resource::SharedMap(id) = resource {
+                s.shared_names
+                    .iter()
+                    .find(|(_, n)| **n == id)
+                    .map(|(name, _)| name.clone())
+            } else {
+                None
+            },
         })
     }
 
     fn observed(&self, resource: Resource) -> Option<Receipt> {
-        self.state
-            .lock()
-            .expect("state")
-            .resources
-            .get(&resource)
-            .map(|generation| Receipt {
-                root: self.root,
-                state: self.state.clone(),
-                resource,
-                generation: *generation,
-            })
+        let s = self.state.lock().expect("state");
+        s.resources.get(&resource).map(|generation| Receipt {
+            root: self.root,
+            state: self.state.clone(),
+            resource,
+            generation: *generation,
+            shared_name: if let Resource::SharedMap(id) = resource {
+                s.shared_names
+                    .iter()
+                    .find(|(_, n)| **n == id)
+                    .map(|(name, _)| name.clone())
+            } else {
+                None
+            },
+        })
     }
 
     fn validate(&self, w: &RuntimeWriter<'_>, r: &Receipt) -> Result<(), Error> {
@@ -438,7 +460,7 @@ impl FakeKernel {
             match r.resource {
                 Resource::Directory(id)
                     if s.map_names.iter().any(|((owner, _), map)| {
-                        *owner == id && s.resources.contains_key(&Resource::Map(*map))
+                        *owner == id && s.resources.contains_key(&Resource::Map(id, *map))
                     }) =>
                 {
                     return Err(error(ErrorKind::InvalidData, "map directory is not empty"));
@@ -469,27 +491,34 @@ impl FakeKernel {
     }
 
     fn new_program(&self, name: &str, kind: &str, maps: &[String]) -> Loaded {
+        self.new_program_with_maps(name, kind, maps, &BTreeMap::new())
+    }
+
+    fn new_program_with_maps(
+        &self,
+        name: &str,
+        kind: &str,
+        maps: &[String],
+        reused: &BTreeMap<String, u32>,
+    ) -> Loaded {
         let mut s = self.state.lock().expect("state");
         let id = s.id();
         let mut ids = Vec::new();
         for name in maps {
-            let map = s.id().get();
-            s.maps.insert(
-                map,
-                KernelMap {
-                    id: map,
-                    name: name.clone(),
-                    kind: "array".into(),
-                    key_size: 4,
-                    value_size: 8,
-                    max_entries: 1,
-                    flags: 0,
-                    btf_id: None,
-                    map_extra: None,
-                    memlock: None,
-                    frozen: false,
-                },
-            );
+            let map = reused.get(name).copied().unwrap_or_else(|| s.id().get());
+            s.maps.entry(map).or_insert(KernelMap {
+                id: map,
+                name: name.clone(),
+                kind: "array".into(),
+                key_size: 4,
+                value_size: 8,
+                max_entries: 1,
+                flags: 0,
+                btf_id: None,
+                map_extra: None,
+                memlock: None,
+                frozen: false,
+            });
             s.map_names.insert((id, name.clone()), map);
             ids.push(map);
         }
@@ -547,12 +576,24 @@ impl FakeKernel {
 
 impl ObjectLoader for FakeKernel {
     fn validate_object(&self, bytes: &[u8], _spec: &ProgramSpec) -> Result<ObjectInfo, Error> {
-        if bytes != b"fake object" {
+        if bytes != b"fake object" && bytes != b"fake shared object" && bytes != b"fake shared pair"
+        {
             return Err(error(ErrorKind::InvalidInput, "invalid fake object"));
         }
         Ok(ObjectInfo {
             license: "GPL".into(),
-            maps: vec!["counter".into()],
+            maps: if bytes == b"fake shared pair" {
+                vec!["counter".into(), "second".into()]
+            } else {
+                vec!["counter".into()]
+            },
+            shared_maps: if bytes == b"fake shared pair" {
+                vec!["counter".into(), "second".into()]
+            } else if bytes == b"fake shared object" {
+                vec!["counter".into()]
+            } else {
+                Vec::new()
+            },
         })
     }
 
@@ -593,6 +634,125 @@ impl ProgramLoad for FakeKernel {
             _ => return Err(error(ErrorKind::Unsupported, "program type")),
         };
         Ok(self.new_program(spec.name().as_str(), kind, maps))
+    }
+
+    fn prepare_maps(
+        &self,
+        w: &RuntimeWriter<'_>,
+        _prepared: &RuntimeIdentity,
+        _bytes: &[u8],
+        shared: &[String],
+        owner: Option<NonZeroU32>,
+    ) -> Result<Vec<Receipt>, EffectFailure<Vec<Receipt>, Error>> {
+        if shared.is_empty() || owner.is_some() {
+            return Ok(Vec::new());
+        }
+        self.writer(w)
+            .and_then(|()| self.enter(Point::PrepareMaps))
+            .map_err(|cause| EffectFailure {
+                cause,
+                remaining: Vec::new(),
+            })?;
+        let mut acquired = Vec::new();
+        for name in shared {
+            if self
+                .state
+                .lock()
+                .expect("state")
+                .shared_names
+                .contains_key(name)
+            {
+                continue;
+            }
+            let map = {
+                let mut s = self.state.lock().expect("state");
+                let id = s.id().get();
+                s.maps.insert(
+                    id,
+                    KernelMap {
+                        id,
+                        name: name.clone(),
+                        kind: "array".into(),
+                        key_size: 4,
+                        value_size: 8,
+                        max_entries: 1,
+                        flags: 0,
+                        btf_id: None,
+                        map_extra: None,
+                        memlock: None,
+                        frozen: false,
+                    },
+                );
+                s.shared_names.insert(name.clone(), id);
+                id
+            };
+            match self.acquire(w, Point::PinSharedMap, Resource::SharedMap(map)) {
+                Ok(receipt) => acquired.push(receipt),
+                Err(failure) => {
+                    acquired.extend(failure.remaining);
+                    self.state.lock().expect("state").collect();
+                    return Err(EffectFailure {
+                        cause: failure.cause,
+                        remaining: acquired,
+                    });
+                }
+            }
+        }
+        Ok(acquired)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn load_program_with_maps(
+        &self,
+        w: &RuntimeWriter<'_>,
+        bytes: &[u8],
+        maps: &[String],
+        globals: &BTreeMap<String, Vec<u8>>,
+        spec: &ProgramSpec,
+        owner: Option<NonZeroU32>,
+        shared: &[String],
+    ) -> Result<Loaded, Error> {
+        if owner.is_none() && shared.is_empty() {
+            return self.load_program(w, bytes, maps, globals, spec);
+        }
+        self.writer(w)?;
+        self.enter(Point::Load)?;
+        let reused = {
+            let s = self.state.lock().expect("state");
+            maps.iter()
+                .filter(|name| owner.is_some() || shared.contains(name))
+                .map(|name| {
+                    let id = match owner {
+                        Some(owner) => s.map_names.get(&(owner, name.clone())),
+                        None => s.shared_names.get(name),
+                    }
+                    .copied()
+                    .ok_or_else(|| error(ErrorKind::Missing, "missing reused map"))?;
+                    Ok((name.clone(), id))
+                })
+                .collect::<Result<BTreeMap<_, _>, Error>>()?
+        };
+        let kind = match spec {
+            ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => "kprobe",
+            ProgramSpec::Tracepoint(_) => "tracepoint",
+            ProgramSpec::Tcx(_) => "schedcls",
+            _ => "extension",
+        };
+        Ok(self.new_program_with_maps(spec.name().as_str(), kind, maps, &reused))
+    }
+
+    fn shared_map_names(
+        &self,
+        w: &RuntimeWriter<'_>,
+        set: NonZeroU32,
+    ) -> Result<Vec<String>, Error> {
+        self.writer(w)?;
+        let s = self.state.lock().expect("state");
+        Ok(s.shared_names
+            .iter()
+            .filter(|(name, id)| s.map_names.get(&(set, (*name).clone())) == Some(*id))
+            .map(|(name, _)| name.clone())
+            .collect())
     }
 
     fn map_names(l: &Loaded) -> &[String] {
@@ -643,11 +803,89 @@ impl ProgramLoad for FakeKernel {
             })?;
         assert_eq!(d.resource, Resource::Directory(l.id));
         let id = self.state.lock().expect("state").map_names[&(l.id, name.into())];
-        self.acquire(w, Point::PinMap, Resource::Map(id))
+        self.acquire(w, Point::PinMap, Resource::Map(l.id, id))
     }
 }
 
 impl ProgramResources for FakeKernel {
+    fn map_set(pin: &Receipt) -> Option<NonZeroU32> {
+        if let Resource::Map(set, _) = pin.resource {
+            Some(set)
+        } else {
+            None
+        }
+    }
+    fn shared_map(pin: &Receipt) -> Option<&str> {
+        pin.shared_name.as_deref()
+    }
+    fn directory_map_set(pin: &Receipt) -> Option<NonZeroU32> {
+        if let Resource::Directory(set) = pin.resource {
+            Some(set)
+        } else {
+            None
+        }
+    }
+    fn observe_map_unload(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+        set: NonZeroU32,
+        remove_maps: bool,
+        shared: &[String],
+    ) -> Result<UnloadArtifacts<Self>, Error> {
+        self.writer(w)?;
+        self.enter(Point::ObserveUnload)?;
+        let (maps, shared_ids) = {
+            let s = self.state.lock().expect("state");
+            (
+                s.map_names
+                    .iter()
+                    .filter(|((p, _), _)| *p == set)
+                    .map(|(_, m)| *m)
+                    .collect::<Vec<_>>(),
+                shared
+                    .iter()
+                    .filter_map(|name| s.shared_names.get(name).copied())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let mut pins: Vec<_> = if remove_maps {
+            maps.into_iter()
+                .filter_map(|map| self.observed(Resource::Map(set, map)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        pins.extend(
+            shared_ids
+                .into_iter()
+                .filter_map(|map| self.observed(Resource::SharedMap(map))),
+        );
+        Ok(UnloadArtifacts {
+            program: self.observed(Resource::Program(id)),
+            maps: pins,
+            directory: if remove_maps {
+                self.observed(Resource::Directory(set))
+            } else {
+                None
+            },
+            bytecode: w
+                .observe_bytecode(id)
+                .map_err(|e| Error::new(ErrorKind::Unavailable, "observe bytecode", e))?,
+        })
+    }
+
+    fn validate_map(&self, w: &RuntimeWriter<'_>, pin: &Receipt) -> Result<(), Error> {
+        self.validate(w, pin)
+    }
+    fn validate_map_directory(
+        &self,
+        w: &RuntimeWriter<'_>,
+        directory: &Receipt,
+    ) -> Result<(), Error> {
+        self.validate(w, directory)
+    }
+
     type ProgramPin = Receipt;
     type MapPin = Receipt;
     type MapDirectory = Receipt;
@@ -690,7 +928,7 @@ impl ProgramResources for FakeKernel {
             program: self.observed(Resource::Program(id)),
             maps: maps
                 .into_iter()
-                .filter_map(|id| self.observed(Resource::Map(id)))
+                .filter_map(|map| self.observed(Resource::Map(id, map)))
                 .collect(),
             directory: self.observed(Resource::Directory(id)),
             bytecode: w
@@ -739,6 +977,7 @@ impl TracepointLinks for FakeKernel {
                 state: self.state.clone(),
                 resource: Resource::Link(id),
                 generation: 0,
+                shared_name: None,
             },
         })
     }
@@ -874,7 +1113,7 @@ impl ProgramObservations for FakeKernel {
         let s = self.state.lock().expect("state");
         Ok(s.map_names
             .iter()
-            .filter(|((p, _), m)| *p == id && s.resources.contains_key(&Resource::Map(**m)))
+            .filter(|((p, _), m)| *p == id && s.resources.contains_key(&Resource::Map(id, **m)))
             .map(|((_, name), id)| bpfman_fs::ObservedMapPin {
                 name: name.clone(),
                 id: *id,
@@ -1811,6 +2050,7 @@ impl TcxLinks for FakeKernel {
                 state: self.state.clone(),
                 resource: Resource::Link(id),
                 generation: 0,
+                shared_name: None,
             },
         })
     }

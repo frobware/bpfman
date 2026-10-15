@@ -44,8 +44,8 @@ for stage in corpus json-global json sqlite-global sqlite go; do
         case "$stage:$name" in
             corpus:*_script_corpus) set -- "$@" "$name" ;;
             *:*_script_corpus) ;;
-            json-global:json_kprobe_native_link_recovery|json-global:json_xdp_load_lifecycle|json-global:json_tcx_native_link_recovery|sqlite-global:sqlite_kprobe_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
-            *:json_kprobe_native_link_recovery|*:json_xdp_load_lifecycle|*:json_tcx_native_link_recovery|*:sqlite_kprobe_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
+            json-global:json_map_sharing_native_recovery|sqlite-global:sqlite_map_sharing_native_recovery|json-global:json_kprobe_native_link_recovery|json-global:json_xdp_load_lifecycle|json-global:json_tcx_native_link_recovery|sqlite-global:sqlite_kprobe_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
+            *:json_map_sharing_native_recovery|*:sqlite_map_sharing_native_recovery|*:json_kprobe_native_link_recovery|*:json_xdp_load_lifecycle|*:json_tcx_native_link_recovery|*:sqlite_kprobe_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
             json:json_*|sqlite:sqlite_*|go:go_*) set -- "$@" "$name" ;;
         esac
     done < "$listing"

@@ -27,6 +27,8 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
         let metadata = BTreeMap::from([("label".into(), format!("quoted '{id}' ☃"))]);
         let metadata_json = serde_json::to_string(&metadata)?;
         let record = LoadRecord {
+            map_owner: None,
+            shared_maps: &[],
             globals: &Default::default(),
             id,
             spec: &bpfman_model::ProgramSpec::Tracepoint(name.clone()),
@@ -64,7 +66,8 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
         assert_eq!(row.map_set, i64::from(id.get()));
         assert_eq!(row.created, created_at);
         assert_eq!(row.map_created, created_at);
-        assert_eq!((row.links, row.users, row.shared), (0, 1, 0));
+        assert_eq!((row.links, row.users), (0, 1));
+        assert_eq!(row.shared, "[]");
         assert_eq!(
             delete_map_set(&tx, map())?,
             0,

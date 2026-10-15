@@ -137,8 +137,6 @@ impl LoadRequest {
             )
         }) {
             Some("program types other than tracepoint, xdp, tc, tcx, kprobe, and kretprobe")
-        } else if map_owner_id.is_some() {
-            Some("map-owner sharing")
         } else {
             None
         };
@@ -153,16 +151,20 @@ impl LoadRequest {
             return Err(anyhow::anyhow!("load persistence requires a UTF-8 runtime path").into());
         }
 
+        let request = bpfman_runtime::PreparedProgram::new_with_cancellation(
+            &bpfman_kernel_aya::Kernel,
+            &path,
+            first,
+            metadata,
+            cancellation,
+        )?
+        .with_globals(&bpfman_kernel_aya::Kernel, globals)?;
+        let request = match map_owner_id {
+            Some(owner) => request.with_map_owner(owner),
+            None => request,
+        };
         Ok(PreparedLoad {
-            request: bpfman_runtime::PreparedProgram::new_with_cancellation(
-                &bpfman_kernel_aya::Kernel,
-                &path,
-                first,
-                metadata,
-                cancellation,
-            )?
-            .with_globals(&bpfman_kernel_aya::Kernel, globals)?
-            .with_additional_programs(&bpfman_kernel_aya::Kernel, remaining)?,
+            request: request.with_additional_programs(&bpfman_kernel_aya::Kernel, remaining)?,
             output,
         })
     }

@@ -70,6 +70,8 @@ where
             .commit_program(
                 w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     id: n(42),
                     spec: &ProgramSpec::Xdp("pass".try_into().expect("symbol")),
                     source: "source.o",
@@ -232,6 +234,8 @@ where
                     .commit_program(
                         w,
                         LoadRecord {
+                            map_owner: None,
+                            shared_maps: &[],
                             id: n(id),
                             spec: &ProgramSpec::Xdp(name.try_into().expect("symbol")),
                             source: "source.o",
@@ -559,6 +563,8 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        map_owner: None,
+                        shared_maps: &[],
                         id: n(program),
                         spec: &ProgramSpec::Xdp("pass".try_into().expect("symbol")),
                         source: "source.o",

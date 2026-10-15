@@ -222,10 +222,8 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
 
-    for options in [
-        vec!["--programs", "tracepoint:a,fentry:b:do_open"],
-        vec!["--programs", "tracepoint:a", "--map-owner-id", "1"],
-    ] {
+    {
+        let options = ["--programs", "tracepoint:a,fentry:b:do_open"];
         assert_failure(
             command(&runtime)
                 .args(["file", "not-opened.o"])
@@ -347,5 +345,42 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
             "tp_b".try_into().expect("symbol"),
         )],
     )?;
+    Ok(())
+}
+
+#[test]
+fn internal_map_names_cannot_request_implicit_pinning() -> Result {
+    let temp = tempfile::tempdir()?;
+    let runtime = temp.path().join("runtime");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../e2e/testdata/bpf/tc_counter_pinned.bpf.o");
+    let mut bytes = std::fs::read(fixture)?;
+    let name = b"tc_stats_map";
+    let positions: Vec<_> = bytes
+        .windows(name.len())
+        .enumerate()
+        .filter_map(|(offset, value)| (value == name).then_some(offset))
+        .collect();
+    assert!(!positions.is_empty());
+    // Keep every ELF/BTF string offset and relocation unchanged while giving
+    // the public PinByName map an internal-looking name.
+    for offset in positions {
+        bytes[offset] = b'.';
+    }
+    let source = temp.path().join("internal-map.o");
+    std::fs::write(&source, bytes)?;
+    assert_failure(
+        command(&runtime)
+            .arg("file")
+            .arg(source)
+            .args(["--programs", "tc:stats"])
+            .output()?,
+        1,
+        "internal maps cannot declare PinByName",
+    )?;
+    assert!(
+        !runtime.exists(),
+        "refuse before filesystem or kernel effects"
+    );
     Ok(())
 }

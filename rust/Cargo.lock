@@ -216,6 +216,7 @@ dependencies = [
  "chrono",
  "libc",
  "rustix",
+ "serde_json",
  "thiserror",
 ]
 

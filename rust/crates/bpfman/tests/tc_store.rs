@@ -102,6 +102,8 @@ fn contract<S: OpenStore + CommitLoad + TcStore + Clone>(
             .commit_program(
                 w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     id: n(42),
                     spec: &ProgramSpec::Tc("pass".try_into().expect("symbol")),
                     source: "source.o",

@@ -12,6 +12,7 @@ pub(super) struct LocalObject {
     pub(super) bytes: Vec<u8>,
     pub(super) license: String,
     pub(super) maps: Vec<String>,
+    pub(super) shared_maps: Vec<String>,
     pub(super) globals: BTreeMap<String, Vec<u8>>,
 }
 
@@ -21,13 +22,15 @@ impl LocalObject {
         validate_selection(&object, spec)?;
 
         let mut maps = Vec::new();
+        let mut shared_maps = Vec::new();
 
         for (name, map) in &object.maps {
-            if !matches!(map.pinning(), PinningType::None) {
-                return Err(LoadCause::Unsupported("PinByName maps"));
-            }
-
             if name.starts_with('.') {
+                if !matches!(map.pinning(), PinningType::None) {
+                    return Err(LoadCause::Invalid(
+                        "internal maps cannot declare PinByName".into(),
+                    ));
+                }
                 continue;
             }
 
@@ -35,10 +38,17 @@ impl LocalObject {
                 return Err(LoadCause::Invalid(format!("invalid map pin name {name:?}")));
             }
 
+            if matches!(map.pinning(), PinningType::ByName) {
+                if map.inner().is_some() {
+                    return Err(LoadCause::Unsupported("shared map-of-maps creation"));
+                }
+                shared_maps.push(name.clone());
+            }
             maps.push(name.clone());
         }
 
         maps.sort();
+        shared_maps.sort();
         let license = object
             .license
             .to_str()
@@ -49,12 +59,43 @@ impl LocalObject {
             bytes,
             license,
             maps,
+            shared_maps,
             globals: BTreeMap::new(),
         })
     }
 
-    fn load(&self, spec: &ProgramSpec) -> Result<LoadedObject, LoadCause> {
+    fn load(
+        &self,
+        spec: &ProgramSpec,
+        sources: &[(String, bpfman_fs::PinSource<'_>)],
+    ) -> Result<LoadedObject, LoadCause> {
+        let object = Object::parse(&self.bytes).map_err(|e| LoadCause::Parse(Box::new(e)))?;
+        for name in &self.shared_maps {
+            if !sources.iter().any(|(n, _)| n == name) {
+                return Err(LoadCause::Invalid(
+                    "PinByName load requires prepared shared pins".into(),
+                ));
+            }
+        }
         let mut loader = aya::EbpfLoader::new();
+        for (name, source) in sources {
+            use bpfman_fs::MapDefinition;
+            let map = object
+                .maps
+                .get(name)
+                .ok_or_else(|| LoadCause::Invalid("reused map is absent from ELF".into()))?;
+            crate::maps::Definition {
+                name,
+                map,
+                btf: None,
+            }
+            .validate(*source)
+            .map_err(|e| LoadCause::MapReuse {
+                name: name.clone(),
+                source: e,
+            })?;
+            loader.map_pin_path(name.as_str(), source.path());
+        }
         let selection = match spec {
             ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
             ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => Selection::Kprobe,
@@ -128,21 +169,9 @@ impl LocalObject {
             },
         }
 
-        let ids = program
-            .info()
-            .and_then(|info| info.map_ids())
-            .map_err(|e| LoadCause::Program(Box::new(e)))?
-            .ok_or_else(|| LoadCause::Invalid("kernel did not report program map IDs".into()))?;
-        let mut maps = Vec::new();
-
-        for name in &self.maps {
-            let map = bpf
-                .map(name)
-                .ok_or_else(|| LoadCause::Invalid(format!("missing loaded map {name}")))?;
-            if ids.contains(&map_id(map)?) {
-                maps.push(name.clone());
-            }
-        }
+        // Retain every public ELF map, including maps used by other selections.
+        // Explicit map-set joins must be able to reuse these by their ELF names.
+        let maps = self.maps.clone();
 
         Ok(LoadedObject {
             bpf,
@@ -154,7 +183,7 @@ impl LocalObject {
 
 // Aya exposes MapData::info but has no corresponding method on its Map enum.
 // Match exhaustively so newly supported map variants require an explicit review.
-fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
+pub(super) fn map_id(map: &aya::maps::Map) -> Result<u32, LoadCause> {
     use aya::maps::Map;
     let data = match map {
         Map::Array(data)
@@ -235,6 +264,7 @@ impl ObjectLoader for Kernel {
         Ok(ObjectInfo {
             license: object.license,
             maps: object.maps,
+            shared_maps: object.shared_maps,
         })
     }
 
@@ -261,14 +291,20 @@ pub(super) fn load(
     globals: &BTreeMap<String, Vec<u8>>,
     spec: &ProgramSpec,
 ) -> Result<LoadedObject, Error> {
-    LocalObject {
-        bytes: bytes.to_vec(),
-        maps: maps.to_vec(),
-        license: String::new(),
-        globals: globals.clone(),
-    }
-    .load(spec)
-    .map_err(Into::into)
+    load_with_maps(bytes, maps, globals, spec, &[])
+}
+
+pub(super) fn load_with_maps(
+    bytes: &[u8],
+    maps: &[String],
+    globals: &BTreeMap<String, Vec<u8>>,
+    spec: &ProgramSpec,
+    sources: &[(String, bpfman_fs::PinSource<'_>)],
+) -> Result<LoadedObject, Error> {
+    let mut object = LocalObject::parse(bytes.to_vec(), spec)?;
+    object.maps = maps.to_vec();
+    object.globals = globals.clone();
+    object.load(spec, sources).map_err(Into::into)
 }
 
 pub(super) fn xdp_frags(bytes: &[u8], name: &str) -> Result<bool, LoadCause> {

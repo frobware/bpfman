@@ -72,6 +72,35 @@ impl OpenStore for Backend {
 }
 
 impl ProgramReader for Reader {
+    fn validate_map_sharing(&mut self) -> Result<(), Error> {
+        let (_, state) = read(&self.file)?;
+        if state.version < 12 {
+            return Err(Failure::Unsupported(
+                "map sharing requires JSON format 12; no implicit upgrade",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn read_map_sets(&mut self) -> Result<Vec<NonZeroU32>, Error> {
+        let (_, state) = read(&self.file)?;
+        Ok(state.map_sets.iter().map(|m| m.id).collect())
+    }
+
+    fn read_shared_maps(
+        &mut self,
+    ) -> Result<std::collections::BTreeMap<String, Vec<NonZeroU32>>, Error> {
+        let (_, state) = read(&self.file)?;
+        let mut maps = std::collections::BTreeMap::<String, Vec<NonZeroU32>>::new();
+        for program in state.programs {
+            for name in program.shared_maps {
+                maps.entry(name).or_default().push(program.id);
+            }
+        }
+        Ok(maps)
+    }
+
     #[tracing::instrument(name = "store.validate", level = "debug", skip_all, err)]
     fn validate(&mut self) -> Result<(), Error> {
         read(&self.file).map(|_| ()).map_err(Into::into)
@@ -129,6 +158,7 @@ impl CommitLoad for Backend {
             state.insert(record)?;
         }
 
+        state.validate()?;
         // Ensure every record can be observed before transferring ownership.
         for row in &state.programs {
             row.record(writer.layout())?;
@@ -163,7 +193,7 @@ impl UnloadStore for Backend {
         let map = state
             .map_sets
             .iter()
-            .find(|map| map.id == id)
+            .find(|map| map.id == row.map_owner.unwrap_or(id))
             .ok_or(Failure::Invalid("missing private map set"))?;
         let root = writer.identity().map_err(Failure::from)?;
 
@@ -220,38 +250,63 @@ impl UnloadStore for Backend {
         })
     }
 
+    #[tracing::instrument(name = "store.retire_map_set", level = "debug", skip_all)]
+    fn retire_map_set(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: MapSetReceipt,
+    ) -> Result<(), EffectFailure<MapSetReceipt, Error>> {
+        remove_map_set(writer, receipt, true)
+    }
+
     #[tracing::instrument(name = "store.delete_map_set", level = "debug", skip_all)]
     fn delete_map_set(
         &self,
         writer: &RuntimeWriter<'_>,
         receipt: MapSetReceipt,
     ) -> Result<(), EffectFailure<MapSetReceipt, Error>> {
-        let result = (|| -> Result<(), Failure> {
-            if writer.identity()? != receipt.root {
-                return Err(Failure::Invalid("map set belongs to another runtime"));
-            }
-
-            let file = writer.open_store_snapshot()?;
-            let (previous, mut state) = read(&file)?;
-
-            if state.identity != receipt.store
-                || state.programs.iter().any(|row| row.id == receipt.row.id)
-            {
-                return Err(Failure::Invalid("map set changed or is still in use"));
-            }
-
-            let index = state
-                .map_sets
-                .iter()
-                .position(|row| row == &receipt.row)
-                .ok_or(Failure::Invalid("map set changed since observation"))?;
-            state.map_sets.remove(index);
-            publish(writer, &file, Some(&previous), &state)
-        })();
-
-        result.map_err(|cause| EffectFailure {
-            remaining: receipt,
-            cause: cause.into(),
-        })
+        remove_map_set(writer, receipt, false)
     }
+}
+
+fn remove_map_set(
+    writer: &RuntimeWriter<'_>,
+    receipt: MapSetReceipt,
+    allow_used: bool,
+) -> Result<(), EffectFailure<MapSetReceipt, Error>> {
+    let result = (|| -> Result<(), Failure> {
+        if writer.identity()? != receipt.root {
+            return Err(Failure::Invalid("map set belongs to another runtime"));
+        }
+
+        let file = writer.open_store_snapshot()?;
+        let (previous, mut state) = read(&file)?;
+
+        if state.identity != receipt.store {
+            return Err(Failure::Invalid("map set changed or is still in use"));
+        }
+
+        let index = state
+            .map_sets
+            .iter()
+            .position(|row| row == &receipt.row)
+            .ok_or(Failure::Invalid("map set changed since observation"))?;
+        if state
+            .programs
+            .iter()
+            .any(|row| row.map_owner.unwrap_or(row.id) == receipt.row.id)
+        {
+            if allow_used {
+                return Ok(());
+            }
+            return Err(Failure::Invalid("map set is still in use"));
+        }
+        state.map_sets.remove(index);
+        publish(writer, &file, Some(&previous), &state)
+    })();
+
+    result.map_err(|cause| EffectFailure {
+        remaining: receipt,
+        cause: cause.into(),
+    })
 }

@@ -10,6 +10,8 @@ use std::{
 
 /// A partial acquisition retains all ownership needed for explicit compensation.
 pub type Acquisition<T> = Result<T, EffectFailure<Option<T>, Error>>;
+/// Multiple acquisitions retain every new receipt after a partial failure.
+pub type Acquisitions<T> = Result<Vec<T>, EffectFailure<Vec<T>, Error>>;
 /// A failed cleanup returns its original, non-cloneable receipt.
 pub type Removal<T> = Result<(), EffectFailure<T, Error>>;
 
@@ -19,6 +21,8 @@ pub struct ObjectInfo {
     pub license: String,
     /// Candidate private map names.
     pub maps: Vec<String>,
+    /// Validated maps declaring PinByName, in lexical order.
+    pub shared_maps: Vec<String>,
 }
 
 /// Local ELF inspection without kernel mutation or runtime initialization.
@@ -59,6 +63,53 @@ pub trait ProgramResources {
         writer: &RuntimeWriter<'_>,
         directory: Self::MapDirectory,
     ) -> Removal<Self::MapDirectory>;
+    /// Revalidate a map receipt's backend, runtime and inode before lifetime checks.
+    fn validate_map(&self, writer: &RuntimeWriter<'_>, pin: &Self::MapPin) -> Result<(), Error>;
+    /// Revalidate a map-directory receipt before lifetime checks.
+    fn validate_map_directory(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        directory: &Self::MapDirectory,
+    ) -> Result<(), Error>;
+    /// Map-set identity of a map-pin receipt, when available for shared lifetime checks.
+    fn map_set(_pin: &Self::MapPin) -> Option<NonZeroU32> {
+        None
+    }
+
+    /// Name of a shared pin; it is coordinated independently of per-program aliases.
+    fn shared_map(_pin: &Self::MapPin) -> Option<&str> {
+        None
+    }
+
+    /// Map-set identity of a directory receipt.
+    fn directory_map_set(_directory: &Self::MapDirectory) -> Option<NonZeroU32> {
+        None
+    }
+
+    /// Adopt a program and its selected map set, omitting pins still used by others.
+    fn observe_map_unload(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+        map_set: NonZeroU32,
+        remove_maps: bool,
+        shared: &[String],
+    ) -> Result<UnloadArtifacts<Self>, Error> {
+        if map_set != id || !shared.is_empty() {
+            return Err(Error::new(
+                crate::ErrorKind::Unsupported,
+                "shared map teardown",
+                std::io::Error::other("shared maps unsupported"),
+            ));
+        }
+        let mut artifacts = self.observe_unload(writer, id)?;
+        if !remove_maps {
+            artifacts.maps.clear();
+            artifacts.directory = None;
+        }
+        Ok(artifacts)
+    }
+
     /// Adopt canonical artifacts after stored ownership has been validated.
     fn observe_unload(
         &self,
@@ -97,7 +148,71 @@ pub trait ProgramLoad: ObjectLoader + ProgramResources {
         globals: &BTreeMap<String, Vec<u8>>,
         spec: &ProgramSpec,
     ) -> Result<Self::Loaded, Error>;
-    /// Maps actually referenced by this loaded program.
+    /// Prepare shared pins before loading. Failed acquisition retains every newly created pin.
+    fn prepare_maps(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        _prepared: &Self::Prepared,
+        _bytes: &[u8],
+        shared: &[String],
+        owner: Option<NonZeroU32>,
+    ) -> Acquisitions<Self::MapPin> {
+        if shared.is_empty() || owner.is_some() {
+            return Ok(Vec::new());
+        }
+        Err(EffectFailure {
+            remaining: Vec::new(),
+            cause: Error::new(
+                crate::ErrorKind::Unsupported,
+                "shared map preparation",
+                std::io::Error::other("shared maps unsupported"),
+            ),
+        })
+    }
+
+    /// Load using validated existing map pins under the runtime writer scope.
+    #[allow(clippy::too_many_arguments)]
+    fn load_program_with_maps(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        bytes: &[u8],
+        maps: &[String],
+        globals: &BTreeMap<String, Vec<u8>>,
+        spec: &ProgramSpec,
+        owner: Option<NonZeroU32>,
+        shared: &[String],
+    ) -> Result<Self::Loaded, Error> {
+        if owner.is_some() || !shared.is_empty() {
+            return Err(Error::new(
+                crate::ErrorKind::Unsupported,
+                "shared map load",
+                std::io::Error::other("shared maps unsupported"),
+            ));
+        }
+        self.load_program(writer, bytes, maps, globals, spec)
+    }
+
+    /// Shared-name pins whose exact identities occur in this map set. Includes
+    /// inherited references when joining after the original program was removed.
+    fn shared_map_names(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        _map_set: NonZeroU32,
+    ) -> Result<Vec<String>, Error> {
+        Ok(Vec::new())
+    }
+
+    /// Exact public map inventory retained in provenance for later teardown.
+    fn map_inventory(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        _loaded: &Self::Loaded,
+        _owner: Option<NonZeroU32>,
+    ) -> Result<BTreeMap<String, u32>, Error> {
+        Ok(BTreeMap::new())
+    }
+
+    /// Public ELF maps retained for pinning, including other selections' maps.
     fn map_names(loaded: &Self::Loaded) -> &[String];
     /// Pin one owned program, retaining partial ownership on failure.
     fn pin_program(
@@ -169,6 +284,7 @@ pub trait TracepointLinks {
             std::io::Error::other("TCX unsupported"),
         ))
     }
+
     /// Adopt a canonical existing pin only after identity validation.
     fn observe_link_pin(
         &self,

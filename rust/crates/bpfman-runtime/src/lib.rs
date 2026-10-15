@@ -99,6 +99,7 @@ pub struct Cancellation {
 /// }
 /// ```
 pub struct PreparedProgram {
+    map_owner: Option<std::num::NonZeroU32>,
     object: kernel::LocalObject,
     source: String,
     spec: bpfman_model::ProgramSpec,
@@ -106,7 +107,7 @@ pub struct PreparedProgram {
 }
 
 /// Validated, nonempty local program batch sharing one captured ELF snapshot.
-/// Each member owns private maps; persistence publishes the entire batch atomically.
+/// Each member creates or joins a map set; persistence publishes the entire batch atomically.
 pub struct PreparedPrograms {
     first: PreparedProgram,
     remaining: Vec<bpfman_model::ProgramSpec>,

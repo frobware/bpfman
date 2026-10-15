@@ -64,7 +64,7 @@ struct LoadOptions {
     /// Set bpfman.io/application, overriding that metadata key.
     #[arg(short = 'a', long)]
     application: Option<String>,
-    /// Nonzero kernel program ID whose maps should be shared.
+    /// Nonzero map-set owner ID whose maps should be shared.
     #[arg(long)]
     map_owner_id: Option<NonZeroU32>,
     /// Requested result format.

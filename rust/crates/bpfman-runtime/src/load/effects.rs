@@ -8,6 +8,7 @@ use std::{collections::BTreeMap, num::NonZeroU32};
 
 pub(crate) struct Inputs<'a> {
     pub(super) cancellation: &'a crate::Cancellation,
+    pub(super) map_owner: Option<NonZeroU32>,
     pub(super) object: &'a LocalObject,
     pub(super) source: &'a str,
     pub(super) spec: &'a bpfman_model::ProgramSpec,
@@ -25,6 +26,7 @@ pub(crate) type FailureFor<F> = Failure<
 
 // Failed acquisition can return a resource even when the effect did not finish.
 type AcquisitionResult<R, E> = Result<R, EffectFailure<Option<R>, E>>;
+type MultipleAcquisitions<R, E> = Result<Vec<R>, EffectFailure<Vec<R>, E>>;
 type PublicationResult<R, E> = Result<R, EffectFailure<Vec<R>, E>>;
 
 // Every mutation borrows the same scoped writer. Receipts remain adapter-owned;
@@ -39,6 +41,24 @@ pub(crate) trait LoadEffects: CleanupEffects {
     fn batch_aborted(&self) -> Self::Error;
 
     fn open_store(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Store, Self::Error>;
+
+    fn admit_maps(
+        &mut self,
+        _writer: &RuntimeWriter<'_>,
+        _input: &Inputs<'_>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    fn prepare_maps(
+        &mut self,
+        _writer: &RuntimeWriter<'_>,
+        _prepared: &Self::Prepared,
+        _input: &Inputs<'_>,
+        _names: &[String],
+    ) -> MultipleAcquisitions<Self::MapPin, Self::Error> {
+        Ok(Vec::new())
+    }
 
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, Self::Error>;
 
@@ -78,6 +98,7 @@ pub(crate) trait LoadEffects: CleanupEffects {
     fn publish(
         &mut self,
         writer: &RuntimeWriter<'_>,
+        kernel: &Self::Kernel,
         id: NonZeroU32,
         input: &Inputs<'_>,
     ) -> PublicationResult<Self::Bytecode, Self::Error>;

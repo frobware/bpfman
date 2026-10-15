@@ -30,6 +30,8 @@ fn scope(test: impl FnOnce(&RuntimeWriter<'_>, &Connection, &mut Store) -> Resul
             Backend.commit_program(
                 &w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     globals: &Default::default(),
                     id: NonZeroU32::new(42).expect("id"),
                     spec: &bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from("trace")?),

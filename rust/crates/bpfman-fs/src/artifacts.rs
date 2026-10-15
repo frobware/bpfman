@@ -293,7 +293,7 @@ impl RuntimeWriter<'_> {
 }
 
 impl PreparedLoad {
-    fn check(&self, writer: &RuntimeWriter<'_>) -> Result<(), Error> {
+    pub(super) fn check(&self, writer: &RuntimeWriter<'_>) -> Result<(), Error> {
         if self.root != identity(&writer.runtime.root)? {
             return Err(Failure::Unsafe("bpffs belongs to another runtime").into());
         }

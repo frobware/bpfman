@@ -34,6 +34,8 @@ fn scope(
             Backend.commit_program(
                 &w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     id: id(42),
                     spec: &ProgramSpec::Xdp("pass".try_into()?),
                     source: "source.o",

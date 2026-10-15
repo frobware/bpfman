@@ -394,6 +394,7 @@ impl LoadEffects for Fake {
     fn publish(
         &mut self,
         writer: &RuntimeWriter<'_>,
+        _kernel: &Self::Kernel,
         program: NonZeroU32,
         input: &Inputs<'_>,
     ) -> Result<BytecodeReceipt, EffectFailure<Vec<BytecodeReceipt>, TestError>> {
@@ -514,8 +515,10 @@ fn invoke_cancellable<F: LoadEffects>(
         writer,
         fake,
         &Inputs {
+            map_owner: None,
             cancellation,
             object: &LocalObject {
+                shared_maps: Vec::new(),
                 globals: Default::default(),
                 bytes: b"ELF snapshot".to_vec(),
                 license: "GPL".into(),

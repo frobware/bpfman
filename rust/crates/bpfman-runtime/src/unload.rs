@@ -138,7 +138,7 @@ pub(super) type StoreReport<S, K> = bpfman_core::UnloadReport<
     <S as UnloadStore>::ProgramReceipt,
     <K as bpfman_kernel::ProgramResources>::MapPin,
     <K as bpfman_kernel::ProgramResources>::MapDirectory,
-    <S as UnloadStore>::MapSetReceipt,
+    Option<<S as UnloadStore>::MapSetReceipt>,
     bpfman_fs::Bytecode,
     crate::UnloadCause,
     <K as bpfman_kernel::TracepointLinks>::LinkPin,

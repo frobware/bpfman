@@ -15,7 +15,9 @@ fn map_failure<T, E: Into<LoadCause>>(failure: EffectFailure<T, E>) -> EffectFai
 }
 
 pub(crate) struct Effects<'a, S, K>(pub(crate) &'a S, pub(crate) &'a K);
-impl<S, K: bpfman_kernel::ProgramResources> LoadCleanup for Effects<'_, S, K> {
+impl<S: bpfman_store::OpenStore, K: bpfman_kernel::ProgramResources> LoadCleanup
+    for Effects<'_, S, K>
+{
     type ProgramPin = K::ProgramPin;
     type MapPin = K::MapPin;
     type Bytecode = Bytecode;
@@ -42,6 +44,32 @@ impl<S, K: bpfman_kernel::ProgramResources> LoadCleanup for Effects<'_, S, K> {
         writer: &RuntimeWriter<'_>,
         receipt: K::MapPin,
     ) -> Result<(), EffectFailure<K::MapPin, LoadCause>> {
+        let remove = self
+            .1
+            .validate_map(writer, &receipt)
+            .map_err(LoadCause::from)
+            .and_then(|()| {
+                if let Some(name) = K::shared_map(&receipt) {
+                    use bpfman_store::ProgramReader;
+                    let mut reader =
+                        crate::store::open_store(self.0, writer).map_err(LoadCause::Open)?;
+                    return Ok(!reader
+                        .read_shared_maps()?
+                        .get(name)
+                        .is_some_and(|users| !users.is_empty()));
+                }
+                Ok(true)
+            });
+        match remove {
+            Ok(false) => return Ok(()),
+            Ok(true) => {}
+            Err(cause) => {
+                return Err(EffectFailure {
+                    remaining: receipt,
+                    cause,
+                });
+            }
+        }
         self.1.remove_map(writer, receipt).map_err(map_failure)
     }
 }
@@ -65,6 +93,45 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         crate::store::open_store(self.0, writer).map_err(LoadCause::Open)
     }
 
+    fn admit_maps(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        input: &Inputs<'_>,
+    ) -> Result<(), LoadCause> {
+        use bpfman_store::ProgramReader;
+        if input.map_owner.is_none() && input.object.shared_maps.is_empty() {
+            return Ok(());
+        }
+        let mut reader = crate::store::open_store(self.0, writer).map_err(LoadCause::Open)?;
+        reader.validate_map_sharing()?;
+        if let Some(owner) = input.map_owner {
+            if !reader.read_map_sets()?.contains(&owner) {
+                return Err(LoadCause::Invalid(format!(
+                    "map_owner_id {owner} does not exist"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn prepare_maps(
+        &mut self,
+        writer: &RuntimeWriter<'_>,
+        prepared: &K::Prepared,
+        input: &Inputs<'_>,
+        names: &[String],
+    ) -> Result<Vec<K::MapPin>, EffectFailure<Vec<K::MapPin>, LoadCause>> {
+        self.1
+            .prepare_maps(
+                writer,
+                prepared,
+                &input.object.bytes,
+                names,
+                input.map_owner,
+            )
+            .map_err(map_failure)
+    }
+
     fn prepare(&mut self, writer: &RuntimeWriter<'_>) -> Result<Self::Prepared, LoadCause> {
         self.1.prepare_load(writer).map_err(LoadCause::from)
     }
@@ -75,12 +142,14 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         input: &Inputs<'_>,
     ) -> Result<Self::Kernel, LoadCause> {
         self.1
-            .load_program(
+            .load_program_with_maps(
                 writer,
                 &input.object.bytes,
                 &input.object.maps,
                 &input.object.globals,
                 input.spec,
+                input.map_owner,
+                &input.object.shared_maps,
             )
             .map_err(Into::into)
     }
@@ -131,10 +200,19 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
     fn publish(
         &mut self,
         writer: &RuntimeWriter<'_>,
+        kernel: &Self::Kernel,
         id: NonZeroU32,
         input: &Inputs<'_>,
     ) -> Result<Bytecode, EffectFailure<Vec<Bytecode>, LoadCause>> {
+        let inventory = self
+            .1
+            .map_inventory(writer, kernel, input.map_owner)
+            .map_err(|cause| EffectFailure {
+                cause: cause.into(),
+                remaining: Vec::new(),
+            })?;
         let provenance = serde_json::to_vec_pretty(&serde_json::json!({
+            "map_set": input.map_owner.unwrap_or(id).get(), "map_inventory": inventory,
             "version": 1, "program_id": id.get(), "program_name": input.spec.name().as_str(),
             "source": input.source, "source_kind": "file", "loaded_at": input.created_at,
         }))
@@ -152,9 +230,23 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         writer: &RuntimeWriter<'_>,
         inputs: &[(NonZeroU32, &Inputs<'_>)],
     ) -> Result<(), LoadCause> {
+        let shared = inputs
+            .iter()
+            .map(|(id, input)| {
+                if input.map_owner.is_none() && input.object.shared_maps.is_empty() {
+                    return Ok(Vec::new());
+                }
+                self.1
+                    .shared_map_names(writer, input.map_owner.unwrap_or(*id))
+                    .map_err(LoadCause::from)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let records: Vec<_> = inputs
             .iter()
-            .map(|(id, input)| bpfman_store::LoadRecord {
+            .zip(&shared)
+            .map(|((id, input), shared)| bpfman_store::LoadRecord {
+                map_owner: input.map_owner,
+                shared_maps: shared,
                 id: *id,
                 spec: input.spec,
                 source: input.source,
@@ -170,7 +262,9 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
     }
 }
 
-impl<S, K: bpfman_kernel::ProgramResources> super::CleanupEffects for Effects<'_, S, K> {
+impl<S: bpfman_store::OpenStore, K: bpfman_kernel::ProgramResources> super::CleanupEffects
+    for Effects<'_, S, K>
+{
     type MapDirectory = K::MapDirectory;
 
     fn remove_map_directory(

@@ -15,8 +15,8 @@ pub use tc::{TcLifecycle, TcRemoval};
 mod lifecycle;
 mod xdp_replace;
 pub use lifecycle::{
-    Acquisition, ObjectInfo, ObjectLoader, ProgramLoad, ProgramResources, Removal, TracepointLinks,
-    UnloadArtifacts, XdpArtifacts, XdpLifecycle,
+    Acquisition, Acquisitions, ObjectInfo, ObjectLoader, ProgramLoad, ProgramResources, Removal,
+    TracepointLinks, UnloadArtifacts, XdpArtifacts, XdpLifecycle,
 };
 pub use xdp_replace::{XdpDispatcherArtifacts, XdpReplacement};
 

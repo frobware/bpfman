@@ -85,6 +85,8 @@ fn seed<S: CommitLoad>(store: &Faults<S>, writer: &RuntimeWriter<'_>) {
         .commit_program(
             writer,
             LoadRecord {
+                map_owner: None,
+                shared_maps: &[],
                 globals: &Default::default(),
                 id: id(),
                 spec: &bpfman_model::ProgramSpec::Tracepoint(
@@ -181,13 +183,18 @@ fn retained_backend_receipts_survive_failed_unload_and_explicit_retry<S: TestSto
     let error = bpfman.unload(id()).expect_err("record failure");
 
     assert!(!store.records(&runtime).is_empty());
-    // Standalone-link, XDP and TC preflight each validate the retained store handle.
+    // Map-set membership, standalone-link, artifact, XDP and TC preflight
+    // validate the retained handle. Membership reads precede destructive effects.
     assert_eq!(
         calls(&store),
         [
             "commit",
             "observe",
             "validate",
+            "records",
+            "validate",
+            "validate",
+            "records",
             "validate",
             "validate",
             "delete program"

@@ -1,3 +1,4 @@
+//! Version 12 adds shared map sets and PinByName references.
 //! Version 11 adds native kernel entry and return probes.
 //! Version 10 adds native TCX programs and links.
 //! Version 9 adds independent TC egress dispatchers.
@@ -71,6 +72,10 @@ pub(super) enum LinkProgress {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Program {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) map_owner: Option<NonZeroU32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) shared_maps: Vec<String>,
     #[serde(default, skip_serializing_if = "Kind::is_tracepoint")]
     pub(super) kind: Kind,
     pub(super) id: NonZeroU32,
@@ -97,7 +102,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 11,
+            version: 12,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -119,7 +124,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=11) {
+        if !matches!(header.version, 1..=12) {
             return Err(Failure::Version(header.version));
         }
 
@@ -157,8 +162,27 @@ impl State {
         }
 
         let mut program_ids = BTreeSet::new();
+        let mut program_generations = BTreeSet::new();
 
         for row in &self.programs {
+            if self.version < 12 && (row.map_owner.is_some() || !row.shared_maps.is_empty()) {
+                return Err(Failure::Unsupported(
+                    "map sharing requires JSON format 12; no implicit upgrade",
+                ));
+            }
+            let mut names = BTreeSet::new();
+            for name in &row.shared_maps {
+                if name.is_empty()
+                    || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    || !names.insert(name)
+                {
+                    return Err(Failure::Invalid("invalid or duplicate shared map name"));
+                }
+            }
+            if row.map_owner == Some(row.id) {
+                return Err(Failure::Invalid("self-referencing map owner"));
+            }
+
             if self.version < 11 && matches!(row.kind, Kind::Kprobe | Kind::Kretprobe) {
                 return Err(Failure::Unsupported(
                     "kernel probes require JSON format 11; no implicit upgrade",
@@ -182,10 +206,13 @@ impl State {
             timestamp(&row.created_at)?;
 
             if !program_ids.insert(row.id)
-                || !self
-                    .map_sets
-                    .iter()
-                    .any(|map| map.id == row.id && map.generation == row.generation)
+                || row.generation == 0
+                || row.generation >= self.next_generation
+                || !program_generations.insert(row.generation)
+                || !self.map_sets.iter().any(|map| {
+                    map.id == row.map_owner.unwrap_or(row.id)
+                        && (row.map_owner.is_some() || map.generation == row.generation)
+                })
             {
                 return Err(Failure::Invalid(
                     "duplicate program or missing private map set",
@@ -352,6 +379,17 @@ impl State {
         &mut self,
         record: &LoadRecord<'_>,
     ) -> Result<StoredProgramSummary, Failure> {
+        if self.version < 12 && (record.map_owner.is_some() || !record.shared_maps.is_empty()) {
+            return Err(Failure::Unsupported(
+                "map sharing requires JSON format 12; no implicit upgrade",
+            ));
+        }
+        if record
+            .map_owner
+            .is_some_and(|owner| owner == record.id || !self.map_sets.iter().any(|m| m.id == owner))
+        {
+            return Err(Failure::Invalid("map owner does not name a map set"));
+        }
         if self.map_sets.iter().any(|m| m.id == record.id)
             || self.programs.iter().any(|p| p.id == record.id)
         {
@@ -363,6 +401,8 @@ impl State {
             .checked_add(1)
             .ok_or(Failure::Invalid("generation exhausted"))?;
         let row = Program {
+            map_owner: record.map_owner,
+            shared_maps: record.shared_maps.to_vec(),
             kind: match record.spec {
                 ProgramSpec::Tracepoint(_) => Kind::Tracepoint,
                 ProgramSpec::Kprobe(_) if self.version >= 11 => Kind::Kprobe,
@@ -399,10 +439,12 @@ impl State {
         };
 
         let summary = row.summary();
-        self.map_sets.push(MapSet {
-            id: row.id,
-            generation,
-        });
+        if record.map_owner.is_none() {
+            self.map_sets.push(MapSet {
+                id: row.id,
+                generation,
+            });
+        }
         self.programs.push(row);
 
         Ok(summary)
@@ -481,8 +523,8 @@ impl Program {
             source: ProgramSource::File(Some(self.source.clone())),
             object_path: path(layout.bytecode_path(self.id))?,
             pin_path: path(layout.program_pin_path(self.id))?,
-            map_path: path(layout.map_directory_path(self.id))?,
-            map_set: self.id,
+            map_path: path(layout.map_directory_path(self.map_owner.unwrap_or(self.id)))?,
+            map_set: self.map_owner.unwrap_or(self.id),
             globals: self
                 .globals
                 .iter()

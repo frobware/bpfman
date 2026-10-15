@@ -28,6 +28,8 @@ fn commit(writer: &RuntimeWriter<'_>) -> Result<(), bpfman_store::Error> {
     Backend.commit_program(
         writer,
         LoadRecord {
+            map_owner: None,
+            shared_maps: &[],
             globals: &Default::default(),
             id: NonZeroU32::new(42).expect("id"),
             spec: &bpfman_model::ProgramSpec::Tracepoint(
@@ -55,7 +57,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     for (bytes, kind) in [
         (b"{".as_slice(), ErrorKind::InvalidData),
-        (b"{\"version\":12}".as_slice(), ErrorKind::IncompatibleState),
+        (b"{\"version\":13}".as_slice(), ErrorKind::IncompatibleState),
         (b"SQLite format 3\0".as_slice(), ErrorKind::InvalidData),
     ] {
         fs::write(layout.database_path(), bytes).expect("fixture");
@@ -70,7 +72,7 @@ fn malformed_and_future_snapshots_are_never_replaced() {
 
     fs::write(layout.database_path(), &pristine).expect("restore");
     let mut reader = writer(&runtime, |w| Backend.open(w).expect("open"));
-    fs::write(layout.database_path(), b"{\"version\":12}").expect("change version");
+    fs::write(layout.database_path(), b"{\"version\":13}").expect("change version");
 
     assert_eq!(
         reader
@@ -388,7 +390,7 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
         });
         let mut state: serde_json::Value =
             serde_json::from_slice(&fs::read(layout.database_path()).expect("read")).expect("JSON");
-        assert_eq!(state["version"], 11);
+        assert_eq!(state["version"], 12);
         state["version"] = version.into();
         fs::write(
             layout.database_path(),
@@ -418,6 +420,8 @@ fn legacy_versions_refuse_xdp_without_upgrade_or_partial_commit() {
             let metadata = BTreeMap::new();
             let globals = BTreeMap::new();
             let record = |id, spec| LoadRecord {
+                map_owner: None,
+                shared_maps: &[],
                 id: NonZeroU32::new(id).expect("id"),
                 spec,
                 source: "source.o",
@@ -481,6 +485,8 @@ fn older_formats_refuse_dispatcher_publication_without_migration() {
                     .commit_program(
                         w,
                         LoadRecord {
+                            map_owner: None,
+                            shared_maps: &[],
                             id: NonZeroU32::new(42).expect("id"),
                             spec: &ProgramSpec::Xdp("pass".try_into().expect("symbol")),
                             source: "source.o",
@@ -563,6 +569,8 @@ fn old_formats_refuse_tc_without_upgrade_or_partial_publication() {
                     .commit_program(
                         w,
                         LoadRecord {
+                            map_owner: None,
+                            shared_maps: &[],
                             id,
                             spec: &spec,
                             source: "tc.o",
@@ -613,6 +621,8 @@ fn format_seven_retains_singletons_and_refuses_replacement_without_upgrade() {
             .commit_program(
                 w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     id,
                     spec: &ProgramSpec::Tc("entry".try_into().expect("symbol")),
                     source: "tc.o",
@@ -721,6 +731,8 @@ fn ingress_formats_refuse_egress_without_changing_the_snapshot() {
                 .commit_program(
                     w,
                     LoadRecord {
+                        map_owner: None,
+                        shared_maps: &[],
                         id: NonZeroU32::MIN,
                         spec: &ProgramSpec::Tc("entry".try_into().expect("symbol")),
                         source: "tc.o",
@@ -823,6 +835,8 @@ fn tcx_requires_format_ten_without_implicit_upgrade() {
             .commit_program(
                 w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     id: NonZeroU32::MIN,
                     spec: &bpfman_model::ProgramSpec::Tcx("native".try_into().expect("symbol")),
                     source: "/native.o",
@@ -850,6 +864,8 @@ fn tcx_requires_format_ten_without_implicit_upgrade() {
             .commit_program(
                 w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     id: NonZeroU32::MIN,
                     spec: &bpfman_model::ProgramSpec::Tcx("native".try_into().expect("symbol")),
                     source: "/native.o",
@@ -899,6 +915,8 @@ fn probes_require_format_eleven_and_validate_persisted_intent() {
                     .commit_program(
                         w,
                         LoadRecord {
+                            map_owner: None,
+                            shared_maps: &[],
                             id: NonZeroU32::MIN,
                             spec: &spec,
                             source: "/probe.o",
@@ -944,6 +962,8 @@ fn probes_require_format_eleven_and_validate_persisted_intent() {
             .commit_program(
                 w,
                 LoadRecord {
+                    map_owner: None,
+                    shared_maps: &[],
                     id: NonZeroU32::MIN,
                     spec: &ProgramSpec::Kprobe("probe".try_into().expect("symbol")),
                     source: "/probe.o",
@@ -989,5 +1009,121 @@ fn probes_require_format_eleven_and_validate_persisted_intent() {
             fs::read(layout.database_path()).expect("unchanged"),
             previous
         );
+    }
+}
+
+#[test]
+fn older_formats_refuse_map_sharing_without_upgrading() {
+    for version in 1..=11 {
+        let temp = tempfile::tempdir().expect("fixture");
+        let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
+        let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+        writer(&runtime, |w| {
+            Backend.open(w).expect("create");
+            commit(w).expect("owner");
+        });
+        let mut state: serde_json::Value =
+            serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot"))
+                .expect("json");
+        state["version"] = version.into();
+        let original = serde_json::to_vec(&state).expect("encode");
+        fs::write(layout.database_path(), &original).expect("old-format fixture");
+        writer(&runtime, |w| {
+            let mut reader = Backend.open(w).expect("old format remains readable");
+            assert_eq!(
+                reader
+                    .validate_map_sharing()
+                    .expect_err("explicit refusal")
+                    .kind(),
+                ErrorKind::Unsupported
+            );
+            assert_eq!(reader.read_records().expect("unchanged").len(), 1);
+            let spec = bpfman_model::ProgramSpec::Tracepoint("trace".try_into().expect("name"));
+            let names = vec!["counter".to_owned()];
+            for (owner, shared) in [
+                (Some(NonZeroU32::new(42).expect("id")), &[][..]),
+                (None, names.as_slice()),
+            ] {
+                assert_eq!(
+                    Backend
+                        .commit_program(
+                            w,
+                            LoadRecord {
+                                id: NonZeroU32::new(43).expect("id"),
+                                map_owner: owner,
+                                shared_maps: shared,
+                                spec: &spec,
+                                source: "source.o",
+                                license: "GPL",
+                                created_at: "2026-10-15T12:00:00Z",
+                                metadata: &BTreeMap::new(),
+                                globals: &BTreeMap::new()
+                            }
+                        )
+                        .expect_err("sharing refused")
+                        .kind(),
+                    ErrorKind::Unsupported
+                );
+                assert_eq!(
+                    fs::read(layout.database_path()).expect("unchanged bytes"),
+                    original
+                );
+            }
+            let mut invalid = state.clone();
+            invalid["programs"][0]["map_owner"] = 42.into();
+            fs::write(
+                layout.database_path(),
+                serde_json::to_vec(&invalid).expect("encode"),
+            )
+            .expect("fixture");
+            assert!(
+                reader.read_records().is_err(),
+                "old formats cannot hide shared intent"
+            );
+        });
+    }
+}
+
+#[test]
+fn malformed_shared_membership_and_references_are_refused_on_read() {
+    let temp = tempfile::tempdir().expect("fixture");
+    let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+    writer(&runtime, |w| {
+        Backend.open(w).expect("create");
+        commit(w).expect("owner");
+        Backend
+            .commit_program(
+                w,
+                LoadRecord {
+                    id: NonZeroU32::new(43).expect("id"),
+                    map_owner: Some(NonZeroU32::new(42).expect("id")),
+                    shared_maps: &["counter".into()],
+                    spec: &bpfman_model::ProgramSpec::Tracepoint("trace".try_into().expect("name")),
+                    source: "source.o",
+                    license: "GPL",
+                    created_at: "2026-10-15T12:00:00Z",
+                    metadata: &BTreeMap::new(),
+                    globals: &BTreeMap::new(),
+                },
+            )
+            .expect("dependent");
+    });
+    let pristine: serde_json::Value =
+        serde_json::from_slice(&fs::read(layout.database_path()).expect("snapshot")).expect("json");
+    for (key, invalid) in [
+        ("map_owner", serde_json::json!(999)),
+        ("map_owner", serde_json::json!(43)),
+        ("shared_maps", serde_json::json!(["../escape"])),
+        ("shared_maps", serde_json::json!(["counter", "counter"])),
+        ("generation", serde_json::json!(0)),
+        ("generation", serde_json::json!(1)),
+    ] {
+        let mut state = pristine.clone();
+        state["programs"][1][key] = invalid;
+        let bytes = serde_json::to_vec(&state).expect("encode");
+        fs::write(layout.database_path(), &bytes).expect("corrupt fixture");
+        assert!(Backend.open_reader(&runtime).is_err(), "invalid {key}");
+        assert_eq!(fs::read(layout.database_path()).expect("unchanged"), bytes);
     }
 }

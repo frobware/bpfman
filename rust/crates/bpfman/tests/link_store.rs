@@ -33,6 +33,8 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
         .commit_program(
             writer,
             LoadRecord {
+                map_owner: None,
+                shared_maps: &[],
                 globals: &Default::default(),
                 id: id(raw),
                 spec: &bpfman_model::ProgramSpec::Tracepoint(
@@ -378,6 +380,8 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        map_owner: None,
+                        shared_maps: &[],
                         id: id(42),
                         spec: &spec,
                         source: "/probe.o",
@@ -512,6 +516,8 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        map_owner: None,
+                        shared_maps: &[],
                         globals: &Default::default(),
                         id: id(raw),
                         spec: &bpfman_model::ProgramSpec::Tcx(

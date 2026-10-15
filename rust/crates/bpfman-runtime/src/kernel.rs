@@ -9,6 +9,7 @@ pub(super) struct LocalObject {
     pub(super) bytes: Vec<u8>,
     pub(super) license: String,
     pub(super) maps: Vec<String>,
+    pub(super) shared_maps: Vec<String>,
     pub(super) globals: BTreeMap<String, Vec<u8>>,
 }
 
@@ -39,6 +40,7 @@ impl LocalObject {
             bytes,
             license: info.license,
             maps: info.maps,
+            shared_maps: info.shared_maps,
             globals: BTreeMap::new(),
         })
     }

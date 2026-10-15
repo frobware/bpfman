@@ -6,6 +6,7 @@
 mod backend;
 mod failure;
 mod kprobe;
+mod maps;
 mod netns;
 mod object;
 mod observe;

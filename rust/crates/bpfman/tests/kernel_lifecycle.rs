@@ -16,6 +16,9 @@ mod tc_replace;
 #[path = "lifecycle/tc_unload.rs"]
 mod tc_unload;
 
+#[path = "lifecycle/map_sharing.rs"]
+mod map_sharing;
+
 #[path = "lifecycle/kprobe.rs"]
 mod kprobe;
 
@@ -1024,4 +1027,21 @@ fn sqlite_kprobe_failure_recovery() {
 #[test]
 fn json_kprobe_failure_recovery() {
     kprobe::recovery(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_map_sharing_lifecycle() {
+    map_sharing::lifecycle(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_map_sharing_lifecycle() {
+    map_sharing::lifecycle(bpfman_store_json::Backend);
+}
+#[test]
+fn sqlite_map_sharing_recovery() {
+    map_sharing::recovery(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn json_map_sharing_recovery() {
+    map_sharing::recovery(bpfman_store_json::Backend);
 }

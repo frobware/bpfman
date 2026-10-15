@@ -85,6 +85,11 @@ impl<K: bpfman_kernel::ProgramResources> LoadError<K> {
             }
             LoadCause::Invalid(_) => LoadErrorKind::InvalidInput,
             LoadCause::Unsupported(_) => LoadErrorKind::Unsupported,
+            LoadCause::Store(e) => match e.kind() {
+                bpfman_store::ErrorKind::Unsupported => LoadErrorKind::Unsupported,
+                bpfman_store::ErrorKind::InvalidData => LoadErrorKind::InvalidInput,
+                _ => LoadErrorKind::Unavailable,
+            },
             LoadCause::Kernel(e) => match e.kind() {
                 bpfman_kernel::ErrorKind::InvalidInput => LoadErrorKind::InvalidInput,
                 bpfman_kernel::ErrorKind::Unsupported => LoadErrorKind::Unsupported,
@@ -107,9 +112,14 @@ impl<K: bpfman_kernel::ProgramResources> LoadError<K> {
 
     /// Explicitly retry unresolved cleanup once, retaining the original error
     /// and all prior attempts. The supplied writer must belong to the same root.
-    fn retry_cleanup(self, writer: &RuntimeWriter<'_>, kernel: &K) -> Self {
+    fn retry_cleanup<S: bpfman_store::OpenStore>(
+        self,
+        writer: &RuntimeWriter<'_>,
+        store: &S,
+        kernel: &K,
+    ) -> Self {
         Self {
-            failure: Box::new(retry(writer, &mut Effects(&(), kernel), *self.failure)),
+            failure: Box::new(retry(writer, &mut Effects(store, kernel), *self.failure)),
             retry_lock_error: None,
         }
     }
@@ -143,7 +153,7 @@ impl<S: bpfman_store::OpenStore, K: bpfman_kernel::ProgramResources> Bpfman<S, K
             },
             |writer| {
                 if let Some(error) = pending.take() {
-                    pending = Some(error.retry_cleanup(&writer, &self.kernel));
+                    pending = Some(error.retry_cleanup(&writer, &self.store, &self.kernel));
                 }
             },
         );

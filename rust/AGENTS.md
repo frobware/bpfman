@@ -136,7 +136,8 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 11 for kernel probes; format 10 retains native TCX,
+- New JSON stores use format 12 for map sharing; format 11 retains kernel probes;
+  format 10 retains native TCX,
   format 9 retains independent TC egress chains, format 8 retains ingress
   replacement, and format 7 retains singleton ingress.
   Older formats never upgrade implicitly.
@@ -495,7 +496,7 @@ The architecture and compatibility goals are in
   selection, including when the same ELF entry is loaded as a return probe.
 - Keep kernel function syntax in the pure model and validate offsets before
   truncation or persistence. Use the existing SQLite schema 2 probe-detail table;
-  new JSON stores use format 11. Formats 1–10 refuse probes without upgrading.
+  kernel probes require JSON format 11 or newer. Formats 1–10 refuse probes without upgrading.
 - Reuse the standalone pending-intent, cancellation and consuming compensation
   interpreter. Confined perf-event pin adoption and held-descriptor teardown apply
   to probes as well as tracepoints. Retain every failed receipt and attempt history.
@@ -503,3 +504,24 @@ The architecture and compatibility goals are in
   contracts on both stores. Keep script labels and assertions unchanged. Probe
   lifetime contracts belong in the existing serial global stage, with immediate
   link/program absence assertions and explicit external program-holder controls.
+
+
+## Shared maps
+
+- Treat map sets as independent of their original program. Explicit owners must
+  name a real map set, never merely a dependent program. Pin every public ELF
+  map so other selections can join; keep internal data maps private.
+- Preserve exact public map IDs in confined published provenance, including the
+  entire owner set in joining programs. Keep older provenance conservative.
+- Keep PinByName pins and map-set aliases separate. Validate existing-only opened
+  map sources and compare type, dimensions, capacity, flags and map-extra before
+  Aya reuse. Keep shared BTF loading inside the existing private syscall boundary.
+- New name pins acquire consuming receipts before program loading. Reused pins
+  never confer compensation authority. Check cancellation between acquisitions.
+- Validate root/parent/inode evidence before cleanup retries. If new durable users
+  adopt an unchanged pin/set, relinquish cleanup authority and preserve their
+  resources. The last user owns removal; independent failures retain receipts.
+- SQLite keeps schema 2; JSON sharing requires format 12 without implicit upgrade.
+  `rust-test-map-sharing` selects the three unchanged sharing scripts and native
+  recovery contracts on both stores. Native immediate program-lifetime assertions
+  belong in the serial global stages; keep them free of sleeps and polling.

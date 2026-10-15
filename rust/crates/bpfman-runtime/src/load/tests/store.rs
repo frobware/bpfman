@@ -143,10 +143,11 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Stor
     fn publish(
         &mut self,
         w: &RuntimeWriter<'_>,
+        kernel: &Self::Kernel,
         id: NonZeroU32,
         i: &Inputs<'_>,
     ) -> Result<BytecodeReceipt, EffectFailure<Vec<BytecodeReceipt>, Error>> {
-        self.fake.publish(w, id, i).map_err(mapped)
+        self.fake.publish(w, kernel, id, i).map_err(mapped)
     }
 }
 

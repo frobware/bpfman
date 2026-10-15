@@ -167,6 +167,21 @@ impl<S: OpenStore + UnloadStore> UnloadStore for ActiveStore<S> {
         self.backend.delete_program(writer, receipt)
     }
 
+    fn retire_map_set(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        receipt: Self::MapSetReceipt,
+    ) -> Result<(), EffectFailure<Self::MapSetReceipt, bpfman_store::Error>> {
+        if let Err(cause) = self.check_writer(writer) {
+            return Err(EffectFailure {
+                remaining: receipt,
+                cause,
+            });
+        }
+
+        self.backend.retire_map_set(writer, receipt)
+    }
+
     fn delete_map_set(
         &self,
         writer: &RuntimeWriter<'_>,

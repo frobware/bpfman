@@ -192,7 +192,7 @@ pub(super) struct UnloadRow {
     pub(super) map_created: String,
     pub(super) links: i64,
     pub(super) users: i64,
-    pub(super) shared: i64,
+    pub(super) shared: String,
 }
 
 pub(super) struct MapSetIdentity<'a> {
@@ -304,8 +304,9 @@ pub(super) fn unload(
                      WHERE kernel_prog_id = p.program_id) AS links,
                     (SELECT count(*) FROM managed_programs
                      WHERE map_set_id = p.map_set_id) AS users,
-                    (SELECT count(*) FROM shared_map_pins
-                     WHERE program_id = p.program_id) AS shared
+                    (SELECT json_group_array(map_name) FROM
+                        (SELECT map_name FROM shared_map_pins
+                         WHERE program_id = p.program_id ORDER BY map_name)) AS shared
              FROM managed_programs p LEFT JOIN map_sets m ON m.id = p.map_set_id
              WHERE p.program_id = :program_id",
         )?
@@ -353,10 +354,11 @@ pub(super) fn insert_program(
          (program_id, program_name, program_type, object_path, source_path, pin_path,
           map_set_id, license, gpl_compatible, metadata_json, created_at, global_data)
          VALUES (:program_id, :name, :kind, :object_path, :source_path, :pin_path,
-                 :program_id, :license, :gpl_compatible, :metadata, :created_at, :globals)",
+                 :map_set, :license, :gpl_compatible, :metadata, :created_at, :globals)",
     )?
     .execute(named_params! {
         ":program_id": record.id.get(),
+        ":map_set": record.map_owner.unwrap_or(record.id).get(),
         ":name": record.spec.name().as_str(),
         ":kind": record.spec.kind().as_str(),
         ":object_path": program.object_path,
@@ -434,4 +436,68 @@ pub(super) fn insert_pending_kprobe(
     tx.prepare_cached("INSERT INTO link_kprobe_details (id, fn_name, offset, retprobe) VALUES (:id, :function, :offset, :retprobe)")?
         .execute(named_params! { ":id": id, ":function": input.target.function.as_str(), ":offset": offset, ":retprobe": input.target.retprobe })?;
     Ok(id)
+}
+
+pub(super) struct MapSetRow {
+    pub(super) id: i64,
+    pub(super) pin_path: String,
+}
+
+pub(super) struct SharedMapRow {
+    pub(super) name: String,
+    pub(super) program: i64,
+}
+
+pub(super) fn map_sets(connection: &Connection) -> rusqlite::Result<Vec<MapSetRow>> {
+    connection
+        .prepare_cached("SELECT id, pin_path FROM map_sets ORDER BY id")?
+        .query_map([], |row| {
+            Ok(MapSetRow {
+                id: row.get("id")?,
+                pin_path: row.get("pin_path")?,
+            })
+        })?
+        .collect()
+}
+
+pub(super) fn shared_maps(connection: &Connection) -> rusqlite::Result<Vec<SharedMapRow>> {
+    connection
+        .prepare_cached(
+            "SELECT map_name, program_id FROM shared_map_pins ORDER BY map_name, program_id",
+        )?
+        .query_map([], |row| {
+            Ok(SharedMapRow {
+                name: row.get("map_name")?,
+                program: row.get("program_id")?,
+            })
+        })?
+        .collect()
+}
+
+pub(super) fn insert_shared_maps(
+    tx: &Transaction<'_>,
+    id: NonZeroU32,
+    names: &[String],
+) -> rusqlite::Result<()> {
+    let mut statement = tx.prepare_cached(
+        "INSERT INTO shared_map_pins (map_name, program_id) VALUES (:name, :program)",
+    )?;
+    for name in names {
+        statement.execute(named_params! { ":name": name, ":program": id.get() })?;
+    }
+    Ok(())
+}
+
+pub(super) struct MapSetUsage {
+    pub(super) path: String,
+    pub(super) created: String,
+    pub(super) users: i64,
+}
+
+pub(super) fn map_set_usage(
+    connection: &Connection,
+    id: NonZeroU32,
+) -> rusqlite::Result<Option<MapSetUsage>> {
+    connection.prepare_cached("SELECT pin_path, created_at, (SELECT count(*) FROM managed_programs WHERE map_set_id = :id) AS users FROM map_sets WHERE id = :id")?
+        .query_row(named_params! { ":id": id.get() }, |row| Ok(MapSetUsage { path: row.get("pin_path")?, created: row.get("created_at")?, users: row.get("users")? })).optional()
 }

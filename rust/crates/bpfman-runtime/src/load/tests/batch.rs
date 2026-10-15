@@ -149,10 +149,11 @@ impl LoadEffects for Batch {
     fn publish(
         &mut self,
         w: &RuntimeWriter<'_>,
+        kernel: &Self::Kernel,
         id: NonZeroU32,
         i: &Inputs<'_>,
     ) -> Result<BytecodeReceipt, EffectFailure<Vec<BytecodeReceipt>, TestError>> {
-        self.members[self.current].publish(w, id, i)
+        self.members[self.current].publish(w, kernel, id, i)
     }
 
     fn persist(
@@ -186,6 +187,7 @@ fn invoke_batch(
         member.cancellation = cancellation.clone();
     }
     let object = LocalObject {
+        shared_maps: Vec::new(),
         globals: BTreeMap::new(),
         bytes: b"ELF".to_vec(),
         license: "GPL".into(),
@@ -196,6 +198,7 @@ fn invoke_batch(
     let spec = bpfman_model::ProgramSpec::Tracepoint(name.clone());
     let inputs: Vec<_> = (0..3)
         .map(|_| Inputs {
+            map_owner: None,
             cancellation: &cancellation,
             object: &object,
             source: "source.o",

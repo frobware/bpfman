@@ -171,10 +171,12 @@ their existing operations: tracepoint programs from version 1, tracepoint links
 from version 2, and XDP loads from version 3. XDP attachment requires a separately
 initialized version 4 or newer runtime. Version 5 adds multi-member XDP
 replacement. Version 6 persists explicit network namespace paths. New stores use
-version 11 for native kernel entry/return probes. Version 10 retains native TCX;
+version 12 for map sharing. Version 11 retains native kernel entry/return probes;
+version 10 retains native TCX;
 version 9 retains independent TC egress dispatchers. Version 8 retains complete
 TC ingress revisions. Version 7 retains TC loads and singleton ingress attachments
-without implicit upgrade. Formats 1–10 refuse kernel probes without upgrading. Formats 1–9 refuse TCX.
+without implicit upgrade. Formats 1–11 refuse map sharing without upgrading.
+Formats 1–10 refuse kernel probes without upgrading. Formats 1–9 refuse TCX.
 Formats 7–8 reject egress without changing existing state.
 Versions 1–6 refuse TC without upgrading. Versions 4 and 5 reject namespaced attachments without upgrading;
 version 4 also rejects replacement. Existing stores never upgrade implicitly.
@@ -385,20 +387,21 @@ use stored summaries without kernel privileges; JSON adds full records and live
 kernel observations. `program get ID [-o text|json]` observes one managed program,
 including its maps, statistics, and links. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. `--all` and
-kernel link state filters remain unsupported. Unload supports a tracepoint with private maps and pending or finalised
-standalone links, an attached XDP or TC extension, or a native DEVMAP
-egress program with private maps. Dispatcher cleanup completes before program
-teardown.
+kernel link state filters remain unsupported. Unload supports the implemented program
+families with private or shared maps and pending or finalised links. Dispatcher
+cleanup completes before program teardown. Map sets survive while any member
+remains; shared-name pins survive while any recorded user remains.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe and kretprobe batches with private maps and
+exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe and kretprobe batches with private or shared maps and
 metadata/application labels are executable, with Go's detailed text output or
-JSON load envelope in selection order. Image loads, other program types,
-and map-owner sharing exit with status 1 before source access or runtime effects.
-ELF-level unsupported PinByName maps and section/type mismatches are rejected
+JSON load envelope in selection order. Image loads and other program types
+exit with status 1 before source access or runtime effects.
+Explicit map owners and ordinary PinByName maps are supported. PinByName
+map-of-maps definitions and section/type mismatches are rejected
 before runtime setup. Credentials are not echoed in auth diagnostics or help.
 Unlike Go, this parser requires the explicit file/image verb and rejects duplicate
 ELF selections, extraneous load-time targets, and zero map-owner IDs.
@@ -569,10 +572,13 @@ It holds one Go-compatible writer scope through runtime preparation, program
 and map pinning, publication, and store commit. Pins use `/proc/self/fd` paths
 anchored at verified directory descriptors because Aya's pin API accepts a
 pathname; callers never supply a deletion path. Each selected program is loaded
-with private maps. Only non-internal maps referenced by that loaded program
-are pinned under `fs/maps/{program_id}`; kernel map IDs establish membership,
-without relying on truncated kernel names. Internal data maps remain
-kernel-owned and are not pinned separately. Loading does not attach programs.
+with private maps by default. Every public ELF map is pinned under
+`fs/maps/{program_id}`, including maps used by other selections in the object.
+An explicit `--map-owner-id` joins an existing map set and creates no new map
+container. Exact map IDs are captured in published provenance and copied into
+joining programs' provenance, so owner-first unload preserves identity evidence.
+Internal data maps remain private to each program and are not pinned separately.
+Loading does not attach programs.
 
 Bytecode and provenance are written into an exclusively created staging
 directory, then published to `programs/{id}` with `RENAME_NOREPLACE`. Partial
@@ -1920,7 +1926,7 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 11 for probes; format 10 retains TCX, format 9
+receipt. New JSON stores use format 12 for sharing; format 11 retains probes, format 10 retains TCX, format 9
 retains egress and format 8 retains ingress
 replacement and format 7 retains singleton ingress. Older formats retain their
 operations without upgrading.
@@ -2023,7 +2029,7 @@ through a reopened application. This also strengthens tracepoint unload, with
 its fault and retry contracts updated to require independent progress.
 
 SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
-use format 11; format 10 retains TCX. Existing formats 1–9 retain their previous
+use format 12; format 11 retains probes and format 10 retains TCX. Existing formats 1–9 retain their previous
 operations and reject TCX
 without an implicit upgrade. Tracepoint target strings keep their existing JSON
 encoding; native targets have a typed object representation.
@@ -2079,7 +2085,7 @@ exact kernel identity. Perf-event teardown holds a live descriptor across unpinn
 and closes it after pin descriptors. External holders retain their ordinary kernel
 lifetime semantics.
 
-SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 11;
+SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 12; format 11 retains probes.
 older snapshots retain existing operations and refuse probe loads/links without
 implicit conversion. `make rust-test-kprobe` runs native recovery contracts and
 seven unchanged acceptance files per store: kprobe/kretprobe load/get and link
@@ -2088,3 +2094,54 @@ gate includes them without changing existing labels. Stateful-fake contracts cov
 acquisition/publication failures, cancellation and reopened retries on both real
 stores. Native lifetime controls run serially to exclude descriptors temporarily
 inherited by concurrently forked test children.
+
+
+## Map sharing and PinByName
+
+Local loads support `--map-owner-id ID` on both stores. `ID` identifies a
+first-class map set originally created by that program, rather than any live
+program that happens to use those maps. A dependent's ID is not a map owner.
+The original program may unload first; later loads can still join its map set
+while another member remains. The final member removes the map pins, container
+and map-set record. Ordinary loads of PIN_NONE maps remain independent.
+
+PinByName maps share a compatible kernel map through `fs/shared/{name}` and keep
+per-map-set aliases for observations and explicit owner joins. Before reuse,
+the adapter checks map type, key/value sizes, capacity, flags and map-extra.
+Creation, reuse, reference publication and teardown all hold the runtime writer
+lock. Shared maps retain BTF for tools such as bpftool; the existing private BPF
+syscall boundary supplies the BTF descriptor required by Aya's public map-create
+API. Aya and dependency versions are unchanged. Sharing map-of-maps definitions
+is outside this slice; PinByName declarations of those maps fail before runtime
+setup, and explicit reuse also refuses them. Internal-looking map names cannot
+declare PinByName; admission rejects them before Aya can choose a default pin path.
+
+Newly created name pins have consuming cleanup receipts. Existing pins never
+become load-compensation targets. Failed acquisition, verifier rejection,
+publication and cancellation compensate every newly owned pin, with cancellation
+checked between name-pin acquisitions. Cleanup retains failures for explicit
+retry. If a committed user adopts an unchanged pin before retry, cleanup validates
+the receipt and relinquishes its authority while preserving that user's map.
+Unload follows the same rule for map-set aliases, containers and shared names.
+Changed inode or runtime evidence still refuses cleanup.
+
+SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
+`shared_map_pins`. New JSON stores use format 12 with map-owner and shared-name
+references. Formats 1–11 keep their previous operations and refuse sharing without
+changing bytes or upgrading. Older artifacts without a map inventory retain
+conservative program-reference validation; broader orphan adoption is separate.
+
+`direnv exec . make rust-test-map-sharing` runs native identity/recovery contracts
+and these unchanged scripts once per store:
+
+- `TestKprobe_MapOwnerIDSharedCounter`
+- `TestProgramLoad_MapOwnerIDMustNameMapSet`
+- `TestTC_PinByNameMapSharing`
+
+The complete gate also runs shared store contracts and stateful-fake coverage for
+faults, cancellation, owner-first unload, reopened retries and authority transfer.
+Native recovery requires verifier-failure cleanup, compatible reuse with retained
+BTF, incompatible-map refusal, swapped-pin preflight refusal, attached owner-first
+unload and successful cleanup after a new member joins during recovery. A retained
+map descriptor remains usable after managed pins disappear; physical kernel map
+reclamation remains outside the synchronous teardown promise.

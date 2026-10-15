@@ -10,6 +10,12 @@ pub(crate) enum LoadCause {
     Map(#[source] Box<aya::maps::MapError>),
     #[error("load program")]
     Program(#[source] Box<aya::programs::ProgramError>),
+    #[error("validate reused map {name}")]
+    MapReuse {
+        name: String,
+        #[source]
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
     #[error("{0}")]
     Invalid(String),
     #[error("{0} execution is not implemented in this Rust load slice")]
@@ -19,7 +25,9 @@ pub(crate) enum LoadCause {
 impl From<LoadCause> for Error {
     fn from(cause: LoadCause) -> Self {
         let kind = match cause {
-            LoadCause::Invalid(_) | LoadCause::Parse(_) => ErrorKind::InvalidInput,
+            LoadCause::Invalid(_) | LoadCause::Parse(_) | LoadCause::MapReuse { .. } => {
+                ErrorKind::InvalidInput
+            }
             LoadCause::Unsupported(_) => ErrorKind::Unsupported,
             _ => ErrorKind::Unavailable,
         };

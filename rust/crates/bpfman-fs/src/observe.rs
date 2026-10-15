@@ -73,6 +73,22 @@ impl RuntimeWriter<'_> {
         kernel: &impl crate::ProgramInspection,
         id: NonZeroU32,
     ) -> Result<UnloadArtifacts, Error> {
+        self.observe_map_unload(kernel, id, id, true, &[], None)
+    }
+
+    /// Adopt exact artifacts for a map-set member. The caller validates durable
+    /// membership and supplies the captured map inventory from published provenance.
+    /// Shared pins and map-set pins are omitted while other users remain.
+    #[allow(clippy::too_many_arguments)]
+    pub fn observe_map_unload(
+        &self,
+        kernel: &impl crate::ProgramInspection,
+        id: NonZeroU32,
+        map_set: NonZeroU32,
+        remove_maps: bool,
+        shared: &[String],
+        inventory: Option<&std::collections::BTreeMap<String, u32>>,
+    ) -> Result<UnloadArtifacts, Error> {
         let mut result = UnloadArtifacts {
             program: None,
             maps: Vec::new(),
@@ -120,19 +136,25 @@ impl RuntimeWriter<'_> {
                 });
             }
 
-            if let Some(maps) = optional_dir(&bpffs, "maps", CONFINED)? {
-                if let Some(directory) = observe(self, &maps, "fs/maps", &id.to_string(), true)? {
+            if let Some(maps) = optional_dir(&bpffs, "maps", CONFINED)?.filter(|_| remove_maps) {
+                if let Some(directory) =
+                    observe(self, &maps, "fs/maps", &map_set.to_string(), true)?
+                {
                     let dir = open_owned(&directory)?;
 
                     for name in names(&dir)? {
                         validate_map_name(&name)?;
-                        let receipt = observe(self, &dir, &format!("fs/maps/{id}"), &name, false)?
-                            .ok_or(Failure::Unsafe("map pin disappeared during observation"))?;
+                        let receipt =
+                            observe(self, &dir, &format!("fs/maps/{map_set}"), &name, false)?
+                                .ok_or(Failure::Unsafe("map pin disappeared during observation"))?;
                         let info = kernel
                             .map_at(crate::PinSource(&proc_path(&dir).join(&name)))
                             .map_err(Failure::Kernel)?;
 
-                        if map_ids.as_ref().is_some_and(|ids| !ids.contains(&info)) {
+                        if inventory.map_or_else(
+                            || map_ids.as_ref().is_some_and(|ids| !ids.contains(&info)),
+                            |ids| ids.get(&name) != Some(&info),
+                        ) {
                             return Err(
                                 Failure::Unsafe("map pin does not belong to this program").into()
                             );
@@ -147,6 +169,34 @@ impl RuntimeWriter<'_> {
                     result.directory = Some(MapDirectory {
                         entry: Box::new(directory),
                     });
+                }
+            }
+            let shared_directory = if shared.is_empty() {
+                None
+            } else {
+                optional_dir(&bpffs, "shared", CONFINED)?
+            };
+            if let Some(directory) = shared_directory {
+                for name in shared {
+                    validate_map_name(name)?;
+                    if let Some(receipt) = observe(self, &directory, "fs/shared", name, false)? {
+                        let fd = open_owned(&receipt)?;
+                        let info = kernel
+                            .map_at(crate::PinSource(&proc_path(&fd)))
+                            .map_err(Failure::Kernel)?;
+                        if inventory.map_or_else(
+                            || map_ids.as_ref().is_some_and(|ids| !ids.contains(&info)),
+                            |ids| ids.get(name) != Some(&info),
+                        ) {
+                            return Err(Failure::Unsafe(
+                                "shared pin has a different kernel map identity",
+                            )
+                            .into());
+                        }
+                        result.maps.push(MapPin {
+                            entry: Box::new(receipt),
+                        });
+                    }
                 }
             }
         }

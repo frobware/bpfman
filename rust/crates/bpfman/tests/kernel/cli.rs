@@ -20,12 +20,29 @@ pub(super) fn effect_boundaries(store: &'static str) {
             .success()
     );
 
+    let internal_pin = root
+        .parent()
+        .expect("temporary parent")
+        .join("internal-pin.o");
+    let mut bytes = fs::read(fixture("tracepoint_counter_pinned.bpf.o")).expect("ELF");
+    let name = b"tracepoint_stats_map";
+    let positions: Vec<_> = bytes
+        .windows(name.len())
+        .enumerate()
+        .filter_map(|(offset, value)| (value == name).then_some(offset))
+        .collect();
+    assert!(!positions.is_empty());
+    for offset in positions {
+        bytes[offset] = b'.';
+    }
+    fs::write(&internal_pin, bytes).expect("malformed map declaration");
+
     for (source, selection, diagnostic) in [
         (fifo, SELECTION, "regular ELF file"),
         (
-            fixture("tracepoint_counter_pinned.bpf.o"),
+            internal_pin,
             SELECTION,
-            "PinByName",
+            "internal maps cannot declare PinByName",
         ),
         (
             fixture("tracepoint_counter.bpf.o"),
@@ -437,6 +454,19 @@ pub(super) fn kprobe_scripts(store: &'static str) {
             "TestMultiProgKprobe_LoadAttachDetachUnload",
             "TestMultiProgKretprobe_LoadAttachDetachUnload",
             "TestKprobe_OffsetBeyondSymbolRejected",
+        ]),
+        &rust(),
+        true,
+    );
+}
+
+pub(super) fn map_sharing_scripts(store: &'static str) {
+    run_dsl(
+        store,
+        Some(&[
+            "TestKprobe_MapOwnerIDSharedCounter",
+            "TestProgramLoad_MapOwnerIDMustNameMapSet",
+            "TestTC_PinByNameMapSharing",
         ]),
         &rust(),
         true,

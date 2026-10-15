@@ -122,6 +122,8 @@ where
                             .commit_program(
                                 &writer,
                                 LoadRecord {
+                                    map_owner: None,
+                                    shared_maps: &[],
                                     globals: &Default::default(),
                                     id: NonZeroU32::new(sequence).expect("id"),
                                     spec: &bpfman_model::ProgramSpec::Tracepoint(

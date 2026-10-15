@@ -183,6 +183,8 @@ where
                     .commit_program(
                         &writer,
                         LoadRecord {
+                            map_owner: None,
+                            shared_maps: &[],
                             id,
                             spec: &record.spec,
                             source: "original.o",
@@ -392,6 +394,8 @@ fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpReplacementStor
                     .commit_program(
                         &writer,
                         LoadRecord {
+                            map_owner: None,
+                            shared_maps: &[],
                             id,
                             spec: &bpfman_model::ProgramSpec::Xdp(
                                 "xdp_pass".try_into().expect("symbol"),

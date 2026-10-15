@@ -5,6 +5,8 @@
 
 use std::{os::fd::OwnedFd, path::PathBuf};
 
+mod maps;
+pub use maps::MapDefinition;
 mod kernel;
 pub use kernel::{
     ExtensionProgram, KernelResult, KprobeKernel, KprobeProgram, LinkInspection, LinkPinning,

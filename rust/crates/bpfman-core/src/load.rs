@@ -18,7 +18,8 @@ impl LoadProgram {
     }
 
     /// Successful loading requires a program receipt and individually owned maps.
-    /// Supply map pins in acquisition order, excluding shared pins.
+    /// Supply newly owned map pins in acquisition order, including new shared-name
+    /// pins. Reused pins never confer compensation authority.
     pub fn loaded<P, M>(self, program_pin: P, map_pins: Vec<M>) -> PublishBytecode<P, M> {
         PublishBytecode {
             load: self,

@@ -19,6 +19,8 @@ json_xdp_load_lifecycle: test
 sqlite_xdp_load_lifecycle: test
 json_kprobe_native_link_recovery: test
 sqlite_kprobe_native_link_recovery: test
+json_map_sharing_native_recovery: test
+sqlite_map_sharing_native_recovery: test
 json_case: test
 json_case_longer: test
 sqlite_case: test
@@ -30,9 +32,9 @@ for threads in 1 2 4 8; do
     BPFMAN_KERNEL_TEST_THREADS=$threads BPFMAN_KERNEL_SUITE=all sh "$runner" "$root/kernel" > "$root/output"
     cat > "$root/expected" <<EXPECTED
 --exact --test-threads=1 json_script_corpus sqlite_script_corpus
---exact --test-threads=1 json_xdp_load_lifecycle json_kprobe_native_link_recovery
+--exact --test-threads=1 json_xdp_load_lifecycle json_kprobe_native_link_recovery json_map_sharing_native_recovery
 --exact --test-threads=$threads json_case json_case_longer
---exact --test-threads=1 sqlite_xdp_load_lifecycle sqlite_kprobe_native_link_recovery
+--exact --test-threads=1 sqlite_xdp_load_lifecycle sqlite_kprobe_native_link_recovery sqlite_map_sharing_native_recovery
 --exact --test-threads=$threads sqlite_case
 --exact --test-threads=1 go_case
 EXPECTED

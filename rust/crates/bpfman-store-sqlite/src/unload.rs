@@ -47,18 +47,34 @@ fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Resul
         ));
     }
 
-    if row.map_set != i64::from(id.get()) || row.users != 1 || row.shared != 0 {
-        return Err(Failure::Unsupported(
-            "only private map sets without shared pins are implemented",
-        ));
+    if u32::try_from(row.map_set)
+        .ok()
+        .and_then(NonZeroU32::new)
+        .is_none()
+        || row.users < 1
+    {
+        return Err(invalid(id, "invalid map-set membership"));
     }
 
+    let shared: Vec<String> =
+        serde_json::from_str(&row.shared).map_err(|_| invalid(id, "invalid shared-map names"))?;
+    if shared.iter().any(|name| {
+        name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    }) {
+        return Err(invalid(id, "invalid shared-map name"));
+    }
     let layout = writer.layout();
 
     for (stored, expected) in [
         (&row.object, layout.bytecode_path(id)),
         (&row.pin, layout.program_pin_path(id)),
-        (&row.map_path, layout.map_directory_path(id)),
+        (
+            &row.map_path,
+            layout.map_directory_path(
+                NonZeroU32::new(row.map_set as u32)
+                    .ok_or_else(|| invalid(id, "invalid map set"))?,
+            ),
+        ),
     ] {
         if Some(stored.as_str()) != expected.to_str() {
             return Err(invalid(
@@ -89,12 +105,14 @@ pub fn observe_unload(
     validate(writer, id, &row)?;
     // Links are a teardown prerequisite, not part of the program identity.
     row.links = 0;
+    row.users = 0;
 
     Ok(Some(UnloadRecord {
         map_set: PrivateMapSet {
             evidence: Box::new(MapSetEvidence {
                 root: writer.identity().map_err(Failure::from)?,
-                id,
+                id: NonZeroU32::new(row.map_set as u32)
+                    .ok_or_else(|| invalid(id, "invalid map set"))?,
                 created_at: row.map_created.clone(),
             }),
         },
@@ -150,7 +168,7 @@ pub fn delete_unloaded_program(
 
         let mut connection = connection(writer)?;
         let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let row = snapshot(&tx, receipt.evidence.id)?
+        let mut row = snapshot(&tx, receipt.evidence.id)?
             .ok_or_else(|| invalid(receipt.evidence.id, "program record disappeared"))?;
         validate(writer, receipt.evidence.id, &row)?;
 
@@ -158,6 +176,7 @@ pub fn delete_unloaded_program(
             return Err(invalid(receipt.evidence.id, "program still has links"));
         }
 
+        row.users = 0;
         if row != receipt.evidence.snapshot {
             return Err(invalid(
                 receipt.evidence.id,
@@ -190,6 +209,21 @@ pub fn delete_unused_map_set(
     writer: &RuntimeWriter<'_>,
     receipt: PrivateMapSet,
 ) -> Result<(), EffectFailure<PrivateMapSet, Error>> {
+    remove_map_set(writer, receipt, false)
+}
+
+pub(crate) fn retire_map_set(
+    writer: &RuntimeWriter<'_>,
+    receipt: PrivateMapSet,
+) -> Result<(), EffectFailure<PrivateMapSet, Error>> {
+    remove_map_set(writer, receipt, true)
+}
+
+fn remove_map_set(
+    writer: &RuntimeWriter<'_>,
+    receipt: PrivateMapSet,
+    allow_used: bool,
+) -> Result<(), EffectFailure<PrivateMapSet, Error>> {
     let result = (|| -> Result<(), Failure> {
         if writer.identity()? != receipt.evidence.root {
             return Err(invalid(
@@ -205,6 +239,14 @@ pub fn delete_unused_map_set(
         let pin_path = path
             .to_str()
             .ok_or_else(|| invalid(receipt.evidence.id, "runtime path is not UTF-8"))?;
+        let usage = queries::map_set_usage(&tx, receipt.evidence.id)?
+            .ok_or_else(|| invalid(receipt.evidence.id, "map set disappeared"))?;
+        if usage.created != receipt.evidence.created_at || usage.path != pin_path {
+            return Err(invalid(receipt.evidence.id, "map set changed"));
+        }
+        if allow_used && usage.users > 0 {
+            return Ok(());
+        }
         let count = queries::delete_map_set(
             &tx,
             queries::MapSetIdentity {

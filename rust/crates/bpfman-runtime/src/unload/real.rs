@@ -3,7 +3,7 @@ use crate::{UnloadCause, unload_error::Cause};
 use bpfman_core::EffectFailure;
 use bpfman_fs::{Bytecode, RuntimeWriter};
 use bpfman_model::LinkState;
-use bpfman_store::{LinkReader, LinkStore, OpenStore, UnloadStore};
+use bpfman_store::{LinkReader, LinkStore, OpenStore, ProgramReader, UnloadStore};
 use std::num::NonZeroU32;
 
 pub(crate) struct Effects<'a, S, K>(pub(crate) &'a S, pub(crate) &'a K);
@@ -30,7 +30,7 @@ where
     type Record = S::ProgramReceipt;
     type Map = K::MapPin;
     type Directory = K::MapDirectory;
-    type MapSet = S::MapSetReceipt;
+    type MapSet = Option<S::MapSetReceipt>;
     type Bytecode = Bytecode;
     type Error = UnloadCause;
 
@@ -42,10 +42,20 @@ where
         &mut self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
-    ) -> Result<(S::ProgramReceipt, S::MapSetReceipt), UnloadCause> {
-        self.0
+    ) -> Result<(S::ProgramReceipt, Self::MapSet), UnloadCause> {
+        let (record, maps) = self
+            .0
             .observe_unload(writer, id)?
-            .ok_or_else(|| Cause::NotFound(id).into())
+            .ok_or(Cause::NotFound(id))?;
+        let records = self.0.open(writer)?.read_records()?;
+        let program = records
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or(Cause::NotFound(id))?;
+        let last = !records
+            .iter()
+            .any(|p| p.id != id && p.map_set == program.map_set);
+        Ok((record, last.then_some(maps)))
     }
 
     fn observe_artifacts(
@@ -53,7 +63,24 @@ where
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,
     ) -> Result<Artifacts<K::ProgramPin, K::MapPin, K::MapDirectory, Bytecode>, UnloadCause> {
-        let found = self.1.observe_unload(writer, id)?;
+        let mut reader = self.0.open(writer)?;
+        let records = reader.read_records()?;
+        let program = records
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or(Cause::NotFound(id))?;
+        let last = !records
+            .iter()
+            .any(|p| p.id != id && p.map_set == program.map_set);
+        let shared: Vec<_> = reader
+            .read_shared_maps()?
+            .into_iter()
+            .filter(|(_, users)| users.as_slice() == [id])
+            .map(|(name, _)| name)
+            .collect();
+        let found = self
+            .1
+            .observe_map_unload(writer, id, program.map_set, last, &shared)?;
 
         Ok(Artifacts {
             pin: found.program,
@@ -164,6 +191,37 @@ where
         writer: &RuntimeWriter<'_>,
         receipt: K::MapPin,
     ) -> Result<(), EffectFailure<K::MapPin, UnloadCause>> {
+        let checked = self
+            .1
+            .validate_map(writer, &receipt)
+            .map_err(UnloadCause::from)
+            .and_then(|()| {
+                let mut reader = self.0.open(writer)?;
+                if let Some(name) = K::shared_map(&receipt) {
+                    if reader
+                        .read_shared_maps()?
+                        .get(name)
+                        .is_some_and(|users| !users.is_empty())
+                    {
+                        return Ok(false);
+                    }
+                } else if let Some(set) = K::map_set(&receipt) {
+                    if reader.read_records()?.iter().any(|p| p.map_set == set) {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            });
+        match checked {
+            Ok(false) => return Ok(()),
+            Ok(true) => {}
+            Err(cause) => {
+                return Err(EffectFailure {
+                    remaining: receipt,
+                    cause,
+                });
+            }
+        }
         self.1.remove_map(writer, receipt).map_err(map_failure)
     }
 
@@ -172,6 +230,34 @@ where
         writer: &RuntimeWriter<'_>,
         receipt: K::MapDirectory,
     ) -> Result<(), EffectFailure<K::MapDirectory, UnloadCause>> {
+        let checked = self
+            .1
+            .validate_map_directory(writer, &receipt)
+            .map_err(UnloadCause::from)
+            .and_then(|()| {
+                if let Some(set) = K::directory_map_set(&receipt) {
+                    if self
+                        .0
+                        .open(writer)?
+                        .read_records()?
+                        .iter()
+                        .any(|p| p.map_set == set)
+                    {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            });
+        match checked {
+            Ok(false) => return Ok(()),
+            Ok(true) => {}
+            Err(cause) => {
+                return Err(EffectFailure {
+                    remaining: receipt,
+                    cause,
+                });
+            }
+        }
         self.1
             .remove_map_directory(writer, receipt)
             .map_err(map_failure)
@@ -180,9 +266,19 @@ where
     fn delete_map_set(
         &mut self,
         writer: &RuntimeWriter<'_>,
-        receipt: S::MapSetReceipt,
-    ) -> Result<(), EffectFailure<S::MapSetReceipt, UnloadCause>> {
-        self.0.delete_map_set(writer, receipt).map_err(map_failure)
+        receipt: Self::MapSet,
+    ) -> Result<(), EffectFailure<Self::MapSet, UnloadCause>> {
+        match receipt {
+            None => Ok(()),
+            Some(receipt) => {
+                self.0
+                    .retire_map_set(writer, receipt)
+                    .map_err(|failure| EffectFailure {
+                        remaining: Some(failure.remaining),
+                        cause: failure.cause.into(),
+                    })
+            }
+        }
     }
 
     fn remove_bytecode(

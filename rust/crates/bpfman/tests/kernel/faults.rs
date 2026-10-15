@@ -158,6 +158,18 @@ impl<S: OpenStore> OpenStore for Faults<S> {
 }
 
 impl<R: ProgramReader> ProgramReader for Reader<R> {
+    fn validate_map_sharing(&mut self) -> Result<(), Error> {
+        self.reader.validate_map_sharing()
+    }
+    fn read_map_sets(&mut self) -> Result<Vec<NonZeroU32>, Error> {
+        self.reader.read_map_sets()
+    }
+    fn read_shared_maps(
+        &mut self,
+    ) -> Result<std::collections::BTreeMap<String, Vec<NonZeroU32>>, Error> {
+        self.reader.read_shared_maps()
+    }
+
     fn validate(&mut self) -> Result<(), Error> {
         check(&self.state, Point::Validate)?;
         self.reader.validate()
@@ -237,6 +249,21 @@ impl<S: UnloadStore> UnloadStore for Faults<S> {
         }
 
         self.backend.delete_program(w, receipt)
+    }
+
+    fn retire_map_set(
+        &self,
+        w: &RuntimeWriter<'_>,
+        receipt: Self::MapSetReceipt,
+    ) -> Result<(), EffectFailure<Self::MapSetReceipt, Error>> {
+        if let Err(cause) = check(&self.state, Point::DeleteMapSet) {
+            return Err(EffectFailure {
+                cause,
+                remaining: receipt,
+            });
+        }
+
+        self.backend.retire_map_set(w, receipt)
     }
 
     fn delete_map_set(

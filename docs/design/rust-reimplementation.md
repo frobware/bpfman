@@ -3,8 +3,10 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The latest
-capability checkpoint adds native kprobe/kretprobe loading and standalone
-attachment, compensation and attached unload on both stores. Native TCX provides
+capability checkpoint adds explicit map-owner joins and PinByName sharing,
+with independent map-set/name-pin lifetimes and consuming recovery on both stores.
+Native kprobe/kretprobe loading and standalone attachment, compensation and
+attached unload remain supported. Native TCX provides
 ordered ingress/egress links alongside legacy TC ingress/egress dispatchers.
 For legacy TC, one to ten EXT members are rebuilt in priority order around a
 native dispatcher, using the same exact legacy filter handle. Publication failures restore the old
@@ -102,7 +104,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
-| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
+| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
 | Kernel probe links | Entry/return selection from the loaded program; function and offset intent; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | Uprobes and mount-namespace target resolution |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
@@ -110,7 +112,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 11 for kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 12 for map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -426,7 +428,7 @@ preservation,
 and Linux 6.18.54 rejects
 multi-buffer fan-out. These boundaries are covered by explicit rejection tests.
 
-Go remains broader overall, including other program families, shared maps, OCI,
+Go remains broader overall, including other program families, OCI,
 and gRPC, and remains the behavioural authority for the existing shared surface.
 Rust's XDP additions do not complete overall feature parity or establish physical
 NIC execution and hardware-offload support.
@@ -2690,7 +2692,8 @@ wrong, change it here before broadening feature coverage.
 
 ### Phase 4: remaining capabilities
 
-- Map sharing and PinByName coordination.
+- Explicit map-owner sharing and ordinary PinByName coordination are implemented;
+  shared map-of-maps definitions remain pending.
 - Kprobe/kretprobe lifecycle is implemented; uprobe, fentry, fexit, LSM,
   and remaining attachment types are pending.
 - OCI pull, cache, authentication, and signature verification.
@@ -4550,3 +4553,70 @@ Go comparison. The kernel stage took 103.60 seconds locally on Linux 6.18.54 wit
 eight ordinary contract workers and the existing development/test `aya-obj`
 opt-level-two override; this is not a controlled benchmark. No Go source,
 dependency, lockfile or legacy Rust source changed.
+
+
+### Map sharing and PinByName coordination (15 October 2026)
+
+Local loads now support explicit map-set joins and ordinary PinByName sharing on
+both stores. An owner ID must name a map set; a dependent program does not create
+one. The original owner program can unload before its dependents, and later loads
+can join the surviving map set. Ordinary PIN_NONE loads remain independent.
+All public ELF maps are pinned so different selections can join by exact names.
+Published provenance retains the entire set's map IDs, including in dependents,
+so teardown can validate pins after the original program and bytecode are gone.
+Older artifacts without that inventory keep conservative reference validation.
+
+Name-derived pins live under the confined `fs/shared` collection, independently
+of per-map-set aliases. Reuse checks type, dimensions, capacity, flags and
+map-extra before loading. Shared-map creation preserves BTF through Aya's public
+map-create API and a narrow BTF-load operation in the existing private syscall
+boundary. All managed filesystem mutation remains in `bpfman-fs`. Aya and
+library versions are unchanged; the Aya adapter now uses the existing workspace
+serde_json dependency for provenance decoding. Shared map-of-maps definitions are
+explicitly refused rather than inferred from incomplete compatibility evidence.
+
+One writer scope covers admission, creation/reuse, load, reference publication and
+teardown. New pins have consuming compensation receipts; reused pins do not.
+Cancellation is checked between shared-name acquisitions. Failed cleanup retains
+every unresolved receipt and attempt. If a later committed user adopts the exact
+same pin or map set before retry, revalidated cleanup transfers authority to that
+user and preserves the resource. Independent cleanup continues in the same pass.
+
+SQLite retains Go schema 2, using its existing map-set membership and shared-pin
+reference tables. New JSON stores use format 12; formats 1–11 refuse sharing
+without changing or implicitly upgrading existing state. Generic store contracts
+cover atomic reference publication, invalid owners, owner-first deletion,
+first-class map-set survival, reopened reads, foreign receipts and last-user
+cleanup. Backend-specific JSON contracts cover unchanged older snapshots.
+
+Three existing acceptance files run unchanged and explicitly selected on each
+store: `TestKprobe_MapOwnerIDSharedCounter`,
+`TestProgramLoad_MapOwnerIDMustNameMapSet`, and `TestTC_PinByNameMapSharing`.
+`make rust-test-map-sharing` also runs native identity and recovery contracts.
+The normal full gate retains all these cases. Stateful-fake contracts exercise
+forward/cleanup failures, per-effect cancellation, owner-first attached unload,
+reopening, new users during retry and transfer of unchanged cleanup authority.
+Native contracts prove shared map identity and BTF, independent control maps,
+verifier-failure cleanup, incompatible definitions, swapped-pin refusal before
+effects, new users during record-only retry, different-selection joins and
+attached owner-first unload. External map-descriptor lifetime remains explicit.
+
+
+Final validation: `direnv exec . make rust-fmt-fix rust-check lint-make` exited
+zero, including warnings-denied Clippy/Rustdoc, all userspace, store, CLI and
+compile-fail contracts, 76 stateful-fake cases and all 120 discovered kernel
+cases. The existing admitted corpus and separately selected TCX/probe files
+remain passing on both stores; the three additional sharing files pass unchanged
+on Rust and the Go reference binary with both JSON and SQLite. Owned tmpfs
+fixture scopes passed normal cleanup. Existing script contents and labels are
+unchanged. Internal-looking PinByName declarations are rejected before runtime
+creation in both userspace CLI and native admission contracts.
+
+Evidence: `/tmp/bpfman-maps-gate.log` records the complete passing gate;
+`/tmp/bpfman-maps-go-json.log` and `/tmp/bpfman-maps-go-sqlite.log` record the Go
+comparison. The kernel stage took 108.03 seconds locally on Linux 6.18.54, with
+eight ordinary contract workers and the existing development/test `aya-obj`
+opt-level-two override. This is not a controlled benchmark. No Go source,
+existing script, root dependency or legacy Rust source changed. The independent
+Rust lockfile only records the Aya adapter's new edge to the already-used
+serde_json package; dependency versions are unchanged.

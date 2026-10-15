@@ -22,6 +22,7 @@ panic = "deny"
 dbg_macro = "deny"
 
 [dependencies]
+serde_json.workspace = true
 aya.workspace = true
 bpfman-core.workspace = true
 bpfman-kernel.workspace = true

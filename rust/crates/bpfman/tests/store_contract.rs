@@ -24,6 +24,8 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
         .commit_program(
             writer,
             LoadRecord {
+                map_owner: None,
+                shared_maps: &[],
                 globals: &BTreeMap::from([
                     ("weight".into(), vec![0, 1, 255]),
                     ("empty".into(), vec![]),
@@ -145,6 +147,8 @@ fn batch_contract<S: OpenStore + CommitLoad>(backend: S) {
     let globals = BTreeMap::new();
     let spec = bpfman_model::ProgramSpec::Tracepoint(name.clone());
     let record = |id| LoadRecord {
+        map_owner: None,
+        shared_maps: &[],
         id: NonZeroU32::new(id).expect("id"),
         spec: &spec,
         source: "/source.o",
@@ -206,6 +210,8 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
     let metadata = BTreeMap::new();
     let globals = BTreeMap::new();
     let record = |id, spec| LoadRecord {
+        map_owner: None,
+        shared_maps: &[],
         id: NonZeroU32::new(id).expect("id"),
         spec,
         source: "source.o",
