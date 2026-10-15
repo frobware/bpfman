@@ -170,11 +170,6 @@ fn sqlite_multiple_readers_single_writer() {
     exercise(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_multiple_readers_single_writer() {
-    exercise(bpfman_store_json::Backend);
-}
-
 fn concurrent_startup<S: OpenStore + Copy + Send>(backend: S) {
     let temporary = tempfile::tempdir().expect("tempdir");
     let layout = RuntimeLayout::try_from(temporary.path().join("runtime")).expect("layout");
@@ -208,9 +203,4 @@ fn concurrent_startup<S: OpenStore + Copy + Send>(backend: S) {
 #[test]
 fn sqlite_concurrent_startup() {
     concurrent_startup(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_concurrent_startup() {
-    concurrent_startup(bpfman_store_json::Backend);
 }

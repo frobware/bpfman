@@ -1,4 +1,4 @@
-//! Batch outcomes through the public API, identical for both store backends.
+//! Batch outcomes through the public API, generic over the store contract.
 use super::{
     faults::{Faults, Point},
     support::*,
@@ -140,8 +140,8 @@ where
     c.no_artifacts();
 }
 
-pub(super) fn cli(store: &'static str) {
-    let c = Context::with_store(store);
+pub(super) fn cli() {
+    let c = Context::new();
     let source = fixture("multi_prog_tracepoint_kmod_counter.bpf.o");
     let args = [
         "program",

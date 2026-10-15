@@ -157,7 +157,6 @@ dependencies = [
  "bpfman-model",
  "bpfman-runtime",
  "bpfman-store",
- "bpfman-store-json",
  "bpfman-store-sqlite",
  "clap",
  "humantime",
@@ -247,7 +246,6 @@ dependencies = [
  "bpfman-lock",
  "bpfman-model",
  "bpfman-store",
- "bpfman-store-json",
  "bpfman-store-sqlite",
  "chrono",
  "libc",
@@ -265,23 +263,6 @@ dependencies = [
  "bpfman-fs",
  "bpfman-model",
  "thiserror",
-]
-
-[[package]]
-name = "bpfman-store-json"
-version = "0.1.0"
-dependencies = [
- "bpfman-core",
- "bpfman-fs",
- "bpfman-lock",
- "bpfman-model",
- "bpfman-store",
- "chrono",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tracing",
 ]
 
 [[package]]

@@ -112,11 +112,6 @@ fn sqlite_cancellation() {
 }
 
 #[test]
-fn json_cancellation() {
-    exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn cancelled_preparation_does_not_read_the_source() {
     let temp = tempfile::tempdir().expect("temporary directory");
     let missing = temp.path().join("missing.o");

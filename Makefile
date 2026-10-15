@@ -1091,7 +1091,7 @@ rust-test-unit: $(RUST_DISPATCHER)
 rust-test-userspace: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) sh rust/test-userspace.sh $(RUST_MANIFEST) $(RUST_TEST_RUNNER)
 
-# Public lifecycle with the stateful fake kernel and both concrete stores.
+# Public lifecycle with the stateful fake kernel and real SQLite.
 .PHONY: rust-test-kernel-fake
 rust-test-kernel-fake: $(RUST_DISPATCHER)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --locked --test kernel_lifecycle $(RUST_TEST_RUNNER)
@@ -1104,7 +1104,7 @@ rust-test-xdp-core:
 # Complete XDP persistence contracts and backend-specific atomicity/format tests.
 .PHONY: rust-test-xdp-store
 rust-test-xdp-store:
-	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-store-sqlite -p bpfman-store-json --locked
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-store-sqlite --locked
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test xdp_store --locked
 
 # Validate CLI load admission before source and runtime effects.

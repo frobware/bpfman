@@ -11,7 +11,7 @@ use bpfman_model::*;
 use bpfman_runtime::{ActiveStore, Bpfman, PreparedProgram, XdpAttach};
 use bpfman_store::*;
 
-pub(super) fn exercise<S>(backend: S, selection: &'static str)
+pub(super) fn exercise<S>(backend: S)
 where
     S: OpenStore
         + CommitLoad
@@ -30,7 +30,7 @@ where
         (XdpMode::Hw, false),
         (XdpMode::Hw, true),
     ] {
-        let c = Context::with_store(selection);
+        let c = Context::new();
         let interface = Interface::new();
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(

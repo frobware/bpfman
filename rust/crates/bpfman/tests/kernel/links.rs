@@ -1,4 +1,4 @@
-//! One outside-in attachment scenario, using both stores and real kernel links.
+//! One outside-in attachment scenario, using a generic store and real kernel links.
 
 use super::{
     faults::{Faults, Point, restore_blocked_pin},

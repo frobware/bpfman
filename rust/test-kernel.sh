@@ -29,14 +29,14 @@ trap 'rm -f "$listing"' EXIT HUP INT TERM
 discovered=0
 while IFS= read -r line; do
     case "$line" in
-        json_*': test'|sqlite_*': test'|go_*': test') discovered=$((discovered + 1)) ;;
+        sqlite_*': test'|go_*': test') discovered=$((discovered + 1)) ;;
         *) echo "unclassified kernel test: $line" >&2; exit 1 ;;
     esac
 done < "$listing"
 [ "$discovered" -gt 0 ] || { echo 'empty kernel test suite' >&2; exit 1; }
 
 selected=0
-for stage in corpus json-global json sqlite-global sqlite go; do
+for stage in corpus sqlite-global sqlite go; do
     if [ "$stage" = corpus ] && [ "$mode" = contracts ]; then continue; fi
     set --
     while IFS= read -r line; do
@@ -44,9 +44,9 @@ for stage in corpus json-global json sqlite-global sqlite go; do
         case "$stage:$name" in
             corpus:*_script_corpus) set -- "$@" "$name" ;;
             *:*_script_corpus) ;;
-            json-global:json_function_tracing_native_link_recovery|sqlite-global:sqlite_function_tracing_native_link_recovery|json-global:json_uprobe_native_link_recovery|sqlite-global:sqlite_uprobe_native_link_recovery|json-global:json_map_sharing_native_recovery|sqlite-global:sqlite_map_sharing_native_recovery|json-global:json_kprobe_native_link_recovery|json-global:json_xdp_load_lifecycle|json-global:json_tcx_native_link_recovery|sqlite-global:sqlite_kprobe_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
-            *:json_function_tracing_native_link_recovery|*:sqlite_function_tracing_native_link_recovery|*:json_uprobe_native_link_recovery|*:sqlite_uprobe_native_link_recovery|*:json_map_sharing_native_recovery|*:sqlite_map_sharing_native_recovery|*:json_kprobe_native_link_recovery|*:json_xdp_load_lifecycle|*:json_tcx_native_link_recovery|*:sqlite_kprobe_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
-            json:json_*|sqlite:sqlite_*|go:go_*) set -- "$@" "$name" ;;
+            sqlite-global:sqlite_function_tracing_native_link_recovery|sqlite-global:sqlite_uprobe_native_link_recovery|sqlite-global:sqlite_map_sharing_native_recovery|sqlite-global:sqlite_kprobe_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
+            *:sqlite_function_tracing_native_link_recovery|*:sqlite_uprobe_native_link_recovery|*:sqlite_map_sharing_native_recovery|*:sqlite_kprobe_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
+            sqlite:sqlite_*|go:go_*) set -- "$@" "$name" ;;
         esac
     done < "$listing"
     [ "$#" -gt 0 ] || continue

@@ -287,4 +287,3 @@ macro_rules! backend_tests {
 }
 
 backend_tests!(sqlite, bpfman_store_sqlite::Backend);
-backend_tests!(json, bpfman_store_json::Backend);

@@ -342,11 +342,6 @@ fn sqlite_uses_injected_kernel_observations() {
     exercise(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_uses_injected_kernel_observations() {
-    exercise(bpfman_store_json::Backend);
-}
-
 fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpReplacementStore + Copy>(
     backend: S,
 ) where
@@ -466,9 +461,4 @@ fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpReplacementStor
 #[test]
 fn sqlite_xdp_uses_injected_kernel_observations() {
     xdp_observations(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_xdp_uses_injected_kernel_observations() {
-    xdp_observations(bpfman_store_json::Backend);
 }

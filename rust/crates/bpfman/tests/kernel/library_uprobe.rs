@@ -49,16 +49,10 @@ fn cache(key: &str, path: &Path) -> Vec<u8> {
     data
 }
 
-fn host_cache(
-    c: &Context,
-    store: &str,
-    cache: &Path,
-    args: &[&str],
-    success: bool,
-) -> std::process::Output {
+fn host_cache(c: &Context, cache: &Path, args: &[&str], success: bool) -> std::process::Output {
     let output = Command::new("unshare")
         .args(["--mount", "--", "sh", "-c", "mount --make-rprivate / && mount -t tmpfs tmpfs /etc && cp \"$1\" /etc/ld.so.cache && shift && exec \"$@\"", "cache-namespace"])
-        .arg(cache).arg(rust()).arg("--runtime-dir").arg(c.layout.root()).args(["--store", store]).args(args)
+        .arg(cache).arg(rust()).arg("--runtime-dir").arg(c.layout.root()).args(args)
         .output().expect("host cache CLI");
     assert_eq!(
         output.status.success(),
@@ -69,9 +63,9 @@ fn host_cache(
     output
 }
 
-pub(super) fn exercise(store: &'static str) {
+pub(super) fn exercise() {
     for kind in ["uprobe", "uretprobe"] {
-        let c = Context::with_store(store);
+        let c = Context::new();
         let id = load(&c, kind);
         let pid = std::process::id().to_string();
         // No host cache is required: the mapped libc wins first.
@@ -115,7 +109,6 @@ pub(super) fn exercise(store: &'static str) {
         for query in ["libbpfmanhost", "libbpfmanhost.so", "libbpfmanhost.so.1"] {
             let output = host_cache(
                 &c,
-                store,
                 &cache_file,
                 &[
                     "link",
@@ -146,7 +139,6 @@ pub(super) fn exercise(store: &'static str) {
         // Readable maps with no match fall through to the cache.
         let output = host_cache(
             &c,
-            store,
             &cache_file,
             &[
                 "link",
@@ -172,7 +164,6 @@ pub(super) fn exercise(store: &'static str) {
         // A maps read error is terminal even though this cache could answer.
         let output = host_cache(
             &c,
-            store,
             &cache_file,
             &[
                 "link",
@@ -190,7 +181,6 @@ pub(super) fn exercise(store: &'static str) {
         assert!(String::from_utf8_lossy(&output.stderr).contains("maps"));
         host_cache(
             &c,
-            store,
             &cache_file,
             &[
                 "link",
@@ -210,11 +200,11 @@ pub(super) fn exercise(store: &'static str) {
         c.run(&rust(), &["program", "unload", &id], true);
         c.no_artifacts();
     }
-    pid_namespace_maps(store);
+    pid_namespace_maps();
 }
 
-fn pid_namespace_maps(store: &'static str) {
-    let c = Context::with_store(store);
+fn pid_namespace_maps() {
+    let c = Context::new();
     let temp = tempfile::tempdir().expect("PID namespace fixture");
     use std::os::unix::ffi::OsStrExt;
     let native = temp

@@ -28,5 +28,4 @@ thiserror.workspace = true
 [dev-dependencies]
 bpfman-kernel-aya.workspace = true
 bpfman-store-sqlite.workspace = true
-bpfman-store-json.workspace = true
 tempfile.workspace = true

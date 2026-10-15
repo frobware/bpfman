@@ -1,4 +1,4 @@
-//! Unload enters the production dispatcher interpreter with both concrete stores.
+//! Unload enters the production dispatcher interpreter with the real store.
 use super::*;
 
 pub(super) fn lifecycle<S: Store>(backend: S) {

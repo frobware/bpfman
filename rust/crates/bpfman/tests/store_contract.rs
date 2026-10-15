@@ -131,11 +131,6 @@ fn sqlite_contract() {
     exercise(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_contract() {
-    exercise(bpfman_store_json::Backend);
-}
-
 fn batch_contract<S: OpenStore + CommitLoad>(backend: S) {
     let temporary = tempfile::tempdir().expect("tempdir");
     let layout = RuntimeLayout::try_from(temporary.path().join("runtime")).expect("layout");
@@ -187,11 +182,6 @@ fn batch_contract<S: OpenStore + CommitLoad>(backend: S) {
 #[test]
 fn sqlite_atomic_batch_contract() {
     batch_contract(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_atomic_batch_contract() {
-    batch_contract(bpfman_store_json::Backend);
 }
 
 fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S) {
@@ -320,9 +310,4 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
 #[test]
 fn sqlite_program_kinds() {
     program_kinds(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_program_kinds() {
-    program_kinds(bpfman_store_json::Backend);
 }

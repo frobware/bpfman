@@ -11,15 +11,11 @@ use std::{
 };
 
 fn run(root: &Path, trace: &Path, filter: &str, args: &[&str]) -> Output {
-    run_backend("json", root, trace, filter, args)
-}
-
-fn run_backend(backend: &str, root: &Path, trace: &Path, filter: &str, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bpfman"))
         .env("RUST_LOG", filter)
         .env_remove("BPFMAN_RUNTIME_DIR")
         .env_remove("BPFMAN_LOCK_TIMEOUT")
-        .args(["--store", backend, "--runtime-dir"])
+        .arg("--runtime-dir")
         .arg(root)
         .arg("--trace-file")
         .arg(trace)
@@ -44,7 +40,7 @@ fn timeline_distinguishes_creation_reader_and_lock_timeout() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("runtime");
     let initial = temp.path().join("initial.json");
-    let filter = "bpfman_runtime=debug,bpfman_store_json=debug,bpfman_fs=trace,bpfman_lock=trace";
+    let filter = "bpfman_runtime=debug,bpfman_store_sqlite=debug,bpfman_fs=trace,bpfman_lock=trace";
     let output = run(&root, &initial, filter, &["program", "list", "-q"]);
 
     assert!(
@@ -57,7 +53,7 @@ fn timeline_distinguishes_creation_reader_and_lock_timeout() {
     for required in [
         "store.open",
         "store.create",
-        "snapshot.publish",
+        "store.connection.open",
         "lock.wait",
         "lock.held",
     ] {
@@ -160,11 +156,11 @@ fn timeline_distinguishes_creation_reader_and_lock_timeout() {
 fn rust_log_filters_components_without_changing_command_output() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("runtime");
-    let trace = temp.path().join("json-only.json");
+    let trace = temp.path().join("store-only.json");
     let output = run(
         &root,
         &trace,
-        "bpfman_store_json=debug",
+        "bpfman_store_sqlite=debug",
         &["program", "list", "-o", "json"],
     );
 
@@ -179,7 +175,7 @@ fn rust_log_filters_components_without_changing_command_output() {
             event["target"]
                 .as_str()
                 .expect("target")
-                .starts_with("bpfman_store_json")
+                .starts_with("bpfman_store_sqlite")
         );
     }
     assert!(!names(&trace).iter().any(|name| name == "lock.wait"));
@@ -210,50 +206,45 @@ fn existing_trace_destination_is_never_truncated() {
 
 #[test]
 fn list_reuses_the_store_handle_opened_at_startup() {
-    for backend in ["sqlite", "json"] {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let root = temp.path().join("runtime");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("runtime");
 
-        // Exercise both first-time initialization and an already-existing store.
-        for stage in ["initial", "existing"] {
-            let trace = temp.path().join(format!("{stage}.json"));
-            let output = run_backend(backend, &root, &trace, "debug", &["program", "list", "-q"]);
+    // Exercise both first-time initialization and an already-existing store.
+    for stage in ["initial", "existing"] {
+        let trace = temp.path().join(format!("{stage}.json"));
+        let output = run(&root, &trace, "debug", &["program", "list", "-q"]);
 
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(output.stdout.is_empty());
-            let events: Vec<Value> = String::from_utf8(output.stderr)
-                .expect("stderr")
-                .lines()
-                .map(|line| serde_json::from_str(line).expect("telemetry JSON"))
-                .collect();
-            let opens = |name: &str| {
-                events
-                    .iter()
-                    .filter(|event| {
-                        event["fields"]["message"] == "new" && event["span"]["name"] == name
-                    })
-                    .count()
-            };
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        let events: Vec<Value> = String::from_utf8(output.stderr)
+            .expect("stderr")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("telemetry JSON"))
+            .collect();
+        let opens = |name: &str| {
+            events
+                .iter()
+                .filter(|event| {
+                    event["fields"]["message"] == "new" && event["span"]["name"] == name
+                })
+                .count()
+        };
 
-            assert_eq!(
-                opens("store.open_reader"),
-                1,
-                "{backend} {stage}: no second open for list"
-            );
-            if backend == "sqlite" {
-                assert_eq!(opens("store.connection.open"), 1, "one read connection");
-                assert!(
-                    events.iter().any(|event| {
-                        event["fields"]["message"] == "reader acquired"
-                            && event["fields"]["reused"] == true
-                    }),
-                    "the listing must reuse the startup connection"
-                );
-            }
-        }
+        assert_eq!(
+            opens("store.open_reader"),
+            1,
+            "{stage}: no second open for list"
+        );
+        assert_eq!(opens("store.connection.open"), 1, "one read connection");
+        assert!(
+            events.iter().any(|event| {
+                event["fields"]["message"] == "reader acquired" && event["fields"]["reused"] == true
+            }),
+            "the listing must reuse the startup connection"
+        );
     }
 }

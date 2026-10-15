@@ -1,4 +1,4 @@
-//! The same pending-link protocol runs against both stores through public contracts.
+//! The same pending-link protocol runs against the real store through public contracts.
 //! No database statements or persistence-format fixtures belong in this suite.
 #![allow(clippy::expect_used)]
 
@@ -324,18 +324,8 @@ fn sqlite_pending_link_lifecycle() {
 }
 
 #[test]
-fn json_pending_link_lifecycle() {
-    lifecycle(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_atomic_failures_and_lock_free_readers() {
     failures(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_atomic_failures_and_lock_free_readers() {
-    failures(bpfman_store_json::Backend);
 }
 
 fn kprobe_lifecycle<S>(backend: S)
@@ -483,11 +473,6 @@ fn sqlite_kprobe_pending_lifecycle() {
     kprobe_lifecycle(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_kprobe_pending_lifecycle() {
-    kprobe_lifecycle(bpfman_store_json::Backend);
-}
-
 fn tcx_lifecycle<S>(backend: S)
 where
     S: OpenStore + CommitLoad + LinkStore,
@@ -629,11 +614,6 @@ where
 fn sqlite_tcx_intent_and_conditional_receipts() {
     tcx_lifecycle(bpfman_store_sqlite::Backend);
 }
-#[test]
-fn json_tcx_intent_and_conditional_receipts() {
-    tcx_lifecycle(bpfman_store_json::Backend);
-}
-
 fn uprobe_lifecycle<S>(backend: S)
 where
     S: OpenStore + CommitLoad + LinkStore + UnloadStore + Copy,
@@ -800,11 +780,6 @@ fn sqlite_uprobe_pending_lifecycle() {
     uprobe_lifecycle(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_uprobe_pending_lifecycle() {
-    uprobe_lifecycle(bpfman_store_json::Backend);
-}
-
 fn function_tracing_lifecycle<S>(backend: S)
 where
     S: OpenStore + CommitLoad + LinkStore + UnloadStore + Copy,
@@ -959,8 +934,4 @@ where
 #[test]
 fn sqlite_function_tracing_pending_lifecycle() {
     function_tracing_lifecycle(bpfman_store_sqlite::Backend);
-}
-#[test]
-fn json_function_tracing_pending_lifecycle() {
-    function_tracing_lifecycle(bpfman_store_json::Backend);
 }

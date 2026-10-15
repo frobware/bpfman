@@ -990,33 +990,18 @@ macro_rules! backend_tests {
     };
 }
 backend_tests!(sqlite, bpfman_store_sqlite::Backend);
-backend_tests!(json, bpfman_store_json::Backend);
 
 #[test]
 fn sqlite_tcx_ordering_and_scopes() {
     tcx::ordering(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_tcx_ordering_and_scopes() {
-    tcx::ordering(bpfman_store_json::Backend);
-}
-#[test]
 fn sqlite_tcx_failure_recovery() {
     tcx::recovery(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_tcx_failure_recovery() {
-    tcx::recovery(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_kprobe_lifecycle() {
     kprobe::lifecycle(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_kprobe_lifecycle() {
-    kprobe::lifecycle(bpfman_store_json::Backend);
 }
 
 #[test]
@@ -1025,25 +1010,12 @@ fn sqlite_kprobe_failure_recovery() {
 }
 
 #[test]
-fn json_kprobe_failure_recovery() {
-    kprobe::recovery(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_map_sharing_lifecycle() {
     map_sharing::lifecycle(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_map_sharing_lifecycle() {
-    map_sharing::lifecycle(bpfman_store_json::Backend);
-}
-#[test]
 fn sqlite_map_sharing_recovery() {
     map_sharing::recovery(bpfman_store_sqlite::Backend);
-}
-#[test]
-fn json_map_sharing_recovery() {
-    map_sharing::recovery(bpfman_store_json::Backend);
 }
 #[path = "lifecycle/uprobe.rs"]
 mod uprobe;
@@ -1052,18 +1024,9 @@ fn sqlite_uprobe_lifecycle() {
     uprobe::lifecycle(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_uprobe_lifecycle() {
-    uprobe::lifecycle(bpfman_store_json::Backend);
-}
-#[test]
 fn sqlite_uprobe_failure_recovery() {
     uprobe::recovery(bpfman_store_sqlite::Backend);
 }
-#[test]
-fn json_uprobe_failure_recovery() {
-    uprobe::recovery(bpfman_store_json::Backend);
-}
-
 #[path = "lifecycle/function_tracing.rs"]
 mod function_tracing;
 #[test]
@@ -1071,14 +1034,6 @@ fn sqlite_function_tracing_lifecycle() {
     function_tracing::lifecycle(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_function_tracing_lifecycle() {
-    function_tracing::lifecycle(bpfman_store_json::Backend);
-}
-#[test]
 fn sqlite_function_tracing_failure_recovery() {
     function_tracing::recovery(bpfman_store_sqlite::Backend);
-}
-#[test]
-fn json_function_tracing_failure_recovery() {
-    function_tracing::recovery(bpfman_store_json::Backend);
 }

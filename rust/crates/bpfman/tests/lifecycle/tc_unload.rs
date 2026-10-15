@@ -1,4 +1,4 @@
-//! Production unload with stateful TC ownership and both concrete stores.
+//! Production unload with stateful TC ownership and the real store.
 use super::*;
 use bpfman_runtime::{TcAttach, UnloadErrorKind};
 

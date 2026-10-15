@@ -7,8 +7,8 @@ use std::{
     process::{Command, Stdio},
 };
 
-pub(super) fn effect_boundaries(store: &'static str) {
-    let c = Context::with_store(store);
+pub(super) fn effect_boundaries() {
+    let c = Context::new();
     let root = c.layout.root();
     let fifo = root.parent().expect("temporary parent").join("source.fifo");
 
@@ -232,22 +232,17 @@ pub(super) fn go_dsl(script: &str) {
     let binary = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin/bpfman"));
-    run_dsl("sqlite", Some(&[script]), &binary, false);
+    run_dsl(Some(&[script]), &binary, false);
 }
 
-pub(super) fn corpus(store: &'static str) {
+pub(super) fn corpus() {
     // Both cohorts share one runner/pool. Four scripts additionally mutate one
     // owned writer/store while ordinary acceptance keeps per-case isolation.
-    run_dsl(store, None, &rust(), true);
+    run_dsl(None, &rust(), true);
 }
 
-fn run_dsl(
-    store: &'static str,
-    scripts: Option<&[&str]>,
-    binary: &std::path::Path,
-    isolated: bool,
-) {
-    let c = Context::with_store(store);
+fn run_dsl(scripts: Option<&[&str]>, binary: &std::path::Path, isolated: bool) {
+    let c = Context::new();
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin/e2e-scripts.test"));
@@ -341,7 +336,7 @@ fn run_dsl(
                 String::new()
             },
         )
-        .env("BPFMAN_STORE", store)
+        .env("BPFMAN_STORE", "sqlite")
         .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
         .env(
             "BPFMAN_E2E_CLSACT_RECLAIM",
@@ -374,7 +369,7 @@ fn run_dsl(
         if let Some(started) = started {
             let _ = writeln!(
                 stderr,
-                "script-batch-timing\t{store}\t{scope}\t{implementation}\t{:.3}",
+                "script-batch-timing\tsqlite\t{scope}\t{implementation}\t{:.3}",
                 started.elapsed().as_secs_f64()
             );
         }
@@ -383,7 +378,7 @@ fn run_dsl(
             if line.starts_with("--- PASS: TestBPFManScripts/") && line.contains("/scripts/") {
                 let _ = writeln!(
                     stderr,
-                    "script-timing\t{store}\t{scope}\t{implementation}\t{line}"
+                    "script-timing\tsqlite\t{scope}\t{implementation}\t{line}"
                 );
             }
         }
@@ -425,9 +420,8 @@ fn run_dsl(
 
 // Existing acceptance files remain immutable and separately selected until the
 // manifest policy permits admission. Keep them in the normal kernel gate.
-pub(super) fn tcx_scripts(store: &'static str) {
+pub(super) fn tcx_scripts() {
     run_dsl(
-        store,
         Some(&[
             "TestTCX_LoadAndGet",
             "TestTCX_LinkRoundTrip",
@@ -443,9 +437,8 @@ pub(super) fn tcx_scripts(store: &'static str) {
     );
 }
 
-pub(super) fn kprobe_scripts(store: &'static str) {
+pub(super) fn kprobe_scripts() {
     run_dsl(
-        store,
         Some(&[
             "TestKprobe_LoadAndGet",
             "TestKretprobe_LoadAndGet",
@@ -460,9 +453,8 @@ pub(super) fn kprobe_scripts(store: &'static str) {
     );
 }
 
-pub(super) fn map_sharing_scripts(store: &'static str) {
+pub(super) fn map_sharing_scripts() {
     run_dsl(
-        store,
         Some(&[
             "TestKprobe_MapOwnerIDSharedCounter",
             "TestProgramLoad_MapOwnerIDMustNameMapSet",
@@ -473,9 +465,8 @@ pub(super) fn map_sharing_scripts(store: &'static str) {
     );
 }
 
-pub(super) fn uprobe_scripts(store: &'static str) {
+pub(super) fn uprobe_scripts() {
     run_dsl(
-        store,
         Some(&[
             "TestUprobe_LoadAndGet",
             "TestUretprobe_LoadAndGet",
@@ -497,9 +488,8 @@ pub(super) fn uprobe_scripts(store: &'static str) {
     );
 }
 
-pub(super) fn container_uprobe_scripts(store: &'static str) {
+pub(super) fn container_uprobe_scripts() {
     run_dsl(
-        store,
         Some(&[
             "TestContainerUprobe_LinkIDAndTraffic",
             "TestContainerUprobe_ExternalCLIPersistence",
@@ -510,9 +500,8 @@ pub(super) fn container_uprobe_scripts(store: &'static str) {
     );
 }
 
-pub(super) fn function_tracing_scripts(store: &'static str) {
+pub(super) fn function_tracing_scripts() {
     run_dsl(
-        store,
         Some(&[
             "TestFentry_LoadAndGet",
             "TestFexit_LoadAndGet",

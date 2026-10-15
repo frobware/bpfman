@@ -44,7 +44,6 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
-| `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
 | `bpfman-runtime` | 4 | Generic attachment lifecycle interpreters, consuming compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
@@ -113,13 +112,24 @@ load retains its original error and exposes the acquisition failure through
 The crate owns no CLI formatting or telemetry subscriber. This is a reusable
 library boundary today; packaging and publishing remain a separate step.
 
+## Persistence scope
+
+SQLite is the only current persistent backend. Sections below retain historical
+measurements and Go comparisons from the two-backend experiment; references to
+JSON stores or two backend batches in that evidence describe the implementation
+before its retirement. The live CLI, workspace and normal gate use SQLite.
+JSON command output and trace files remain supported.
+
 ## Store backend boundary
 
-The CLI composition root selects SQLite (the default) or JSON with `--store`
-or `BPFMAN_STORE`, opens a runtime-bound `ActiveStore`, and moves it into `Bpfman`.
+The CLI composition root supplies SQLite implicitly, opens a runtime-bound
+`ActiveStore`, and moves it into `Bpfman`. There is no `--store` flag or
+`BPFMAN_STORE` binding. The experimental JSON backend and its dedicated filesystem
+publisher have been retired. Existing JSON state is refused unchanged; no
+conversion or automatic replacement is performed.
 Shared behavioural tests construct the same application instance in setup.
 Runtime depends
-on `bpfman-store`, with no direct or transitive dependency on either backend.
+on `bpfman-store`, with no direct or transitive dependency on a concrete backend.
 Architecture tests enforce this separation. The contract
 crate defines small, statically dispatched interfaces:
 
@@ -142,7 +152,7 @@ crate defines small, statically dispatched interfaces:
   snapshot without the writer lock.
 
 There are no connection types, schema-version fields, or transaction callbacks
-in these contracts. SQLite and JSON implement the same operations. Tests use these real stores;
+in these contracts. SQLite implements these operations. Tests use the real store;
 fault decorators intercept selected operations without implementing persistence.
 
 `ActiveStore` retains the handle returned by startup and clones it for each
@@ -150,8 +160,7 @@ caller without reopening the backend. Clones share backend resources, not a
 transaction or frozen snapshot. SQLite retains one idle read connection; a
 concurrent read opens a separate connection if that slot is occupied. Its mutex
 protects only checkout/return, never query execution. Sequential reads reuse the
-connection, including after a failed read. JSON shares the opened directory
-handle and reads the currently published snapshot on each call. Mutation
+connection, including after a failed read. Mutation
 preflight revalidates the retained handle, and reads check compatibility inside
 their own snapshots.
 
@@ -165,33 +174,10 @@ and stored column types are checked at runtime, with domain validation afterward
 Creation still executes the authoritative Go schema DDL. Neither SQL nor query
 row types appear in the generic store contracts or behavioural tests.
 
-JSON version 4 adds complete single-member XDP dispatcher snapshots to private
-tracepoint/XDP programs and standalone tracepoint links. Versions 1–3 retain
-their existing operations: tracepoint programs from version 1, tracepoint links
-from version 2, and XDP loads from version 3. XDP attachment requires a separately
-initialized version 4 or newer runtime. Version 5 adds multi-member XDP
-replacement. Version 6 persists explicit network namespace paths. New stores use
-version 12 for map sharing. Version 11 retains native kernel entry/return probes;
-version 10 retains native TCX;
-version 9 retains independent TC egress dispatchers. Version 8 retains complete
-TC ingress revisions. Version 7 retains TC loads and singleton ingress attachments
-without implicit upgrade. Formats 1–11 refuse map sharing without upgrading.
-Formats 1–10 refuse kernel probes without upgrading. Formats 1–9 refuse TCX.
-Formats 7–8 reject egress without changing existing state.
-Versions 1–6 refuse TC without upgrading. Versions 4 and 5 reject namespaced attachments without upgrading;
-version 4 also rejects replacement. Existing stores never upgrade implicitly.
-The filesystem adapter writes the pending snapshot beneath a verified directory
-descriptor and atomically renames it into place under the runtime writer lock.
-Failed publication leaves the old state intact; interrupted staging files are
-reused after validation. This is runtime state under `/run`; power-loss recovery
-is outside the contract. JSON format/version checks and generation-based deletion
-evidence remain inside the JSON adapter. Unknown fields and invalid relationships
-are rejected without repair.
-
 `LinkStore` and `LinkReader` support attachment lifecycle operations: allocate
 pending intent and its canonical pin path, finalise with the kernel link ID,
 observe, and conditionally delete using opaque receipts. The shared contract
-suite exercises both backends through an injected `ActiveStore`, including failed
+suite exercises the real store through an injected `ActiveStore`, including failed
 finalisation, stale receipts, lock-free reads, and program deletion blocked by
 pending or finalised links. SQLite retains Go's schema version 2. The runtime
 enforces release of the managed attachment reference before consuming a
@@ -201,16 +187,12 @@ teardown.
 Pending intent is cleaned using its canonical pin path; a missing kernel ID does
 not prevent cleanup. A present pin must still match the program and link type.
 
-Both formats occupy `<runtime>/db/store.db`. The filename is historical; selecting
-another backend refuses the existing incompatible contents rather than creating
-a second inventory. There is no implicit conversion. Use a separate runtime to
-try JSON alongside an existing SQLite runtime:
-
-```sh
-sudo rust/target/debug/bpfman --store json --runtime-dir /run/bpfman-json program list
-```
-
-Keep the same store selection for later commands against that runtime.
+SQLite occupies `<runtime>/db/store.db` and retains Go schema 2. The generic
+contracts, consuming receipts and backend-parameterized scenarios remain intact.
+A future adapter belongs behind those contracts and must run the same lifecycle,
+CLI and DSL scenarios. Only composition setup selects the implementation.
+Architecture tests guard the normal dependency closures against concrete adapter
+and SQL dependencies leaking into the runtime or store contracts.
 
 Shared store errors expose portable categories and preserve private diagnostic
 sources. `UnloadReport<S>` and `UnloadError<S>` retain the selected backend's
@@ -219,7 +201,7 @@ authority internally. Backends must reject foreign or stale evidence.
 Failed-load cleanup needs only filesystem receipts and never reopens or retries
 the store.
 
-Tests use both real stores through production read/unload operations and
+Tests use real SQLite through production read/unload operations and
 the production load interpreter with fake kernel/filesystem effects. They check
 open failures before acquisition, atomic commit failure with independent cleanup
 failures, successful commit without compensation, retained receipts, unchanged
@@ -229,7 +211,7 @@ compensation, and real-kernel compatibility gates remain in place.
 Generic live-kernel tests inject failures at store operations through a test-only
 `Faults<S>` decorator. They call public runtime operations with real kernel and
 filesystem effects; no production failure flags or persistence edits are needed.
-The same `lifecycle::exercise<S>` scenarios run against both SQLite and JSON.
+The same `lifecycle::exercise<S>` scenarios remain generic and run against SQLite.
 CLI and unchanged DSL tests inspect returned JSON and runtime artifacts, with no
 database queries. `make rust-test` and `make rust-check` build the fixtures and
 run all kernel and unchanged DSL tests as part of the normal gate. Cargo's runner
@@ -252,8 +234,7 @@ Opening, byte-preservation, WAL, independent-reader/writer and receipt contracts
 continue using actual database files. `tests/sqlite_compatibility.rs` checks the
 selected SQLite CLI against Go's schema. These format-specific assertions do not
 belong in the generic lifecycle tests. Sharing persisted state with Go is checked separately
-in `tests/kernel/go_compatibility.rs`; JSON does not need to share
-Go's SQLite representation. The division preserves the previous coverage:
+in `tests/kernel/go_compatibility.rs`. The division preserves the previous coverage:
 
 | Scenario | Coverage |
 | --- | --- |
@@ -261,21 +242,18 @@ Go's SQLite representation. The division preserves the previous coverage:
 | Foreign pin/map identity, failed output delivery | `tests/kernel/cli.rs`, public CLI and artifact observations |
 | Go/Rust shared-state observations and unload in both directions | SQLite-specific `tests/kernel/go_compatibility.rs` |
 | Unsupported stored relationships, noncanonical stored paths, partial writes | SQLite adapter tests using the actual Go schema |
-| CLI tracepoint lifecycle | Unchanged `TestTracepoint_LoadAndGet.bpfman` and `TestTracepoint_LinkRoundTrip.bpfman`, plus `TestTracepoint_UnloadAttached.bpfman`, each with SQLite and JSON |
+| CLI tracepoint lifecycle | Unchanged `TestTracepoint_LoadAndGet.bpfman` and `TestTracepoint_LinkRoundTrip.bpfman`, plus `TestTracepoint_UnloadAttached.bpfman`, with SQLite |
 | Typed, raw, and nested-shell executable selection | `tests/e2e_selection.rs`, unprivileged Make recipe tests |
 
-Both persistent backends run the same generic lifecycle, CLI, unchanged DSL,
-and unprivileged store-contract scenarios, changing only backend selection in
-test setup. JSON adds focused persistence tests for malformed state, publication
-failure, invalid relationships, and stale generations. It has no separate
-behavioural suite.
+The generic lifecycle, unchanged DSL and store-contract suites run against real
+SQLite. Fault decorators intercept domain operations and delegate successful
+persistence and receipt validation to that adapter. The stateful fake replaces
+kernel effects only.
 
-`tests/concurrent_store.rs` exercises both backends with four independent readers
-opening and reading while a writer holds the runtime lock and publishes successive
-commits. Each read sees one complete committed snapshot; separate calls may see
-different generations. Concurrent first starts recheck absence under the writer
-lock. SQLite uses WAL; JSON readers retain an opened inode even if publication
-unlinks it before validation. Staging validation still requires exactly one link.
+`tests/concurrent_store.rs` exercises four independent readers opening and reading
+while a writer holds the runtime lock and publishes successive commits. Each read
+sees one complete committed snapshot; separate calls may see newer commits.
+Concurrent first starts recheck absence under the writer lock. SQLite uses WAL.
 
 ## Telemetry
 
@@ -284,8 +262,8 @@ enable structured JSON events on stderr. Command output remains on stdout.
 Telemetry is disabled by default. Filters can select a crate or individual module:
 
 ```sh
-RUST_LOG=bpfman_runtime=debug,bpfman_store_json=debug,bpfman_fs::snapshot=trace,bpfman_lock=trace \
-  rust/target/debug/bpfman --store json --runtime-dir /tmp/bpfman-observe \
+RUST_LOG=bpfman_runtime=debug,bpfman_store_sqlite=debug,bpfman_fs=trace,bpfman_lock=trace \
+  rust/target/debug/bpfman --runtime-dir /tmp/bpfman-observe \
   --trace-file /tmp/bpfman-startup.json program list -q
 ```
 
@@ -294,8 +272,8 @@ filter. `--trace-file` enables debug spans when `RUST_LOG` is unset; lock spans 
 trace level and need `bpfman_lock=trace`. Existing output files are refused. Each
 file covers one CLI process. Trace guards flush on normal and error exits.
 
-Targets include `bpfman_runtime`, `bpfman_store_json`, `bpfman_store_sqlite`,
-`bpfman_fs::snapshot`, and `bpfman_lock`. Operation spans cover store opening,
+Targets include `bpfman_runtime`, `bpfman_store_sqlite`,
+`bpfman_fs`, and `bpfman_lock`. Operation spans cover store opening,
 creation, snapshots, commits, deletion, publication, and program operations.
 `lock.wait` measures acquisition (including timeout/cancellation); `lock.held`
 covers the current callback and closing its descriptor. Inherited descriptors may
@@ -305,8 +283,6 @@ span records actual read-connection opening; `reader acquired` events include
 `reused` so connection reuse is visible. No record contents or credentials
 are logged. Model/core crates remain uninstrumented and pure.
 
-JSON now separates `store.read`, `store.decode`, `store.validate_state` and
-`store.encode`; fields contain byte lengths and record counts, never contents.
 SQLite dispatcher/link/unload writer openings emit `store.connection.open_writer`.
 These spans separate adapter work from existing writer wait/ownership and kernel
 operation spans; nested span durations must not be blindly added together.
@@ -598,8 +574,7 @@ mounted bpffs may remain after a failed load. Crash recovery is separate work.
 Non-UTF-8 source/runtime paths are rejected before load effects because this
 slice persists paths as SQLite text; read-only listing still accepts native paths.
 
-SQLite creates every selected program and private map set in one transaction;
-JSON publishes one complete snapshot. Records retain Go's source path, license,
+SQLite creates every selected program and private map set in one transaction. Records retain Go's source path, license,
 metadata, UTC creation time, and null update time.
 Existing rows are not overwritten. On commit, ownership transfers to stored
 state; failed output delivery never compensates the successful load.
@@ -622,7 +597,7 @@ earlier cleanup failures and cover cancellation and explicit retry. Kernel tests
 cover second-program verifier rejection, batch commit failure, retained cleanup,
 private map ownership, CLI ordering, and post-commit observation/output failure.
 The unchanged three-program tracepoint DSL tests staggered detach and counter
-execution against both SQLite and JSON.
+execution against SQLite.
 
 Build and run the focused real-kernel acceptance gate with:
 
@@ -649,9 +624,8 @@ sudo rust/target/debug/bpfman program load file \
 
 `-g NAME=HEX` overrides globals after checking their names and byte lengths
 against the captured ELF, before creating runtime state. Aya applies the bytes
-when loading; both stores retain the overrides for later program observations.
-The stored ELF remains the original input. Empty JSON-store overrides are
-omitted, preserving existing snapshots without a version change.
+when loading; SQLite retains the overrides for later program observations.
+The stored ELF remains the original input.
 
 ## Tracepoint attachment and detachment
 
@@ -680,7 +654,7 @@ descriptors may keep the kernel attachment alive. `list_link_records` reads a
 fresh store snapshot without the writer lock and includes pending intent; it
 does not claim current kernel presence.
 
-The same real-kernel scenario runs against SQLite and JSON. It proves counter
+The same real-kernel scenario runs against SQLite. It proves counter
 execution before detach and quiescence afterwards, replacement refusal, failed
 finalisation compensation, blocked unpinning, explicit retries with preserved
 history, and cancellation at store boundaries. Private interpreter tests cover
@@ -853,12 +827,11 @@ or an invalid mode for the selected interface fails before store initialization.
 Only XDP attach reads this configuration; read-only commands do not need it.
 Real-kernel tests use veth to verify native driver and SKB modes, hardware-request
 fallback, packet counters, replacement/restoration, and either surviving member
-on both stores. Run `direnv exec . make rust-test-xdp-modes` for that suite.
+with SQLite. Run `direnv exec . make rust-test-xdp-modes` for that suite.
 Actual hardware offload is unverified.
 
 SQLite atomically publishes the dispatcher header, managed link, and member
-using Go schema version 2. JSON supports that snapshot from version 4; newly
-created JSON stores use version 7. Explicit XDP namespaces require format 6 or newer.
+using Go schema version 2.
 A successful commit ends compensation, including when cancellation arrives late.
 
 Last-member `link detach LINK_ID` synchronously detaches the outer link before releasing
@@ -909,16 +882,16 @@ driver rejects a non-fragment dispatcher at jumbo MTU, replacement leaves the
 old fragment-aware chain active.
 
 Two parallel `TestXDP_PASS_{Drv,Skb}_MultiBuffer` scripts cover public PASS
-behaviour on both stores, using pooled namespaces and the existing packet probe.
+behaviour with SQLite, using pooled namespaces and the existing packet probe.
 They require complete 8014-byte payloads, no duplicates, exact member execution
 and fragment/tail/boundary-read evidence. They verify single/two-member execution,
 equal-priority ordering, proceed-on stopping, mixed membership at MTU 1500,
 restored jumbo operation, both survivors, stable outer identity and last detach.
-Actual Go comparison on both stores failed initial jumbo attachment with `ERANGE`
+Actual Go comparison with SQLite failed initial jumbo attachment with `ERANGE`
 in both modes, so both scripts are Rust-only.
 
 Run `direnv exec . make rust-test-xdp-frags` for four retained kernel contracts
-on both stores and explicitly requested driver/SKB modes. Two jumbo ping waves
+with SQLite and explicitly requested driver/SKB modes. Two jumbo ping waves
 per survivor scenario prove execution after attach/detach publication restoration;
 the 8 KB ICMP payloads prohibit IP fragmentation and retain fragment/tail/boundary
 counter evidence. Rust also checks exact snapshots, unresolved ownership,
@@ -958,15 +931,13 @@ managed link IDs, program identities, metadata, creation timestamps, priorities,
 and proceed-on masks are preserved. Revision, dispatcher ID, slots, extension
 kernel links, and membership change atomically; the durable outer link stays
 unchanged. Failures return the receipt for an explicit retry and commit nothing.
-SQLite rechecks and publishes within one transaction using Go schema 2. JSON
-publishes a complete file in its existing format (5 or 6 for replacement), and
-never implicitly upgrades older state.
+SQLite rechecks and publishes within one transaction using Go schema 2.
 
-Run `direnv exec . make rust-test-xdp-store` for the six shared store contracts
+Run `direnv exec . make rust-test-xdp-store` for the shared store contracts
 and backend-specific tests. Coverage includes 1 → 2 → 1 → 0 persistence with
 removal of either member, growth to ten slots, capacity refusal, stable IDs,
 reopening, stale/foreign receipts, invalid requests, SQLite DML aborts and ignored
-writes, JSON publication obstruction, malformed membership, and format-4 refusal.
+writes and malformed membership.
 The runtime uses complete-snapshot operations for replacement. Singleton store
 entry points remain restricted to first attach and last detach.
 
@@ -1020,7 +991,7 @@ multiple interfaces, foreign kernel instances, failed retirement, cancellation,
 partial progress, and new links added during retained recovery.
 
 The batched `direnv exec . make rust-test-scripts` gate includes these twelve
-unchanged Go XDP scripts on SQLite and JSON (`rust-test-xdp-corpus` is an alias):
+unchanged Go XDP scripts with SQLite (`rust-test-xdp-corpus` is an alias):
 
 | Coverage | Unchanged scripts |
 | --- | --- |
@@ -1061,7 +1032,7 @@ authority. Entry/spawn failures return errors before attachment, and no worker
 or descriptor remains detached from its owning operation. Uprobes use the separate
 mount-namespace subprocess helper described below.
 
-Namespace paths are persisted in Go-compatible SQLite columns and JSON format 6,
+Namespace paths are persisted in Go-compatible SQLite columns,
 and appear in link details and dispatcher runtime JSON. Rebuilds retain the
 established path even when a new attach uses an alias of the same namespace.
 Missing or replaced paths refuse new preparation and retained unload retries.
@@ -1070,8 +1041,7 @@ Final detach uses owned kernel/pin identities and can clean up after a named
 namespace path is removed; non-last detach and attached unload need the stored
 namespace path to prepare surviving members or retained program evidence.
 
-Run `direnv exec . make rust-test-xdp-netns` for six real-kernel tests on both
-stores. The unchanged `TestXDP_NetnsVethPairLinkRoundTrip` and
+Run `direnv exec . make rust-test-xdp-netns` for real-kernel tests with SQLite. The unchanged `TestXDP_NetnsVethPairLinkRoundTrip` and
 `TestXDP_NetnsDispatcherRebuild` scripts verify traffic, rebuilding, observations,
 and counter quiescence. Shared recovery tests cover identical interface indices
 in independent namespaces, alias paths, invalid namespace objects, missing/replaced
@@ -1083,7 +1053,7 @@ worker-entry failure test verifies that no effect runs or caller namespace chang
 ### XDP TX and REDIRECT packet delivery
 
 Run `direnv exec . make rust-test-scripts rust-test-xdp-delivery` for script
-acceptance and four real-kernel restoration tests: SQLite and JSON, each with
+acceptance and real-kernel restoration tests with SQLite and
 explicitly verified native and SKB ingress modes. Normal forwarding lives in the
 eight `TestXDP_TX_*` / `TestXDP_Redirect_*` scripts, including jumbo variants;
 the Rust matrix retains post-failure packet evidence.
@@ -1126,7 +1096,7 @@ program, such as PASS to continue normal processing or DROP to discard the frame
 See the kernel's [DEVMAP documentation](https://docs.kernel.org/bpf/map_devmap.html).
 
 Run `direnv exec . make rust-test-xdp-devmap` for four real-kernel suites:
-SQLite/JSON with explicitly observed native/SKB ingress modes. Each covers
+SQLite with explicitly observed native/SKB ingress modes. Each covers
 PASS and DROP lookup fallback, default REDIRECT stopping or explicit continuation
 into a DROP member, and removal of either member. The same marked-frame captures
 and exact execution counters used for direct delivery prove forwarding to
@@ -1167,7 +1137,7 @@ The same namespace-aware Go map-update fixture accepts both map types and applie
 the array bounds check only to DEVMAP.
 
 Run `direnv exec . make rust-test-xdp-devmap-hash` for eight real-kernel suites:
-SQLite/JSON, explicit driver/SKB ingress, and ordinary/genuine multi-buffer frames.
+SQLite, explicit driver/SKB ingress, and ordinary/genuine multi-buffer frames.
 They reuse the DEVMAP forwarding lifecycle with a two-entry hash map and keys
 `0x80000001` and `0xffffffff`. The second key names an unused target; packets
 must follow only the requested key, including PASS/DROP fallback while that key
@@ -1198,7 +1168,7 @@ also passed. Aya and the lockfile remain unchanged.
 
 Run `direnv exec . make rust-test-scripts rust-test-xdp-multibuffer-forwarding`
 for ordinary script acceptance and eight independently scheduled real-kernel
-restoration suites: direct TX/REDIRECT and DEVMAP, each on SQLite/JSON with
+restoration suites: direct TX/REDIRECT and DEVMAP, each on SQLite with
 explicitly observed native/SKB ingress modes. Together they
 cover the direct TX/REDIRECT and DEVMAP lifecycle scenarios above with three
 8014-byte Ethernet frames (8000 bytes after the Ethernet header) and MTU 9000 on
@@ -1235,17 +1205,17 @@ discovery and the optional `KERNEL_DEV` override are documented in
 
 Run `direnv exec . make rust-test-scripts rust-test-xdp-broadcast` for ordinary
 and jumbo script acceptance plus sixteen real-kernel restoration/lifetime suites:
-DEVMAP/DEVMAP_HASH, SQLite/JSON, native/SKB ingress, and ordinary/genuine multi-buffer
+DEVMAP/DEVMAP_HASH, SQLite, native/SKB ingress, and ordinary/genuine multi-buffer
 frames. `direnv exec . make rust-test-xdp-broadcast-hash` selects the eight hash-backed
 suites. Eight parallel `TestXDP_{Devmap,DevmapHash}_Broadcast_{Drv,Skb}_` scripts
 cover ordinary and 8014-byte frames, ingress exclusion, empty/sparse maps, live
 updates, continuation, both survivors and last detach. A map/ifindex-filtered
 tracepoint requires zero redirect errors except for exact jumbo cloning rejection;
 fragment/tail/boundary counters prove genuine non-linear input and intact forwarding.
-All eight passed on both stores. Ordinary driver scripts are shared with Go.
+All eight passed with SQLite. Ordinary driver scripts are shared with Go.
 The ordinary SKB scripts are Rust-only after Go attached in driver mode; the four
 jumbo scripts are Rust-only after Go failed to attach the receiving fragment-aware
-observer at MTU 9000 with `ERANGE` on both stores. These are tested topology
+observer at MTU 9000 with `ERANGE` with SQLite. These are tested topology
 boundaries, not a claim about all possible Go SKB/jumbo setups.
 Rust retains two post-failure packet waves per scenario, reducing jumbo captures
 from 72 to 8 per matrix invocation, just as for ordinary frames. Exact map
@@ -1328,7 +1298,7 @@ native egress programs before creating a dispatcher revision, including after
 store reopen. Unsupported CPUMAP sections fail preparation before runtime effects.
 
 Eight parallel `TestXDP_{Devmap,DevmapHash}_Egress_{Drv,Skb}_{Linear,MultiBuffer}`
-scripts cover observable egress behaviour on both stores. Six positive scripts
+scripts cover observable egress behaviour with SQLite. Six positive scripts
 prove ordinary PASS/DROP on both map types and genuine jumbo hash egress; two
 array-jumbo scripts preserve the current rejection boundary. They check native
 XDP type/ID, refusal of interface attachment after CLI/store reopening, empty-map
@@ -1400,7 +1370,7 @@ after map-owner unload; closing it releases both map and program. Final inventor
 and managed artifacts must be empty.
 
 Go's current loader forces all managed XDP to EXT and clears its attach type.
-Actual comparison on both stores rejects native egress loading at the context
+Actual comparison with SQLite rejects native egress loading at the context
 read (`invalid bpf_context access off=20 size=4`), so all eight new scripts carry
 `rust-only=true`. Native DEVMAP egress is beyond that Go path. Go still supports
 more of the overall bpfman surface. DEVMAP_HASH unicast acceptance above adds coverage for existing
@@ -1478,7 +1448,7 @@ remain asynchronous kernel lifetime contracts.
 
 It also runs in `rust-check`, alongside operation-level fault tests, filesystem
 confinement tests, the real-kernel tests, and the unchanged admitted DSL corpus
-on both stores. The fake checks orchestration and simulated ownership; the real
+with SQLite. The fake checks orchestration and simulated ownership; the real
 kernel tests establish verifier, syscall, and kernel lifetime behaviour.
 
 
@@ -1666,7 +1636,7 @@ Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
 84 admitted scripts: 52 shared Go/Rust scripts and 32 Rust-only scripts,
 out of 171 scripts in total. Eight DEVMAP files declare four named cases each;
 eight broadcast and eight TX/direct REDIRECT files declare two each. The 84-file
-isolated corpus therefore executes 124 script processes per store: 60 plain
+isolated corpus therefore executes 124 script processes with SQLite: 60 plain
 scripts and 64 named cases. Each case has its own runtime, pooled network, timeout
 and residue checks. Direct shell execution still runs the complete matrix. See the
 [case runner guide](../cmd/bpfman-shell/USER-GUIDE.md#running-and-checking-scripts).
@@ -1726,7 +1696,7 @@ No production behaviour was changed for these testing slices.
 
 Jumbo PASS adds two parallel driver/SKB scripts for stopping, mixed membership,
 restored jumbo operation and both survivors. Both passed in about six seconds
-per backend; Go failed first jumbo attachment with `ERANGE` on both stores.
+per backend; Go failed first jumbo attachment with `ERANGE` with SQLite.
 The scripts are Rust-only. Rust retains publication-restoration traffic and
 internal dispatcher flags; 44 duplicate jumbo ping waves and eight ordinary
 ping waves moved out of the serial contracts. See the
@@ -1754,10 +1724,10 @@ direnv exec . sudo -n unshare --mount --propagation private -- \
   BPFMAN_E2E_SCRIPT_SELECTOR='rust=ok,!external'
 ```
 
-Repeat with `BPFMAN_STORE=json` and a fresh runtime. Backend batches run one after
-the other because each runner holds the shared suite lock. Scripts within each
+The Go runner still uses `BPFMAN_STORE=sqlite` for its own harness. Batches run
+sequentially because each runner holds the shared suite lock. Scripts within each
 batch run concurrently, subject to their serial/exclusive pragmas.
-The full `rust-check` gate runs two `script_corpus` tests, one per backend.
+The full `rust-check` gate runs the SQLite `script_corpus` test.
 Each runs all 84 admitted scripts with `BPFMAN_E2E_ISOLATED_RUNTIME=1`, using
 fresh per-script stores and bpffs mounts. The runner checks every script's empty
 program/link/dispatcher inventories and artifact collections before unmounting,
@@ -1927,18 +1897,14 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 16 for function tracing; format 15 retains library names; format 14 retains container targets; format 13 retains host uprobes; format 12 retains
-sharing; format 11 retains kernel probes, format 10 retains TCX, format 9
-retains egress and format 8 retains ingress
-replacement and format 7 retains singleton ingress. Older formats retain their
-operations without upgrading.
+receipt.
 
 `direnv exec . make rust-test-tc` selects store and real veth failure-recovery
-contracts for both hooks and both stores. The earlier `rust-test-tc-ingress` target
+contracts for both hooks with SQLite. The earlier `rust-test-tc-ingress` target
 and `rust-test-tc-egress` alias run the same complete TC subset.
 `make rust-test-scripts` separately runs all admitted unchanged Go TC load/link
 lifecycle, chain, ordering, signed-encoding, namespace,
-survivor-unload, egress traffic and ingress/egress independence scripts on both stores.
+survivor-unload, egress traffic and ingress/egress independence scripts with SQLite.
 The Rust-only bidirectional clsact script adds twelve cases for both attach/drain
 orders and owned/borrowed/foreign-filter qdiscs. The Rust runner advertises
 `BPFMAN_E2E_CLSACT_RECLAIM=true` so the reclaim
@@ -1983,7 +1949,7 @@ The unchanged TC acceptance scripts also cover capacity rejection, last detach,
 multiple-interface independence, namespace round trips/rebuilds, signed UNSPEC,
 multi-priority continuation and foreign ingress-qdisc refusal. Their results are
 recorded separately from the parity manifest: script contents and labels remain
-unchanged. New shared scripts require Go and Rust acceptance on both stores;
+unchanged. New shared scripts require Go and Rust acceptance with SQLite;
 implementation-specific orphan lifetime and recovery coverage stays in Rust tests.
 The new shared `TestTC_DeletedNetnsLifecycle` exercises both hooks, repeated
 members, another program's orphan membership and an independent live namespace.
@@ -1992,7 +1958,7 @@ later members of the original unload list. Go now reports complete removal to
 that unload operation, which consumes those later members once. Unexpected missing
 snapshots and failed removals still fail. Go's namespace checks, kernel adapter,
 cleanup ordering and warning/GC policy remain unchanged. All four cases pass the
-reduced Go change and Rust on both stores. Rust retains its stricter orphan
+reduced Go change and Rust with SQLite. Rust retains its stricter orphan
 validation and consuming recovery; the shared script adds no post-unload sleep.
 
 Legacy TC outer-filter status and general orphan repair remain unsupported. Qdisc inspection/deletion
@@ -2030,15 +1996,11 @@ teardown. Successful unpins do not repeat during record-only retries, including
 through a reopened application. This also strengthens tracepoint unload, with
 its fault and retry contracts updated to require independent progress.
 
-SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
-use format 16; format 15 retains library names; format 14 retains container targets and format 13 retains host uprobes and format 12 retains sharing, format 11 retains kernel probes and
-format 10 retains TCX. Existing formats 1–9 retain their previous
-operations and reject TCX
-without an implicit upgrade. Tracepoint target strings keep their existing JSON
-encoding; native targets have a typed object representation.
+SQLite keeps Go schema 2 and its existing native TCX detail table. Tracepoint
+target strings keep their existing JSON encoding; native targets have a typed object representation.
 
 `direnv exec . make rust-test-tcx` runs real kernel recovery and eight existing,
-unchanged TCX acceptance files on both stores. It is also part of `rust-check`.
+unchanged TCX acceptance files with SQLite. It is also part of `rust-check`.
 The files cover load/get, ordinary and namespace link round trips, duplicate
 rejection, priority ordering, zero/tie ordering, chain continuation and stopping.
 Their labels remain unchanged and their passes are recorded separately from the
@@ -2051,7 +2013,7 @@ The parallel regression also removed a pre-existing tracepoint unload polling
 loop that enumerated all kernel programs. That enumeration could itself hold
 another fixture's program FD. The contract now requires immediate absence of its
 own ID, preserving independent fixture lifetimes. Go passes the same eight TCX
-scripts on both stores; Go sources remain unchanged.
+scripts with SQLite; Go sources remain unchanged.
 
 Immediate native lifetime controls run in the existing serial stage, separately
 from concurrently spawning contracts. A pipe-synchronized fork/exec experiment
@@ -2088,21 +2050,18 @@ exact kernel identity. Perf-event teardown holds a live descriptor across unpinn
 and closes it after pin descriptors. External holders retain their ordinary kernel
 lifetime semantics.
 
-SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 16 for function tracing; format 15 retains library names; format 14 retains container targets; format 13 retains host uprobes;
-format 11 introduced kernel probes.
-older snapshots retain existing operations and refuse probe loads/links without
-implicit conversion. `make rust-test-kprobe` runs native recovery contracts and
-seven unchanged acceptance files per store: kprobe/kretprobe load/get and link
+SQLite keeps Go schema 2 and `link_kprobe_details`. `make rust-test-kprobe` runs
+native recovery contracts and seven unchanged acceptance files with SQLite: kprobe/kretprobe load/get and link
 round trips, multi-program weighted counters and invalid-offset cleanup. The full
 gate includes them without changing existing labels. Stateful-fake contracts cover
-acquisition/publication failures, cancellation and reopened retries on both real
-stores. Native lifetime controls run serially to exclude descriptors temporarily
+acquisition/publication failures, cancellation and reopened retries on real
+SQLite. Native lifetime controls run serially to exclude descriptors temporarily
 inherited by concurrently forked test children.
 
 
 ## Map sharing and PinByName
 
-Local loads support `--map-owner-id ID` on both stores. `ID` identifies a
+Local loads support `--map-owner-id ID` with SQLite. `ID` identifies a
 first-class map set originally created by that program, rather than any live
 program that happens to use those maps. A dependent's ID is not a map owner.
 The original program may unload first; later loads can still join its map set
@@ -2130,14 +2089,11 @@ Unload follows the same rule for map-set aliases, containers and shared names.
 Changed inode or runtime evidence still refuses cleanup.
 
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
-`shared_map_pins`. New JSON stores use format 16 for function tracing; format 15 retains library names; format 14 retains container targets; format 13 retains host uprobes; format 12 introduced map-owner
-and shared-name
-references. Formats 1–11 keep their previous operations and refuse sharing without
-changing bytes or upgrading. Older artifacts without a map inventory retain
+`shared_map_pins`. Older artifacts without a map inventory retain
 conservative program-reference validation; broader orphan adoption is separate.
 
 `direnv exec . make rust-test-map-sharing` runs native identity/recovery contracts
-and these unchanged scripts once per store:
+and these unchanged scripts once with SQLite:
 
 - `TestKprobe_MapOwnerIDSharedCounter`
 - `TestProgramLoad_MapOwnerIDMustNameMapSet`
@@ -2176,8 +2132,7 @@ Link get/list, detach and attached-program unload use the standalone pending-int
 protocol, confined pins, cancellation and consuming compensation. Independent
 links make progress after another record deletion fails; record-only retries
 retain their exact evidence and never remove completed pins again. SQLite keeps
-Go schema 2 and `link_uprobe_details`. Host probes require JSON format 13; formats
-1–12 retain their existing capabilities without upgrading implicitly.
+Go schema 2 and `link_uprobe_details`.
 
 `make rust-test-uprobe` runs native identity/recovery/lifetime contracts and nine
 unchanged scripts per store, covering entry/return load/get, link round trips,
@@ -2210,13 +2165,11 @@ and transferred descriptors. Detach and unload work after the target namespace
 has disappeared. Reusable callers inject target opening through
 `Kernel::with_uprobe_target_opener`; `Kernel::default()` supports host targets.
 
-SQLite keeps schema 2 and `link_uprobe_details.container_pid`. New JSON stores use
-format 16 for function tracing; format 15 retains library names; format 14 retains container file targets and format
-13 retains host file targets, without implicit upgrades. Container PID zero retains host lookup and remains separate
-from the optional `--pid` process filter.
+SQLite keeps schema 2 and `link_uprobe_details.container_pid`. Container PID zero
+retains host lookup and remains separate from the optional `--pid` process filter.
 
 The focused `rust-test-uprobe` target and full gate include three unchanged
-container scripts on both stores: `TestContainerUprobe_LinkIDAndTraffic`,
+container scripts with SQLite: `TestContainerUprobe_LinkIDAndTraffic`,
 `TestContainerUprobe_ExternalCLIPersistence` and
 `TestContainerUprobe_PidNamespaceTraffic`. Native contracts distinguish a
 namespace-only target from its host spelling for both entry and return probes,
@@ -2253,15 +2206,13 @@ non-absolute cache paths, and explicitly rejects standalone old-format caches.
 No `dlopen` or library constructors run. Attachment still holds one opened regular
 file through symbol resolution and BPF attachment.
 
-JSON library-name links require format 15. Formats 13/14 keep their prior file
-capabilities and refuse library intent without modifying or upgrading snapshots.
 SQLite keeps schema 2. Pure tests cover malformed/truncated caches, matching and
 ordering; real-store/fake-kernel matrices cover raw-name persistence and recovery.
 Native tests actively install synthetic host caches, test maps precedence and
 fallback, refuse missing maps, and resolve host PID mappings into a separate PID
 namespace with no cache. Helper lookup failures leave no pending links.
 
-Five unchanged files join `rust-test-uprobe` and the full gate on both stores:
+Five unchanged files join `rust-test-uprobe` and the full gate with SQLite:
 `TestUprobe_LibraryNameCacheTraffic`, `TestContainerUprobe_LibraryNameTarget`,
 `TestContainerUprobe_SyntheticLdSoCache`, `TestContainerUprobe_PodStyleNamespaces`,
 and `TestContainerUprobe_HostProcDaemonView`. All five also pass against Go on
@@ -2289,7 +2240,7 @@ bpfman program unload PROGRAM_ID
 Use `fexit` for both load and attach when selecting function exits. Get/list retain
 that family and the requested function. `Bpfman::attach_tracing` and its
 cancellation variant take a typed `TracingKind`; loading and attachment preserve
-the same function through both stores and CLI process boundaries.
+the same function through SQLite and CLI process boundaries.
 
 Resolution searches vmlinux BTF first, then kernel module BTF in kernel BTF-ID
 order. Missing functions and ambiguous matches within a BTF object are errors.
@@ -2315,13 +2266,11 @@ retains program ownership for an explicit reopened retry. Trampoline execution
 quiescence follows kernel RCU behavior, as in Go.
 
 SQLite retains Go schema 2, `managed_programs.attach_func` and the existing
-`link_fentry_details`/`link_fexit_details` tables. New JSON stores use format 16;
-formats 1–15 retain their earlier capabilities and reject tracing writes or
-persisted tracing state without implicit upgrade. Link function names must match
+`link_fentry_details`/`link_fexit_details` tables. Link function names must match
 the corresponding program's stored load target.
 
 `make rust-test-function-tracing` selects six unchanged fentry/fexit acceptance
-files on both stores, plus native vmlinux/module traffic and recovery contracts.
+files with SQLite, plus native vmlinux/module traffic and recovery contracts.
 The native tests verify requested-target override, missing-target and publication
 failure cleanup, cancellation, pin identity refusal, duplicate compensation,
 reopened record-only retries and external descriptor lifetime controls. Immediate

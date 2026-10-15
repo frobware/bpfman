@@ -22,6 +22,8 @@ fn invalid_flags_are_rejected_before_opening_the_database() -> Result<(), Box<dy
         vec!["program", "list", "--all"],
         vec!["program", "list", "--attached"],
         vec!["--store", "unknown", "program", "list"],
+        vec!["--store", "sqlite", "program", "list"],
+        vec!["--store", "json", "program", "list"],
     ] {
         let output = run(&args)?;
 
@@ -33,44 +35,62 @@ fn invalid_flags_are_rejected_before_opening_the_database() -> Result<(), Box<dy
 }
 
 #[test]
-fn selected_store_reopens_and_refuses_a_different_format() -> Result<(), Box<dyn std::error::Error>>
-{
-    for (selected, wrong) in [("sqlite", "json"), ("json", "sqlite")] {
-        let directory = tempfile::tempdir()?;
-        let command = || {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
-            command
-                .arg("--runtime-dir")
-                .arg(directory.path())
-                .env("BPFMAN_STORE", selected)
-                // Read-only operations do not need the XDP attach config.
-                .arg("--config")
-                .arg(directory.path().join("missing.toml"))
-                .args(["program", "list", "-o", "json"]);
-            command
-        };
+fn implicit_sqlite_reopens_and_ignores_the_retired_store_environment()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let command = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
 
-        let initial = command().output()?;
+        command
+            .arg("--runtime-dir")
+            .arg(directory.path())
+            .arg("--config")
+            .arg(directory.path().join("missing.toml"))
+            .args(["program", "list", "-o", "json"])
+            .env("BPFMAN_STORE", "json");
 
-        assert!(initial.status.success());
+        command
+    };
 
-        let programs: serde_json::Value = serde_json::from_slice(&initial.stdout)?;
+    let initial = command().output()?;
 
-        assert_eq!(programs["programs"], serde_json::json!([]));
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
 
-        // The explicit CLI choice overrides the environment; mismatched state
-        // fails rather than being replaced or interpreted as an empty inventory.
+    let programs: serde_json::Value = serde_json::from_slice(&initial.stdout)?;
+    assert_eq!(programs["programs"], serde_json::json!([]));
 
-        let refused = command().args(["--store", wrong]).output()?;
+    let database = std::fs::read(directory.path().join("db/store.db"))?;
+    assert!(database.starts_with(b"SQLite format 3\0"));
 
-        assert_eq!(refused.status.code(), Some(1));
-        assert!(refused.stdout.is_empty());
+    let reopened = command().output()?;
 
-        let reopened = command().output()?;
+    assert!(reopened.status.success());
+    assert_eq!(reopened.stdout, initial.stdout);
 
-        assert!(reopened.status.success());
-        assert_eq!(reopened.stdout, initial.stdout);
-    }
+    Ok(())
+}
+
+#[test]
+fn incompatible_store_is_refused_without_replacement() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    std::fs::create_dir(directory.path().join("db"))?;
+    let database = directory.path().join("db/store.db");
+    let original = br#"{"version":16,"identity":"0123456789abcdef0123456789abcdef","next_generation":1,"programs":[],"map_sets":[],"links":[]}"#;
+    std::fs::write(&database, original)?;
+
+    let refused = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .arg("--runtime-dir")
+        .arg(directory.path())
+        .args(["program", "list", "-o", "json"])
+        .output()?;
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty());
+    assert_eq!(std::fs::read(database)?, original);
 
     Ok(())
 }
@@ -87,6 +107,7 @@ fn help_describes_the_experimental_scope() -> Result<(), Box<dyn std::error::Err
     assert!(stdout.contains("managed program listing"));
     assert!(stdout.contains("--lock-timeout"));
     assert!(stdout.contains("--version"));
+    assert!(!stdout.contains("--store"));
     assert!(output.stderr.is_empty());
 
     Ok(())

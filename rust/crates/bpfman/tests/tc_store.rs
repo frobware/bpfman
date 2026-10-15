@@ -393,13 +393,3 @@ fn sqlite_snapshot_contract() {
         contract(bpfman_store_sqlite::Backend, hook);
     }
 }
-
-#[test]
-fn json_snapshot_contract() {
-    for hook in [
-        bpfman_model::TcDirection::Ingress,
-        bpfman_model::TcDirection::Egress,
-    ] {
-        contract(bpfman_store_json::Backend, hook);
-    }
-}

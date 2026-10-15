@@ -1,4 +1,4 @@
-//! Namespace identity, caller isolation, and retained unload recovery on both stores.
+//! Namespace identity, caller isolation, and retained unload recovery through the store contract.
 #![allow(clippy::panic)]
 
 use super::{

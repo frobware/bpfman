@@ -15,9 +15,9 @@ impl Drop for Namespace {
     }
 }
 
-pub(super) fn exercise(store: &'static str) {
+pub(super) fn exercise() {
     for kind in ["uprobe", "uretprobe"] {
-        let c = Context::with_store(store);
+        let c = Context::new();
         let temp = tempfile::tempdir().expect("namespace fixture");
         let target = temp.path().join("target");
         fs::write(&target, "host target is deliberately not ELF").expect("host target");

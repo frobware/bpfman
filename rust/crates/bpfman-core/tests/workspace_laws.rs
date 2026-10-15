@@ -16,7 +16,6 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-kernel-aya", 4),
     ("bpfman-store", 3),
     ("bpfman-store-sqlite", 4),
-    ("bpfman-store-json", 4),
     ("bpfman-runtime", 4),
     ("bpfman", 5),
 ];
@@ -198,10 +197,8 @@ fn runtime_and_store_contract_cannot_reach_a_persistence_backend() {
             let dependency = string(&package(meta, id)["name"]);
 
             assert!(
-                !matches!(
-                    dependency,
-                    "bpfman-store-sqlite" | "bpfman-store-json" | "rusqlite" | "libsqlite3-sys"
-                ),
+                !dependency.starts_with("bpfman-store-")
+                    && !matches!(dependency, "rusqlite" | "libsqlite3-sys"),
                 "{name} reaches concrete persistence backend {dependency}"
             );
             pending.extend(normal_dependencies(meta, id));
@@ -263,7 +260,7 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                     name, "bpfman-store-sqlite",
                     "SQL belongs inside the store adapter"
                 ),
-                "bpfman-store-sqlite" | "bpfman-store-json" => assert_eq!(
+                backend if backend.starts_with("bpfman-store-") => assert_eq!(
                     name, "bpfman",
                     "only the composition root selects a persistence backend"
                 ),

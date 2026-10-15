@@ -1,4 +1,4 @@
-//! Map-set membership and PinByName lifetime through both concrete stores.
+//! Map-set membership and PinByName lifetime through the real store.
 #![allow(clippy::expect_used)]
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, RuntimeWriter};
 use bpfman_lock::AcquireOptions;
@@ -164,8 +164,4 @@ fn exercise<S: OpenStore + CommitLoad + UnloadStore + Copy>(backend: S) {
 #[test]
 fn sqlite_map_sharing() {
     exercise(bpfman_store_sqlite::Backend);
-}
-#[test]
-fn json_map_sharing() {
-    exercise(bpfman_store_json::Backend);
 }

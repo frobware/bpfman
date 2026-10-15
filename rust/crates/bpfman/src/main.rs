@@ -55,12 +55,7 @@ fn run(cli: cli::Cli, cancellation: &bpfman_runtime::Cancellation) -> Result<(),
     let _command =
         tracing::debug_span!("cli.command", runtime = %cli.layout.root().display()).entered();
 
-    match cli.store {
-        cli::StoreBackend::Sqlite => {
-            run_with_store(cli, bpfman_store_sqlite::Backend, cancellation)
-        }
-        cli::StoreBackend::Json => run_with_store(cli, bpfman_store_json::Backend, cancellation),
-    }
+    run_with_store(cli, bpfman_store_sqlite::Backend, cancellation)
 }
 
 fn run_with_store<S>(

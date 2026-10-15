@@ -29,21 +29,9 @@ fn sqlite_lifecycle_store_failures() {
 }
 
 #[test]
-fn json_lifecycle_store_failures() {
-    let _timing = support::TestTiming::start("json_lifecycle_store_failures");
-    lifecycle::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_cli_effect_boundaries() {
     let _timing = support::TestTiming::start("sqlite_cli_effect_boundaries");
-    cli::effect_boundaries("sqlite");
-}
-
-#[test]
-fn json_cli_effect_boundaries() {
-    let _timing = support::TestTiming::start("json_cli_effect_boundaries");
-    cli::effect_boundaries("json");
+    cli::effect_boundaries();
 }
 
 #[test]
@@ -59,33 +47,15 @@ fn sqlite_cancellation_boundaries() {
 }
 
 #[test]
-fn json_cancellation_boundaries() {
-    let _timing = support::TestTiming::start("json_cancellation_boundaries");
-    cancellation::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_tracepoint_attachment_lifecycle() {
     let _timing = support::TestTiming::start("sqlite_tracepoint_attachment_lifecycle");
     links::exercise(bpfman_store_sqlite::Backend);
 }
 
 #[test]
-fn json_tracepoint_attachment_lifecycle() {
-    let _timing = support::TestTiming::start("json_tracepoint_attachment_lifecycle");
-    links::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_attached_unload_failures_and_cancellation() {
     let _timing = support::TestTiming::start("sqlite_attached_unload_failures_and_cancellation");
     attached::exercise(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_attached_unload_failures_and_cancellation() {
-    let _timing = support::TestTiming::start("json_attached_unload_failures_and_cancellation");
-    attached::exercise(bpfman_store_json::Backend);
 }
 
 #[test]
@@ -101,21 +71,9 @@ fn sqlite_unload_pending_pin_failures_and_retries() {
 }
 
 #[test]
-fn json_unload_pending_pin_failures_and_retries() {
-    let _timing = support::TestTiming::start("json_unload_pending_pin_failures_and_retries");
-    pending::pinned(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_unload_pending_intent_without_pin() {
     let _timing = support::TestTiming::start("sqlite_unload_pending_intent_without_pin");
     pending::unpinned(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_unload_pending_intent_without_pin() {
-    let _timing = support::TestTiming::start("json_unload_pending_intent_without_pin");
-    pending::unpinned(bpfman_store_json::Backend);
 }
 
 #[test]
@@ -125,21 +83,9 @@ fn sqlite_batch_lifecycle() {
 }
 
 #[test]
-fn json_batch_lifecycle() {
-    let _timing = support::TestTiming::start("json_batch_lifecycle");
-    batch::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_batch_cli() {
     let _timing = support::TestTiming::start("sqlite_batch_cli");
-    batch::cli("sqlite");
-}
-
-#[test]
-fn json_batch_cli() {
-    let _timing = support::TestTiming::start("json_batch_cli");
-    batch::cli("json");
+    batch::cli();
 }
 
 #[path = "kernel/xdp.rs"]
@@ -151,12 +97,6 @@ fn sqlite_xdp_load_lifecycle() {
     xdp::exercise(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_xdp_load_lifecycle() {
-    let _timing = support::TestTiming::start("json_xdp_load_lifecycle");
-    xdp::exercise(bpfman_store_json::Backend);
-}
-
 #[path = "kernel/xdp_attach.rs"]
 mod xdp_attach;
 
@@ -164,12 +104,6 @@ mod xdp_attach;
 fn sqlite_xdp_attachment_failures() {
     let _timing = support::TestTiming::start("sqlite_xdp_attachment_failures");
     xdp_attach::exercise(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_xdp_attachment_failures() {
-    let _timing = support::TestTiming::start("json_xdp_attachment_failures");
-    xdp_attach::exercise(bpfman_store_json::Backend);
 }
 
 #[path = "kernel/xdp_switch.rs"]
@@ -181,25 +115,13 @@ fn sqlite_xdp_switch_and_restoration() {
     xdp_switch::exercise(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_xdp_switch_and_restoration() {
-    let _timing = support::TestTiming::start("json_xdp_switch_and_restoration");
-    xdp_switch::exercise(bpfman_store_json::Backend);
-}
-
 #[path = "kernel/xdp_runtime.rs"]
 mod xdp_runtime;
 
 #[test]
 fn sqlite_xdp_runtime_replacement() {
     let _timing = support::TestTiming::start("sqlite_xdp_runtime_replacement");
-    xdp_runtime::exercise(bpfman_store_sqlite::Backend, "sqlite");
-}
-
-#[test]
-fn json_xdp_runtime_replacement() {
-    let _timing = support::TestTiming::start("json_xdp_runtime_replacement");
-    xdp_runtime::exercise(bpfman_store_json::Backend, "json");
+    xdp_runtime::exercise(bpfman_store_sqlite::Backend);
 }
 
 #[path = "kernel/xdp_unload.rs"]
@@ -211,12 +133,6 @@ fn sqlite_xdp_unload_lifecycle() {
     xdp_unload::exercise(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_xdp_unload_lifecycle() {
-    let _timing = support::TestTiming::start("json_xdp_unload_lifecycle");
-    xdp_unload::exercise(bpfman_store_json::Backend);
-}
-
 #[path = "kernel/xdp_netns.rs"]
 mod xdp_netns;
 
@@ -224,12 +140,6 @@ mod xdp_netns;
 fn sqlite_xdp_netns_recovery() {
     let _timing = support::TestTiming::start("sqlite_xdp_netns_recovery");
     xdp_netns::exercise(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_xdp_netns_recovery() {
-    let _timing = support::TestTiming::start("json_xdp_netns_recovery");
-    xdp_netns::exercise(bpfman_store_json::Backend);
 }
 
 #[path = "kernel/xdp_frags.rs"]
@@ -242,21 +152,9 @@ fn sqlite_xdp_frags_multibuffer() {
 }
 
 #[test]
-fn json_xdp_frags_multibuffer() {
-    let _timing = support::TestTiming::start("json_xdp_frags_multibuffer");
-    xdp_frags::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
-}
-
-#[test]
 fn sqlite_xdp_frags_multibuffer_skb() {
     let _timing = support::TestTiming::start("sqlite_xdp_frags_multibuffer_skb");
     xdp_frags::exercise(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
-}
-
-#[test]
-fn json_xdp_frags_multibuffer_skb() {
-    let _timing = support::TestTiming::start("json_xdp_frags_multibuffer_skb");
-    xdp_frags::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
 }
 
 #[path = "kernel/xdp_delivery.rs"]
@@ -273,30 +171,10 @@ fn sqlite_xdp_packet_delivery() {
 }
 
 #[test]
-fn json_xdp_packet_delivery() {
-    let _timing = support::TestTiming::start("json_xdp_packet_delivery");
-    xdp_delivery::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
 fn sqlite_xdp_packet_delivery_skb() {
     let _timing = support::TestTiming::start("sqlite_xdp_packet_delivery_skb");
     xdp_delivery::exercise(
         bpfman_store_sqlite::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
-fn json_xdp_packet_delivery_skb() {
-    let _timing = support::TestTiming::start("json_xdp_packet_delivery_skb");
-    xdp_delivery::exercise(
-        bpfman_store_json::Backend,
         bpfman_model::XdpMode::Skb,
         xdp_delivery::Frames::Linear,
     );
@@ -316,30 +194,10 @@ fn sqlite_xdp_devmap_delivery() {
 }
 
 #[test]
-fn json_xdp_devmap_delivery() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_delivery");
-    xdp_devmap::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
 fn sqlite_xdp_devmap_delivery_skb() {
     let _timing = support::TestTiming::start("sqlite_xdp_devmap_delivery_skb");
     xdp_devmap::exercise(
         bpfman_store_sqlite::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_delivery_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_delivery_skb");
-    xdp_devmap::exercise(
-        bpfman_store_json::Backend,
         bpfman_model::XdpMode::Skb,
         xdp_delivery::Frames::Linear,
     );
@@ -387,46 +245,6 @@ fn sqlite_xdp_multibuffer_forwarding_devmap_skb() {
     );
 }
 
-#[test]
-fn json_xdp_multibuffer_forwarding_delivery() {
-    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_delivery");
-    xdp_delivery::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
-fn json_xdp_multibuffer_forwarding_devmap() {
-    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_devmap");
-    xdp_devmap::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
-fn json_xdp_multibuffer_forwarding_delivery_skb() {
-    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_delivery_skb");
-    xdp_delivery::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
-fn json_xdp_multibuffer_forwarding_devmap_skb() {
-    let _timing = support::TestTiming::start("json_xdp_multibuffer_forwarding_devmap_skb");
-    xdp_devmap::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
 #[path = "kernel/xdp_broadcast.rs"]
 mod xdp_broadcast;
 
@@ -445,26 +263,6 @@ fn sqlite_xdp_devmap_broadcast_skb() {
     let _timing = support::TestTiming::start("sqlite_xdp_devmap_broadcast_skb");
     xdp_broadcast::exercise(
         bpfman_store_sqlite::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_broadcast() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast");
-    xdp_broadcast::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_broadcast_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast_skb");
-    xdp_broadcast::exercise(
-        bpfman_store_json::Backend,
         bpfman_model::XdpMode::Skb,
         xdp_delivery::Frames::Linear,
     );
@@ -491,26 +289,6 @@ fn sqlite_xdp_devmap_broadcast_frags_skb() {
 }
 
 #[test]
-fn json_xdp_devmap_broadcast_frags() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast_frags");
-    xdp_broadcast::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_broadcast_frags_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast_frags_skb");
-    xdp_broadcast::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
 fn sqlite_xdp_devmap_broadcast_hash() {
     let _timing = support::TestTiming::start("sqlite_xdp_devmap_broadcast_hash");
     xdp_broadcast::exercise_hash(
@@ -531,26 +309,6 @@ fn sqlite_xdp_devmap_broadcast_hash_skb() {
 }
 
 #[test]
-fn json_xdp_devmap_broadcast_hash() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast_hash");
-    xdp_broadcast::exercise_hash(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_broadcast_hash_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast_hash_skb");
-    xdp_broadcast::exercise_hash(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
 fn sqlite_xdp_devmap_broadcast_hash_frags() {
     let _timing = support::TestTiming::start("sqlite_xdp_devmap_broadcast_hash_frags");
     xdp_broadcast::exercise_hash(
@@ -565,26 +323,6 @@ fn sqlite_xdp_devmap_broadcast_hash_frags_skb() {
     let _timing = support::TestTiming::start("sqlite_xdp_devmap_broadcast_hash_frags_skb");
     xdp_broadcast::exercise_hash(
         bpfman_store_sqlite::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_broadcast_hash_frags() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast_hash_frags");
-    xdp_broadcast::exercise_hash(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_broadcast_hash_frags_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_broadcast_hash_frags_skb");
-    xdp_broadcast::exercise_hash(
-        bpfman_store_json::Backend,
         bpfman_model::XdpMode::Skb,
         xdp_delivery::Frames::MultiBuffer,
     );
@@ -618,30 +356,6 @@ fn sqlite_xdp_devmap_egress_frags_boundary_skb() {
 }
 
 #[test]
-fn json_xdp_devmap_egress() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress");
-    xdp_egress::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
-}
-
-#[test]
-fn json_xdp_devmap_egress_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress_skb");
-    xdp_egress::exercise(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
-}
-
-#[test]
-fn json_xdp_devmap_egress_frags_boundary() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress_frags_boundary");
-    xdp_egress::fragments_boundary(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
-}
-
-#[test]
-fn json_xdp_devmap_egress_frags_boundary_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress_frags_boundary_skb");
-    xdp_egress::fragments_boundary(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
-}
-
-#[test]
 fn sqlite_xdp_devmap_egress_hash() {
     let _timing = support::TestTiming::start("sqlite_xdp_devmap_egress_hash");
     xdp_egress::exercise_hash(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Drv);
@@ -663,30 +377,6 @@ fn sqlite_xdp_devmap_egress_hash_frags() {
 fn sqlite_xdp_devmap_egress_hash_frags_skb() {
     let _timing = support::TestTiming::start("sqlite_xdp_devmap_egress_hash_frags_skb");
     xdp_egress::fragments_hash(bpfman_store_sqlite::Backend, bpfman_model::XdpMode::Skb);
-}
-
-#[test]
-fn json_xdp_devmap_egress_hash() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress_hash");
-    xdp_egress::exercise_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
-}
-
-#[test]
-fn json_xdp_devmap_egress_hash_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress_hash_skb");
-    xdp_egress::exercise_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
-}
-
-#[test]
-fn json_xdp_devmap_egress_hash_frags() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress_hash_frags");
-    xdp_egress::fragments_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Drv);
-}
-
-#[test]
-fn json_xdp_devmap_egress_hash_frags_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_egress_hash_frags_skb");
-    xdp_egress::fragments_hash(bpfman_store_json::Backend, bpfman_model::XdpMode::Skb);
 }
 
 #[test]
@@ -729,46 +419,6 @@ fn sqlite_xdp_devmap_hash_frags_skb() {
     );
 }
 
-#[test]
-fn json_xdp_devmap_hash() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_hash");
-    xdp_devmap::exercise_hash(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_hash_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_hash_skb");
-    xdp_devmap::exercise_hash(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::Linear,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_hash_frags() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_hash_frags");
-    xdp_devmap::exercise_hash(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Drv,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
-#[test]
-fn json_xdp_devmap_hash_frags_skb() {
-    let _timing = support::TestTiming::start("json_xdp_devmap_hash_frags_skb");
-    xdp_devmap::exercise_hash(
-        bpfman_store_json::Backend,
-        bpfman_model::XdpMode::Skb,
-        xdp_delivery::Frames::MultiBuffer,
-    );
-}
-
 #[path = "kernel/tc.rs"]
 mod tc;
 #[test]
@@ -776,15 +426,6 @@ fn sqlite_tc_ingress_lifecycle() {
     let _timing = support::TestTiming::start("sqlite_tc_ingress_lifecycle");
     tc::exercise(
         bpfman_store_sqlite::Backend,
-        bpfman_model::TcDirection::Ingress,
-    );
-}
-
-#[test]
-fn json_tc_ingress_lifecycle() {
-    let _timing = support::TestTiming::start("json_tc_ingress_lifecycle");
-    tc::exercise(
-        bpfman_store_json::Backend,
         bpfman_model::TcDirection::Ingress,
     );
 }
@@ -802,25 +443,10 @@ fn sqlite_tc_orphan_recovery() {
 }
 
 #[test]
-fn json_tc_orphan_recovery() {
-    let _timing = support::TestTiming::start("json_tc_orphan_recovery");
-    tc_orphan::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_tc_ingress_attached_unload() {
     let _timing = support::TestTiming::start("sqlite_tc_ingress_attached_unload");
     tc_unload::exercise(
         bpfman_store_sqlite::Backend,
-        bpfman_model::TcDirection::Ingress,
-    );
-}
-
-#[test]
-fn json_tc_ingress_attached_unload() {
-    let _timing = support::TestTiming::start("json_tc_ingress_attached_unload");
-    tc_unload::exercise(
-        bpfman_store_json::Backend,
         bpfman_model::TcDirection::Ingress,
     );
 }
@@ -838,24 +464,9 @@ fn sqlite_tc_ingress_replacement() {
 }
 
 #[test]
-fn json_tc_ingress_replacement() {
-    let _timing = support::TestTiming::start("json_tc_ingress_replacement");
-    tc_replace::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::TcDirection::Ingress,
-    );
-}
-
-#[test]
 fn sqlite_script_corpus() {
     let _timing = support::TestTiming::start("sqlite_script_corpus");
-    cli::corpus("sqlite");
-}
-
-#[test]
-fn json_script_corpus() {
-    let _timing = support::TestTiming::start("json_script_corpus");
-    cli::corpus("json");
+    cli::corpus();
 }
 
 #[test]
@@ -863,15 +474,6 @@ fn sqlite_tc_egress_lifecycle() {
     let _timing = support::TestTiming::start("sqlite_tc_egress_lifecycle");
     tc::exercise(
         bpfman_store_sqlite::Backend,
-        bpfman_model::TcDirection::Egress,
-    );
-}
-
-#[test]
-fn json_tc_egress_lifecycle() {
-    let _timing = support::TestTiming::start("json_tc_egress_lifecycle");
-    tc::exercise(
-        bpfman_store_json::Backend,
         bpfman_model::TcDirection::Egress,
     );
 }
@@ -886,28 +488,10 @@ fn sqlite_tc_egress_attached_unload() {
 }
 
 #[test]
-fn json_tc_egress_attached_unload() {
-    let _timing = support::TestTiming::start("json_tc_egress_attached_unload");
-    tc_unload::exercise(
-        bpfman_store_json::Backend,
-        bpfman_model::TcDirection::Egress,
-    );
-}
-
-#[test]
 fn sqlite_tc_egress_replacement() {
     let _timing = support::TestTiming::start("sqlite_tc_egress_replacement");
     tc_replace::exercise(
         bpfman_store_sqlite::Backend,
-        bpfman_model::TcDirection::Egress,
-    );
-}
-
-#[test]
-fn json_tc_egress_replacement() {
-    let _timing = support::TestTiming::start("json_tc_egress_replacement");
-    tc_replace::exercise(
-        bpfman_store_json::Backend,
         bpfman_model::TcDirection::Egress,
     );
 }
@@ -920,26 +504,12 @@ fn sqlite_tcx_native_link_recovery() {
     tcx::exercise(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_tcx_native_link_recovery() {
-    tcx::exercise(bpfman_store_json::Backend);
-}
-#[test]
 fn sqlite_tcx_script_corpus() {
-    cli::tcx_scripts("sqlite");
+    cli::tcx_scripts();
 }
-#[test]
-fn json_tcx_script_corpus() {
-    cli::tcx_scripts("json");
-}
-
 #[test]
 fn sqlite_kprobe_script_corpus() {
-    cli::kprobe_scripts("sqlite");
-}
-
-#[test]
-fn json_kprobe_script_corpus() {
-    cli::kprobe_scripts("json");
+    cli::kprobe_scripts();
 }
 
 #[path = "kernel/kprobe.rs"]
@@ -951,19 +521,9 @@ fn sqlite_kprobe_native_link_recovery() {
 }
 
 #[test]
-fn json_kprobe_native_link_recovery() {
-    kprobe::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_map_sharing_script_corpus() {
-    cli::map_sharing_scripts("sqlite");
+    cli::map_sharing_scripts();
 }
-#[test]
-fn json_map_sharing_script_corpus() {
-    cli::map_sharing_scripts("json");
-}
-
 #[path = "kernel/map_sharing.rs"]
 mod map_sharing;
 #[test]
@@ -971,18 +531,8 @@ fn sqlite_map_sharing_native_recovery() {
     map_sharing::exercise(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_map_sharing_native_recovery() {
-    map_sharing::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_uprobe_script_corpus() {
-    cli::uprobe_scripts("sqlite");
-}
-
-#[test]
-fn json_uprobe_script_corpus() {
-    cli::uprobe_scripts("json");
+    cli::uprobe_scripts();
 }
 
 #[path = "kernel/uprobe.rs"]
@@ -994,18 +544,8 @@ fn sqlite_uprobe_native_link_recovery() {
 }
 
 #[test]
-fn json_uprobe_native_link_recovery() {
-    uprobe::exercise(bpfman_store_json::Backend);
-}
-
-#[test]
 fn sqlite_container_uprobe_script_corpus() {
-    cli::container_uprobe_scripts("sqlite");
-}
-
-#[test]
-fn json_container_uprobe_script_corpus() {
-    cli::container_uprobe_scripts("json");
+    cli::container_uprobe_scripts();
 }
 
 #[path = "kernel/container_uprobe.rs"]
@@ -1013,12 +553,7 @@ mod container_uprobe;
 
 #[test]
 fn sqlite_container_uprobe_namespace_lookup() {
-    container_uprobe::exercise("sqlite");
-}
-
-#[test]
-fn json_container_uprobe_namespace_lookup() {
-    container_uprobe::exercise("json");
+    container_uprobe::exercise();
 }
 
 #[path = "kernel/library_uprobe.rs"]
@@ -1026,12 +561,7 @@ mod library_uprobe;
 
 #[test]
 fn sqlite_uprobe_library_resolution() {
-    library_uprobe::exercise("sqlite");
-}
-
-#[test]
-fn json_uprobe_library_resolution() {
-    library_uprobe::exercise("json");
+    library_uprobe::exercise();
 }
 
 #[path = "kernel/function_tracing.rs"]
@@ -1041,14 +571,6 @@ fn sqlite_function_tracing_native_link_recovery() {
     function_tracing::exercise(bpfman_store_sqlite::Backend);
 }
 #[test]
-fn json_function_tracing_native_link_recovery() {
-    function_tracing::exercise(bpfman_store_json::Backend);
-}
-#[test]
 fn sqlite_function_tracing_script_corpus() {
-    cli::function_tracing_scripts("sqlite");
-}
-#[test]
-fn json_function_tracing_script_corpus() {
-    cli::function_tracing_scripts("json");
+    cli::function_tracing_scripts();
 }

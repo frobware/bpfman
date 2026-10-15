@@ -2,6 +2,14 @@
 
 ## Status
 
+SQLite is now the only Rust persistence adapter and is implicit in the CLI;
+`--store` and the `BPFMAN_STORE` binding are removed. The experimental JSON adapter
+and its dedicated snapshot publisher are retired. Store traits, consuming receipts,
+generic application/scenarios and dependency guards remain the boundary for future
+implementations. JSON output and tracing are unaffected. Historical checkpoints
+below record validation performed when both adapters existed; they do not describe
+current backend availability. Go's backends are unchanged.
+
 Implementation is in progress in the independent `rust/` workspace. The latest
 capability checkpoint adds explicit map-owner joins and PinByName sharing,
 with independent map-set/name-pin lifetimes and consuming recovery on both stores.
@@ -105,15 +113,15 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
-| Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | General reconciliation and lost-report recovery |
-| Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup on both stores | LSM and other tracing families |
+| Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
+| Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | LSM and other tracing families |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 16 for function tracing; format 15 retains library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -678,9 +686,10 @@ backend-independent `OpenStore`, `ProgramReader`, `CommitLoad`, `UnloadStore`,
 are generic over the capabilities they consume;
 they neither import a backend nor know its storage format or version.
 `bpfman-store-sqlite` implements the contracts and owns all SQL, schema checks,
-transactions, and concrete receipt evidence. `bpfman-store-json` implements the
-same contracts with atomic whole-file publication. Both adapters and the runtime
-are peers in the dependency tiers, depending on the contracts below them.
+transactions, and concrete receipt evidence. SQLite is implicit at the CLI
+composition root; there is no store selector. The adapter and runtime are peers
+in the dependency tiers, depending on the contracts below them. The experimental
+JSON adapter demonstrated this separation and has now been retired.
 
 This boundary supports a serialized JSON file without changing lifecycle
 orchestration. Each implementation must still provide atomic visibility, writer
@@ -693,7 +702,10 @@ Unload uses associated, non-cloneable program and map-set receipts. Failures
 return those receipts with their causes. An explicit retry supplies the same
 backend and runtime authority; the backend validates evidence again before
 mutation. No generic transaction callback, SQL row, or file-format payload
-appears in the contracts. Shared tests exercise both real persistent backends.
+appears in the contracts. Shared scenarios remain generic and exercise real SQLite.
+A future adapter must run those same scenarios, changing only composition setup.
+Normal dependency-closure guards prevent concrete persistence dependencies from
+reaching the runtime or contract crates.
 Failure decorators may intercept individual store operations, but never implement
 storage, atomicity,
 or receipt validation themselves. No fake store is needed; SQLite remains the
@@ -758,7 +770,6 @@ meaningful:
 | `bpfman-lock` | Effectful | Go-compatible writer locking, borrowed write permits, and inherited descriptor ownership |
 | `bpfman-store` | Boundary | Backend-independent read, atomic commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | Effectful | SQLite schema, migrations, queries, and atomic persistence operations |
-| `bpfman-store-json` | Effectful | Versioned JSON snapshots, atomic publication, and conditional teardown |
 | `bpfman-kernel` | Boundary | Backend-independent kernel capabilities, observations, errors, and opaque ownership contracts |
 | `bpfman-kernel-aya` | Effectful | Concrete Aya/Linux implementation; owns Aya types and BPF syscall details |
 | `bpfman-image-oci` | Effectful | OCI pull, cache, authentication, and signature-policy adapters |
@@ -987,19 +998,10 @@ the rest of the workspace.
 
 ## Store adapter
 
-The implementation supports SQLite and JSON behind the same store contracts.
-SQLite retains Go schema version 2 and its migration history. JSON format 4 adds
-complete single-member XDP dispatcher snapshots. Older JSON formats retain their
-existing operations: tracepoint programs from version 1, tracepoint links from
-version 2, and XDP loads from version 3. XDP attachment requires a separately
-initialized version 4 or newer runtime. Format 5 adds multi-member replacement;
-format 6 adds explicit network-namespace paths; format 7 adds TC extension loads
-and singleton ingress snapshots. New stores use format 8, which adds complete TC
-revisions. Format 7 retains its singleton operations and refuses replacement;
-it never upgrades implicitly. Formats 1–6
-retain their existing operations and refuse TC without upgrading. Formats 4 and 5
-refuse namespaced attachments; format 4 also refuses replacement. Neither backend
-implicitly migrates or repairs existing state. The implementation does not use sled.
+The implementation uses SQLite behind backend-neutral store contracts. SQLite
+retains Go schema version 2 and its migration history. Existing state is never
+implicitly migrated, repaired or replaced. JSON persistence has been retired;
+existing JSON stores are refused unchanged. The implementation does not use sled.
 
 The store has two classes of operation:
 
@@ -1242,14 +1244,11 @@ authority before dispatch. The active store binds the backend to the adopted roo
 and retains the opened reader handle instead of discarding it after validation.
 Cloning that handle performs no I/O and does not retain an old snapshot. SQLite
 owns reuse of one idle connection and opens independent connections for overlapping
-reads; no mutex is held while queries execute. JSON shares its directory handle
-and acquires a fresh immutable snapshot on each read. Mutation preflight explicitly
+reads; no mutex is held while queries execute. Mutation preflight explicitly
 revalidates a retained handle. The active store never recreates missing state
 during an operation. Ordinary
 snapshot queries remain read-only and recheck the schema within their own
-transaction, with SQLite WAL permitting concurrent readers and a writer. JSON
-readers consume an independently opened immutable snapshot; a zero-link inode
-after concurrent rename remains valid read evidence, but never staging authority.
+transaction, with SQLite WAL permitting concurrent readers and a writer.
 All read-only commands, including combined store/kernel observations, bypass
 the writer lock. The store snapshot and subsequent kernel/filesystem reads are
 not one atomic observation: concurrent unload may remove an object between
@@ -4900,3 +4899,39 @@ seconds locally on Linux 6.18.54, with eight ordinary contract workers and the
 existing development/test aya-obj opt-level-two override. This is local evidence,
 not a controlled benchmark. No dependency, lockfile, Go, legacy Rust or acceptance
 script changes were needed.
+
+
+## SQLite-only persistence checkpoint (15 October 2026)
+
+The experimental Rust JSON adapter is retired after establishing that runtime
+operations and recovery do not depend on a persistence representation. The CLI
+now supplies SQLite implicitly at its composition root. The `--store` flag,
+`BPFMAN_STORE` binding, JSON crate, dedicated filesystem snapshot publisher and
+JSON-only test invocations are removed. Existing incompatible files are refused
+without replacement or implicit migration. Go and the acceptance corpus are
+unchanged; the shared Go test runner still selects SQLite for its own harness.
+JSON command output, bytecode provenance and telemetry remain supported.
+
+The store traits, generic `ActiveStore`/`Bpfman` orchestration, consuming receipts,
+fault decorators and generic store/lifecycle scenarios remain intact. Fake-kernel
+scenarios continue using real SQLite. Future adapters must implement those same
+contracts and run the same generic scenarios. Dependency guards reject any
+`bpfman-store-*` adapter from the runtime/contract normal dependency closure and
+from non-composition production consumers; SQL remains private to the adapter.
+
+Telemetry contracts now exercise SQLite creation, read-connection reuse,
+independent reads under writer contention, timeout and filtered output. CLI
+contracts cover implicit SQLite creation/reopening, ignored legacy selector
+variables, rejection of either retired flag value, and byte-preserving refusal
+of JSON state. Signal, cancellation, concurrency and consuming recovery coverage
+remain in the normal gate.
+
+Validation: `direnv exec . make rust-check lint-make` passes, including formatting,
+warnings-denied Clippy/Rustdoc, userspace and compile-fail contracts, all 42
+stateful-fake tests with real SQLite, all 68 discovered/selected native kernel
+cases and unchanged acceptance cohorts. Native lifetime controls remain serial;
+ordinary contracts use eight workers. Both fake and real owned tmpfs scopes pass
+normal cleanup. The kernel stage took 63.07 seconds on Linux 6.18.54 with the
+existing `aya-obj` optimization override. Evidence: `/tmp/sqlite-only-check.log`.
+Final formatting/lint/userspace/Make checks, including the retained JSON-output
+contract and final refusal fixture, are in `/tmp/sqlite-only-final-userspace.log`.

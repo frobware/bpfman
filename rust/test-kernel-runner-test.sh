@@ -13,19 +13,13 @@ case "$*" in *"${FAKE_FAILURE:-never-match}"*) exit 1 ;; esac
 MOCK
 chmod +x "$root/kernel"
 cat > "$FAKE_TEST_LIST" <<'LIST'
-json_script_corpus: test
 sqlite_script_corpus: test
-json_xdp_load_lifecycle: test
 sqlite_xdp_load_lifecycle: test
-json_uprobe_native_link_recovery: test
 sqlite_uprobe_native_link_recovery: test
-json_kprobe_native_link_recovery: test
 sqlite_kprobe_native_link_recovery: test
-json_map_sharing_native_recovery: test
 sqlite_map_sharing_native_recovery: test
-json_case: test
-json_case_longer: test
 sqlite_case: test
+sqlite_case_longer: test
 go_case: test
 LIST
 runner="${0%/*}/test-kernel.sh"
@@ -33,11 +27,9 @@ for threads in 1 2 4 8; do
     : > "$FAKE_KERNEL_LOG"
     BPFMAN_KERNEL_TEST_THREADS=$threads BPFMAN_KERNEL_SUITE=all sh "$runner" "$root/kernel" > "$root/output"
     cat > "$root/expected" <<EXPECTED
---exact --test-threads=1 json_script_corpus sqlite_script_corpus
---exact --test-threads=1 json_xdp_load_lifecycle json_uprobe_native_link_recovery json_kprobe_native_link_recovery json_map_sharing_native_recovery
---exact --test-threads=$threads json_case json_case_longer
+--exact --test-threads=1 sqlite_script_corpus
 --exact --test-threads=1 sqlite_xdp_load_lifecycle sqlite_uprobe_native_link_recovery sqlite_kprobe_native_link_recovery sqlite_map_sharing_native_recovery
---exact --test-threads=$threads sqlite_case
+--exact --test-threads=$threads sqlite_case sqlite_case_longer
 --exact --test-threads=1 go_case
 EXPECTED
     cmp "$root/expected" "$FAKE_KERNEL_LOG"
@@ -50,7 +42,7 @@ BPFMAN_KERNEL_TEST_THREADS=2 BPFMAN_KERNEL_SUITE=contracts sh "$runner" "$root/k
 sed '1d' "$root/expected" | sed 's/threads=8/threads=2/g' > "$root/contracts"
 cmp "$root/contracts" "$FAKE_KERNEL_LOG"
 
-# Invalid admission must have no effects; a failed stage stops later backends.
+# Invalid admission must have no effects; a failed stage stops later stages.
 for invalid in 0 3 16 invalid; do
     : > "$FAKE_KERNEL_LOG"
     if BPFMAN_KERNEL_TEST_THREADS=$invalid sh "$runner" "$root/kernel" > "$root/output" 2>&1; then exit 1; fi
@@ -61,7 +53,7 @@ if BPFMAN_KERNEL_SUITE=unknown sh "$runner" "$root/kernel" > "$root/output" 2>&1
 [ ! -s "$FAKE_KERNEL_LOG" ]
 if sh "$runner" "$root/kernel" unexpected_filter > "$root/output" 2>&1; then exit 1; fi
 [ ! -s "$FAKE_KERNEL_LOG" ]
-FAKE_FAILURE=json_case; export FAKE_FAILURE
+FAKE_FAILURE=sqlite_case; export FAKE_FAILURE
 if BPFMAN_KERNEL_SUITE=all sh "$runner" "$root/kernel" > "$root/output" 2>&1; then exit 1; fi
 [ "$(wc -l < "$FAKE_KERNEL_LOG")" -eq 3 ]
 unset FAKE_FAILURE

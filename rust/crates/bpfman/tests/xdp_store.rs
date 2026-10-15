@@ -178,11 +178,6 @@ fn sqlite_snapshot_contract() {
     contract(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_snapshot_contract() {
-    contract(bpfman_store_json::Backend);
-}
-
 use bpfman_store::{
     XdpDispatcherReader, XdpMemberCommit, XdpMemberId, XdpReplace, XdpReplacementStore,
 };
@@ -527,11 +522,6 @@ fn sqlite_replacement_contract() {
     replacement_contract(bpfman_store_sqlite::Backend);
 }
 
-#[test]
-fn json_replacement_contract() {
-    replacement_contract(bpfman_store_json::Backend);
-}
-
 fn capacity_contract<S: OpenStore + CommitLoad + XdpReplacementStore>(backend: S)
 where
     S::Reader: XdpDispatcherReader + LinkReader,
@@ -683,9 +673,4 @@ where
 #[test]
 fn sqlite_replacement_capacity_contract() {
     capacity_contract(bpfman_store_sqlite::Backend);
-}
-
-#[test]
-fn json_replacement_capacity_contract() {
-    capacity_contract(bpfman_store_json::Backend);
 }

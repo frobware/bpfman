@@ -96,7 +96,7 @@ The architecture and compatibility goals are in
   hash ownership. The first native egress insertion initializes compatible
   fragment ownership; later egress updates still require matching fragment flags.
   `make rust-test-xdp-egress-hash` proves ordinary and genuine multi-buffer
-  PASS/DROP, context/helper reads, rollback, and map-held lifetime in both stores
+  PASS/DROP, context/helper reads, rollback, and map-held lifetime with SQLite
   and driver/SKB modes. Aya remains unchanged, and the array DEVMAP boundary is
   still tested explicitly. See [egress acceptance](README.md#xdp-devmap-egress-programs).
 
@@ -136,15 +136,11 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 16 for function tracing; format 15 retains library-name uprobes; format 14 retains container file targets; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
-  format 10 retains native TCX,
-  format 9 retains independent TC egress chains, format 8 retains ingress
-  replacement, and format 7 retains singleton ingress.
-  Older formats never upgrade implicitly.
+- Keep SQLite schema 2.
   Attached unload must adopt all TC attachments before effects, finish exact
   filter/stage/record prerequisites before program teardown, and retain blocked
   ownership for explicit retry. Reject newly acquired links between retry passes.
-  `make rust-test-tc` runs both hooks and both stores, including replacement and attached
+  `make rust-test-tc` runs both hooks with SQLite, including replacement and attached
   unload. Members of one dispatcher use its latest revision; a failed member blocks
   later members of that dispatcher while independent interfaces/hooks continue one pass.
 - A missing explicit namespace selector admits complete TC orphan cleanup. Require
@@ -253,7 +249,7 @@ The architecture and compatibility goals are in
   determines its own outcome. After destructive unload starts, finish that pass.
   Compensation does not observe the cancelled forward token; explicit retries
   may cancel admission but must retain receipts. No automatic retries. Test
-  effect-boundary cancellation and real process signals with both stores.
+  effect-boundary cancellation and real process signals with SQLite.
 - Keep output and telemetry collection in the front end. Effectful libraries may
   emit `tracing` spans/events with stable operation names and crate/module targets;
   never install subscribers or write logs directly. The CLI configures `RUST_LOG`
@@ -268,8 +264,15 @@ The architecture and compatibility goals are in
   layout and obtain paths through its methods. Layout construction performs no
   I/O and does not imply filesystem readiness. Add accessors as consumers need
   them, rather than scattering joins or preemptively exposing every Go path.
-- Store backend selection belongs to the binary composition root. Runtime
-  depends on `bpfman-store` contracts, never on SQLite or a future file-format
+- SQLite is implicit in the CLI: there is no `--store` option or `BPFMAN_STORE`
+  binding. Select the concrete backend only at the binary composition root.
+  Retain the store traits, generic application and generic contract/lifecycle
+  scenarios so a future adapter can run the same suites. Do not specialize
+  generic helpers to SQLite or expose SQL/schema/connection details through
+  them. Architecture tests reject concrete store adapters in the runtime and
+  contract crates' normal dependency closures and outside the composition root.
+  The Go DSL harness may still set `BPFMAN_STORE=sqlite` for its own runner;
+  that is not a Rust CLI setting. Runtime depends on `bpfman-store` contracts, never on SQLite or a future file-format
   implementation. Keep format/version checks and atomic publication inside each
   backend. Use domain operations, not connections or transaction callbacks.
   Associated teardown receipts stay opaque and must validate backend/runtime
@@ -357,7 +360,7 @@ The architecture and compatibility goals are in
   residue, blocked dependent cleanup, all outcomes, and explicit retry history.
 - Generic lifecycle and outside-in tests use store contracts and public
   observations, never SQL queries or triggers to set up state or inject faults.
-  Use real SQLite or JSON stores, including when the kernel is fake. Do not add
+  Use real SQLite stores, including when the kernel is fake. Do not add
   a simulated store implementation. SQLite `:memory:` is a real backend and is
   suitable for adapter tests; use temporary files when testing multiple independent
   connections, reopening, locking, or persistent store identity.
@@ -378,7 +381,7 @@ The architecture and compatibility goals are in
 - Treat existing `.bpfman` scripts as immutable acceptance contracts during this
   Rust reimplementation. Run them unchanged and record newly passing cases in the
   implementation document. New scripts must pass the same assertions against the
-  Go binary and Rust with both stores before admission; do not use a Rust-only
+  Go binary and Rust with SQLite before admission; do not use a Rust-only
   label to bypass that comparison. Keep implementation-specific receipt, retry
   and immediate kernel-lifetime coverage in Rust integration contracts.
   Keep Rust unit tests quick and focused
@@ -393,7 +396,7 @@ The architecture and compatibility goals are in
   Do not claim parity from decoding alone or weaken scripts for Rust.
   Existing file-bytecode parity scripts carry `#pragma labels={"rust":"ok"}`.
   Keep these labels unchanged; run additional acceptance cases with explicit
-  filename selection on both stores and record the results separately. Use
+  filename selection with SQLite and record the results separately. Use
   `BPFMAN_E2E_SCRIPT_SELECTOR='rust=ok,!external'` to batch the established set
   through the existing Go runner and its pooled interfaces/parallel scheduler.
   Rust-only scripts additionally declare `rust-only=true`; always select Rust
@@ -401,7 +404,7 @@ The architecture and compatibility goals are in
   The runner defaults to Go and skips Rust-only scripts even when selected.
   `rust=ok,!rust-only,!external` selects shared parity; `rust=ok,!external`
   selects all admitted Rust acceptance. The normal gate runs all admitted scripts
-  per backend with `BPFMAN_E2E_ISOLATED_RUNTIME=1`: fresh per-script stores/bpffs,
+  with SQLite and `BPFMAN_E2E_ISOLATED_RUNTIME=1`: fresh per-script stores/bpffs,
   unchanged pooled interfaces and parallel scheduling. The Go runner checks each
   script's inventories/artifacts before unmounting, including after failure.
   The same runner overlaps an additional shared cohort containing file lifecycle,
@@ -467,8 +470,8 @@ The architecture and compatibility goals are in
   live anchor links and retain the anchor program FD through insertion; never
   treat inspection failure as absence. Refuse pending intent and duplicate
   program/hook attachment before native effects.
-- Keep SQLite schema 2 and native TCX details; JSON TCX requires format 10 without
-  upgrading older snapshots. Derive managed position from one store snapshot.
+- Keep SQLite schema 2 and native TCX details. Derive managed position from one
+  store snapshot.
   It is not an observation of foreign programs or current native chain order.
 - Adopt only canonical confined pins, validating kernel ID, program and hook.
   Explicitly detach a retained native link before unpinning; external descriptors
@@ -480,7 +483,7 @@ The architecture and compatibility goals are in
   teardown. Record-only retries retain their receipts and never repeat completed
   pin removal. Preserve this rule for both tracepoint and TCX.
 - `rust-test-tcx` runs recovery contracts plus eight unchanged, explicitly selected
-  existing TCX scripts on both stores. Keep them in the full gate without changing
+  existing TCX scripts with SQLite. Keep them in the full gate without changing
   script labels or assertions.
 
 - Run TCX immediate lifetime controls in the existing serial global stage,
@@ -495,13 +498,12 @@ The architecture and compatibility goals are in
   kernel-probe ELF section; entry/return attachment comes from the stored program
   selection, including when the same ELF entry is loaded as a return probe.
 - Keep kernel function syntax in the pure model and validate offsets before
-  truncation or persistence. Use the existing SQLite schema 2 probe-detail table;
-  kernel probes require JSON format 11 or newer. Formats 1–10 refuse probes without upgrading.
+  truncation or persistence. Use the existing SQLite schema 2 probe-detail table.
 - Reuse the standalone pending-intent, cancellation and consuming compensation
   interpreter. Confined perf-event pin adoption and held-descriptor teardown apply
   to probes as well as tracepoints. Retain every failed receipt and attempt history.
 - `rust-test-kprobe` runs seven unchanged existing scripts plus native recovery
-  contracts on both stores. Keep script labels and assertions unchanged. Probe
+  contracts with SQLite. Keep script labels and assertions unchanged. Probe
   lifetime contracts belong in the existing serial global stage, with immediate
   link/program absence assertions and explicit external program-holder controls.
 
@@ -521,9 +523,9 @@ The architecture and compatibility goals are in
 - Validate root/parent/inode evidence before cleanup retries. If new durable users
   adopt an unchanged pin/set, relinquish cleanup authority and preserve their
   resources. The last user owns removal; independent failures retain receipts.
-- SQLite keeps schema 2; JSON sharing requires format 12 without implicit upgrade.
+- SQLite keeps schema 2.
   `rust-test-map-sharing` selects the three unchanged sharing scripts and native
-  recovery contracts on both stores. Native immediate program-lifetime assertions
+  recovery contracts with SQLite. Native immediate program-lifetime assertions
   belong in the serial global stages; keep them free of sleeps and polling.
 
 
@@ -540,20 +542,18 @@ The architecture and compatibility goals are in
   close rejected/transferred descriptors. Dispatch before signals start threads.
 - PID zero means all processes, rather than Aya's calling-process scope. Reject
   unrepresentable PIDs/offsets and location-less requests before store creation.
-- Keep SQLite schema 2 and existing user-probe details. JSON uprobes require
-  format 13, without implicitly upgrading formats 1–12.
+- Keep SQLite schema 2 and existing user-probe details.
 - Reuse standalone receipts, cancellation and independent cleanup/retry rules.
-  `rust-test-uprobe` selects nine unchanged scripts and native recovery on both
-  stores; include them in the full gate. Immediate lifetime contracts run in the
+  `rust-test-uprobe` selects nine unchanged scripts and native recovery with
+  SQLite; include them in the full gate. Immediate lifetime contracts run in the
   serial global stages with retained external-descriptor controls.
 
-- Container intent requires JSON format 14; format 13 retains host links without
-  implicit upgrade. SQLite retains schema 2 and the existing container_pid field.
+- SQLite retains schema 2 and the existing container_pid field.
   Three unchanged container traffic/persistence/PID-namespace scripts join the
   focused and full gates. Keep namespace-only target lookup and vanished-namespace
-  teardown contracts on both stores, plus process failure/cancellation/FD tests.
+  teardown contracts with SQLite, plus process failure/cancellation/FD tests.
 
-- Bare library intent requires JSON format 15. Preserve the requested name in
+- Preserve the requested library name in
   stored details. Resolve positive-PID maps first; read errors never fall through.
   Container maps are read in the parent using the same proc root as namespace
   lookup; unresolved names use the target namespace's cache in the helper.
@@ -583,10 +583,9 @@ The architecture and compatibility goals are in
   links for one loaded tracing program; compensate that pending intent while
   retaining the original. Separately loaded programs may share a function.
   Trampoline execution quiescence remains subject to kernel RCU.
-- SQLite retains Go schema 2 and existing tracing-detail/load-target fields; JSON
-  tracing requires format 16 without upgrading formats 1–15. Both stores validate
+- SQLite retains Go schema 2 and existing tracing-detail/load-target fields. Validate
   link function names against stored load targets.
 - `rust-test-function-tracing` runs six unchanged acceptance files plus native
-  vmlinux/module traffic and recovery contracts on both stores. Keep immediate
+  vmlinux/module traffic and recovery contracts with SQLite. Keep immediate
   lifetime tests in the serial global stages. Retain generic real-store and
   stateful-fake failure/cancellation/consuming retry coverage. LSM is separate.

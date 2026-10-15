@@ -24,20 +24,11 @@ pub(super) struct Cli {
     /// Timeout for acquiring the writer lock (0 waits indefinitely).
     #[arg(long, global = true, env = "BPFMAN_LOCK_TIMEOUT", default_value = "30s", value_parser = lock_timeout)]
     pub(super) lock_timeout: Duration,
-    /// Persistence format for this runtime (existing state is never converted).
-    #[arg(long = "store", global = true, env = "BPFMAN_STORE", value_enum, default_value_t = StoreBackend::Sqlite)]
-    pub(super) store: StoreBackend,
     /// Write a new Perfetto/Chrome timeline file, filtered by RUST_LOG.
     #[arg(long, global = true, value_name = "PATH")]
     pub(super) trace_file: Option<std::path::PathBuf>,
     #[command(subcommand)]
     pub(super) command: Command,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-pub(super) enum StoreBackend {
-    Sqlite,
-    Json,
 }
 
 pub(super) enum PreparedCommand {

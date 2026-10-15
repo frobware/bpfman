@@ -1,4 +1,4 @@
-//! Kernel/FS replacement capabilities with real pins, targets, and both stores.
+//! Kernel/FS replacement capabilities with real pins, targets, and a generic store.
 //! Runtime orchestration is deliberately not exercised by this adapter contract.
 use super::{support::*, xdp_attach::Interface};
 use bpfman_fs::*;

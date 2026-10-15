@@ -178,15 +178,10 @@ pub(super) fn rust() -> PathBuf {
 pub(super) struct Context {
     _temporary: tempfile::TempDir,
     pub(super) layout: RuntimeLayout,
-    store: &'static str,
 }
 
 impl Context {
     pub(super) fn new() -> Self {
-        Self::with_store("sqlite")
-    }
-
-    pub(super) fn with_store(store: &'static str) -> Self {
         assert_ne!(
             fs::read_link("/proc/self/ns/mnt").expect("self namespace"),
             fs::read_link("/proc/1/ns/mnt").expect("host namespace"),
@@ -198,7 +193,6 @@ impl Context {
         Self {
             _temporary: temporary,
             layout,
-            store,
         }
     }
 
@@ -223,7 +217,7 @@ impl Context {
             .arg("--runtime-dir")
             .arg(self.layout.root())
             .args(args)
-            .env("BPFMAN_STORE", self.store)
+            .env_remove("BPFMAN_STORE")
             .env_remove("BPFMAN_RUNTIME_DIR")
             .env_remove("BPFMAN_LOCK_TIMEOUT");
         command
