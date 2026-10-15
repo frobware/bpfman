@@ -38,9 +38,12 @@ fn invalid(id: NonZeroU32, reason: &str) -> Failure {
 }
 
 fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Result<(), Failure> {
-    if !matches!(row.kind.as_str(), "tracepoint" | "xdp" | "tc" | "tcx") {
+    if !matches!(
+        row.kind.as_str(),
+        "tracepoint" | "xdp" | "tc" | "tcx" | "kprobe" | "kretprobe"
+    ) {
         return Err(Failure::Unsupported(
-            "only tracepoint, XDP, TC, and TCX programs are implemented",
+            "only tracepoint, XDP, TC, TCX, kprobe, and kretprobe programs are implemented",
         ));
     }
 

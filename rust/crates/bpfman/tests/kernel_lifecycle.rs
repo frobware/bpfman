@@ -16,6 +16,9 @@ mod tc_replace;
 #[path = "lifecycle/tc_unload.rs"]
 mod tc_unload;
 
+#[path = "lifecycle/kprobe.rs"]
+mod kprobe;
+
 #[path = "lifecycle/tcx.rs"]
 mod tcx;
 
@@ -1001,4 +1004,24 @@ fn sqlite_tcx_failure_recovery() {
 #[test]
 fn json_tcx_failure_recovery() {
     tcx::recovery(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_kprobe_lifecycle() {
+    kprobe::lifecycle(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_kprobe_lifecycle() {
+    kprobe::lifecycle(bpfman_store_json::Backend);
+}
+
+#[test]
+fn sqlite_kprobe_failure_recovery() {
+    kprobe::recovery(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_kprobe_failure_recovery() {
+    kprobe::recovery(bpfman_store_json::Backend);
 }

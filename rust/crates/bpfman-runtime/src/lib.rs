@@ -121,6 +121,18 @@ pub struct ActiveStore<S: bpfman_store::OpenStore> {
     runtime: bpfman_fs::RuntimeDirectory,
 }
 
+/// Kernel function attachment intent; entry/return selection comes from the loaded program.
+pub struct KprobeAttach {
+    /// Managed program identity.
+    pub program_id: std::num::NonZeroU32,
+    /// Validated kernel function name.
+    pub function: bpfman_model::KernelFunction,
+    /// Byte offset from the function entry.
+    pub offset: u64,
+    /// Operator labels for this attachment.
+    pub metadata: std::collections::BTreeMap<String, String>,
+}
+
 /// Validated tracepoint attachment intent for an already loaded program.
 pub struct TracepointAttach {
     /// Managed program identity.

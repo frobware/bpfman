@@ -103,6 +103,8 @@ impl PreparedProgram {
                 | ProgramSpec::Xdp(_)
                 | ProgramSpec::Tc(_)
                 | ProgramSpec::Tcx(_)
+                | ProgramSpec::Kprobe(_)
+                | ProgramSpec::Kretprobe(_)
         ) {
             return Err(LoadCause::Unsupported("program type").into());
         }

@@ -8,6 +8,7 @@ use bpfman_model::StoredLink;
 use bpfman_store::{LinkStore, OpenStore};
 use std::num::NonZeroU64;
 
+mod kprobe;
 mod real;
 mod tcx;
 #[cfg(test)]

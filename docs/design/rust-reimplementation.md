@@ -3,8 +3,9 @@
 ## Status
 
 Implementation is in progress in the independent `rust/` workspace. The latest
-capability checkpoint adds native TCX loading, ordered ingress/egress links and
-consuming teardown on both stores, alongside legacy TC ingress/egress dispatchers.
+capability checkpoint adds native kprobe/kretprobe loading and standalone
+attachment, compensation and attached unload on both stores. Native TCX provides
+ordered ingress/egress links alongside legacy TC ingress/egress dispatchers.
 For legacy TC, one to ten EXT members are rebuilt in priority order around a
 native dispatcher, using the same exact legacy filter handle. Publication failures restore the old
 chain before staged cleanup; restoration and retirement failures retain consuming
@@ -101,14 +102,15 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
-| Local program load | Atomic tracepoint/XDP/TC batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
+| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe batches, private maps, named selection, compensation | Other program families, shared maps, OCI sources |
+| Kernel probe links | Entry/return selection from the loaded program; function and offset intent; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | Uprobes and mount-namespace target resolution |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
-| TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | TCX, outer-filter status and general orphan repair |
+| TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 10 for TCX, format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 11 for kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2426,19 +2428,13 @@ The implementation remains synchronous. Do not introduce async/await, an async
 runtime, or synchronous wrappers around async libraries. Scoped threads are
 appropriate where required for namespace-sensitive kernel operations.
 
-Prioritize the existing Go runner for packet acceptance and reduce kernel-gate
-duration without reducing coverage. Its pooled interface leases and scheduler
-already support concurrent scripts. The current Rust runner
-forces `--test-threads=1`: several fixtures use PID-only interface/namespace names,
-and each DSL test launches a separate Go runner that takes the system-wide
-`/tmp/bpfman-e2e.lock`. Simply enabling test threads would introduce name collisions
-and competing runner locks. Batch admitted scripts into one Go runner per backend,
-running the backend batches sequentially, so its existing parallel scheduler and
-serial/exclusive pragmas apply. Prefer this harness for future packet scenarios;
-keep Rust-specific ownership and fault tests separate. Give remaining Rust fixtures
-independent names or process isolation, then enable bounded parallel execution and
-measure per-test timings.
-Keep packet assertions, cleanup checks and both-store coverage intact.
+Prioritize the existing Go runner for packet acceptance. Admitted scripts now run
+in one batch per backend with pooled interfaces, per-script runtime isolation and
+an overlapping shared-runtime cohort. Independent retained contracts use eight
+workers; global inventories and immediate lifetime controls run serially to avoid
+transient BPF descriptors inherited by concurrently forked children. Keep backend
+batches sequential, classify every discovered test and preserve cleanup assertions.
+Future scheduling changes must measure wall time without reducing coverage.
 
 ## Delivery sequence
 
@@ -2487,6 +2483,10 @@ named-selection DSL scripts.
 
 Completed checkpoint:
 
+- Native TCX ingress/egress loading, ordered attachment, confined native-link
+  teardown and attached unload, including both stores and unchanged acceptance.
+- Independent legacy TC ingress/egress chains, shared clsact ownership and
+  missing-explicit-namespace cleanup with complete-snapshot consuming receipts.
 - Singleton legacy TC ingress loading/attachment with its native dispatcher,
   exact kernel-assigned filter handles, atomic publication, durable clsact ownership,
   malformed/foreign identity refusal, cancellation, compensation, and explicit
@@ -2679,10 +2679,11 @@ survivor unload and clsact reclamation on both stores. The script runner's expli
 against Rust; Go's production reclaim policy remains unchanged.
 
 This TC slice follows capabilities already present in Go, including replacement
-and attached-program unload; the XDP advantages recorded earlier remain. TC egress,
-outer-filter observations, deleted-namespace/orphan repair, the uprobe mount-namespace
-helper, and TCX ordering remain later work in this phase. Unsupported operations
-continue to fail clearly.
+and attached-program unload; the XDP advantages recorded earlier remain. Subsequent
+checkpoints completed TC egress, missing-explicit-namespace cleanup and native TCX
+ordering. Outer-filter observations and general orphan reconciliation remain open.
+The uprobe mount-namespace helper belongs to the later attachment-family work.
+Unsupported operations continue to fail clearly.
 
 This phase validates the architecture. If the effect or state-machine model is
 wrong, change it here before broadening feature coverage.
@@ -2690,7 +2691,8 @@ wrong, change it here before broadening feature coverage.
 ### Phase 4: remaining capabilities
 
 - Map sharing and PinByName coordination.
-- Kprobe, uprobe, fentry, fexit, LSM, and remaining attachment types.
+- Kprobe/kretprobe lifecycle is implemented; uprobe, fentry, fexit, LSM,
+  and remaining attachment types are pending.
 - OCI pull, cache, authentication, and signature verification.
 - Namespace helper and CSI integration.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
@@ -4476,3 +4478,75 @@ existing development/test `aya-obj` opt-level-two override; this is not a contro
 benchmark. `/tmp/bpfman-tcx/gate.stdout.log`, `gate.stderr.log` and
 `final-report.json` retain the final evidence. No Go source, dependency, lockfile
 or legacy Rust source changed.
+
+### Native kprobe and kretprobe lifecycle (15 October 2026)
+
+Kernel entry/return probes now extend the standalone lifecycle on both stores.
+Local ELF loading accepts kprobe and kretprobe sections as native KPROBE programs.
+The stored `ProgramSpec` determines entry versus return attachment when adopting
+an already-loaded program; the ELF section does not silently override that intent.
+This matches the existing corpus, which loads the same ELF entry in both roles.
+Probe attachment uses Aya's public KProbe API without dependency changes.
+
+A validated pure kernel-function type rejects malformed targets. The CLI rejects
+negative or unrepresentable offsets before opening state. The kernel decides
+symbol/offset validity; the unchanged 1 MiB out-of-symbol rejection test verifies
+that failure consumes pending intent and leaves no link or pin. Canonical program
+and perf-event link pins use the existing descriptor-confined filesystem adapter.
+Native program adoption checks exact identity and type; prepared handles also
+refuse changing entry/return selection after admission.
+
+The runtime reuses the production standalone pending-intent, cancellation,
+finalisation and compensation interpreter. Shared pin/record operations delegate
+to the existing adapter. Attached unload validates every pin before effects,
+continues independent links after record failures and blocks program deletion
+until every dependency succeeds. Failed cleanup retains consuming receipts and
+history for an explicit retry, including after reopening the application. Successful
+pin removal never repeats during record-only retries.
+
+SQLite retains Go schema 2 and its existing `link_kprobe_details` table. New JSON
+stores use format 11 with typed probe targets; formats 1–10 refuse probe operations
+without publication or implicit upgrade. Shared real-store tests cover missing or
+mismatched programs, offset range, pending intent, stale/foreign evidence,
+finalisation, reopened reads and conditional deletion. JSON-specific tests retain
+unchanged older bytes and reject inconsistent or malformed persisted probe intent.
+
+Seven existing scripts are explicitly selected unchanged on each store:
+
+- `TestKprobe_LoadAndGet`
+- `TestKretprobe_LoadAndGet`
+- `TestKprobe_LinkRoundTrip`
+- `TestKretprobe_LinkRoundTrip`
+- `TestMultiProgKprobe_LoadAttachDetachUnload`
+- `TestMultiProgKretprobe_LoadAttachDetachUnload`
+- `TestKprobe_OffsetBeyondSymbolRejected`
+
+`make rust-test-kprobe` runs these batches and native recovery contracts. The normal
+full gate also selects them; existing labels remain unchanged. Four new
+stateful-fake cases run both roles through the production interpreter with real
+stores, covering acquisition/publication/cleanup faults, cancellation and reopened
+record-only unload. Native contracts cover swapped-pin refusal before any effects,
+failed finalisation, cancellation after pending intent, independent link removal,
+reopened retries and immediate owned-object release. A retained program-descriptor
+control observes presence until close, then requires immediate absence. These
+lifetime contracts use the existing serial global stages, without sleeps or polling.
+
+Uprobes and their mount-namespace helper, shared maps, general reconciliation,
+other program families and OCI sources remain subsequent work.
+
+
+Final validation: `direnv exec . make rust-check lint-make` exited zero, including
+formatting, warnings-denied Clippy/Rustdoc, userspace/store/CLI and compile-fail
+contracts, 72 stateful-fake cases and all 116 discovered kernel cases. Owned fake
+and real tmpfs scopes passed normal cleanup. The existing 91-file admitted corpus,
+four shared-runtime scripts, eight separately selected TCX files and seven probe
+files passed per store. The seven probe files also passed unchanged against the
+existing Go binary with both JSON and SQLite, including isolated runtime residue
+checks. All existing `.bpfman` contents and labels remain unchanged.
+
+Evidence: `/tmp/bpfman-kprobe-gate.log` records the successful full gate;
+`/tmp/bpfman-kprobe-go-json.log` and `/tmp/bpfman-kprobe-go-sqlite.log` record the
+Go comparison. The kernel stage took 103.60 seconds locally on Linux 6.18.54 with
+eight ordinary contract workers and the existing development/test `aya-obj`
+opt-level-two override; this is not a controlled benchmark. No Go source,
+dependency, lockfile or legacy Rust source changed.

@@ -425,3 +425,20 @@ pub(super) fn tcx_scripts(store: &'static str) {
         true,
     );
 }
+
+pub(super) fn kprobe_scripts(store: &'static str) {
+    run_dsl(
+        store,
+        Some(&[
+            "TestKprobe_LoadAndGet",
+            "TestKretprobe_LoadAndGet",
+            "TestKprobe_LinkRoundTrip",
+            "TestKretprobe_LinkRoundTrip",
+            "TestMultiProgKprobe_LoadAttachDetachUnload",
+            "TestMultiProgKretprobe_LoadAttachDetachUnload",
+            "TestKprobe_OffsetBeyondSymbolRejected",
+        ]),
+        &rust(),
+        true,
+    );
+}

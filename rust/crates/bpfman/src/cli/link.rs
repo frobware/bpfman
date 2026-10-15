@@ -42,6 +42,17 @@ impl LinkCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum AttachCommand {
+    /// Attach a kernel entry or return probe, as selected when loading.
+    Kprobe {
+        program_id: NonZeroU32,
+        function: bpfman_model::KernelFunction,
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=i64::MAX as u64))]
+        offset: u64,
+        #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
+        metadata: Vec<(String, String)>,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
     /// Attach a native TCX classifier without a dispatcher.
     Tcx {
         program_id: NonZeroU32,
@@ -126,6 +137,33 @@ impl LinkCommand {
         S::Reader: bpfman_store::LinkReader,
     {
         match self {
+            Self::Attach {
+                target:
+                    AttachCommand::Kprobe {
+                        program_id,
+                        function,
+                        offset,
+                        metadata,
+                        output,
+                    },
+            } => {
+                let record = app.attach_kprobe_with_cancellation(
+                    bpfman_runtime::KprobeAttach {
+                        program_id,
+                        function,
+                        offset,
+                        metadata: metadata.into_iter().collect(),
+                    },
+                    cancellation,
+                )?;
+                let observed = app.get_link(record.id).map_err(|error| {
+                    anyhow::Error::from(error).context(format!(
+                        "attachment committed as link {}; observation failed",
+                        record.id
+                    ))
+                })?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+            }
             Self::Attach {
                 target:
                     AttachCommand::Tcx {

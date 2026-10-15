@@ -72,6 +72,8 @@ impl fmt::Display for Tracepoint {
 pub enum LinkDetails {
     /// A standalone tracepoint attachment.
     Tracepoint(Tracepoint),
+    /// Standalone kernel entry or return probe.
+    Kprobe(crate::KprobeLink),
     /// Native TCX attachment.
     Tcx(crate::TcxLink),
     /// XDP extension attached through a dispatcher.

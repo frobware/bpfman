@@ -931,3 +931,26 @@ fn sqlite_tcx_script_corpus() {
 fn json_tcx_script_corpus() {
     cli::tcx_scripts("json");
 }
+
+#[test]
+fn sqlite_kprobe_script_corpus() {
+    cli::kprobe_scripts("sqlite");
+}
+
+#[test]
+fn json_kprobe_script_corpus() {
+    cli::kprobe_scripts("json");
+}
+
+#[path = "kernel/kprobe.rs"]
+mod kprobe;
+
+#[test]
+fn sqlite_kprobe_native_link_recovery() {
+    kprobe::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_kprobe_native_link_recovery() {
+    kprobe::exercise(bpfman_store_json::Backend);
+}

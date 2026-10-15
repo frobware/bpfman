@@ -1,3 +1,4 @@
+//! Version 11 adds native kernel entry and return probes.
 //! Version 10 adds native TCX programs and links.
 //! Version 9 adds independent TC egress dispatchers.
 //! Version 8 adds complete TC ingress revisions.
@@ -96,7 +97,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 10,
+            version: 11,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -118,7 +119,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=10) {
+        if !matches!(header.version, 1..=11) {
             return Err(Failure::Version(header.version));
         }
 
@@ -158,6 +159,11 @@ impl State {
         let mut program_ids = BTreeSet::new();
 
         for row in &self.programs {
+            if self.version < 11 && matches!(row.kind, Kind::Kprobe | Kind::Kretprobe) {
+                return Err(Failure::Unsupported(
+                    "kernel probes require JSON format 11; no implicit upgrade",
+                ));
+            }
             if self.version < 10 && row.kind == Kind::Tcx {
                 return Err(Failure::Unsupported(
                     "TCX requires JSON format 10; no implicit upgrade",
@@ -217,6 +223,11 @@ impl State {
                 }
             }
 
+            if self.version < 11 && matches!(link.target.kind(), Kind::Kprobe | Kind::Kretprobe) {
+                return Err(Failure::Unsupported(
+                    "kernel probes require JSON format 11; no implicit upgrade",
+                ));
+            }
             if self.version < 10 && link.target.kind() == Kind::Tcx {
                 return Err(Failure::Unsupported(
                     "TCX requires JSON format 10; no implicit upgrade",
@@ -354,6 +365,13 @@ impl State {
         let row = Program {
             kind: match record.spec {
                 ProgramSpec::Tracepoint(_) => Kind::Tracepoint,
+                ProgramSpec::Kprobe(_) if self.version >= 11 => Kind::Kprobe,
+                ProgramSpec::Kretprobe(_) if self.version >= 11 => Kind::Kretprobe,
+                ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => {
+                    return Err(Failure::Unsupported(
+                        "kernel probes require JSON format 11; no implicit upgrade",
+                    ));
+                }
                 ProgramSpec::Tcx(_) if self.version >= 10 => Kind::Tcx,
                 ProgramSpec::Tcx(_) => {
                     return Err(Failure::Unsupported(
@@ -456,6 +474,8 @@ impl Program {
                     Kind::Xdp => ProgramSpec::Xdp(name),
                     Kind::Tc => ProgramSpec::Tc(name),
                     Kind::Tcx => ProgramSpec::Tcx(name),
+                    Kind::Kprobe => ProgramSpec::Kprobe(name),
+                    Kind::Kretprobe => ProgramSpec::Kretprobe(name),
                 }
             },
             source: ProgramSource::File(Some(self.source.clone())),
@@ -518,7 +538,7 @@ impl Link {
     pub(super) fn record(&self, layout: &RuntimeLayout) -> Result<StoredLink, Failure> {
         let details = self.target.details()?;
         let pin_path = match &details {
-            LinkDetails::Tracepoint(_) => layout.link_pin_path(self.id),
+            LinkDetails::Tracepoint(_) | LinkDetails::Kprobe(_) => layout.link_pin_path(self.id),
             LinkDetails::Tcx(d) => layout.tcx_link_path(d.key, self.program_id),
             _ => return Err(Failure::Invalid("invalid standalone target")),
         };
@@ -577,6 +597,8 @@ pub(super) enum Kind {
     Xdp,
     Tc,
     Tcx,
+    Kprobe,
+    Kretprobe,
 }
 
 impl Kind {
@@ -590,6 +612,8 @@ impl Kind {
             Self::Xdp => ProgramType::Xdp,
             Self::Tc => ProgramType::Tc,
             Self::Tcx => ProgramType::Tcx,
+            Self::Kprobe => ProgramType::Kprobe,
+            Self::Kretprobe => ProgramType::Kretprobe,
         }
     }
 }
@@ -599,6 +623,7 @@ impl Kind {
 pub(super) enum LinkTarget {
     Tracepoint(String),
     Tcx(TcxTarget),
+    Kprobe(KprobeTarget),
 }
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -612,16 +637,46 @@ pub(super) struct TcxTarget {
     pub(super) priority: u32,
 }
 
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct KprobeTarget {
+    pub(super) function: String,
+    pub(super) offset: u64,
+    pub(super) retprobe: bool,
+}
+
 impl LinkTarget {
     fn kind(&self) -> Kind {
         match self {
             Self::Tracepoint(_) => Kind::Tracepoint,
             Self::Tcx(_) => Kind::Tcx,
+            Self::Kprobe(d) => {
+                if d.retprobe {
+                    Kind::Kretprobe
+                } else {
+                    Kind::Kprobe
+                }
+            }
         }
     }
 
     fn details(&self) -> Result<LinkDetails, Failure> {
         match self {
+            Self::Kprobe(d) => {
+                if d.offset > i64::MAX as u64 {
+                    return Err(Failure::Invalid(
+                        "kernel probe offset exceeds persistence range",
+                    ));
+                }
+                Ok(LinkDetails::Kprobe(bpfman_model::KprobeLink {
+                    function: d
+                        .function
+                        .parse()
+                        .map_err(|_| Failure::Invalid("invalid kernel function"))?,
+                    offset: d.offset,
+                    retprobe: d.retprobe,
+                }))
+            }
             Self::Tracepoint(raw) => {
                 Ok(LinkDetails::Tracepoint(raw.parse().map_err(|_| {
                     Failure::Invalid("invalid tracepoint target")

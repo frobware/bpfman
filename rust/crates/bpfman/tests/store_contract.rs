@@ -199,7 +199,10 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
     let tracepoint = ProgramSpec::Tracepoint(name.clone());
     let xdp = ProgramSpec::Xdp(name.clone());
     let tc = ProgramSpec::Tc(name.clone());
-    let unsupported = ProgramSpec::Kprobe(name);
+    let tcx = ProgramSpec::Tcx(name.clone());
+    let kprobe = ProgramSpec::Kprobe(name.clone());
+    let kretprobe = ProgramSpec::Kretprobe(name.clone());
+    let unsupported = ProgramSpec::Uprobe(name);
     let metadata = BTreeMap::new();
     let globals = BTreeMap::new();
     let record = |id, spec| LoadRecord {
@@ -222,13 +225,27 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
         backend
             .commit_programs(
                 w,
-                &[record(1, &tracepoint), record(2, &xdp), record(3, &tc)],
+                &[
+                    record(1, &tracepoint),
+                    record(2, &xdp),
+                    record(3, &tc),
+                    record(4, &tcx),
+                    record(5, &kprobe),
+                    record(6, &kretprobe),
+                ],
             )
             .expect("mixed batch");
         let records = reader.read_records().expect("records");
         assert_eq!(
             records.iter().map(|p| p.spec.clone()).collect::<Vec<_>>(),
-            [tracepoint.clone(), xdp.clone(), tc.clone()]
+            [
+                tracepoint.clone(),
+                xdp.clone(),
+                tc.clone(),
+                tcx.clone(),
+                kprobe.clone(),
+                kretprobe.clone()
+            ]
         );
         assert_eq!(
             reader
@@ -237,7 +254,14 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                 .iter()
                 .map(|p| p.kind())
                 .collect::<Vec<_>>(),
-            [ProgramType::Tracepoint, ProgramType::Xdp, ProgramType::Tc]
+            [
+                ProgramType::Tracepoint,
+                ProgramType::Xdp,
+                ProgramType::Tc,
+                ProgramType::Tcx,
+                ProgramType::Kprobe,
+                ProgramType::Kretprobe
+            ]
         );
         assert!(
             backend

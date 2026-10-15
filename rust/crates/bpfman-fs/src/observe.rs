@@ -99,6 +99,7 @@ impl RuntimeWriter<'_> {
                 if info.id != id.get()
                     || !matches!(info.kind,
                         kind if kind == crate::PinProgramKind::Tracepoint
+                            || kind == crate::PinProgramKind::Kprobe
                             || kind == crate::PinProgramKind::Tc
                             || kind == crate::PinProgramKind::Extension
                             || kind == crate::PinProgramKind::Xdp)

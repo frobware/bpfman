@@ -21,6 +21,8 @@ pub struct PinSource<'a>(pub(crate) &'a Path);
 pub enum PinProgramKind {
     /// Standalone tracepoint.
     Tracepoint,
+    /// Kernel entry or return probe.
+    Kprobe,
     /// Dispatcher extension.
     Extension,
     /// XDP dispatcher.
@@ -242,4 +244,24 @@ pub trait TcxProgram {
         target: &bpfman_model::TcxLink,
         order: bpfman_model::TcxOrder,
     ) -> KernelResult<Self::Link>;
+}
+
+/// Adopt a kernel probe through a confined program pin.
+pub trait KprobeKernel: ProgramInspection + LinkInspection {
+    /// Owned adopted program.
+    type Kprobe: KprobeProgram;
+    /// Inspect and adopt the requested entry/return probe.
+    fn kprobe_at(
+        &self,
+        source: PinSource<'_>,
+        retprobe: bool,
+    ) -> KernelResult<(PinnedProgram, Self::Kprobe)>;
+}
+
+/// Adopted kernel probe, independent of its library representation.
+pub trait KprobeProgram {
+    /// Owned unpinned attachment.
+    type Link: LinkPinning;
+    /// Attach at the selected kernel function and offset.
+    fn attach(&mut self, target: &bpfman_model::KprobeLink) -> KernelResult<Self::Link>;
 }

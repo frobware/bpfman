@@ -5,6 +5,7 @@
 
 mod backend;
 mod failure;
+mod kprobe;
 mod netns;
 mod object;
 mod observe;
@@ -46,6 +47,9 @@ pub struct Dispatcher(aya::Ebpf);
 
 /// Opaque adopted tracepoint handle.
 pub struct AyaTracepoint(aya::programs::TracePoint);
+
+/// Opaque adopted kernel probe handle.
+pub struct AyaKprobe(aya::programs::KProbe);
 
 /// Opaque adopted extension handle.
 pub struct AyaExtension(aya::programs::Extension);

@@ -588,6 +588,7 @@ impl ProgramLoad for FakeKernel {
         let kind = match spec {
             ProgramSpec::Tracepoint(_) => "tracepoint",
             ProgramSpec::Tcx(_) => "schedcls",
+            ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => "kprobe",
             ProgramSpec::Xdp(_) | ProgramSpec::Tc(_) => "extension",
             _ => return Err(error(ErrorKind::Unsupported, "program type")),
         };
@@ -1812,5 +1813,28 @@ impl TcxLinks for FakeKernel {
                 generation: 0,
             },
         })
+    }
+}
+
+impl KprobeLinks for FakeKernel {
+    type PreparedKprobe = Loaded;
+
+    fn prepare_kprobe(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+        _target: &KprobeLink,
+    ) -> Result<Loaded, Error> {
+        self.enter(Point::PrepareLink)?;
+        self.adopt(w, id, "kprobe")
+    }
+
+    fn attach_kprobe(
+        &self,
+        w: &RuntimeWriter<'_>,
+        p: Loaded,
+        _target: &KprobeLink,
+    ) -> Result<Live, Error> {
+        self.attach_tracepoint(w, p, &"fake/event".parse().expect("tracepoint"))
     }
 }

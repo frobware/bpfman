@@ -31,6 +31,9 @@ pub(super) struct StoredLinkRow {
     pub(super) priority: Option<i64>,
     pub(super) netns: Option<String>,
     pub(super) nsid: Option<i64>,
+    pub(super) function: Option<String>,
+    pub(super) offset: Option<i64>,
+    pub(super) retprobe: Option<i64>,
 }
 
 pub(super) fn stored_links(
@@ -42,11 +45,12 @@ pub(super) fn stored_links(
                 p.program_type AS program_kind, l.kernel_link_id AS kernel_id,
                 l.pin_path, l.metadata_json AS metadata, l.created_at,
                 t.tp_group AS tp_group, t.tp_name AS tp_name,
-                x.interface, x.ifindex, x.direction, x.priority, x.netns, x.nsid
+                x.interface, x.ifindex, x.direction, x.priority, x.netns, x.nsid, k.fn_name, k.offset, k.retprobe
          FROM links l
          LEFT JOIN managed_programs p ON p.program_id = l.kernel_prog_id
          LEFT JOIN link_tracepoint_details t ON t.id = l.id
          LEFT JOIN link_tcx_details x ON x.id = l.id
+         LEFT JOIN link_kprobe_details k ON k.id = l.id
          WHERE (:id IS NULL OR l.id = :id) ORDER BY l.id",
     )?;
     statement
@@ -68,6 +72,9 @@ pub(super) fn stored_links(
                 priority: row.get("priority")?,
                 netns: row.get("netns")?,
                 nsid: row.get("nsid")?,
+                function: row.get("fn_name")?,
+                offset: row.get("offset")?,
+                retprobe: row.get("retprobe")?,
             })
         })?
         .collect()
@@ -405,4 +412,26 @@ pub(super) fn insert_pending_tcx(
 pub(super) fn is_tcx(connection: &Connection, id: NonZeroU32) -> rusqlite::Result<bool> {
     connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM managed_programs WHERE program_id=:id AND program_type='tcx') AS supported")?
         .query_row(named_params!{":id":id.get()}, |row| row.get("supported"))
+}
+
+pub(super) fn is_kprobe(
+    connection: &Connection,
+    id: NonZeroU32,
+    retprobe: bool,
+) -> rusqlite::Result<bool> {
+    connection.prepare_cached("SELECT EXISTS(SELECT 1 FROM managed_programs WHERE program_id=:id AND program_type=:kind) AS supported")?
+        .query_row(named_params! { ":id": id.get(), ":kind": if retprobe { "kretprobe" } else { "kprobe" } }, |row| row.get("supported"))
+}
+
+pub(super) fn insert_pending_kprobe(
+    tx: &Transaction<'_>,
+    input: &bpfman_store::PendingKprobe<'_>,
+    metadata: &str,
+    offset: i64,
+) -> rusqlite::Result<i64> {
+    let id = tx.prepare_cached("INSERT INTO links (kind, kernel_prog_id, metadata_json, created_at) VALUES (:kind, :program, :metadata, :created) RETURNING id")?
+        .query_row(named_params! { ":kind": if input.target.retprobe { "kretprobe" } else { "kprobe" }, ":program": input.program_id.get(), ":metadata": metadata, ":created": input.created_at }, |row| row.get("id"))?;
+    tx.prepare_cached("INSERT INTO link_kprobe_details (id, fn_name, offset, retprobe) VALUES (:id, :function, :offset, :retprobe)")?
+        .execute(named_params! { ":id": id, ":function": input.target.function.as_str(), ":offset": offset, ":retprobe": input.target.retprobe })?;
+    Ok(id)
 }

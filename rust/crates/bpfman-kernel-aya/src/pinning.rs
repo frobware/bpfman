@@ -18,6 +18,7 @@ fn nz(id: u32) -> KernelResult<NonZeroU32> {
 fn program(info: &ProgramInfo) -> KernelResult<PinnedProgram> {
     let kind = match info.program_type() {
         k if k == ProgramType::TracePoint.into() => PinProgramKind::Tracepoint,
+        k if k == ProgramType::KProbe.into() => PinProgramKind::Kprobe,
         k if k == ProgramType::Extension.into() => PinProgramKind::Extension,
         k if k == ProgramType::SchedClassifier.into() => PinProgramKind::Tc,
         k if k == ProgramType::Xdp.into() => PinProgramKind::Xdp,

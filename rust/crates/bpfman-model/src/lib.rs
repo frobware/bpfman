@@ -8,6 +8,9 @@ extern crate alloc;
 
 use alloc::string::String;
 
+mod kprobe;
+pub use kprobe::{InvalidKernelFunction, KernelFunction, KprobeLink};
+
 mod netns;
 pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
 

@@ -5,6 +5,10 @@ use std::io::{self, Write};
 
 fn record(link: &StoredLink) -> Value {
     let (kind, details) = match &link.details {
+        LinkDetails::Kprobe(d) => (
+            if d.retprobe { "kretprobe" } else { "kprobe" },
+            json!({"fn_name": d.function.as_str(), "offset": d.offset, "retprobe": d.retprobe}),
+        ),
         LinkDetails::Tracepoint(target) => (
             "tracepoint",
             json!({"group": target.group(), "name": target.name()}),
@@ -151,6 +155,10 @@ pub(super) fn attachment(details: &LinkDetails) -> (&'static str, String) {
         LinkDetails::Tc(d) => (
             "tc",
             format!("{}:{}", d.interface.as_str(), d.key.direction),
+        ),
+        LinkDetails::Kprobe(d) => (
+            if d.retprobe { "kretprobe" } else { "kprobe" },
+            format!("{}+{}", d.function.as_str(), d.offset),
         ),
         LinkDetails::Tracepoint(t) => ("tracepoint", t.to_string()),
         LinkDetails::Xdp(d) => ("xdp", format!("{}:xdp", d.interface.as_str())),

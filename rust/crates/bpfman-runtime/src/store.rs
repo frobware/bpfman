@@ -193,6 +193,14 @@ pub(super) fn open_store<S: OpenStore>(
 impl<S: OpenStore + bpfman_store::LinkStore> bpfman_store::LinkStore for ActiveStore<S> {
     type LinkReceipt = S::LinkReceipt;
 
+    fn create_pending_kprobe(
+        &self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        request: bpfman_store::PendingKprobe<'_>,
+    ) -> Result<(bpfman_model::StoredLink, Self::LinkReceipt), bpfman_store::Error> {
+        self.backend.create_pending_kprobe(writer, request)
+    }
+
     fn create_pending_tcx(
         &self,
         writer: &RuntimeWriter<'_>,

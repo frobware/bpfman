@@ -47,6 +47,13 @@ pub trait LinkReader {
 /// }
 /// ```
 pub trait LinkStore {
+    /// Publish probe intent, validating the loaded program and entry/return selection.
+    fn create_pending_kprobe(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: PendingKprobe<'_>,
+    ) -> Result<(StoredLink, Self::LinkReceipt), Error>;
+
     /// Allocate native TCX intent, validating the loaded program and hook uniqueness.
     fn create_pending_tcx(
         &self,
@@ -101,6 +108,18 @@ pub struct PendingTcx<'a> {
     pub program_id: NonZeroU32,
     /// Resolved namespace and hook.
     pub target: &'a bpfman_model::TcxLink,
+    /// Operator labels.
+    pub metadata: &'a BTreeMap<String, String>,
+    /// Caller-captured RFC3339 timestamp.
+    pub created_at: &'a str,
+}
+
+/// Standalone kernel probe intent admitted before kernel attachment.
+pub struct PendingKprobe<'a> {
+    /// Managed native probe program.
+    pub program_id: NonZeroU32,
+    /// Kernel function, offset and derived entry/return selection.
+    pub target: &'a bpfman_model::KprobeLink,
     /// Operator labels.
     pub metadata: &'a BTreeMap<String, String>,
     /// Caller-captured RFC3339 timestamp.

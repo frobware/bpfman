@@ -45,7 +45,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-store-json` | 4 | Versioned whole-file snapshots, atomic publication, and conditional teardown |
-| `bpfman-runtime` | 4 | Generic tracepoint/XDP/TC/TCX lifecycle interpreters, compensation, and observations |
+| `bpfman-runtime` | 4 | Generic tracepoint/XDP/TC/TCX/kernel-probe lifecycle interpreters, compensation, and observations |
 | `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -171,9 +171,11 @@ their existing operations: tracepoint programs from version 1, tracepoint links
 from version 2, and XDP loads from version 3. XDP attachment requires a separately
 initialized version 4 or newer runtime. Version 5 adds multi-member XDP
 replacement. Version 6 persists explicit network namespace paths. New stores use
-version 9, which adds independent TC egress dispatchers. Version 8 retains complete
+version 11 for native kernel entry/return probes. Version 10 retains native TCX;
+version 9 retains independent TC egress dispatchers. Version 8 retains complete
 TC ingress revisions. Version 7 retains TC loads and singleton ingress attachments
-without implicit upgrade. Formats 7–8 reject egress without changing existing state.
+without implicit upgrade. Formats 1–10 refuse kernel probes without upgrading. Formats 1–9 refuse TCX.
+Formats 7–8 reject egress without changing existing state.
 Versions 1–6 refuse TC without upgrading. Versions 4 and 5 reject namespaced attachments without upgrading;
 version 4 also rejects replacement. Existing stores never upgrade implicitly.
 The filesystem adapter writes the pending snapshot beneath a verified directory
@@ -392,7 +394,7 @@ teardown.
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint, XDP, TC, and TCX batches with private maps and
+exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe and kretprobe batches with private maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads, other program types,
 and map-owner sharing exit with status 1 before source access or runtime effects.
@@ -678,8 +680,8 @@ history, and cancellation at store boundaries. Private interpreter tests cover
 individual forward and cleanup failures, including live-descriptor release.
 The CLI exposes `link attach tracepoint PROGRAM_ID GROUP/NAME [-m KEY=VALUE]`,
 `link get LINK_ID`, `link list`, and `link detach LINK_ID`. Attach/get/list accept
-`-o json`; JSON follows Go's record/status shapes. Other attachment kinds except the XDP slice below, list
-filters, and batch detachment are not implemented. `get_link` observes recorded
+`-o json`; JSON follows Go's record/status shapes. XDP, legacy TC, TCX and kernel probes are also implemented in the slices below;
+list filters and batch detachment remain unsupported. `get_link` observes recorded
 kernel identity and a descriptor-confined pin without the writer lock; missing
 kernel state is reported as absence, while denied or inconsistent observation
 fails. Output failure after finalisation leaves the committed link manageable.
@@ -1918,7 +1920,8 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 10 for TCX; format 9 retains egress and format 8 retains ingress
+receipt. New JSON stores use format 11 for probes; format 10 retains TCX, format 9
+retains egress and format 8 retains ingress
 replacement and format 7 retains singleton ingress. Older formats retain their
 operations without upgrading.
 
@@ -2020,7 +2023,8 @@ through a reopened application. This also strengthens tracepoint unload, with
 its fault and retry contracts updated to require independent progress.
 
 SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
-use format 10; existing formats 1–9 retain their previous operations and reject TCX
+use format 11; format 10 retains TCX. Existing formats 1–9 retain their previous
+operations and reject TCX
 without an implicit upgrade. Tracepoint target strings keep their existing JSON
 encoding; native targets have a typed object representation.
 
@@ -2054,3 +2058,33 @@ warnings-denied Clippy/Rustdoc, formatting and Makefile lint, with successful ow
 tmpfs cleanup. All 173 existing scripts remain byte-for-byte unchanged. Evidence
 and the lifetime investigation are in the
 [implementation record](../docs/design/rust-reimplementation.md#native-tcx-lifecycle-and-ordering-14-october-2026).
+
+## Kernel entry and return probes
+
+Local `kprobe:ENTRY` and `kretprobe:ENTRY` selections load native KPROBE programs.
+Either kernel-probe ELF section is accepted; entry versus return attachment comes
+from the stored selection, so one ELF entry can be loaded in either role. Attach
+with `link attach kprobe PROGRAM_ID FUNCTION [--offset BYTES] [-m KEY=VALUE]`.
+The function is syntax-validated and offsets must fit the shared persistence
+range. The kernel validates symbol existence and whether an offset lies inside it.
+Get/list expose Go-compatible `fn_name`, `offset` and `retprobe` details.
+
+`Bpfman::attach_kprobe` and its cancellation variant use the same standalone
+pending-intent and consuming compensation interpreter as tracepoints and TCX.
+Detach keeps the program loaded; attached unload admits all pins before effects,
+attempts independent links once, and retains unresolved records for explicit retry.
+Reopening the application and retrying a record-only failure never removes a
+completed pin again. Adopted program and link pins require confined traversal and
+exact kernel identity. Perf-event teardown holds a live descriptor across unpinning
+and closes it after pin descriptors. External holders retain their ordinary kernel
+lifetime semantics.
+
+SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 11;
+older snapshots retain existing operations and refuse probe loads/links without
+implicit conversion. `make rust-test-kprobe` runs native recovery contracts and
+seven unchanged acceptance files per store: kprobe/kretprobe load/get and link
+round trips, multi-program weighted counters and invalid-offset cleanup. The full
+gate includes them without changing existing labels. Stateful-fake contracts cover
+acquisition/publication failures, cancellation and reopened retries on both real
+stores. Native lifetime controls run serially to exclude descriptors temporarily
+inherited by concurrently forked test children.

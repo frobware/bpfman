@@ -57,6 +57,7 @@ impl LocalObject {
         let mut loader = aya::EbpfLoader::new();
         let selection = match spec {
             ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
+            ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => Selection::Kprobe,
             ProgramSpec::Tc(_) => Selection::Tc,
             ProgramSpec::Tcx(_) => Selection::Tcx,
             ProgramSpec::Xdp(_) => Selection::Xdp(xdp_role(&self.bytes, spec.name().as_str())?),
@@ -92,6 +93,14 @@ impl LocalObject {
             Selection::Tc => crate::verification::load_tc(program)?,
             Selection::Tcx => {
                 let program: &mut aya::programs::SchedClassifier = program
+                    .try_into()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+                program
+                    .load()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+            }
+            Selection::Kprobe => {
+                let program: &mut aya::programs::KProbe = program
                     .try_into()
                     .map_err(|e| LoadCause::Program(Box::new(e)))?;
                 program
@@ -199,6 +208,13 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         (ProgramSpec::Tc(_) | ProgramSpec::Tcx(_), _) => Err(LoadCause::Invalid(
             "TC selection requires a classifier section".into(),
         )),
+        (
+            ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_),
+            ProgramSection::KProbe | ProgramSection::KRetProbe,
+        ) => Ok(()),
+        (ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_), _) => Err(LoadCause::Invalid(
+            "kernel probe selection requires a kprobe or kretprobe section".into(),
+        )),
         (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint) => Ok(()),
         (ProgramSpec::Xdp(_), section @ ProgramSection::Xdp { .. }) => {
             XdpRole::from_section(section).map(|_| ())
@@ -271,6 +287,7 @@ enum XdpRole {
 }
 
 enum Selection {
+    Kprobe,
     Tc,
     Tcx,
     Tracepoint,

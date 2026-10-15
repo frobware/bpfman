@@ -196,6 +196,17 @@ fn invalid_link_requests_fail_before_runtime_creation() -> Result<(), Box<dyn st
     for args in [
         vec!["get", "0"],
         vec!["detach", "18446744073709551616"],
+        vec!["attach", "kprobe", "42", "../bad"],
+        vec!["attach", "kprobe", "0", "function"],
+        vec!["attach", "kprobe", "42", "function", "--offset", "-1"],
+        vec![
+            "attach",
+            "kprobe",
+            "42",
+            "function",
+            "--offset",
+            "18446744073709551615",
+        ],
         vec!["attach", "tracepoint", "0", "syscalls/sys_enter_kill"],
         vec!["attach", "tracepoint", "42", "../event"],
         vec!["attach", "tracepoint", "42", "a/b/c"],

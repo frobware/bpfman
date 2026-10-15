@@ -336,6 +336,154 @@ fn json_atomic_failures_and_lock_free_readers() {
     failures(bpfman_store_json::Backend);
 }
 
+fn kprobe_lifecycle<S>(backend: S)
+where
+    S: OpenStore + CommitLoad + LinkStore + UnloadStore + Copy,
+    S::Reader: LinkReader,
+{
+    for retprobe in [false, true] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
+        let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+        let other = RuntimeDirectory::open_or_create(
+            RuntimeLayout::try_from(temp.path().join("other")).expect("layout"),
+        )
+        .expect("other");
+        let store = ActiveStore::open(backend, &layout, Duration::from_secs(1)).expect("store");
+        let name = "probe".try_into().expect("symbol");
+        let spec = if retprobe {
+            bpfman_model::ProgramSpec::Kretprobe(name)
+        } else {
+            bpfman_model::ProgramSpec::Kprobe(name)
+        };
+        let target = bpfman_model::KprobeLink {
+            function: "bpfman_e2e_target_0".parse().expect("function"),
+            offset: if retprobe { 0 } else { 17 },
+            retprobe,
+        };
+        let pending = |w: &RuntimeWriter<'_>, target: &bpfman_model::KprobeLink| {
+            store.create_pending_kprobe(
+                w,
+                bpfman_store::PendingKprobe {
+                    program_id: id(42),
+                    target,
+                    metadata: &[("owner".into(), "probe".into())].into(),
+                    created_at: "2026-10-15T12:00:00Z",
+                },
+            )
+        };
+        let (record, receipt) = writer(&runtime, |w| {
+            assert!(pending(w, &target).is_err(), "missing program");
+            store
+                .commit_program(
+                    w,
+                    LoadRecord {
+                        id: id(42),
+                        spec: &spec,
+                        source: "/probe.o",
+                        globals: &Default::default(),
+                        metadata: &Default::default(),
+                        license: "GPL",
+                        created_at: "2026-10-15T12:00:00Z",
+                    },
+                )
+                .expect("load");
+            let mut wrong = target.clone();
+            wrong.retprobe = !retprobe;
+            assert!(
+                pending(w, &wrong).is_err(),
+                "selection must match loaded kind"
+            );
+            wrong = target.clone();
+            wrong.offset = u64::MAX;
+            assert!(pending(w, &wrong).is_err(), "offset cannot truncate");
+            let (record, receipt) = pending(w, &target).expect("pending");
+            assert_eq!(record.details, LinkDetails::Kprobe(target.clone()));
+            assert_eq!(record.state, LinkState::Pending);
+            assert_eq!(
+                record.pin_path,
+                layout.link_pin_path(record.id).to_str().expect("path")
+            );
+            let (program, _) = store
+                .observe_unload(w, id(42))
+                .expect("observe")
+                .expect("program");
+            assert!(
+                store.delete_program(w, program).is_err(),
+                "pending link protects program"
+            );
+            (record, receipt)
+        });
+        let receipt = writer(&other, |w| {
+            store
+                .finalise_link(w, receipt, id(400))
+                .expect_err("foreign runtime")
+                .remaining
+        });
+        writer(&runtime, |w| {
+            let (_, stale) = store
+                .observe_link(w, record.id)
+                .expect("observe")
+                .expect("present");
+            let attached = store
+                .finalise_link(w, receipt, id(400))
+                .map_err(|e| e.cause)
+                .expect("finalise");
+            assert_eq!(attached.details, record.details);
+            assert!(
+                store.delete_link(w, stale).is_err(),
+                "stale pending evidence"
+            );
+        });
+        let mut reader = backend
+            .open_reader(&runtime)
+            .expect("reader")
+            .expect("exists");
+        let observed = reader.read_links().expect("reopened intent");
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].details, LinkDetails::Kprobe(target));
+        assert_eq!(observed[0].metadata["owner"], "probe");
+        assert_eq!(
+            observed[0].state,
+            LinkState::Attached { kernel_id: id(400) }
+        );
+        writer(&runtime, |w| {
+            let (_, receipt) = store
+                .observe_link(w, record.id)
+                .expect("observe")
+                .expect("present");
+            store
+                .delete_link(w, receipt)
+                .map_err(|e| e.cause)
+                .expect("delete unchanged");
+            let (program, maps) = store
+                .observe_unload(w, id(42))
+                .expect("observe")
+                .expect("present");
+            store
+                .delete_program(w, program)
+                .map_err(|e| e.cause)
+                .expect("delete program");
+            store
+                .delete_map_set(w, maps)
+                .map_err(|e| e.cause)
+                .expect("delete map set");
+        });
+        assert!(reader.read_links().expect("empty").is_empty());
+        assert!(reader.read_records().expect("empty").is_empty());
+    }
+}
+
+#[test]
+fn sqlite_kprobe_pending_lifecycle() {
+    kprobe_lifecycle(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn json_kprobe_pending_lifecycle() {
+    kprobe_lifecycle(bpfman_store_json::Backend);
+}
+
 fn tcx_lifecycle<S>(backend: S)
 where
     S: OpenStore + CommitLoad + LinkStore,

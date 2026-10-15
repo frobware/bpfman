@@ -136,9 +136,10 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 10 for native TCX; format 9 retains independent TC egress chains and format 8
-  retains ingress replacement, and format 7 retains singleton ingress.
-  Formats 1–9 never upgrade implicitly.
+- New JSON stores use format 11 for kernel probes; format 10 retains native TCX,
+  format 9 retains independent TC egress chains, format 8 retains ingress
+  replacement, and format 7 retains singleton ingress.
+  Older formats never upgrade implicitly.
   Attached unload must adopt all TC attachments before effects, finish exact
   filter/stage/record prerequisites before program teardown, and retain blocked
   ownership for explicit retry. Reject newly acquired links between retry passes.
@@ -486,3 +487,19 @@ The architecture and compatibility goals are in
   forked child retaining a copied BPF FD before exec; the deterministic control
   is recorded under `/tmp/bpfman-tcx/`. Preserve every immediate assertion and
   select every discovered test; do not add polling to cover inherited holders.
+
+## Native kernel probes
+
+- Load kprobe and kretprobe selections as native KPROBE programs. Accept either
+  kernel-probe ELF section; entry/return attachment comes from the stored program
+  selection, including when the same ELF entry is loaded as a return probe.
+- Keep kernel function syntax in the pure model and validate offsets before
+  truncation or persistence. Use the existing SQLite schema 2 probe-detail table;
+  new JSON stores use format 11. Formats 1–10 refuse probes without upgrading.
+- Reuse the standalone pending-intent, cancellation and consuming compensation
+  interpreter. Confined perf-event pin adoption and held-descriptor teardown apply
+  to probes as well as tracepoints. Retain every failed receipt and attempt history.
+- `rust-test-kprobe` runs seven unchanged existing scripts plus native recovery
+  contracts on both stores. Keep script labels and assertions unchanged. Probe
+  lifetime contracts belong in the existing serial global stage, with immediate
+  link/program absence assertions and explicit external program-holder controls.

@@ -7,10 +7,10 @@ use std::{os::fd::OwnedFd, path::PathBuf};
 
 mod kernel;
 pub use kernel::{
-    ExtensionProgram, KernelResult, LinkInspection, LinkPinning, LinkRetention, MapPinning,
-    OuterInfo, OuterLink, PinProgramKind, PinSource, PinTarget, PinnedProgram, ProgramInspection,
-    ProgramPinning, TcxKernel, TcxProgram, TracepointKernel, TracepointProgram, XdpKernel,
-    XdpSwitchKernel,
+    ExtensionProgram, KernelResult, KprobeKernel, KprobeProgram, LinkInspection, LinkPinning,
+    LinkRetention, MapPinning, OuterInfo, OuterLink, PinProgramKind, PinSource, PinTarget,
+    PinnedProgram, ProgramInspection, ProgramPinning, TcxKernel, TcxProgram, TracepointKernel,
+    TracepointProgram, XdpKernel, XdpSwitchKernel,
 };
 
 mod xdp;
@@ -231,4 +231,13 @@ pub struct PreparedTcxAttach<P: TcxProgram> {
     target: bpfman_model::TcxLink,
     program_id: std::num::NonZeroU32,
 }
+mod kprobe;
 mod tcx;
+
+/// Confined kernel probe program and collection, ready for one attachment.
+pub struct PreparedKprobeAttach<P: KprobeProgram> {
+    program: P,
+    program_pin: artifacts::Entry,
+    links: OwnedFd,
+    retprobe: bool,
+}

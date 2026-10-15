@@ -79,6 +79,62 @@ impl LinkStore for Backend {
     type LinkReceipt = LinkReceipt;
 
     #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
+    fn create_pending_kprobe(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingKprobe<'_>,
+    ) -> Result<(StoredLink, LinkReceipt), Error> {
+        let file = writer.open_store_snapshot().map_err(Failure::from)?;
+        let (previous, mut state) = read(&file)?;
+
+        if state.version < 11 {
+            return Err(Failure::Unsupported(
+                "kernel probes require JSON format 11; no implicit upgrade",
+            )
+            .into());
+        }
+
+        if !state.programs.iter().any(|program| {
+            program.id == request.program_id
+                && program.kind
+                    == if request.target.retprobe {
+                        crate::state::Kind::Kretprobe
+                    } else {
+                        crate::state::Kind::Kprobe
+                    }
+        }) {
+            return Err(Failure::Invalid("missing or mismatched kernel probe program").into());
+        }
+
+        let id = NonZeroU64::new(state.next_link_id)
+            .filter(|id| id.get() <= i64::MAX as u64)
+            .ok_or(Failure::Invalid("link ID exhausted"))?;
+        state.next_link_id += 1;
+        let row = Link {
+            id,
+            program_id: request.program_id,
+            target: crate::state::LinkTarget::Kprobe(crate::state::KprobeTarget {
+                function: request.target.function.as_str().into(),
+                offset: request.target.offset,
+                retprobe: request.target.retprobe,
+            }),
+            state: LinkProgress::Pending,
+            metadata: request.metadata.clone(),
+            created_at: request.created_at.into(),
+        };
+        let record = row.record_at(writer.layout(), &state)?;
+        let receipt = LinkReceipt {
+            root: writer.identity().map_err(Failure::from)?,
+            store: state.identity.clone(),
+            row: row.clone(),
+        };
+        state.links.push(row);
+        publish(writer, &file, Some(&previous), &state)?;
+
+        Ok((record, receipt))
+    }
+
+    #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
     fn create_pending_tracepoint(
         &self,
         writer: &RuntimeWriter<'_>,

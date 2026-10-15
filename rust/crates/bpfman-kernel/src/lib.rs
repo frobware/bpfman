@@ -3,6 +3,9 @@
 //! Reads borrow one backend supplied at application construction. Implementations
 //! own resource reuse and synchronization; observations confer no removal authority.
 
+mod kprobe;
+pub use kprobe::KprobeLinks;
+
 mod tcx;
 pub use tcx::TcxLinks;
 

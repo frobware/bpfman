@@ -43,7 +43,9 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
         bpfman_model::LinkDetails::Tc(d) => {
             runtime.layout().tc_slot_path(d.key, d.revision, d.slot)
         }
-        bpfman_model::LinkDetails::Tracepoint(_) => runtime.layout().link_pin_path(record.id),
+        bpfman_model::LinkDetails::Tracepoint(_) | bpfman_model::LinkDetails::Kprobe(_) => {
+            runtime.layout().link_pin_path(record.id)
+        }
         bpfman_model::LinkDetails::Xdp(details) => {
             runtime
                 .layout()
@@ -60,7 +62,9 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     };
     let kernel = match kernel_id
         .map(|id| match &record.details {
-            bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_link(id),
+            bpfman_model::LinkDetails::Tracepoint(_) | bpfman_model::LinkDetails::Kprobe(_) => {
+                backend.tracepoint_link(id)
+            }
             bpfman_model::LinkDetails::Tcx(_) => backend.tcx_link(id),
             bpfman_model::LinkDetails::Xdp(_) | bpfman_model::LinkDetails::Tc(_) => {
                 backend.extension_link(id)
@@ -73,7 +77,9 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
         Err(error) => return Err(error.into()),
     };
     let pin = match &record.details {
-        bpfman_model::LinkDetails::Tracepoint(_) => backend.tracepoint_pin(runtime, record.id)?,
+        bpfman_model::LinkDetails::Tracepoint(_) | bpfman_model::LinkDetails::Kprobe(_) => {
+            backend.tracepoint_pin(runtime, record.id)?
+        }
         bpfman_model::LinkDetails::Tcx(d) => backend.tcx_pin(runtime, d, record.program_id)?,
         bpfman_model::LinkDetails::Tc(details) => backend.tc_pin(runtime, details)?,
         bpfman_model::LinkDetails::Xdp(details) => backend.extension_pin(runtime, details)?,

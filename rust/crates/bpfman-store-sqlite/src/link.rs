@@ -37,12 +37,17 @@ fn connection(writer: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
 }
 
 fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
-    if row.kind != "tracepoint" && row.kind != "tcx" {
+    if !matches!(
+        row.kind.as_str(),
+        "tracepoint" | "tcx" | "kprobe" | "kretprobe"
+    ) {
         return Err(Failure::UnsupportedLink);
     }
 
     if row.program_kind.as_deref() != Some(row.kind.as_str()) {
-        return Err(Failure::InvalidLink("missing or non-tracepoint program"));
+        return Err(Failure::InvalidLink(
+            "missing or mismatched standalone program",
+        ));
     }
 
     let id = u64::try_from(row.id)
@@ -62,7 +67,30 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
                 .ok_or(Failure::InvalidLink("invalid kernel ID"))?,
         },
     };
-    let details = if row.kind == "tcx" {
+    let details = if matches!(row.kind.as_str(), "kprobe" | "kretprobe") {
+        let retprobe = match row.retprobe {
+            Some(0) if row.kind == "kprobe" => false,
+            Some(1) if row.kind == "kretprobe" => true,
+            _ => {
+                return Err(Failure::InvalidLink(
+                    "probe entry/return selection differs from program",
+                ));
+            }
+        };
+        LinkDetails::Kprobe(bpfman_model::KprobeLink {
+            function: row
+                .function
+                .as_deref()
+                .ok_or(Failure::InvalidLink("missing kernel function"))?
+                .parse()
+                .map_err(|_| Failure::InvalidLink("invalid kernel function"))?,
+            offset: row
+                .offset
+                .and_then(|v| u64::try_from(v).ok())
+                .ok_or(Failure::InvalidLink("invalid kernel probe offset"))?,
+            retprobe,
+        })
+    } else if row.kind == "tcx" {
         let nz32 = |v: Option<i64>| {
             v.and_then(|v| u32::try_from(v).ok())
                 .and_then(NonZeroU32::new)
@@ -261,6 +289,53 @@ impl LinkStore for Backend {
     type LinkReceipt = LinkReceipt;
 
     #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
+    fn create_pending_kprobe(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        request: bpfman_store::PendingKprobe<'_>,
+    ) -> Result<(StoredLink, LinkReceipt), Error> {
+        (|| -> Result<_, Failure> {
+            let mut connection = connection(writer)?;
+            let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            open::require_supported(open::schema_version(&tx)?)?;
+
+            if !queries::is_kprobe(&tx, request.program_id, request.target.retprobe)? {
+                return Err(Failure::InvalidLink(
+                    "missing or mismatched standalone program",
+                ));
+            }
+
+            let metadata =
+                serde_json::to_string(request.metadata).map_err(Failure::LinkMetadata)?;
+            let offset = i64::try_from(request.target.offset).map_err(|_| {
+                Failure::InvalidLink("kernel probe offset exceeds persistence range")
+            })?;
+            let id = queries::insert_pending_kprobe(&tx, &request, &metadata, offset)?;
+            let managed = u64::try_from(id)
+                .ok()
+                .and_then(NonZeroU64::new)
+                .ok_or(Failure::InvalidLink("invalid allocated ID"))?;
+            let path = writer.layout().link_pin_path(managed);
+            let path = path
+                .to_str()
+                .ok_or(Failure::InvalidLink("runtime path is not UTF-8"))?;
+
+            if queries::set_link_pin(&tx, id, path)? != 1 {
+                return Err(Failure::InvalidLink("pending link disappeared"));
+            }
+
+            let row = one(&tx, id)?;
+            let record = canonical(writer, &row, &tx)?;
+            let receipt = evidence(writer, row)?;
+            tx.commit()?;
+
+            Ok((record, receipt))
+        })()
+        .map_err(crate::Error::from)
+        .map_err(Into::into)
+    }
+
+    #[tracing::instrument(name = "store.create_pending_link", level = "debug", skip_all, err)]
     fn create_pending_tracepoint(
         &self,
         writer: &RuntimeWriter<'_>,
@@ -272,7 +347,9 @@ impl LinkStore for Backend {
             open::require_supported(open::schema_version(&tx)?)?;
 
             if !queries::is_tracepoint(&tx, request.program_id)? {
-                return Err(Failure::InvalidLink("missing or non-tracepoint program"));
+                return Err(Failure::InvalidLink(
+                    "missing or mismatched standalone program",
+                ));
             }
 
             let metadata =

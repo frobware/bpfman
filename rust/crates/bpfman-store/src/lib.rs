@@ -14,7 +14,9 @@ pub use xdp_replace::{
 mod error;
 mod link;
 
-pub use link::{LinkObservation, LinkReader, LinkStore, PendingTcx, PendingTracepoint};
+pub use link::{
+    LinkObservation, LinkReader, LinkStore, PendingKprobe, PendingTcx, PendingTracepoint,
+};
 
 use bpfman_core::EffectFailure;
 use bpfman_fs::{RuntimeDirectory, RuntimeWriter};
