@@ -156,19 +156,20 @@ impl LoadRequest {
         }
 
         let request = bpfman_runtime::PreparedProgram::new_with_cancellation(
-            &bpfman_kernel_aya::Kernel,
+            &bpfman_kernel_aya::Kernel::default(),
             &path,
             first,
             metadata,
             cancellation,
         )?
-        .with_globals(&bpfman_kernel_aya::Kernel, globals)?;
+        .with_globals(&bpfman_kernel_aya::Kernel::default(), globals)?;
         let request = match map_owner_id {
             Some(owner) => request.with_map_owner(owner),
             None => request,
         };
         Ok(PreparedLoad {
-            request: request.with_additional_programs(&bpfman_kernel_aya::Kernel, remaining)?,
+            request: request
+                .with_additional_programs(&bpfman_kernel_aya::Kernel::default(), remaining)?,
             output,
         })
     }

@@ -8,14 +8,14 @@ use bpfman_store::{CommitLoad, LinkReader, LinkStore, OpenStore, UnloadStore};
 
 fn prepare() -> PreparedPrograms {
     PreparedProgram::new(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &fixture("multi_prog_tracepoint_kmod_counter.bpf.o"),
         bpfman_model::ProgramSpec::Tracepoint("tp_c".try_into().expect("symbol")),
         Default::default(),
     )
     .expect("first")
     .with_additional_programs(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         vec![
             bpfman_model::ProgramSpec::Tracepoint("tp_a".try_into().expect("symbol")),
             bpfman_model::ProgramSpec::Tracepoint("tp_b".try_into().expect("symbol")),
@@ -39,7 +39,7 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let loaded = app.load_batch(prepare()).expect("batch");
@@ -65,14 +65,14 @@ where
 
     let commits = store.count(Point::Commit);
     let bad = PreparedProgram::new(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &fixture("tracepoint_batch_bad.bpf.o"),
         bpfman_model::ProgramSpec::Tracepoint("good".try_into().expect("symbol")),
         Default::default(),
     )
     .expect("good")
     .with_additional_programs(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         vec![bpfman_model::ProgramSpec::Tracepoint(
             "bad".try_into().expect("symbol"),
         )],

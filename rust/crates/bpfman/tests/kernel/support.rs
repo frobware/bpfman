@@ -366,7 +366,8 @@ pub(super) fn id(value: &Value) -> NonZeroU32 {
 }
 
 pub(super) fn assert_program_absent(id: NonZeroU32) {
-    let error = bpfman_kernel::ProgramObservations::program(&bpfman_kernel_aya::Kernel, id)
-        .expect_err("owned program references must be released before return");
+    let error =
+        bpfman_kernel::ProgramObservations::program(&bpfman_kernel_aya::Kernel::default(), id)
+            .expect_err("owned program references must be released before return");
     assert_eq!(error.kind(), bpfman_kernel::ErrorKind::Missing);
 }

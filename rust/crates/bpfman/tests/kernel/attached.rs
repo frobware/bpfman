@@ -25,7 +25,7 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
 
@@ -33,7 +33,7 @@ where
         let loaded = app
             .load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("tracepoint_counter.bpf.o"),
                     bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                     Default::default(),

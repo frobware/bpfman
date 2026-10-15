@@ -57,13 +57,13 @@ where
         let store = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let load = || {
             app.load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("tcx_counter.bpf.o"),
                     ProgramSpec::Tcx("tcx_stats".try_into().expect("symbol")),
                     Default::default(),
@@ -83,7 +83,7 @@ where
         // rebound selector before acquiring a link, even at the same ifindex.
         let r = selected(id, direction);
         let (_, prepared) = c.writer(|w| {
-            bpfman_kernel_aya::Kernel
+            bpfman_kernel_aya::Kernel::default()
                 .prepare_tcx(w, id, &r.interface, &r.netns, r.direction, r.priority)
                 .expect("prepare retained namespace")
         });
@@ -92,7 +92,7 @@ where
             .expect("rebound selector");
         c.writer(|w| {
             assert!(
-                bpfman_kernel_aya::Kernel
+                bpfman_kernel_aya::Kernel::default()
                     .attach_tcx(w, prepared, bpfman_model::TcxOrder::First)
                     .is_err(),
                 "changed namespace refuses attachment"
@@ -139,12 +139,17 @@ where
             panic!("attached")
         };
         let pin = c.writer(|w| {
-            w.observe_tcx_link_pin(&bpfman_kernel_aya::Kernel, target, id, Some(kernel_id))
-                .expect("observe")
-                .expect("pin")
+            w.observe_tcx_link_pin(
+                &bpfman_kernel_aya::Kernel::default(),
+                target,
+                id,
+                Some(kernel_id),
+            )
+            .expect("observe")
+            .expect("pin")
         });
         let pin = other.writer(|w| {
-            w.remove_link_pin(&bpfman_kernel_aya::Kernel, pin)
+            w.remove_link_pin(&bpfman_kernel_aya::Kernel::default(), pin)
                 .expect_err("foreign runtime")
                 .remaining
         });
@@ -165,7 +170,7 @@ where
         let error = app.detach(links[0].id).expect_err("record-only failure");
         assert_eq!(error.report().expect("retained record").unresolved(), 1);
         assert!(matches!(
-            bpfman_kernel_aya::Kernel
+            bpfman_kernel_aya::Kernel::default()
                 .tcx_link(kernel_id)
                 .expect("held object")
                 .details,
@@ -184,7 +189,7 @@ where
             .expect("immediate reattach with old link held");
         drop(held_link);
         assert_eq!(
-            bpfman_kernel_aya::Kernel
+            bpfman_kernel_aya::Kernel::default()
                 .tcx_link(kernel_id)
                 .expect_err("released old link")
                 .kind(),
@@ -228,7 +233,7 @@ where
                 panic!("attached")
             };
             assert_eq!(
-                bpfman_kernel_aya::Kernel
+                bpfman_kernel_aya::Kernel::default()
                     .tcx_link(kernel_id)
                     .expect_err("owned native link released immediately")
                     .kind(),
@@ -238,7 +243,7 @@ where
         store.set(None);
         let reopened = Bpfman::new(
             ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("reopen"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let report = reopened
@@ -266,7 +271,7 @@ where
             .expect("attach control");
         let report = app.unload(id).expect("unload control");
         assert_eq!(report.unresolved(), 0);
-        assert!(bpfman_kernel_aya::Kernel.program(id).is_ok());
+        assert!(bpfman_kernel_aya::Kernel::default().program(id).is_ok());
         drop(program);
         absent(id, "external program holder closed");
         c.no_artifacts();
@@ -274,7 +279,7 @@ where
 }
 
 fn absent(id: NonZeroU32, boundary: &str) {
-    let observation = bpfman_kernel_aya::Kernel.program(id);
+    let observation = bpfman_kernel_aya::Kernel::default().program(id);
     assert!(
         matches!(&observation,Err(error) if error.kind() == bpfman_kernel::ErrorKind::Missing),
         "{boundary}: owned program {id} remains observable: {observation:?}"

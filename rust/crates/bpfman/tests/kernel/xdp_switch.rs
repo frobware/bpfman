@@ -49,17 +49,17 @@ impl OuterLink for Outer {
 
 impl ProgramInspection for Probe {
     fn program_at(&self, source: PinSource<'_>) -> KernelResult<PinnedProgram> {
-        bpfman_kernel_aya::Kernel.program_at(source)
+        bpfman_kernel_aya::Kernel::default().program_at(source)
     }
 
     fn map_at(&self, source: PinSource<'_>) -> KernelResult<u32> {
-        bpfman_kernel_aya::Kernel.map_at(source)
+        bpfman_kernel_aya::Kernel::default().map_at(source)
     }
 }
 
 impl LinkInspection for Probe {
     fn link_at(&self, source: PinSource<'_>) -> KernelResult<KernelLink> {
-        bpfman_kernel_aya::Kernel.link_at(source)
+        bpfman_kernel_aya::Kernel::default().link_at(source)
     }
 }
 
@@ -74,32 +74,34 @@ impl XdpKernel for Probe {
         interface: &InterfaceName,
         netns: &bpfman_model::NetworkNamespace,
     ) -> KernelResult<(XdpKey, Self::Namespace)> {
-        bpfman_kernel_aya::Kernel.interface(interface, netns)
+        bpfman_kernel_aya::Kernel::default().interface(interface, netns)
     }
 
     fn validate_namespace(&self, namespace: &Self::Namespace) -> KernelResult<()> {
-        bpfman_kernel_aya::Kernel.validate_namespace(namespace)
+        bpfman_kernel_aya::Kernel::default().validate_namespace(namespace)
     }
 
     fn extension_at(
         &self,
         source: PinSource<'_>,
     ) -> KernelResult<(PinnedProgram, Self::Extension)> {
-        bpfman_kernel_aya::Kernel.extension_at(source)
+        bpfman_kernel_aya::Kernel::default().extension_at(source)
     }
 
     fn outer_at(&self, source: PinSource<'_>) -> KernelResult<Outer> {
         Ok(Outer {
-            fd: bpfman_kernel_aya::Kernel.outer_at(source)?,
+            fd: bpfman_kernel_aya::Kernel::default().outer_at(source)?,
             faults: self.0.clone(),
         })
     }
 
     fn outer_by_id(&self, id: NonZeroU32) -> KernelResult<Option<Outer>> {
-        Ok(bpfman_kernel_aya::Kernel.outer_by_id(id)?.map(|fd| Outer {
-            fd,
-            faults: self.0.clone(),
-        }))
+        Ok(bpfman_kernel_aya::Kernel::default()
+            .outer_by_id(id)?
+            .map(|fd| Outer {
+                fd,
+                faults: self.0.clone(),
+            }))
     }
 
     fn attach_outer(
@@ -110,7 +112,8 @@ impl XdpKernel for Probe {
         mode: bpfman_model::XdpMode,
     ) -> KernelResult<Outer> {
         Ok(Outer {
-            fd: bpfman_kernel_aya::Kernel.attach_outer(dispatcher, key, namespace, mode)?,
+            fd: bpfman_kernel_aya::Kernel::default()
+                .attach_outer(dispatcher, key, namespace, mode)?,
             faults: self.0.clone(),
         })
     }
@@ -120,7 +123,7 @@ impl XdpSwitchKernel for Probe {
     type Target = bpfman_kernel_aya::AyaXdpTarget;
 
     fn target_at(&self, source: PinSource<'_>) -> KernelResult<(PinnedProgram, Self::Target)> {
-        bpfman_kernel_aya::Kernel.target_at(source)
+        bpfman_kernel_aya::Kernel::default().target_at(source)
     }
 
     fn replace_outer(
@@ -133,7 +136,7 @@ impl XdpSwitchKernel for Probe {
         if faults.reject_update {
             return injected();
         }
-        bpfman_kernel_aya::Kernel.replace_outer(&outer.fd, old, new)?;
+        bpfman_kernel_aya::Kernel::default().replace_outer(&outer.fd, old, new)?;
         if std::mem::take(&mut faults.fail_after_update) {
             faults.fail_info = true;
         }
@@ -142,7 +145,7 @@ impl XdpSwitchKernel for Probe {
 }
 
 fn live(id: NonZeroU32) -> OuterInfo {
-    bpfman_kernel_aya::Kernel
+    bpfman_kernel_aya::Kernel::default()
         .outer_by_id(id)
         .expect("outer lookup")
         .expect("live link")
@@ -175,7 +178,7 @@ fn stage_config(
     programs: &[NonZeroU32],
     actions: &[XdpProceedOn],
 ) -> Revision {
-    let kernel = bpfman_kernel_aya::Kernel;
+    let kernel = bpfman_kernel_aya::Kernel::default();
     let first = &snapshot.members()[0];
     let revision = NonZeroU32::new(first.details.revision.get() + 1).expect("revision");
     let config = XdpConfig::new(actions).expect("config");
@@ -228,7 +231,7 @@ fn stage_config(
 }
 
 fn remove(w: &RuntimeWriter<'_>, revision: Revision) {
-    let kernel = bpfman_kernel_aya::Kernel;
+    let kernel = bpfman_kernel_aya::Kernel::default();
     for extension in revision.extensions {
         kernel
             .remove_extension(w, extension)
@@ -275,13 +278,13 @@ where
     let interface = Interface::new();
     let app = Bpfman::new(
         ActiveStore::open(backend.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let load = || {
         app.load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture("xdp_counter.bpf.o"),
                 ProgramSpec::Xdp("xdp_stats".try_into().expect("symbol")),
                 Default::default(),
@@ -308,7 +311,7 @@ where
     let LinkDetails::Xdp(details) = &link.details else {
         unreachable!("XDP")
     };
-    let kernel = bpfman_kernel_aya::Kernel;
+    let kernel = bpfman_kernel_aya::Kernel::default();
     traffic(&c, &interface, &[first], &[second]);
     let final_link = c.writer(|w| {
         let (old, _) = backend
@@ -569,7 +572,7 @@ fn publish_replacement<S: XdpReplacementStore>(
     staged: &Revision,
     programs: &[NonZeroU32],
 ) -> XdpDispatcherSnapshot {
-    let kernel = bpfman_kernel_aya::Kernel;
+    let kernel = bpfman_kernel_aya::Kernel::default();
     let first = &old.members()[0];
     let old_artifacts = kernel
         .observe_dispatcher(w, old)

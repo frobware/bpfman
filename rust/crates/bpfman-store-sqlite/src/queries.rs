@@ -534,7 +534,7 @@ pub(super) fn insert_pending_uprobe(
 ) -> rusqlite::Result<i64> {
     let id = tx.prepare_cached("INSERT INTO links (kind, kernel_prog_id, metadata_json, created_at) VALUES (:kind, :program, :metadata, :created) RETURNING id")?
         .query_row(named_params! { ":kind": if input.target.retprobe() { "uretprobe" } else { "uprobe" }, ":program": input.program_id.get(), ":metadata": metadata, ":created": input.created_at }, |row| row.get("id"))?;
-    tx.prepare_cached("INSERT INTO link_uprobe_details (id, target, fn_name, offset, pid, container_pid, retprobe) VALUES (:id, :target, :function, :offset, :pid, 0, :retprobe)")?
-        .execute(named_params! { ":id": id, ":target": input.target.target(), ":function": input.target.function(), ":offset": offset, ":pid": input.target.pid().map_or(0, NonZeroU32::get), ":retprobe": input.target.retprobe() })?;
+    tx.prepare_cached("INSERT INTO link_uprobe_details (id, target, fn_name, offset, pid, container_pid, retprobe) VALUES (:id, :target, :function, :offset, :pid, :container_pid, :retprobe)")?
+        .execute(named_params! { ":id": id, ":target": input.target.target(), ":function": input.target.function(), ":offset": offset, ":pid": input.target.pid().map_or(0, NonZeroU32::get), ":container_pid": input.target.container_pid().map_or(0, NonZeroU32::get), ":retprobe": input.target.retprobe() })?;
     Ok(id)
 }

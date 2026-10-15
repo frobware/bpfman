@@ -26,20 +26,20 @@ where
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let load = |action: i32| {
             app.load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("tc_ingress.bpf.o"),
                     ProgramSpec::Tc("tc_ingress".try_into().expect("symbol")),
                     Default::default(),
                 )
                 .expect("prepare")
                 .with_globals(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     [("tc_action".into(), action.to_ne_bytes().to_vec())].into(),
                 )
                 .expect("globals"),
@@ -189,7 +189,7 @@ where
         drop(app);
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("reopen"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         assert_eq!(app.unload(d).expect("unload stops member").unresolved(), 0);
@@ -209,7 +209,7 @@ where
         drop(app);
         let app = Bpfman::new(
             ActiveStore::open(backend.clone(), &c.layout, TIMEOUT).expect("reopen last"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         assert_eq!(app.unload(b).expect("last attached member").unresolved(), 0);

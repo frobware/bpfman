@@ -81,8 +81,9 @@ fn request(program_id: NonZeroU32, interface: &Interface) -> XdpAttach {
 }
 
 fn gone(id: NonZeroU32) {
-    let error = bpfman_kernel::LinkObservations::extension_link(&bpfman_kernel_aya::Kernel, id)
-        .expect_err("owned extension link must be released before return");
+    let error =
+        bpfman_kernel::LinkObservations::extension_link(&bpfman_kernel_aya::Kernel::default(), id)
+            .expect_err("owned extension link must be released before return");
     assert_eq!(error.kind(), bpfman_kernel::ErrorKind::Missing);
 }
 
@@ -102,13 +103,13 @@ where
     let store = Faults::new(backend.clone());
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let program = app
         .load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture("xdp_pass.bpf.o"),
                 ProgramSpec::Xdp("pass".try_into().expect("symbol")),
                 Default::default(),
@@ -156,13 +157,13 @@ where
     let foreign = Context::new();
     let foreign_app = Bpfman::new(
         ActiveStore::open(backend, &foreign.layout, TIMEOUT).expect("foreign store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let foreign_program = foreign_app
         .load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture("xdp_pass.bpf.o"),
                 ProgramSpec::Xdp("pass".try_into().expect("symbol")),
                 Default::default(),
@@ -212,7 +213,7 @@ where
     another_slot.slot = 1usize.try_into().expect("slot");
     assert!(
         runtime
-            .read_xdp_link_pin(&bpfman_kernel_aya::Kernel, &another_slot)
+            .read_xdp_link_pin(&bpfman_kernel_aya::Kernel::default(), &another_slot)
             .expect("empty slot")
             .is_none()
     );
@@ -221,7 +222,7 @@ where
         .xdp_slot_path(details.key, details.revision, another_slot.slot);
     fs::rename(&extension, &slot_pin).expect("move pin to slot one");
     let observed = runtime
-        .read_xdp_link_pin(&bpfman_kernel_aya::Kernel, &another_slot)
+        .read_xdp_link_pin(&bpfman_kernel_aya::Kernel::default(), &another_slot)
         .expect("slot one")
         .expect("pin present");
     assert_eq!(
@@ -232,7 +233,7 @@ where
     );
     assert!(
         runtime
-            .read_xdp_link_pin(&bpfman_kernel_aya::Kernel, details)
+            .read_xdp_link_pin(&bpfman_kernel_aya::Kernel::default(), details)
             .expect("empty original slot")
             .is_none()
     );

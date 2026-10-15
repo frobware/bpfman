@@ -1,8 +1,8 @@
-//! Native host user-space entry/return probes with confined pin adoption.
-use crate::{AyaLink, AyaUprobe, Kernel, failure::filesystem};
+//! Native user-space entry/return probes with confined pin adoption.
+use crate::{AyaLink, AyaUprobe, Kernel, PreparedUprobe, failure::filesystem};
 use bpfman_fs::{
-    KernelResult, PinSource, PinnedProgram, PreparedUprobeAttach, ProgramInspection, RuntimeWriter,
-    UprobeKernel, UprobeProgram,
+    KernelResult, PinSource, PinnedProgram, ProgramInspection, RuntimeWriter, UprobeKernel,
+    UprobeProgram,
 };
 use bpfman_kernel::{Error, UprobeLinks};
 use bpfman_model::UprobeLink;
@@ -12,7 +12,7 @@ use std::{
 };
 
 impl UprobeLinks for Kernel {
-    type PreparedUprobe = PreparedUprobeAttach<AyaUprobe>;
+    type PreparedUprobe = PreparedUprobe;
 
     fn prepare_uprobe(
         &self,
@@ -20,9 +20,27 @@ impl UprobeLinks for Kernel {
         program: NonZeroU32,
         target: &UprobeLink,
     ) -> Result<Self::PreparedUprobe, Error> {
-        writer
+        let program = writer
             .prepare_uprobe_attach(self, program, target.retprobe())
-            .map_err(filesystem)
+            .map_err(filesystem)?;
+        let file = match (&self.uprobe_opener, target.container_pid()) {
+            (Some(open), Some(_)) => Some(
+                open(writer, target)
+                    .and_then(regular)
+                    .map_err(target_error)?,
+            ),
+            (None, Some(_)) => {
+                return Err(target_error(std::io::Error::other(
+                    "container target opener is not configured",
+                )));
+            }
+            (_, None) => None,
+        };
+        Ok(PreparedUprobe {
+            program,
+            target: file,
+            intent: target.clone(),
+        })
     }
 
     fn attach_uprobe(
@@ -31,7 +49,21 @@ impl UprobeLinks for Kernel {
         prepared: Self::PreparedUprobe,
         target: &UprobeLink,
     ) -> Result<Self::LiveTracepoint, Error> {
-        prepared.attach(writer, target).map_err(filesystem)
+        if &prepared.intent != target {
+            return Err(target_error(std::io::Error::other(
+                "user-space target changed since preparation",
+            )));
+        }
+        let file = match prepared.target {
+            Some(file) => file,
+            None => open_host(target.target())
+                .and_then(regular)
+                .map_err(target_error)?,
+        };
+        prepared
+            .program
+            .attach(writer, target, &file)
+            .map_err(filesystem)
     }
 }
 
@@ -57,7 +89,7 @@ impl UprobeKernel for Kernel {
 impl UprobeProgram for AyaUprobe {
     type Link = AyaLink;
 
-    fn attach(&mut self, target: &UprobeLink) -> KernelResult<AyaLink> {
+    fn attach(&mut self, target: &UprobeLink, file: &std::fs::File) -> KernelResult<AyaLink> {
         let scope = target.pid().map_or(
             aya::programs::uprobe::UProbeScope::AllProcesses,
             aya::programs::uprobe::UProbeScope::OneProcess,
@@ -69,18 +101,58 @@ impl UprobeProgram for AyaUprobe {
             None => aya::programs::uprobe::UProbeAttachLocation::AbsoluteOffset(target.offset()),
         };
 
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
-            .open(target.target())?;
-
-        if !file.metadata()?.is_file() {
-            return Err(std::io::Error::other("uprobe target must be a regular file").into());
-        }
-
         let path = format!("/proc/self/fd/{}", file.as_raw_fd());
         let id = self.0.attach(point, path, scope)?;
         let link: aya::programs::links::FdLink = self.0.take_link(id)?.try_into()?;
         Ok(AyaLink(link))
+    }
+}
+
+pub(super) type TargetOpener =
+    dyn Fn(&RuntimeWriter<'_>, &UprobeLink) -> std::io::Result<std::fs::File> + Send + Sync;
+
+impl Kernel {
+    /// Inject container target lookup. The callback returns an owned regular-file
+    /// descriptor; attachment and pinning remain in this backend and its caller.
+    /// The caller owns process policy and cooperative cancellation for the lookup.
+    pub fn with_uprobe_target_opener(
+        open: impl Fn(&RuntimeWriter<'_>, &UprobeLink) -> std::io::Result<std::fs::File>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            uprobe_opener: Some(Box::new(open)),
+        }
+    }
+}
+
+fn open_host(path: &str) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+        .open(path)
+}
+
+fn regular(file: std::fs::File) -> std::io::Result<std::fs::File> {
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(
+            "uprobe target must be a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+fn target_error(error: std::io::Error) -> Error {
+    Error::new(
+        crate::ErrorKind::Unavailable,
+        "open user-space probe target",
+        error,
+    )
+}
+
+impl std::fmt::Debug for Kernel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Kernel").finish_non_exhaustive()
     }
 }

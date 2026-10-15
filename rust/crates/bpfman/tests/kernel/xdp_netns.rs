@@ -90,13 +90,13 @@ where
     let faults = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let load = || {
         app.load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture("xdp_counter.bpf.o"),
                 ProgramSpec::Xdp("xdp_stats".try_into().expect("symbol")),
                 Default::default(),
@@ -150,7 +150,7 @@ where
 
     // Path replacement after preparation must fail before creating an outer link.
     c.writer(|w| {
-        let kernel = bpfman_kernel_aya::Kernel;
+        let kernel = bpfman_kernel_aya::Kernel::default();
         let (_, prepared) = kernel
             .prepare_xdp(w, a, &request(a, select(&alias)).interface, &select(&alias))
             .expect("prepare retained namespace");

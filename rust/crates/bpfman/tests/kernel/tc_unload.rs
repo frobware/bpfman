@@ -23,13 +23,13 @@ where
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let id = app
             .load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("tc_ingress.bpf.o"),
                     ProgramSpec::Tc("tc_ingress".try_into().expect("symbol")),
                     Default::default(),
@@ -118,7 +118,7 @@ where
         drop(app);
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("reopen"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         faults.fail_after(Point::TcDelete, 1);
@@ -171,7 +171,7 @@ where
         let foreign_app = Bpfman::new(
             ActiveStore::open(Faults::new(backend.clone()), &other.layout, TIMEOUT)
                 .expect("foreign runtime"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let error = foreign_app
@@ -181,7 +181,7 @@ where
         drop(app);
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("reopen for retry"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         faults.set(None);

@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 
 fn request(object: &str, name: &str) -> PreparedProgram {
     PreparedProgram::new(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &fixture(object),
         ProgramSpec::Xdp(name.try_into().expect("symbol")),
         Default::default(),
@@ -56,7 +56,7 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let baseline = dispatchers();
@@ -98,7 +98,7 @@ where
     // Failure of a later selected member compensates the earlier extension.
     let bad = request("multi_prog_one_bad.bpf.o", "good")
         .with_additional_programs(
-            &bpfman_kernel_aya::Kernel,
+            &bpfman_kernel_aya::Kernel::default(),
             vec![ProgramSpec::Xdp("bad".try_into().expect("symbol"))],
         )
         .expect("batch");

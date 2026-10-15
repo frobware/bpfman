@@ -33,7 +33,7 @@ fn request(id: NonZeroU32) -> UprobeAttach {
 
 fn absent(id: NonZeroU32) {
     assert_eq!(
-        bpfman_kernel_aya::Kernel
+        bpfman_kernel_aya::Kernel::default()
             .program(id)
             .expect_err("released program")
             .kind(),
@@ -58,14 +58,14 @@ where
         let store = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let load = || {
             let name = "uprobe_counter".try_into().expect("symbol");
             app.load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("uprobe_counter.bpf.o"),
                     if retprobe {
                         ProgramSpec::Uretprobe(name)
@@ -155,14 +155,14 @@ where
         // and retry only the retained records, without adopting completed pins.
         store.set(Some(Point::DeleteLink));
         let error = app.unload(id).expect_err("record failure");
-        assert!(bpfman_kernel_aya::Kernel.program(id).is_ok());
+        assert!(bpfman_kernel_aya::Kernel::default().program(id).is_ok());
         for link in [&first, &second] {
             assert!(!std::path::Path::new(&link.pin_path).exists());
             let LinkState::Attached { kernel_id } = link.state else {
                 unreachable!()
             };
             assert_eq!(
-                bpfman_kernel_aya::Kernel
+                bpfman_kernel_aya::Kernel::default()
                     .tracepoint_link(kernel_id)
                     .expect_err("owned link released")
                     .kind(),
@@ -172,7 +172,7 @@ where
         store.set(None);
         let reopened = Bpfman::new(
             ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("reopen"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         assert_eq!(
@@ -193,7 +193,7 @@ where
             .expect("holder");
         app.attach_uprobe(request(id)).expect("control attach");
         assert_eq!(app.unload(id).expect("held program unload").unresolved(), 0);
-        assert!(bpfman_kernel_aya::Kernel.program(id).is_ok());
+        assert!(bpfman_kernel_aya::Kernel::default().program(id).is_ok());
         drop(held_program);
         absent(id);
         c.no_artifacts();

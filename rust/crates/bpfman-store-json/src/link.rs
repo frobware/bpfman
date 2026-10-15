@@ -87,6 +87,12 @@ impl LinkStore for Backend {
         let file = writer.open_store_snapshot().map_err(Failure::from)?;
         let (previous, mut state) = read(&file)?;
 
+        if state.version < 14 && request.target.container_pid().is_some() {
+            return Err(Failure::Unsupported(
+                "container probes require JSON format 14; no implicit upgrade",
+            )
+            .into());
+        }
         if state.version < 13 {
             return Err(Failure::Unsupported(
                 "user probes require JSON format 13; no implicit upgrade",
@@ -117,6 +123,7 @@ impl LinkStore for Backend {
                 target: request.target.target().into(),
                 function: request.target.function().map(Into::into),
                 pid: request.target.pid().map_or(0, NonZeroU32::get),
+                container_pid: request.target.container_pid().map_or(0, NonZeroU32::get),
                 offset: request.target.offset(),
                 retprobe: request.target.retprobe(),
             }),

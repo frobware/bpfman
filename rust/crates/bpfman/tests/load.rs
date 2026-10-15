@@ -317,7 +317,7 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
     std::fs::copy(fixture, &source)?;
     let prepare = || {
         bpfman_runtime::PreparedProgram::new(
-            &bpfman_kernel_aya::Kernel,
+            &bpfman_kernel_aya::Kernel::default(),
             &source,
             bpfman_model::ProgramSpec::Tracepoint("tp_a".try_into().expect("symbol")),
             Default::default(),
@@ -326,7 +326,7 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
 
     for extra in ["tp_a", "missing"] {
         let result = prepare()?.with_additional_programs(
-            &bpfman_kernel_aya::Kernel,
+            &bpfman_kernel_aya::Kernel::default(),
             vec![bpfman_model::ProgramSpec::Tracepoint(
                 extra.try_into().expect("symbol"),
             )],
@@ -340,7 +340,7 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
     let prepared = prepare()?;
     std::fs::write(&source, b"replaced after validation")?;
     let _batch = prepared.with_additional_programs(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         vec![bpfman_model::ProgramSpec::Tracepoint(
             "tp_b".try_into().expect("symbol"),
         )],

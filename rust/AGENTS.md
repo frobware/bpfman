@@ -136,7 +136,7 @@ The architecture and compatibility goals are in
   target before switching, and retain both native handles if restoration fails.
   Never clean staged pins until restoration succeeds, or restore after publication.
   Copy clsact ownership into fresh revision evidence; retire only the old revision.
-- New JSON stores use format 13 for host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
+- New JSON stores use format 14 for container uprobes; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes;
   format 10 retains native TCX,
   format 9 retains independent TC egress chains, format 8 retains ingress
   replacement, and format 7 retains singleton ingress.
@@ -534,8 +534,10 @@ The architecture and compatibility goals are in
   independent of this derived selection.
 - Host file targets contain a directory separator. Open nonblocking, require a
   regular file and retain its descriptor across symbol resolution and attachment
-  through `/proc/self/fd`. Bare library names and container namespaces remain
-  explicit unsupported boundaries until their resolution helper is implemented.
+  through `/proc/self/fd`. Bare library names remain unsupported. Container absolute targets use the
+  private single-threaded re-exec helper and SCM_RIGHTS handoff; BPF effects stay
+  in the parent. Inherit a duplicate writer-lock FD, reap on every outcome and
+  close rejected/transferred descriptors. Dispatch before signals start threads.
 - PID zero means all processes, rather than Aya's calling-process scope. Reject
   unrepresentable PIDs/offsets and location-less requests before store creation.
 - Keep SQLite schema 2 and existing user-probe details. JSON uprobes require
@@ -544,3 +546,9 @@ The architecture and compatibility goals are in
   `rust-test-uprobe` selects nine unchanged scripts and native recovery on both
   stores; include them in the full gate. Immediate lifetime contracts run in the
   serial global stages with retained external-descriptor controls.
+
+- Container intent requires JSON format 14; format 13 retains host links without
+  implicit upgrade. SQLite retains schema 2 and the existing container_pid field.
+  Three unchanged container traffic/persistence/PID-namespace scripts join the
+  focused and full gates. Keep namespace-only target lookup and vanished-namespace
+  teardown contracts on both stores, plus process failure/cancellation/FD tests.

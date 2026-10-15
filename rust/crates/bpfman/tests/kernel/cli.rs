@@ -491,3 +491,16 @@ pub(super) fn uprobe_scripts(store: &'static str) {
         true,
     );
 }
+
+pub(super) fn container_uprobe_scripts(store: &'static str) {
+    run_dsl(
+        store,
+        Some(&[
+            "TestContainerUprobe_LinkIDAndTraffic",
+            "TestContainerUprobe_ExternalCLIPersistence",
+            "TestContainerUprobe_PidNamespaceTraffic",
+        ]),
+        &rust(),
+        true,
+    );
+}

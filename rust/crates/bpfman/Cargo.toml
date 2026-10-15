@@ -8,10 +8,22 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-[lints]
-workspace = true
+# Only the private exec descriptor module permits unsafe operations.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "deny"
+unreachable_pub = "deny"
+[lints.clippy]
+disallowed_methods = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
 
 [dependencies]
+bpfman-lock.workspace = true
+rustix = { workspace = true, features = ["thread"] }
+libc.workspace = true
 bpfman-kernel-aya.workspace = true
 bpfman-store-sqlite.workspace = true
 bpfman-store-json.workspace = true
@@ -35,6 +47,5 @@ tracing-chrome.workspace = true
 [dev-dependencies]
 bpfman-kernel.workspace = true
 aya.workspace = true
-bpfman-lock.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true

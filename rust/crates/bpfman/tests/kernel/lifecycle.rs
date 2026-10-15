@@ -12,7 +12,7 @@ fn load<S: OpenStore + CommitLoad>(
     bpfman: &bpfman_runtime::Bpfman<S, bpfman_kernel_aya::Kernel>,
 ) -> Result<ObservedProgram, bpfman_runtime::LoadError<bpfman_kernel_aya::Kernel>> {
     let request = bpfman_runtime::PreparedProgram::new(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &fixture("tracepoint_counter.bpf.o"),
         bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from(NAME).expect("symbol")),
         BTreeMap::new(),
@@ -40,7 +40,7 @@ pub(super) fn exercise<
         bpfman_runtime::ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("active store");
     let bpfman = bpfman_runtime::Bpfman::new(
         active,
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         std::time::Duration::from_millis(50),
     );
     let unrelated = load(&bpfman).expect("unrelated load").record.id;

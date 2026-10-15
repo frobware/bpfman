@@ -27,8 +27,17 @@ pub use netns::XdpNamespace;
 use bpfman_kernel::{Error, ErrorKind};
 
 /// Linux kernel backend selected by the application composition root.
-#[derive(Debug, Default)]
-pub struct Kernel;
+#[derive(Default)]
+pub struct Kernel {
+    uprobe_opener: Option<Box<uprobe::TargetOpener>>,
+}
+
+/// Adopted program and target descriptor retained through user-probe attachment.
+pub struct PreparedUprobe {
+    program: bpfman_fs::PreparedUprobeAttach<AyaUprobe>,
+    target: Option<std::fs::File>,
+    intent: bpfman_model::UprobeLink,
+}
 
 /// Owned Aya program and maps; its representation is private to this adapter.
 ///

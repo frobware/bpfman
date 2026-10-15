@@ -12,7 +12,7 @@ use bpfman_store::{CommitLoad, OpenStore, UnloadStore};
 
 fn request() -> PreparedProgram {
     PreparedProgram::new(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &fixture("tracepoint_counter.bpf.o"),
         bpfman_model::ProgramSpec::Tracepoint(
             bpfman_model::Symbol::try_from(NAME).expect("symbol"),
@@ -39,7 +39,7 @@ pub(super) fn exercise<
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
 

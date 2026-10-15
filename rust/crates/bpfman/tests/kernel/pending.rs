@@ -25,13 +25,13 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let loaded = app
         .load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture("tracepoint_counter.bpf.o"),
                 bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                 Default::default(),
@@ -74,7 +74,7 @@ where
     store.set(None);
     let kernel_id = c.writer(|writer| {
         writer
-            .observe_link_pin(&bpfman_kernel_aya::Kernel, pending_id, id, None)
+            .observe_link_pin(&bpfman_kernel_aya::Kernel::default(), pending_id, id, None)
             .expect("validated pending pin")
             .expect("pin")
             .kernel_id()
@@ -203,13 +203,13 @@ where
         let store = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let loaded = app
             .load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("tracepoint_counter.bpf.o"),
                     bpfman_model::ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
                     Default::default(),

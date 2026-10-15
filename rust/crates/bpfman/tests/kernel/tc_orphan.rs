@@ -34,13 +34,13 @@ where
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let load = || {
             app.load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("tc_ingress.bpf.o"),
                     ProgramSpec::Tc("tc_ingress".try_into().expect("symbol")),
                     Default::default(),
@@ -99,7 +99,7 @@ where
         );
         fs::rename(&alias, &replacement).expect("hide replacement");
 
-        let kernel = bpfman_kernel_aya::Kernel;
+        let kernel = bpfman_kernel_aya::Kernel::default();
         let orphan = c.writer(|w| {
             match kernel
                 .observe_tc_removal(w, snapshot)

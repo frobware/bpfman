@@ -80,7 +80,7 @@ impl Counters {
 fn program_released(id: NonZeroU32) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
-        match bpfman_kernel_aya::Kernel.program(id) {
+        match bpfman_kernel_aya::Kernel::default().program(id) {
             Err(error) if error.kind() == bpfman_kernel::ErrorKind::Missing => {
                 return;
             }
@@ -115,7 +115,7 @@ where
     };
     let prepare = |object, symbol: &str| {
         PreparedProgram::new(
-            &bpfman_kernel_aya::Kernel,
+            &bpfman_kernel_aya::Kernel::default(),
             &fixture(object),
             ProgramSpec::Xdp(symbol.try_into().expect("symbol")),
             Default::default(),
@@ -130,7 +130,7 @@ where
     let faults = Faults::new(backend.clone());
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     // Native XDP takes the same ownership/compensation path as other programs.
@@ -145,7 +145,7 @@ where
         app.load(
             prepare(object, symbol)
                 .expect("prepare")
-                .with_globals(&bpfman_kernel_aya::Kernel, globals)
+                .with_globals(&bpfman_kernel_aya::Kernel::default(), globals)
                 .expect("globals"),
         )
         .expect("load")
@@ -216,7 +216,7 @@ where
     // Reopening preserves the role without a new persistence field.
     let reopened = Bpfman::new(
         ActiveStore::open(backend, &c.layout, TIMEOUT).expect("reopen"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let failure = reopened
@@ -353,7 +353,7 @@ where
     c.absent(pass);
     assert!(app.get(pass).is_err());
     assert!(
-        bpfman_kernel_aya::Kernel.program(pass).is_ok(),
+        bpfman_kernel_aya::Kernel::default().program(pass).is_ok(),
         "map-held program survives unpinning"
     );
     check(Some(pass));
@@ -375,7 +375,7 @@ where
         0
     );
     assert!(
-        bpfman_kernel_aya::Kernel.program(drop).is_ok(),
+        bpfman_kernel_aya::Kernel::default().program(drop).is_ok(),
         "retained map FD still owns egress"
     );
     targets.assert_unloaded();
@@ -418,13 +418,13 @@ where
     frames.configure(&network);
     let app = Bpfman::new(
         ActiveStore::open(backend, &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let load = |object, symbol: &str| {
         app.load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture(object),
                 ProgramSpec::Xdp(symbol.try_into().expect("symbol")),
                 Default::default(),

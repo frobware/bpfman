@@ -105,14 +105,14 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
-| Kernel and host user-space probe links | Entry/return selection from the loaded program; function and offset intent; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | Library-name and mount-namespace target resolution |
+| Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; absolute container file targets through the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload on both stores | Bare library-name target resolution |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
 | XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 13 for host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
+| Persistence | Go-compatible SQLite schema 2; new JSON stores use format 14 for container uprobes; format 13 retains host uprobes; format 12 retains map sharing; format 11 retains kernel probes; format 10 retains TCX; format 9 retains TC egress; format 8 retains ingress replacement; format 7 retains singleton ingress; format 6 retains namespace-aware XDP | No implicit upgrade or conversion of existing state |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -1263,9 +1263,9 @@ uses scoped OS-thread namespace switching; its subprocess helper serves a
 different purpose, described below. See the
 [implemented namespace contract](../../rust/README.md#explicit-xdp-network-namespaces).
 
-### Planned mount-namespace helper for uprobes
+### Mount-namespace helper for uprobes
 
-Use a hidden subcommand of the same `bpfman` executable, provisionally
+The implementation uses a hidden subcommand of the same `bpfman` executable,
 `bpfman __ns-helper open-uprobe-target ...`. This is a separate child process,
 not a separately installed `bpfman-ns` binary. The subcommand selects the mode
 explicitly and gives it typed argument parsing, without an inherited environment
@@ -1295,7 +1295,8 @@ Preserve the current Go helper's division of responsibility:
 The legacy Rust helper instead attached inside the target mount namespace and
 switched back to pin the link. Retaining Go's file-descriptor handoff keeps BPF
 effects and their cleanup in the parent while isolating target filesystem lookup
-in the child. This remains planned work, not an implemented command.
+in the child. The absolute-file-target helper is implemented; bare library-name resolution
+remains subsequent work.
 
 ### Object creation and deletion boundary
 
@@ -4678,3 +4679,78 @@ Go comparison. The kernel stage took 112.47 seconds locally on Linux 6.18.54,
 with eight ordinary contract workers and the existing development/test `aya-obj`
 opt-level-two override; this is not a controlled benchmark. No Go source,
 dependency, lockfile or legacy Rust source changed.
+
+
+### Container uprobe descriptor handoff (15 October 2026)
+
+Absolute user-space targets now accept `--container-pid HOST_PID`, independently
+of the optional process filter. The same executable exposes a hidden typed
+`__ns-helper open-uprobe-target` mode, dispatched before signal handling,
+telemetry, stores or thread creation. The parent opens the target mount namespace,
+falling back from an absent `/proc/HOST_PID/ns/mnt` to `/host/proc/HOST_PID/ns/mnt`,
+and duplicates its held writer lock. An audited post-fork `dup2` boundary maps
+CLOEXEC source duplicates into explicit socket/lock/namespace slots; the lock uses
+the existing `BPFMAN_WRITER_LOCK_FD` protocol.
+
+The single-threaded child validates distinct inherited descriptors, the lock's
+regular-file type/link count and exclusive flock, enters the mount namespace, opens the
+absolute target nonblocking, requires a regular file and sends one descriptor
+through `SCM_RIGHTS`. It performs no BPF effects and exits without restoration.
+The parent validates the message and received file, reaps the child and retains
+the target descriptor across symbol resolution and attachment through its own
+`/proc/self/fd`. Helper failure, timeout and cancellation close descriptors and
+kill/reap the child. Cancellation remains a typed runtime result. Pending intent,
+pinning, finalisation and consuming compensation stay under the parent's writer
+scope. Host target failures retain their existing pending-intent compensation.
+
+Process launch remains private to the binary and is injected into the Aya backend
+through an owned-file target-opening callback. The reusable runtime sees no CLI
+or subprocess mechanics. `Kernel::default()` retains host support; configured
+backends retain the exact admitted target and refuse changed attachment intent.
+The binary has one narrow unsafe descriptor-inheritance module; metadata tests
+confine that exception and preserve every other workspace lint gate. Runtime,
+filesystem and kernel contracts retain their dependency boundaries.
+
+SQLite retains Go schema 2 and the existing `container_pid` column. New JSON
+stores use format 14; format 13 continues to read and publish host probes while
+refusing container intent without modifying or upgrading its snapshot. Both
+stores preserve container intent through pending/finalised links, observations,
+foreign/stale receipts and reopened deletion. JSON rejects malformed container
+PIDs, relative container targets and container state in older formats.
+
+The stateful-fake entry/return matrix now runs host and container intent through
+acquisition/publication failures, cancellation, independent cleanup and reopened
+record-only retries. Process contracts use the production root-bound writer and
+launcher with real inherited sockets/locks, covering spawn/exit failures, absent
+and malformed SCM_RIGHTS messages, surplus/truncated rights, non-regular targets,
+cancellation before/during the helper, FD closure and child reaping. Native
+contracts bind a valid ELF over a deliberately invalid host target only inside a
+new mount namespace, proving namespace-specific lookup for entry and return
+probes on both stores. They also check failed symbol resolution, external-CLI
+persistence and teardown after the namespace disappears.
+
+Three unchanged acceptance files join the focused `rust-test-uprobe` target and
+the full gate on both stores: `TestContainerUprobe_LinkIDAndTraffic`,
+`TestContainerUprobe_ExternalCLIPersistence`, and
+`TestContainerUprobe_PidNamespaceTraffic`. All three also pass unchanged against
+the Go reference with JSON and SQLite. Bare library-name resolution, including
+cache/pod/host-proc acceptance scripts that depend on it, remains a separate
+slice. No Go source, legacy Rust or existing script contents/labels changed;
+the independent Rust lockfile adds edges to already-used libc and rustix without
+changing dependency versions.
+
+
+Validation: `direnv exec . make rust-fmt-fix rust-check lint-make` exited zero,
+including warnings-denied Clippy/Rustdoc, formatting, store/CLI/compile-fail
+checks, all 80 fake-kernel cases and all 128 discovered/selected kernel cases.
+Owned fake and real tmpfs fixtures passed normal cleanup. A final userspace rerun
+also passed the production-writer process fixtures, including spawn failure and
+missing descriptor messages. The three container files passed unchanged against
+Rust and Go with both JSON and SQLite; existing acceptance labels are untouched.
+
+Evidence: `/tmp/container-gate.log`, `/tmp/container-final-userspace.log`,
+`/tmp/container-kernel.log`, `/tmp/bpfman-container-uprobe-go-json.log`, and
+`/tmp/bpfman-container-uprobe-go-sqlite.log`. The full kernel stage took 114.43
+seconds locally on Linux 6.18.54, using eight ordinary contract workers and the
+existing development/test `aya-obj` opt-level-two override; this is local evidence,
+not a controlled benchmark.

@@ -7,7 +7,7 @@ fn record(link: &StoredLink) -> Value {
     let (kind, details) = match &link.details {
         LinkDetails::Uprobe(d) => (
             if d.retprobe() { "uretprobe" } else { "uprobe" },
-            json!({"target": d.target(), "fn_name": d.function().unwrap_or_default(), "offset": d.offset(), "pid": d.pid().map_or(0, std::num::NonZeroU32::get), "container_pid": 0, "retprobe": d.retprobe()}),
+            json!({"target": d.target(), "fn_name": d.function().unwrap_or_default(), "offset": d.offset(), "pid": d.pid().map_or(0, std::num::NonZeroU32::get), "container_pid": d.container_pid().map_or(0, std::num::NonZeroU32::get), "retprobe": d.retprobe()}),
         ),
         LinkDetails::Kprobe(d) => (
             if d.retprobe { "kretprobe" } else { "kprobe" },

@@ -337,19 +337,19 @@ where
     let faults = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let load = |object, symbol: &str, globals| {
         app.load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture(object),
                 ProgramSpec::Xdp(symbol.try_into().expect("symbol")),
                 Default::default(),
             )
             .expect("prepare")
-            .with_globals(&bpfman_kernel_aya::Kernel, globals)
+            .with_globals(&bpfman_kernel_aya::Kernel::default(), globals)
             .expect("globals"),
         )
         .expect("load")

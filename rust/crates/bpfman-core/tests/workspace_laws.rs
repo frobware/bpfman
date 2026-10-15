@@ -249,8 +249,11 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                 // Legacy TC inspection/deletion needs route-netlink sockets;
                 // Aya's public API supplies creation and the assigned handle.
                 "rustix" => assert!(
-                    matches!(name, "bpfman-lock" | "bpfman-fs" | "bpfman-kernel-aya"),
-                    "filesystem, lock, and route-netlink syscalls belong in their adapters"
+                    matches!(
+                        name,
+                        "bpfman-lock" | "bpfman-fs" | "bpfman-kernel-aya" | "bpfman"
+                    ),
+                    "syscalls belong in adapters or the private binary namespace helper"
                 ),
                 "aya" | "aya-obj" => assert_eq!(
                     name, "bpfman-kernel-aya",
@@ -347,7 +350,9 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
     let filesystem = std::fs::read_to_string(root.join("crates/bpfman-fs/Cargo.toml"))
         .expect("filesystem manifest");
     assert_eq!(section(&filesystem, "[lints]"), ["workspace = true"]);
-    for manifest in [&kernel] {
+    let binary =
+        std::fs::read_to_string(root.join("crates/bpfman/Cargo.toml")).expect("binary manifest");
+    for manifest in [&kernel, &binary] {
         for category in ["rust", "clippy"] {
             let expected = section(&workspace, &format!("[workspace.lints.{category}]"));
             let actual = section(manifest, &format!("[lints.{category}]"));
@@ -393,4 +398,24 @@ fn kernel_unsafe_is_confined_to_syscall_boundaries() {
             assert!(!source.contains("allow(unsafe_code)"), "{}", path.display());
         }
     }
+}
+
+#[test]
+fn binary_unsafe_is_confined_to_helper_descriptor_inheritance() {
+    fn walk(path: &Path) {
+        for entry in std::fs::read_dir(path).expect("binary sources") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                walk(&path);
+            } else if path.extension().is_some_and(|s| s == "rs") {
+                let source = std::fs::read_to_string(&path).expect("source");
+                if path.ends_with("ns_helper/inherited.rs") {
+                    assert!(source.contains("#![allow(unsafe_code)]"));
+                } else {
+                    assert!(!source.contains("allow(unsafe_code)"), "{}", path.display());
+                }
+            }
+        }
+    }
+    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../bpfman/src"));
 }

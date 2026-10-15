@@ -8,7 +8,7 @@ use bpfman_model::{ProgramSpec, StoredLink, UprobeLink};
 use bpfman_store::{LinkStore, OpenStore, ProgramReader};
 use std::num::NonZeroU64;
 
-struct Adapter<'a, S: OpenStore, K>(&'a ActiveStore<S>, &'a K);
+struct Adapter<'a, S: OpenStore, K>(&'a ActiveStore<S>, &'a K, &'a Cancellation);
 struct Prepared<P> {
     program: P,
     target: UprobeLink,
@@ -41,7 +41,16 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::UprobeLinks> Effects for Adapte
             return Err(Cause::Invalid("program pin differs from canonical runtime layout").into());
         }
         let target = request.target.clone().into_link(retprobe);
-        let program = self.1.prepare_uprobe(writer, request.program_id, &target)?;
+        let program = self
+            .1
+            .prepare_uprobe(writer, request.program_id, &target)
+            .map_err(|error| -> LinkCause {
+                if self.2.is_cancelled() {
+                    Cause::Cancelled.into()
+                } else {
+                    error.into()
+                }
+            })?;
 
         Ok(Prepared { program, target })
     }
@@ -152,7 +161,7 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::UprobeLinks> Bpfman<S, K> {
         self.attach_standalone(
             request,
             cancellation,
-            &mut Adapter(&self.store, &self.kernel),
+            &mut Adapter(&self.store, &self.kernel, cancellation),
         )
     }
 }

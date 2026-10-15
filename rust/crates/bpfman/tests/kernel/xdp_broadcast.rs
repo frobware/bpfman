@@ -53,19 +53,19 @@ where
     let faults = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let load = |object, symbol: &str, globals| {
         app.load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture(object),
                 ProgramSpec::Xdp(symbol.try_into().expect("symbol")),
                 Default::default(),
             )
             .expect("prepare")
-            .with_globals(&bpfman_kernel_aya::Kernel, globals)
+            .with_globals(&bpfman_kernel_aya::Kernel::default(), globals)
             .expect("globals"),
         )
         .expect("load")
@@ -115,14 +115,14 @@ where
     let errors = app
         .load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture("xdp_redirect_error.bpf.o"),
                 ProgramSpec::Tracepoint("redirect_error".try_into().expect("symbol")),
                 Default::default(),
             )
             .expect("prepare error observation")
             .with_globals(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 [
                     (
                         "selected_map_id".into(),

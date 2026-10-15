@@ -12,7 +12,7 @@ use std::{collections::BTreeMap, num::NonZeroU32};
 
 fn prepared(object: &str, spec: ProgramSpec) -> PreparedProgram {
     PreparedProgram::new(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &fixture(object),
         spec,
         Default::default(),
@@ -47,7 +47,7 @@ fn map(program: &ObservedProgram) -> u32 {
 }
 fn absent(id: NonZeroU32) {
     assert_eq!(
-        bpfman_kernel_aya::Kernel
+        bpfman_kernel_aya::Kernel::default()
             .program(id)
             .expect_err("released program")
             .kind(),
@@ -71,7 +71,7 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let shared = c.layout.shared_maps_path().join("tracepoint_stats_map");
@@ -103,7 +103,7 @@ where
     let held_map = aya::maps::MapData::from_pin(&shared).expect("external map holder");
     assert_eq!(held_map.info().expect("typed map").id(), map_id);
     assert!(
-        bpfman_kernel_aya::Kernel
+        bpfman_kernel_aya::Kernel::default()
             .map(map_id)
             .expect("map")
             .btf_id
@@ -186,7 +186,7 @@ where
     assert_eq!(map(&joined), map_id);
     let reopened = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("reopen"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     assert_eq!(
@@ -229,7 +229,7 @@ where
     let runtime = RuntimeDirectory::open_existing(c.layout.clone())
         .expect("runtime")
         .expect("exists");
-    let pins = bpfman_kernel_aya::Kernel
+    let pins = bpfman_kernel_aya::Kernel::default()
         .map_pins(&runtime, owner.record.id)
         .expect("complete set");
     let ids: BTreeMap<_, _> = pins.into_iter().map(|pin| (pin.name, pin.id)).collect();

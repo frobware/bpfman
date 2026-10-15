@@ -283,5 +283,9 @@ pub trait UprobeProgram {
     /// Owned unpinned attachment.
     type Link: LinkPinning;
     /// Attach at the selected host file location and process scope.
-    fn attach(&mut self, target: &bpfman_model::UprobeLink) -> KernelResult<Self::Link>;
+    fn attach(
+        &mut self,
+        target: &bpfman_model::UprobeLink,
+        file: &std::fs::File,
+    ) -> KernelResult<Self::Link>;
 }

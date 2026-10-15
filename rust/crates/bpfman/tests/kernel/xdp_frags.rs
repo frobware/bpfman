@@ -178,13 +178,13 @@ where
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let load = |object, symbol: &str| {
             app.load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture(object),
                     ProgramSpec::Xdp(symbol.try_into().expect("symbol")),
                     Default::default(),

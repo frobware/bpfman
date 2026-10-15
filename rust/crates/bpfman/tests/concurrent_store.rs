@@ -19,7 +19,7 @@ where
     let store = ActiveStore::open(backend, &layout, BUDGET).expect("startup");
     let shared = Bpfman::new(
         ActiveStore::open(backend, &layout, BUDGET).expect("shared application"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         Duration::from_millis(50),
     );
     let runtime = RuntimeDirectory::open_existing(layout.clone())
@@ -58,7 +58,7 @@ where
 
                             let bpfman = Bpfman::new(
                                 active,
-                                bpfman_kernel_aya::Kernel,
+                                bpfman_kernel_aya::Kernel::default(),
                                 Duration::from_millis(50),
                             );
                             assert!(
@@ -190,7 +190,7 @@ fn concurrent_startup<S: OpenStore + Copy + Send>(backend: S) {
             threads.push(scope.spawn(move || {
                 start.wait();
                 let active = ActiveStore::open(backend, layout, BUDGET).expect("startup");
-                let bpfman = Bpfman::new(active, bpfman_kernel_aya::Kernel, BUDGET);
+                let bpfman = Bpfman::new(active, bpfman_kernel_aya::Kernel::default(), BUDGET);
                 let records = bpfman
                     .list(&Default::default())
                     .expect("complete initialized store");

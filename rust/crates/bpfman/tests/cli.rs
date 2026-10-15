@@ -353,7 +353,7 @@ fn host_probe_admission_precedes_runtime_creation() -> Result<(), Box<dyn std::e
             "--fn-name",
             "entry",
             "--container-pid",
-            "1",
+            "2147483648",
         ],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))

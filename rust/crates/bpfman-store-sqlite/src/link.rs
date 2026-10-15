@@ -68,9 +68,6 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
         },
     };
     let details = if matches!(row.kind.as_str(), "uprobe" | "uretprobe") {
-        if row.container_pid.unwrap_or(0) != 0 {
-            return Err(Failure::UnsupportedLink);
-        }
         let retprobe = match row.user_retprobe {
             Some(0) if row.kind == "uprobe" => false,
             Some(1) if row.kind == "uretprobe" => true,
@@ -98,7 +95,12 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
                     .map_err(|_| Failure::InvalidLink("invalid user PID"))?,
                 retprobe,
             )
-            .map_err(|_| Failure::InvalidLink("invalid host probe target"))?,
+            .and_then(|target| {
+                target.with_container_pid(
+                    u32::try_from(row.container_pid.unwrap_or(0)).unwrap_or(u32::MAX),
+                )
+            })
+            .map_err(|_| Failure::InvalidLink("invalid user probe target or container PID"))?,
         )
     } else if matches!(row.kind.as_str(), "kprobe" | "kretprobe") {
         let retprobe = match row.retprobe {

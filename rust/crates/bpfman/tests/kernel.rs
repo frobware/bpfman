@@ -997,3 +997,26 @@ fn sqlite_uprobe_native_link_recovery() {
 fn json_uprobe_native_link_recovery() {
     uprobe::exercise(bpfman_store_json::Backend);
 }
+
+#[test]
+fn sqlite_container_uprobe_script_corpus() {
+    cli::container_uprobe_scripts("sqlite");
+}
+
+#[test]
+fn json_container_uprobe_script_corpus() {
+    cli::container_uprobe_scripts("json");
+}
+
+#[path = "kernel/container_uprobe.rs"]
+mod container_uprobe;
+
+#[test]
+fn sqlite_container_uprobe_namespace_lookup() {
+    container_uprobe::exercise("sqlite");
+}
+
+#[test]
+fn json_container_uprobe_namespace_lookup() {
+    container_uprobe::exercise("json");
+}

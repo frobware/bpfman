@@ -47,9 +47,11 @@ fn fire() {
 }
 
 pub(super) fn assert_gone(kernel: NonZeroU32) {
-    let error =
-        bpfman_kernel::LinkObservations::tracepoint_link(&bpfman_kernel_aya::Kernel, kernel)
-            .expect_err("link must be gone");
+    let error = bpfman_kernel::LinkObservations::tracepoint_link(
+        &bpfman_kernel_aya::Kernel::default(),
+        kernel,
+    )
+    .expect_err("link must be gone");
     assert_eq!(error.kind(), bpfman_kernel::ErrorKind::Missing);
 }
 
@@ -68,13 +70,13 @@ where
     let store = Faults::new(backend);
     let app = Bpfman::new(
         ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("startup"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let loaded = app
         .load(
             PreparedProgram::new(
-                &bpfman_kernel_aya::Kernel,
+                &bpfman_kernel_aya::Kernel::default(),
                 &fixture("tracepoint_counter.bpf.o"),
                 bpfman_model::ProgramSpec::Tracepoint(
                     bpfman_model::Symbol::try_from(NAME).expect("symbol"),
@@ -167,11 +169,11 @@ where
     swap();
     c.writer(|writer| {
         let pin = writer
-            .observe_link_pin(&bpfman_kernel_aya::Kernel, other.id, id, None)
+            .observe_link_pin(&bpfman_kernel_aya::Kernel::default(), other.id, id, None)
             .expect("observe pin")
             .expect("pin");
         writer
-            .remove_link_pin(&bpfman_kernel_aya::Kernel, pin)
+            .remove_link_pin(&bpfman_kernel_aya::Kernel::default(), pin)
             .map_err(|e| e.cause)
             .expect("externally unpin");
     });

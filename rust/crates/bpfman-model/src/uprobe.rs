@@ -1,9 +1,9 @@
-//! Host user-space probe intent, independent of kernel libraries.
+//! User-space probe intent, independent of kernel libraries.
 use crate::Symbol;
 use alloc::string::String;
 use core::{fmt, num::NonZeroU32};
 
-/// Validated host file target and probe location. Bare library-name lookup is
+/// Validated file target and probe location. Bare library-name lookup is
 /// a separate capability; file paths must contain a directory separator.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UprobeTarget {
@@ -11,16 +11,17 @@ pub struct UprobeTarget {
     function: Option<Symbol>,
     offset: u64,
     pid: Option<NonZeroU32>,
+    container_pid: Option<NonZeroU32>,
 }
 
-/// Invalid host probe intent.
+/// Invalid user-space probe intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InvalidUprobe;
 
 impl fmt::Display for InvalidUprobe {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
-            "expected a host file path, a symbol or nonzero offset, and representable offset/PID",
+            "expected a file path (absolute for containers), a symbol or nonzero offset, and representable offset/PIDs",
         )
     }
 }
@@ -51,7 +52,23 @@ impl UprobeTarget {
             function,
             offset,
             pid: NonZeroU32::new(pid),
+            container_pid: None,
         })
+    }
+
+    /// Select a container mount namespace by positive host PID. Container file
+    /// targets must be absolute; zero retains host lookup.
+    pub fn with_container_pid(mut self, pid: u32) -> Result<Self, InvalidUprobe> {
+        if pid > i32::MAX as u32 || (pid != 0 && !self.target.starts_with('/')) {
+            return Err(InvalidUprobe);
+        }
+        self.container_pid = NonZeroU32::new(pid);
+        Ok(self)
+    }
+
+    /// Optional host PID selecting a container mount namespace.
+    pub fn container_pid(&self) -> Option<NonZeroU32> {
+        self.container_pid
     }
 
     /// File target spelling retained as operator intent.
@@ -100,6 +117,17 @@ impl UprobeLink {
         retprobe: bool,
     ) -> Result<Self, InvalidUprobe> {
         Ok(UprobeTarget::new(target, function, offset, pid)?.into_link(retprobe))
+    }
+
+    /// Select the persisted container namespace intent.
+    pub fn with_container_pid(mut self, pid: u32) -> Result<Self, InvalidUprobe> {
+        self.target = self.target.with_container_pid(pid)?;
+        Ok(self)
+    }
+
+    /// Optional host PID selecting a container mount namespace.
+    pub fn container_pid(&self) -> Option<NonZeroU32> {
+        self.target.container_pid()
     }
 
     /// File target spelling retained as operator intent.
@@ -154,6 +182,17 @@ mod tests {
         assert_eq!(target.offset(), 42);
         assert_eq!(target.pid().map(NonZeroU32::get), Some(7));
         assert!(target.retprobe());
+        assert!(target.clone().with_container_pid(1).is_err());
+        let absolute = UprobeTarget::new("/bin/target", None, 17, 0)?;
+        assert!(absolute.clone().with_container_pid(u32::MAX).is_err());
+        assert_eq!(
+            absolute
+                .with_container_pid(123)?
+                .into_link(false)
+                .container_pid()
+                .map(NonZeroU32::get),
+            Some(123)
+        );
         Ok(())
     }
 }

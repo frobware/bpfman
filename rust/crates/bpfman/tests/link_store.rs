@@ -639,7 +639,7 @@ where
     S: OpenStore + CommitLoad + LinkStore + UnloadStore + Copy,
     S::Reader: LinkReader,
 {
-    for retprobe in [false, true] {
+    for (retprobe, container_pid) in [(false, 0), (true, 0), (false, 4567), (true, 4567)] {
         let temp = tempfile::tempdir().expect("tempdir");
         let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
         let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
@@ -665,7 +665,9 @@ where
             1234,
             retprobe,
         )
-        .expect("target");
+        .expect("target")
+        .with_container_pid(container_pid)
+        .expect("container intent");
         let pending = |w: &RuntimeWriter<'_>, target: &bpfman_model::UprobeLink| {
             store.create_pending_uprobe(
                 w,

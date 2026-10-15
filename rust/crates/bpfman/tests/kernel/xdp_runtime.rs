@@ -35,13 +35,13 @@ where
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let load = || {
             app.load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("xdp_counter.bpf.o"),
                     ProgramSpec::Xdp("xdp_stats".try_into().expect("symbol")),
                     Default::default(),

@@ -27,13 +27,13 @@ where
         let faults = Faults::new(backend.clone());
         let app = Bpfman::new(
             ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-            bpfman_kernel_aya::Kernel,
+            bpfman_kernel_aya::Kernel::default(),
             TIMEOUT,
         );
         let load = || {
             app.load(
                 PreparedProgram::new(
-                    &bpfman_kernel_aya::Kernel,
+                    &bpfman_kernel_aya::Kernel::default(),
                     &fixture("xdp_counter.bpf.o"),
                     ProgramSpec::Xdp("xdp_stats".try_into().expect("symbol")),
                     Default::default(),
@@ -115,9 +115,11 @@ where
         assert_eq!(report.xdp_attempts().len(), 3); // failed attempt plus two successful detaches
         c.absent(removed);
         if held.is_some() {
-            let (program, _) =
-                bpfman_kernel::ProgramObservations::program(&bpfman_kernel_aya::Kernel, removed)
-                    .expect("retained descriptor must prevent program release");
+            let (program, _) = bpfman_kernel::ProgramObservations::program(
+                &bpfman_kernel_aya::Kernel::default(),
+                removed,
+            )
+            .expect("retained descriptor must prevent program release");
             assert_eq!(program.id, removed);
         }
         drop(held);

@@ -84,11 +84,11 @@ where
     let faults = Faults::new(backend.clone());
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     let prepared = PreparedProgram::new(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &fixture("tc_ingress.bpf.o"),
         ProgramSpec::Tc("tc_ingress".try_into().expect("symbol")),
         Default::default(),
@@ -325,7 +325,7 @@ where
     drop(app);
     let app = Bpfman::new(
         ActiveStore::open(faults.clone(), &c.layout, TIMEOUT).expect("reopen"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     faults.set(Some(Point::TcDelete));
@@ -374,7 +374,7 @@ where
     drop(app);
     let app = Bpfman::new(
         ActiveStore::open(backend.clone(), &c.layout, TIMEOUT).expect("reopen"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     app.detach_tc(record.id).expect("detach borrowed");
@@ -397,7 +397,7 @@ where
     drop(app);
     let app = Bpfman::new(
         ActiveStore::open(backend, &c.layout, TIMEOUT).expect("reopen"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
     app.detach_tc(record.id).expect("detach owned");

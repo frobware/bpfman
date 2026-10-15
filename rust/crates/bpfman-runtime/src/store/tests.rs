@@ -68,7 +68,11 @@ fn setup<S: TestStore>(backend: S) -> Setup<S> {
     let store = Faults::new(backend);
     let active = ActiveStore::open(store.clone(), runtime.layout(), TIMEOUT).expect("active store");
     store.clear_calls();
-    let bpfman = Bpfman::new(active, bpfman_kernel_aya::Kernel, Duration::from_millis(25));
+    let bpfman = Bpfman::new(
+        active,
+        bpfman_kernel_aya::Kernel::default(),
+        Duration::from_millis(25),
+    );
     (temp, runtime, store, bpfman)
 }
 
@@ -316,7 +320,7 @@ fn operations_retain_the_adopted_runtime_when_its_path_is_replaced<S: TestStore>
     });
     scope(&runtime, |writer| seed(&store, writer));
     let active = ActiveStore::open(store.clone(), runtime.layout(), TIMEOUT).expect("active");
-    let bpfman = Bpfman::new(active, bpfman_kernel_aya::Kernel, TIMEOUT);
+    let bpfman = Bpfman::new(active, bpfman_kernel_aya::Kernel::default(), TIMEOUT);
 
     std::fs::rename(&original, temp.path().join("adopted")).expect("move root");
     std::fs::create_dir(&original).expect("replacement");

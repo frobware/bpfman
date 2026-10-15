@@ -80,7 +80,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Stor
     }
 
     fn open_store(&mut self, w: &RuntimeWriter<'_>) -> Result<Self::Store, Error> {
-        real::Effects(self.store, &bpfman_kernel_aya::Kernel)
+        real::Effects(self.store, &bpfman_kernel_aya::Kernel::default())
             .open_store(w)
             .map_err(Into::into)
     }
@@ -90,7 +90,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Stor
         w: &RuntimeWriter<'_>,
         records: &[(NonZeroU32, &Inputs<'_>)],
     ) -> Result<(), Error> {
-        real::Effects(self.store, &bpfman_kernel_aya::Kernel)
+        real::Effects(self.store, &bpfman_kernel_aya::Kernel::default())
             .persist(w, records)
             .map_err(Into::into)
     }

@@ -56,6 +56,7 @@ impl<P: UprobeProgram> PreparedUprobeAttach<P> {
         mut self,
         writer: &RuntimeWriter<'_>,
         target: &bpfman_model::UprobeLink,
+        file: &std::fs::File,
     ) -> Result<LiveTracepoint<P::Link>, Error> {
         self.program_pin.check_writer(writer)?;
         open_owned(&self.program_pin)?;
@@ -64,7 +65,7 @@ impl<P: UprobeProgram> PreparedUprobeAttach<P> {
                 Failure::Unsafe("probe entry/return selection changed since admission").into(),
             );
         }
-        let link = self.program.attach(target).map_err(Failure::Kernel)?;
+        let link = self.program.attach(target, file).map_err(Failure::Kernel)?;
         let id = NonZeroU32::new(link.id().map_err(Failure::Kernel)?)
             .ok_or(Failure::Unsafe("zero kernel link ID"))?;
 
@@ -75,5 +76,15 @@ impl<P: UprobeProgram> PreparedUprobeAttach<P> {
             link,
             id,
         })
+    }
+}
+
+impl RuntimeWriter<'_> {
+    /// Duplicate this writer's held lock for an explicitly launched helper.
+    /// Closing this descriptor releases its reference, never explicitly unlocks.
+    pub fn duplicate_lock_fd(&self) -> Result<std::os::fd::OwnedFd, Error> {
+        self._permit
+            .duplicate_fd()
+            .map_err(|e| Failure::Lock(e).into())
     }
 }

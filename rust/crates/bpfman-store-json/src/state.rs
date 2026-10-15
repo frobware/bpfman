@@ -1,3 +1,4 @@
+//! Version 14 adds container mount-namespace user-space targets.
 //! Version 13 adds host user-space probes.
 //! Version 12 adds shared map sets and PinByName references.
 //! Version 11 adds native kernel entry and return probes.
@@ -103,7 +104,7 @@ impl State {
         std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
 
         Ok(Self {
-            version: 13,
+            version: 14,
             tc: Vec::new(),
             xdp: Vec::new(),
             identity: random.iter().map(|b| format!("{b:02x}")).collect(),
@@ -125,7 +126,7 @@ impl State {
 
         let header: Header = serde_json::from_slice(bytes)?;
 
-        if !matches!(header.version, 1..=13) {
+        if !matches!(header.version, 1..=14) {
             return Err(Failure::Version(header.version));
         }
 
@@ -256,6 +257,13 @@ impl State {
                 }
             }
 
+            if self.version < 14
+                && matches!(&link.target, LinkTarget::Uprobe(d) if d.container_pid != 0)
+            {
+                return Err(Failure::Unsupported(
+                    "container probes require JSON format 14; no implicit upgrade",
+                ));
+            }
             if self.version < 13 && matches!(link.target.kind(), Kind::Uprobe | Kind::Uretprobe) {
                 return Err(Failure::Unsupported(
                     "user probes require JSON format 13; no implicit upgrade",
@@ -721,7 +729,13 @@ pub(super) struct UprobeTarget {
     pub(super) function: Option<String>,
     pub(super) offset: u64,
     pub(super) pid: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(super) container_pid: u32,
     pub(super) retprobe: bool,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }
 
 impl LinkTarget {
@@ -760,7 +774,8 @@ impl LinkTarget {
                     d.pid,
                     d.retprobe,
                 )
-                .map_err(|_| Failure::Invalid("invalid host probe target"))?,
+                .and_then(|target| target.with_container_pid(d.container_pid))
+                .map_err(|_| Failure::Invalid("invalid user probe target"))?,
             )),
             Self::Kprobe(d) => {
                 if d.offset > i64::MAX as u64 {

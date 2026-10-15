@@ -12,12 +12,23 @@ use clap::Parser;
 
 mod cli;
 mod error;
+mod ns_helper;
 mod output;
 mod signals;
 mod telemetry;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
+
+    if let cli::Command::NsHelper { command } = cli.command {
+        return match command.execute() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                let _ = writeln!(io::stderr().lock(), "Error: namespace helper: {error:#}");
+                ExitCode::FAILURE
+            }
+        };
+    }
 
     let shutdown = match signals::Shutdown::install() {
         Ok(shutdown) => shutdown,
@@ -76,7 +87,11 @@ where
         cli.lock_timeout,
         cancellation,
     )?;
-    let bpfman = bpfman_runtime::Bpfman::new(store, bpfman_kernel_aya::Kernel, cli.lock_timeout);
+    let launcher = ns_helper::Launcher::new(std::env::current_exe()?, cancellation.clone());
+    let kernel = bpfman_kernel_aya::Kernel::with_uprobe_target_opener(move |writer, target| {
+        launcher.open(writer, target)
+    });
+    let bpfman = bpfman_runtime::Bpfman::new(store, kernel, cli.lock_timeout);
 
     match command {
         cli::PreparedCommand::Get { id, output } => {

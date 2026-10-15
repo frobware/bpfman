@@ -63,6 +63,12 @@ impl Command {
     ) -> Result<PreparedCommand, crate::error::Error> {
         let command = match self {
             Self::Program { command } => command,
+            Self::NsHelper { .. } => {
+                return Err(anyhow::anyhow!(
+                    "namespace helper must dispatch before runtime initialization"
+                )
+                .into());
+            }
             Self::Dispatcher { command } => return Ok(PreparedCommand::Dispatcher(command)),
             Self::Link { command } => {
                 command.validate()?;
@@ -87,6 +93,11 @@ impl Command {
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    #[command(name = "__ns-helper", hide = true)]
+    NsHelper {
+        #[command(subcommand)]
+        command: crate::ns_helper::Helper,
+    },
     /// Inspect dispatcher snapshots.
     Dispatcher {
         #[command(subcommand)]

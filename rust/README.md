@@ -1927,7 +1927,7 @@ preserve the qdisc and relinquish bpfman's ownership. Classic ingress qdiscs,
 malformed ownership evidence, and foreign programs replacing the exact stored
 filter are refused. The existing Go SQLite schema 2 remains unchanged. TC teardown
 across implementations is not supported yet: Go attachments lack Rust's ownership
-receipt. New JSON stores use format 13 for host uprobes; format 12 retains
+receipt. New JSON stores use format 14 for container targets; format 13 retains host uprobes; format 12 retains
 sharing; format 11 retains kernel probes, format 10 retains TCX, format 9
 retains egress and format 8 retains ingress
 replacement and format 7 retains singleton ingress. Older formats retain their
@@ -2031,7 +2031,7 @@ through a reopened application. This also strengthens tracepoint unload, with
 its fault and retry contracts updated to require independent progress.
 
 SQLite keeps Go schema 2 and its existing native TCX detail table. New JSON stores
-use format 13; format 12 retains sharing, format 11 retains kernel probes and
+use format 14; format 13 retains host uprobes and format 12 retains sharing, format 11 retains kernel probes and
 format 10 retains TCX. Existing formats 1–9 retain their previous
 operations and reject TCX
 without an implicit upgrade. Tracepoint target strings keep their existing JSON
@@ -2088,7 +2088,7 @@ exact kernel identity. Perf-event teardown holds a live descriptor across unpinn
 and closes it after pin descriptors. External holders retain their ordinary kernel
 lifetime semantics.
 
-SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 13;
+SQLite keeps Go schema 2 and `link_kprobe_details`. New JSON stores use format 14 for container targets; format 13 retains host uprobes;
 format 11 introduced kernel probes.
 older snapshots retain existing operations and refuse probe loads/links without
 implicit conversion. `make rust-test-kprobe` runs native recovery contracts and
@@ -2130,7 +2130,7 @@ Unload follows the same rule for map-set aliases, containers and shared names.
 Changed inode or runtime evidence still refuses cleanup.
 
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
-`shared_map_pins`. New JSON stores use format 13; format 12 introduced map-owner
+`shared_map_pins`. New JSON stores use format 14 for container targets; format 13 retains host uprobes; format 12 introduced map-owner
 and shared-name
 references. Formats 1–11 keep their previous operations and refuse sharing without
 changing bytes or upgrading. Older artifacts without a map inventory retain
@@ -2166,8 +2166,9 @@ bpfman link attach uprobe PROGRAM_ID /path/to/binary --offset FILE_OFFSET
 
 `-f` aliases `--fn-name`. With a symbol, offset is relative to its entry; without
 one, a nonzero offset is required. PID zero or omission selects all processes.
-File targets must contain a directory separator; bare library names and
-`--container-pid` remain unsupported pending namespace-aware target resolution.
+File targets must contain a directory separator; bare library names remain
+unsupported. `--container-pid HOST_PID` selects a container mount namespace
+for an absolute file target.
 The target is opened nonblocking and must be a regular file. Symbol resolution
 and attachment use the same retained file through `/proc/self/fd`.
 
@@ -2184,3 +2185,41 @@ multi-program lifecycle, absolute offsets, positive PID filtering and dotted Go
 symbols. The full gate also selects them. Native lifetime controls run in serial
 global stages and require immediate owned-program absence, with an explicit
 external descriptor control.
+
+
+## Container uprobes and mount-namespace target lookup
+
+```sh
+bpfman link attach uprobe PROGRAM_ID /path/in/container --fn-name entry --container-pid HOST_PID
+```
+
+The hidden `__ns-helper open-uprobe-target` command re-executes the same binary
+before signal handling or thread creation. The parent opens the target mount
+namespace (using `/host/proc` if the host PID is absent from `/proc`) and duplicates
+its held writer lock. Explicit inherited descriptor slots carry the namespace,
+lock and Unix socket. The single-threaded child validates them, enters the mount
+namespace, opens one absolute regular-file target nonblocking, and returns its
+FD through `SCM_RIGHTS`. It performs no BPF operations.
+
+The parent reaps the child and attaches through its own `/proc/self/fd`, retaining
+the target FD through symbol resolution and attachment. Pinning, pending intent,
+compensation and writer authority stay in the parent. Cancellation or the bounded
+30-second helper deadline kills and reaps the child; every failure closes local
+and transferred descriptors. Detach and unload work after the target namespace
+has disappeared. Reusable callers inject target opening through
+`Kernel::with_uprobe_target_opener`; `Kernel::default()` supports host targets.
+
+SQLite keeps schema 2 and `link_uprobe_details.container_pid`. New JSON stores use
+format 14 for container intent; host links remain supported in format 13 without
+an implicit upgrade. Container PID zero retains host lookup and remains separate
+from the optional `--pid` process filter.
+
+The focused `rust-test-uprobe` target and full gate include three unchanged
+container scripts on both stores: `TestContainerUprobe_LinkIDAndTraffic`,
+`TestContainerUprobe_ExternalCLIPersistence` and
+`TestContainerUprobe_PidNamespaceTraffic`. Native contracts distinguish a
+namespace-only target from its host spelling for both entry and return probes,
+check failed symbol lookup and missing namespaces, and reopen/tear down persisted
+links after the namespace exits. Process contracts exercise malformed messages,
+failed child exits, descriptor closure, cancellation and reaping. Bare library
+lookup and its cache/pod/host-proc acceptance scripts remain subsequent work.

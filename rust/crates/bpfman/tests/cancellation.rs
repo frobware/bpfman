@@ -65,7 +65,7 @@ fn exercise<
 
     let app = Bpfman::new(
         ActiveStore::open(backend, &layout, BUDGET).expect("store"),
-        bpfman_kernel_aya::Kernel,
+        bpfman_kernel_aya::Kernel::default(),
         BUDGET,
     );
     assert_eq!(
@@ -124,7 +124,7 @@ fn cancelled_preparation_does_not_read_the_source() {
     cancellation.cancel();
 
     let error = bpfman_runtime::PreparedProgram::new_with_cancellation(
-        &bpfman_kernel_aya::Kernel,
+        &bpfman_kernel_aya::Kernel::default(),
         &missing,
         bpfman_model::ProgramSpec::Tracepoint(
             bpfman_model::Symbol::try_from("trace").expect("symbol"),
