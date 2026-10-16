@@ -14,6 +14,7 @@ MOCK
 chmod +x "$root/kernel"
 cat > "$FAKE_TEST_LIST" <<'LIST'
 sqlite_script_corpus: test
+sqlite_lsm_native_link_recovery: test
 sqlite_xdp_load_lifecycle: test
 sqlite_uprobe_native_link_recovery: test
 sqlite_kprobe_native_link_recovery: test
@@ -28,7 +29,7 @@ for threads in 1 2 4 8; do
     BPFMAN_KERNEL_TEST_THREADS=$threads BPFMAN_KERNEL_SUITE=all sh "$runner" "$root/kernel" > "$root/output"
     cat > "$root/expected" <<EXPECTED
 --exact --test-threads=1 sqlite_script_corpus
---exact --test-threads=1 sqlite_xdp_load_lifecycle sqlite_uprobe_native_link_recovery sqlite_kprobe_native_link_recovery sqlite_map_sharing_native_recovery
+--exact --test-threads=1 sqlite_lsm_native_link_recovery sqlite_xdp_load_lifecycle sqlite_uprobe_native_link_recovery sqlite_kprobe_native_link_recovery sqlite_map_sharing_native_recovery
 --exact --test-threads=$threads sqlite_case sqlite_case_longer
 --exact --test-threads=1 go_case
 EXPECTED

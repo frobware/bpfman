@@ -173,3 +173,59 @@ fn non_tracepoint_program_cannot_acquire_tracepoint_intent() -> Result {
         Ok(())
     })
 }
+
+#[test]
+fn lsm_details_publish_atomically_and_validate_the_load_bound_hook() -> Result {
+    scope(|writer, db, reader| {
+        db.execute_batch("UPDATE managed_programs SET program_type='lsm', attach_func='file_open';
+            CREATE TRIGGER reject_lsm BEFORE INSERT ON link_lsm_details BEGIN SELECT RAISE(ABORT, 'injected detail failure'); END")?;
+        let target = bpfman_model::TracingLink {
+            function: "file_open".try_into()?,
+            kind: bpfman_model::TracingKind::Lsm,
+        };
+        let pending = || {
+            Backend.create_pending_tracing(
+                writer,
+                bpfman_store::PendingTracing {
+                    program_id: NonZeroU32::new(42).expect("id"),
+                    target: &target,
+                    metadata: &BTreeMap::new(),
+                    created_at: "2026-10-16T12:00:00Z",
+                },
+            )
+        };
+        assert!(pending().is_err());
+        assert!(reader.read_links()?.is_empty());
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM links", [], |row| row.get::<_, u32>(0))?,
+            0
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM link_lsm_details", [], |row| row
+                .get::<_, u32>(0))?,
+            0
+        );
+        db.execute_batch("DROP TRIGGER reject_lsm")?;
+        let (link, _) = pending()?;
+        assert_eq!(
+            reader.read_links()?[0].details,
+            bpfman_model::LinkDetails::Tracing(target)
+        );
+        db.execute_batch("UPDATE link_lsm_details SET hook_name='file_permission'")?;
+        assert!(
+            reader.read_links().is_err(),
+            "hook must match the load target"
+        );
+        db.execute_batch("UPDATE link_lsm_details SET hook_name='file_open'; UPDATE managed_programs SET program_type='fentry'")?;
+        assert!(reader.read_links().is_err(), "program family must match");
+        db.execute_batch(
+            "UPDATE managed_programs SET program_type='lsm'; DELETE FROM link_lsm_details",
+        )?;
+        assert!(
+            reader.read_links().is_err(),
+            "missing details must not become an empty intent"
+        );
+        assert_eq!(link.program_id.get(), 42);
+        Ok(())
+    })
+}

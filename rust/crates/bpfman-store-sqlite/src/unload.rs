@@ -50,13 +50,14 @@ fn validate(writer: &RuntimeWriter<'_>, id: NonZeroU32, row: &Snapshot) -> Resul
             | "uretprobe"
             | "fentry"
             | "fexit"
+            | "lsm"
     ) {
         return Err(Failure::Unsupported(
-            "only tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry, and fexit programs are implemented",
+            "only tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry, fexit, and lsm programs are implemented",
         ));
     }
 
-    if matches!(row.kind.as_str(), "fentry" | "fexit") {
+    if matches!(row.kind.as_str(), "fentry" | "fexit" | "lsm") {
         bpfman_model::Symbol::try_from(row.attach_func.as_deref().unwrap_or_default())
             .map_err(|_| invalid(id, "missing or invalid tracing load target"))?;
     }

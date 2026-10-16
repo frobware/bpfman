@@ -49,9 +49,15 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracingLinks> Effects for Adapt
                     kind: request.kind,
                 }
             }
+            ProgramSpec::Lsm { hook, .. } if request.kind == bpfman_model::TracingKind::Lsm => {
+                TracingLink {
+                    function: hook.clone(),
+                    kind: request.kind,
+                }
+            }
             _ => {
                 return Err(
-                    Cause::Invalid("program is not the requested function tracing family").into(),
+                    Cause::Invalid("program is not the requested BTF attachment family").into(),
                 );
             }
         };
@@ -155,7 +161,7 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracingLinks> Effects for Adapt
 }
 
 impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracingLinks> Bpfman<S, K> {
-    /// Attach function entry or exit tracing using the standalone pending-intent protocol.
+    /// Attach function tracing or an LSM hook using the standalone pending-intent protocol.
     pub fn attach_tracing(&self, request: TracingAttach) -> Result<StoredLink, LinkError<S, K>> {
         self.attach_tracing_with_cancellation(request, &Cancellation::new())
     }

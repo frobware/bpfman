@@ -103,13 +103,15 @@ impl LocalObject {
             ProgramSpec::Fexit { target, .. } => {
                 Selection::Tracing(target, bpfman_model::TracingKind::Fexit)
             }
+            ProgramSpec::Lsm { hook, .. } => {
+                Selection::Tracing(hook, bpfman_model::TracingKind::Lsm)
+            }
             ProgramSpec::Tracepoint(_) => Selection::Tracepoint,
             ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_) => Selection::Kprobe,
             ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_) => Selection::Uprobe,
             ProgramSpec::Tc(_) => Selection::Tc,
             ProgramSpec::Tcx(_) => Selection::Tcx,
             ProgramSpec::Xdp(_) => Selection::Xdp(xdp_role(&self.bytes, spec.name().as_str())?),
-            _ => return Err(LoadCause::Unsupported("program type")),
         };
         if matches!(
             selection,
@@ -262,6 +264,10 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         ))
     })?;
     match (spec, &program.section) {
+        (ProgramSpec::Lsm { .. }, ProgramSection::Lsm { .. }) => Ok(()),
+        (ProgramSpec::Lsm { .. }, _) => Err(LoadCause::Invalid(
+            "LSM selection requires an lsm section".into(),
+        )),
         (ProgramSpec::Fentry { .. }, ProgramSection::FEntry { .. })
         | (ProgramSpec::Fexit { .. }, ProgramSection::FExit { .. }) => Ok(()),
         (ProgramSpec::Fentry { .. } | ProgramSpec::Fexit { .. }, _) => Err(LoadCause::Invalid(
@@ -295,7 +301,6 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
         (ProgramSpec::Xdp(_), _) => {
             Err(LoadCause::Invalid("selected ELF program is not XDP".into()))
         }
-        _ => Err(LoadCause::Unsupported("program type")),
     }
 }
 

@@ -117,6 +117,7 @@ impl RuntimeWriter<'_> {
                         kind if kind == crate::PinProgramKind::Tracepoint
                             || kind == crate::PinProgramKind::Kprobe
                             || kind == crate::PinProgramKind::Tracing
+                            || kind == crate::PinProgramKind::Lsm
                             || kind == crate::PinProgramKind::Tc
                             || kind == crate::PinProgramKind::Extension
                             || kind == crate::PinProgramKind::Xdp)

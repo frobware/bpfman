@@ -788,6 +788,7 @@ where
     for kind in [
         bpfman_model::TracingKind::Fentry,
         bpfman_model::TracingKind::Fexit,
+        bpfman_model::TracingKind::Lsm,
     ] {
         let temp = tempfile::tempdir().expect("tempdir");
         let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
@@ -807,6 +808,10 @@ where
             bpfman_model::TracingKind::Fexit => bpfman_model::ProgramSpec::Fexit {
                 name,
                 target: function.clone(),
+            },
+            bpfman_model::TracingKind::Lsm => bpfman_model::ProgramSpec::Lsm {
+                name,
+                hook: function.clone(),
             },
         };
         let target = bpfman_model::TracingLink { function, kind };
@@ -842,7 +847,9 @@ where
             let mut wrong = target.clone();
             wrong.kind = match kind {
                 bpfman_model::TracingKind::Fentry => bpfman_model::TracingKind::Fexit,
-                bpfman_model::TracingKind::Fexit => bpfman_model::TracingKind::Fentry,
+                bpfman_model::TracingKind::Fexit | bpfman_model::TracingKind::Lsm => {
+                    bpfman_model::TracingKind::Fentry
+                }
             };
             assert!(
                 pending(w, &wrong).is_err(),

@@ -100,7 +100,7 @@ fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
 }
 
 #[test]
-fn valid_requests_fail_explicitly_without_creating_runtime_or_accessing_source() -> Result {
+fn missing_sources_and_image_requests_fail_without_creating_runtime() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
 
@@ -131,7 +131,11 @@ fn valid_requests_fail_explicitly_without_creating_runtime_or_accessing_source()
             assert_failure(
                 output,
                 1,
-                &format!("program load {source} execution is not implemented"),
+                if source == "file" {
+                    "read local ELF"
+                } else {
+                    "program load image execution is not implemented"
+                },
             )?;
 
             assert!(!runtime.exists());
@@ -218,7 +222,7 @@ fn native_object_paths_are_not_lossily_decoded_or_opened() -> Result {
 }
 
 #[test]
-fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects() -> Result {
+fn lsm_batch_reaches_source_validation_before_runtime_effects() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
 
@@ -230,7 +234,7 @@ fn unsupported_tracepoint_options_are_rejected_before_source_or_runtime_effects(
                 .args(options)
                 .output()?,
             1,
-            "execution is not implemented",
+            "read local ELF",
         )?;
         assert!(!runtime.exists());
     }
@@ -400,6 +404,40 @@ fn tracing_family_mismatches_fail_before_runtime_creation() -> Result {
                 .output()?,
             1,
             "matching fentry/fexit section",
+        )?;
+        assert!(!runtime.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn lsm_family_mismatches_fail_before_runtime_creation() -> Result {
+    let temporary = tempfile::tempdir()?;
+    let runtime = temporary.path().join("runtime");
+    for (object, spec, diagnostic) in [
+        (
+            "fentry_counter.bpf.o",
+            "lsm:test_fentry:file_open",
+            "LSM selection requires an lsm section",
+        ),
+        (
+            "lsm_exact.bpf.o",
+            "fentry:test_lsm:file_open",
+            "matching fentry/fexit section",
+        ),
+        ("lsm_exact.bpf.o", "tracepoint:test_lsm", "not a tracepoint"),
+    ] {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../e2e/testdata/bpf")
+            .join(object);
+        assert_failure(
+            command(&runtime)
+                .arg("file")
+                .arg(source)
+                .args(["--programs", spec])
+                .output()?,
+            1,
+            diagnostic,
         )?;
         assert!(!runtime.exists());
     }

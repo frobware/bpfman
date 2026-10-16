@@ -152,11 +152,11 @@ pub struct PendingUprobe<'a> {
     pub created_at: &'a str,
 }
 
-/// Function tracing intent admitted before kernel attachment.
+/// BTF tracing and LSM intent admitted before kernel attachment.
 pub struct PendingTracing<'a> {
     /// Managed native tracing program.
     pub program_id: NonZeroU32,
-    /// Load-bound function and entry/exit selection.
+    /// Load-bound function or hook and native family selection.
     pub target: &'a bpfman_model::TracingLink,
     /// Operator labels.
     pub metadata: &'a BTreeMap<String, String>,

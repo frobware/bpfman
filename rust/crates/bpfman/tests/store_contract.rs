@@ -206,7 +206,7 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
         name: name.clone(),
         target: "exit_target".try_into().expect("target"),
     };
-    let unsupported = ProgramSpec::Lsm {
+    let lsm = ProgramSpec::Lsm {
         name: name.clone(),
         hook: name,
     };
@@ -227,7 +227,7 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
         let mut reader = backend.open(w).expect("open");
         assert!(
             backend
-                .commit_programs(w, &[record(1, &tracepoint), record(2, &unsupported)])
+                .commit_programs(w, &[record(1, &tracepoint), record(1, &lsm)])
                 .is_err()
         );
         assert!(reader.read_records().expect("atomic rejection").is_empty());
@@ -245,6 +245,7 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                     record(8, &uretprobe),
                     record(9, &fentry),
                     record(10, &fexit),
+                    record(11, &lsm),
                 ],
             )
             .expect("mixed batch");
@@ -261,7 +262,8 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                 uprobe.clone(),
                 uretprobe.clone(),
                 fentry.clone(),
-                fexit.clone()
+                fexit.clone(),
+                lsm.clone()
             ]
         );
         assert_eq!(
@@ -281,7 +283,8 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
                 ProgramType::Uprobe,
                 ProgramType::Uretprobe,
                 ProgramType::Fentry,
-                ProgramType::Fexit
+                ProgramType::Fexit,
+                ProgramType::Lsm
             ]
         );
         assert!(

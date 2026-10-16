@@ -8,7 +8,7 @@ use crate::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bpfman_fs::RuntimeWriter;
-use bpfman_model::{ProgramSpec, StoredProgramSummary};
+use bpfman_model::StoredProgramSummary;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 /// Atomically insert a private map set and its loaded program. Existing rows
@@ -73,21 +73,6 @@ fn insert(
     writer: &RuntimeWriter<'_>,
     record: &LoadRecord<'_>,
 ) -> Result<(), Failure> {
-    if !matches!(
-        record.spec,
-        ProgramSpec::Tracepoint(_)
-            | ProgramSpec::Xdp(_)
-            | ProgramSpec::Tc(_)
-            | ProgramSpec::Tcx(_)
-            | ProgramSpec::Kprobe(_)
-            | ProgramSpec::Kretprobe(_)
-            | ProgramSpec::Uprobe(_)
-            | ProgramSpec::Uretprobe(_)
-            | ProgramSpec::Fentry { .. }
-            | ProgramSpec::Fexit { .. }
-    ) {
-        return Err(Failure::Unsupported("program type"));
-    }
     let mut shared_names = std::collections::BTreeSet::new();
     if record.map_owner == Some(record.id)
         || record.shared_maps.iter().any(|name| {

@@ -514,3 +514,11 @@ pub(super) fn function_tracing_scripts() {
         true,
     );
 }
+
+pub(super) fn lsm_scripts() {
+    run_dsl(
+        Some(&["TestLsm_LoadAndGet", "TestLsm_LinkRoundTrip"]),
+        &rust(),
+        true,
+    );
+}

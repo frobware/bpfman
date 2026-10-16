@@ -372,10 +372,10 @@ remains; shared-name pins survive while any recorded user remains.
 including repeated/comma-separated `--programs`, metadata, globals, application,
 nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
-exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry and fexit batches
+exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry, fexit and LSM batches
 with private or shared maps and
 metadata/application labels are executable, with Go's detailed text output or
-JSON load envelope in selection order. Image loads and other program types
+JSON load envelope in selection order. Image loads
 exit with status 1 before source access or runtime effects.
 Explicit map owners and ordinary PinByName maps are supported. PinByName
 map-of-maps definitions and section/type mismatches are rejected
@@ -2274,5 +2274,54 @@ files with SQLite, plus native vmlinux/module traffic and recovery contracts.
 The native tests verify requested-target override, missing-target and publication
 failure cleanup, cancellation, pin identity refusal, duplicate compensation,
 reopened record-only retries and external descriptor lifetime controls. Immediate
-lifetime contracts run in the serial global stages of the full gate. LSM remains
-separate work.
+lifetime contracts run in the serial global stages of the full gate.
+
+
+## Native LSM hooks
+
+Local LSM loads bind the requested hook at load time, overriding the ELF target:
+
+```sh
+bpfman program load file e2e/testdata/bpf/lsm_exact.bpf.o \
+  --programs lsm:test_lsm:file_open
+bpfman link attach lsm PROGRAM_ID -m owner=lsm
+bpfman link get LINK_ID -o json
+bpfman link detach LINK_ID
+bpfman program unload PROGRAM_ID
+```
+
+`lsm:ENTRY:HOOK` requires an LSM ELF section and a hook found as
+`bpf_lsm_HOOK` in vmlinux BTF. Aya's public LSM loader preserves the section's
+sleepable flag and loads native `BPF_PROG_TYPE_LSM`; it is distinct from
+fentry/fexit's TRACING program type. Attach takes no replacement hook. The shared
+`TracingKind::Lsm` selection and `Bpfman::attach_tracing` operations drive the
+existing standalone interpreter, writer authority and consuming receipts.
+
+Pin adoption revalidates the native program type, ID and BTF target against the
+stored hook. Link observation and cleanup require the LSM attach type. The
+pending-intent, cancellation, compensation, detach and attached-unload paths
+reuse the existing confined filesystem operations. Record-only failures retain
+program ownership for an explicit reopened retry; completed pin removal never
+repeats. A live link descriptor remains owned across unpinning and closes after
+all pin descriptors. Separate program loads can attach to the same hook; a second
+link for one loaded program is refused and compensates its pending intent.
+
+SQLite retains Go schema 2 and its existing `managed_programs.attach_func` and
+`link_lsm_details.hook_name` fields. Link JSON uses `kind: lsm` and
+`details: {hook_name: HOOK}`. Hook and family must match the stored load target.
+Store contracts and generic runtime consumers remain independent of SQL.
+
+`direnv exec . make rust-test-lsm` runs the two unchanged acceptance files,
+`TestLsm_LoadAndGet` and `TestLsm_LinkRoundTrip`, plus native execution and
+recovery contracts. The same files pass against Go with SQLite. Native contracts
+prove the requested hook overrides the ELF hook, precise execution and
+post-detach quiescence, missing-hook cleanup, publication failures, cancellation,
+foreign pins, reopened cleanup and external descriptor lifetime. Shared store
+and stateful-fake matrices include LSM through real SQLite. SQLite adapter tests
+cover atomic detail publication and malformed/mismatched hook records.
+
+BPF LSM must be active in `/sys/kernel/security/lsm`; merely compiling the kernel
+with BPF LSM support is insufficient. The native test requires it and joins the
+serial global stage of `rust-check`, keeping immediate lifetime controls separate
+from concurrently spawning fixtures. Existing script assertions and labels remain
+unchanged. OCI loading and other attachment families remain separate work.

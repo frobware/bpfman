@@ -124,35 +124,6 @@ impl LoadRequest {
             }
         };
 
-        // Reject the complete unsupported request before touching even the source.
-        let reason = if !std::iter::once(&first).chain(&remaining).all(|spec| {
-            matches!(
-                spec,
-                bpfman_model::ProgramSpec::Tracepoint(_)
-                    | bpfman_model::ProgramSpec::Xdp(_)
-                    | bpfman_model::ProgramSpec::Tc(_)
-                    | bpfman_model::ProgramSpec::Tcx(_)
-                    | bpfman_model::ProgramSpec::Kprobe(_)
-                    | bpfman_model::ProgramSpec::Kretprobe(_)
-                    | bpfman_model::ProgramSpec::Uprobe(_)
-                    | bpfman_model::ProgramSpec::Uretprobe(_)
-                    | bpfman_model::ProgramSpec::Fentry { .. }
-                    | bpfman_model::ProgramSpec::Fexit { .. }
-            )
-        }) {
-            Some(
-                "program types other than tracepoint, xdp, tc, tcx, kprobe, kretprobe, uprobe, uretprobe, fentry, and fexit",
-            )
-        } else {
-            None
-        };
-
-        if let Some(reason) = reason {
-            return Err(anyhow::anyhow!(
-                "program load file execution is not implemented for {reason}; no runtime state was changed"
-            ).into());
-        }
-
         if layout.root().to_str().is_none() {
             return Err(anyhow::anyhow!("load persistence requires a UTF-8 runtime path").into());
         }

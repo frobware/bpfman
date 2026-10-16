@@ -126,6 +126,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
             let expected = match d.kind {
                 bpfman_model::TracingKind::Fentry => 24,
                 bpfman_model::TracingKind::Fexit => 25,
+                bpfman_model::TracingKind::Lsm => 27,
             };
             if !matches!(link.details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if attach_type == expected)
             {

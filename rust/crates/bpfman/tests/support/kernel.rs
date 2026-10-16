@@ -630,12 +630,12 @@ impl ProgramLoad for FakeKernel {
             ProgramSpec::Tracepoint(_) => "tracepoint",
             ProgramSpec::Tcx(_) => "schedcls",
             ProgramSpec::Fentry { .. } | ProgramSpec::Fexit { .. } => "tracing",
+            ProgramSpec::Lsm { .. } => "lsm",
             ProgramSpec::Kprobe(_)
             | ProgramSpec::Kretprobe(_)
             | ProgramSpec::Uprobe(_)
             | ProgramSpec::Uretprobe(_) => "kprobe",
             ProgramSpec::Xdp(_) | ProgramSpec::Tc(_) => "extension",
-            _ => return Err(error(ErrorKind::Unsupported, "program type")),
         };
         Ok(self.new_program(spec.name().as_str(), kind, maps))
     }
@@ -744,6 +744,7 @@ impl ProgramLoad for FakeKernel {
             ProgramSpec::Tracepoint(_) => "tracepoint",
             ProgramSpec::Tcx(_) => "schedcls",
             ProgramSpec::Fentry { .. } | ProgramSpec::Fexit { .. } => "tracing",
+            ProgramSpec::Lsm { .. } => "lsm",
             _ => "extension",
         };
         Ok(self.new_program_with_maps(spec.name().as_str(), kind, maps, &reused))
@@ -2127,10 +2128,18 @@ impl TracingLinks for FakeKernel {
         &self,
         w: &RuntimeWriter<'_>,
         id: NonZeroU32,
-        _target: &TracingLink,
+        target: &TracingLink,
     ) -> Result<Loaded, Error> {
         self.enter(Point::PrepareLink)?;
-        self.adopt(w, id, "tracing")
+        self.adopt(
+            w,
+            id,
+            if target.kind == TracingKind::Lsm {
+                "lsm"
+            } else {
+                "tracing"
+            },
+        )
     }
     fn attach_tracing(
         &self,
@@ -2166,6 +2175,7 @@ impl TracingLinks for FakeKernel {
             attach_type: match target.kind {
                 TracingKind::Fentry => 24,
                 TracingKind::Fexit => 25,
+                TracingKind::Lsm => 27,
             },
             target_obj_id: 0,
             target_btf_id: 123,
@@ -2194,7 +2204,7 @@ impl FakeKernel {
         let matches_kind = match kind {
             None => s.links[&found].observation.details == KernelLinkDetails::PerfEvent,
             Some(kind) => {
-                matches!(s.links[&found].observation.details, KernelLinkDetails::Tracing { attach_type, .. } if attach_type == match kind { TracingKind::Fentry => 24, TracingKind::Fexit => 25 })
+                matches!(s.links[&found].observation.details, KernelLinkDetails::Tracing { attach_type, .. } if attach_type == match kind { TracingKind::Fentry => 24, TracingKind::Fexit => 25, TracingKind::Lsm => 27 })
             }
         };
         if !matches_kind {

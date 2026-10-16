@@ -31,7 +31,11 @@ impl RuntimeWriter<'_> {
             )
             .map_err(Failure::Kernel)?;
 
-        if info.id != id.get() || info.kind != crate::PinProgramKind::Tracing {
+        let expected_kind = match target.kind {
+            bpfman_model::TracingKind::Lsm => crate::PinProgramKind::Lsm,
+            _ => crate::PinProgramKind::Tracing,
+        };
+        if info.id != id.get() || info.kind != expected_kind {
             return Err(
                 Failure::Unsafe("program pin has a different kernel identity or type").into(),
             );

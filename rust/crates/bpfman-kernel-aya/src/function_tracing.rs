@@ -25,6 +25,7 @@ pub(super) fn attach_type(kind: TracingKind) -> u32 {
     match kind {
         TracingKind::Fentry => 24,
         TracingKind::Fexit => 25,
+        TracingKind::Lsm => 27,
     }
 }
 
@@ -34,16 +35,26 @@ struct Target {
     base: Vec<u8>,
 }
 
-fn resolve(function: &str) -> io::Result<Target> {
+fn resolve(function: &str, kind: TracingKind) -> io::Result<Target> {
+    let btf_name = match kind {
+        TracingKind::Lsm => format!("bpf_lsm_{function}"),
+        _ => function.to_owned(),
+    };
     let base = std::fs::read("/sys/kernel/btf/vmlinux")?;
     let parts = Parts::parse(&base)?;
-    let (base_count, found) = parts.function(function, None)?;
+    let (base_count, found) = parts.function(&btf_name, None)?;
     if let Some(id) = found {
         return Ok(Target {
             id,
             module: None,
             base,
         });
+    }
+    if kind == TracingKind::Lsm {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("LSM hook {function:?} not found in vmlinux BTF"),
+        ));
     }
     let mut current = 0;
     while let Some(id) = syscall::btf_next(current)? {
@@ -79,7 +90,7 @@ pub(super) fn load(
     function: &str,
     kind: TracingKind,
 ) -> Result<Option<OwnedFd>, LoadCause> {
-    let target = resolve(function).map_err(failure)?;
+    let target = resolve(function, kind).map_err(failure)?;
     let base = aya::Btf::parse(&target.base, Default::default()).map_err(failure)?;
     let Some(module) = target.module else {
         let program = bpf
@@ -95,6 +106,13 @@ pub(super) fn load(
             }
             TracingKind::Fexit => {
                 let p: &mut aya::programs::FExit = program
+                    .try_into()
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+                p.load(function, &base)
+                    .map_err(|e| LoadCause::Program(Box::new(e)))?;
+            }
+            TracingKind::Lsm => {
+                let p: &mut aya::programs::Lsm = program
                     .try_into()
                     .map_err(|e| LoadCause::Program(Box::new(e)))?;
                 p.load(function, &base)
@@ -208,7 +226,7 @@ impl TracingKernel for Kernel {
         let observation = self.program_at(source)?;
         let fd = pin_syscall::open(source.path())?;
         let info = syscall::program_info(fd.as_fd())?;
-        let expected = resolve(target.function.as_str())?;
+        let expected = resolve(target.function.as_str(), target.kind)?;
         let module_id = match &expected.module {
             Some(fd) => syscall::btf_id(fd.as_fd())?,
             None => {
@@ -223,8 +241,12 @@ impl TracingKernel for Kernel {
                 info.attach_btf_obj_id
             }
         };
+        let expected_type = match target.kind {
+            TracingKind::Lsm => 29,
+            _ => 26,
+        };
         if info.id != observation.id
-            || info.type_ != 26
+            || info.type_ != expected_type
             || info.attach_btf_id != expected.id
             || info.attach_btf_obj_id != module_id
         {

@@ -1,4 +1,4 @@
-//! Probe admission, cancellation and consuming recovery through both real stores.
+//! Probe admission, cancellation and consuming recovery through real stores.
 use super::*;
 use bpfman_model::{LinkDetails, LinkState};
 use bpfman_runtime::TracingAttach;
@@ -6,10 +6,17 @@ use std::num::NonZeroU32;
 
 fn load<S: Store>(f: &Fixture<S>, kind: bpfman_model::TracingKind) -> NonZeroU32 {
     let name = "entry".try_into().expect("symbol");
-    let target = "bpfman_test_kfunc_0".try_into().expect("target");
+    let target = if kind == bpfman_model::TracingKind::Lsm {
+        "file_open"
+    } else {
+        "bpfman_test_kfunc_0"
+    }
+    .try_into()
+    .expect("target");
     let spec = match kind {
         bpfman_model::TracingKind::Fentry => ProgramSpec::Fentry { name, target },
         bpfman_model::TracingKind::Fexit => ProgramSpec::Fexit { name, target },
+        bpfman_model::TracingKind::Lsm => ProgramSpec::Lsm { name, hook: target },
     };
     f.app
         .load(
@@ -38,6 +45,7 @@ pub(super) fn lifecycle<S: Store>(backend: S) {
     for kind in [
         bpfman_model::TracingKind::Fentry,
         bpfman_model::TracingKind::Fexit,
+        bpfman_model::TracingKind::Lsm,
     ] {
         let f = Fixture::new(backend);
         let id = load(&f, kind);
@@ -47,7 +55,14 @@ pub(super) fn lifecycle<S: Store>(backend: S) {
             panic!("probe")
         };
         assert_eq!(d.kind, kind);
-        assert_eq!(d.function.as_str(), "bpfman_test_kfunc_0");
+        assert_eq!(
+            d.function.as_str(),
+            if kind == bpfman_model::TracingKind::Lsm {
+                "file_open"
+            } else {
+                "bpfman_test_kfunc_0"
+            }
+        );
         assert_eq!(observed.record.metadata["owner"], "probe-contract");
         assert!(observed.kernel.is_some() && observed.pin_present);
         assert!(matches!(link.state, LinkState::Attached { .. }));
@@ -89,6 +104,7 @@ pub(super) fn recovery<S: Store>(backend: S) {
     for kind in [
         bpfman_model::TracingKind::Fentry,
         bpfman_model::TracingKind::Fexit,
+        bpfman_model::TracingKind::Lsm,
     ] {
         for (point, phase) in [
             (Point::PrepareLink, Phase::Before),

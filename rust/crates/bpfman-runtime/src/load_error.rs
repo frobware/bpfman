@@ -28,8 +28,6 @@ pub(super) enum LoadCause {
     Kernel(#[from] bpfman_kernel::Error),
     #[error("{0}")]
     Invalid(String),
-    #[error("{0} execution is not implemented in this Rust load slice")]
-    Unsupported(&'static str),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
     #[error(transparent)]
@@ -84,7 +82,6 @@ impl<K: bpfman_kernel::ProgramResources> LoadError<K> {
                 LoadErrorKind::Cancelled
             }
             LoadCause::Invalid(_) => LoadErrorKind::InvalidInput,
-            LoadCause::Unsupported(_) => LoadErrorKind::Unsupported,
             LoadCause::Store(e) => match e.kind() {
                 bpfman_store::ErrorKind::Unsupported => LoadErrorKind::Unsupported,
                 bpfman_store::ErrorKind::InvalidData => LoadErrorKind::InvalidInput,

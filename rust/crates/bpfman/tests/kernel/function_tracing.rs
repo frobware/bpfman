@@ -54,6 +54,7 @@ where
             let name = match kind {
                 bpfman_model::TracingKind::Fentry => "test_fentry",
                 bpfman_model::TracingKind::Fexit => "test_fexit",
+                bpfman_model::TracingKind::Lsm => unreachable!("LSM has its own hook contracts"),
             }
             .try_into()
             .expect("name");
@@ -64,6 +65,9 @@ where
                 match kind {
                     bpfman_model::TracingKind::Fentry => ProgramSpec::Fentry { name, target },
                     bpfman_model::TracingKind::Fexit => ProgramSpec::Fexit { name, target },
+                    bpfman_model::TracingKind::Lsm => {
+                        unreachable!("LSM has its own hook contracts")
+                    }
                 },
                 Default::default(),
             )
@@ -99,6 +103,7 @@ where
         let key = match kind {
             bpfman_model::TracingKind::Fentry => 0,
             bpfman_model::TracingKind::Fexit => 1,
+            bpfman_model::TracingKind::Lsm => unreachable!("LSM has its own hook contracts"),
         };
         let before: u64 = counts.get(&key, 0).expect("count").iter().sum();
         tempfile::NamedTempFile::new()
@@ -121,6 +126,7 @@ where
             let (object, name) = match kind {
                 bpfman_model::TracingKind::Fentry => ("fentry_kmod_exact.bpf.o", "test_fentry"),
                 bpfman_model::TracingKind::Fexit => ("fexit_kmod_exact.bpf.o", "test_fexit"),
+                bpfman_model::TracingKind::Lsm => unreachable!("LSM has its own hook contracts"),
             };
             let name = name.try_into().expect("name");
             // ELF targets slot zero; loading slot one proves requested target override.
@@ -132,6 +138,9 @@ where
                     match kind {
                         bpfman_model::TracingKind::Fentry => ProgramSpec::Fentry { name, target },
                         bpfman_model::TracingKind::Fexit => ProgramSpec::Fexit { name, target },
+                        bpfman_model::TracingKind::Lsm => {
+                            unreachable!("LSM has its own hook contracts")
+                        }
                     },
                     Default::default(),
                 )
@@ -162,6 +171,7 @@ where
         let wrong_kind = match kind {
             bpfman_model::TracingKind::Fentry => bpfman_model::TracingKind::Fexit,
             bpfman_model::TracingKind::Fexit => bpfman_model::TracingKind::Fentry,
+            bpfman_model::TracingKind::Lsm => unreachable!("LSM has its own hook contracts"),
         };
         let error = app
             .attach_tracing(request(id, wrong_kind))
@@ -209,6 +219,7 @@ where
         let map_name = match kind {
             bpfman_model::TracingKind::Fentry => "fe_count",
             bpfman_model::TracingKind::Fexit => "fx_count",
+            bpfman_model::TracingKind::Lsm => unreachable!("LSM has its own hook contracts"),
         };
         let map = aya::maps::MapData::from_pin(c.layout.map_directory_path(id).join(map_name))
             .expect("counter");

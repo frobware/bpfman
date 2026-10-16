@@ -20,6 +20,7 @@ fn program(info: &ProgramInfo) -> KernelResult<PinnedProgram> {
         k if k == ProgramType::TracePoint.into() => PinProgramKind::Tracepoint,
         k if k == ProgramType::KProbe.into() => PinProgramKind::Kprobe,
         k if k == ProgramType::Tracing.into() => PinProgramKind::Tracing,
+        k if k == ProgramType::Lsm(aya::programs::LsmAttachType::Mac).into() => PinProgramKind::Lsm,
         k if k == ProgramType::Extension.into() => PinProgramKind::Extension,
         k if k == ProgramType::SchedClassifier.into() => PinProgramKind::Tc,
         k if k == ProgramType::Xdp.into() => PinProgramKind::Xdp,

@@ -11,7 +11,10 @@ fn record(link: &StoredLink) -> Value {
         ),
         LinkDetails::Tracing(d) => (
             d.kind.program_type().as_str(),
-            json!({"fn_name": d.function.as_str()}),
+            match d.kind {
+                bpfman_model::TracingKind::Lsm => json!({"hook_name": d.function.as_str()}),
+                _ => json!({"fn_name": d.function.as_str()}),
+            },
         ),
         LinkDetails::Kprobe(d) => (
             if d.retprobe { "kretprobe" } else { "kprobe" },

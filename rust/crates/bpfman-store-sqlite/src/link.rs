@@ -39,7 +39,15 @@ fn connection(writer: &RuntimeWriter<'_>) -> Result<Connection, Failure> {
 fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
     if !matches!(
         row.kind.as_str(),
-        "tracepoint" | "tcx" | "kprobe" | "kretprobe" | "uprobe" | "uretprobe" | "fentry" | "fexit"
+        "tracepoint"
+            | "tcx"
+            | "kprobe"
+            | "kretprobe"
+            | "uprobe"
+            | "uretprobe"
+            | "fentry"
+            | "fexit"
+            | "lsm"
     ) {
         return Err(Failure::UnsupportedLink);
     }
@@ -67,7 +75,7 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
                 .ok_or(Failure::InvalidLink("invalid kernel ID"))?,
         },
     };
-    let details = if matches!(row.kind.as_str(), "fentry" | "fexit") {
+    let details = if matches!(row.kind.as_str(), "fentry" | "fexit" | "lsm") {
         let function = row
             .tracing_function
             .as_deref()
@@ -81,8 +89,10 @@ fn decode(row: &queries::StoredLinkRow) -> Result<StoredLink, Failure> {
                 .map_err(|_| Failure::InvalidLink("invalid tracing function"))?,
             kind: if row.kind == "fentry" {
                 bpfman_model::TracingKind::Fentry
-            } else {
+            } else if row.kind == "fexit" {
                 bpfman_model::TracingKind::Fexit
+            } else {
+                bpfman_model::TracingKind::Lsm
             },
         })
     } else if matches!(row.kind.as_str(), "uprobe" | "uretprobe") {

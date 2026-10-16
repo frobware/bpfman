@@ -112,9 +112,10 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
-| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
+| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
-| Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | LSM and other tracing families |
+| Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
+| LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
@@ -2696,8 +2697,8 @@ wrong, change it here before broadening feature coverage.
 
 - Explicit map-owner sharing and ordinary PinByName coordination are implemented;
   shared map-of-maps definitions remain pending.
-- Kprobe/kretprobe, host/container uprobe/uretprobe and native fentry/fexit
-  lifecycle are implemented; LSM and remaining attachment types are pending.
+- Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
+  LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull, cache, authentication, and signature verification.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
@@ -4935,3 +4936,64 @@ normal cleanup. The kernel stage took 63.07 seconds on Linux 6.18.54 with the
 existing `aya-obj` optimization override. Evidence: `/tmp/sqlite-only-check.log`.
 Final formatting/lint/userspace/Make checks, including the retained JSON-output
 contract and final refusal fixture, are in `/tmp/sqlite-only-final-userspace.log`.
+
+
+## Native LSM lifecycle checkpoint (16 October 2026)
+
+LSM extends the existing BTF-bound attachment path with an explicit
+`TracingKind::Lsm` selection. `lsm:ENTRY:HOOK` requires a matching LSM ELF section
+and resolves `bpf_lsm_HOOK` in vmlinux BTF at load time. Aya's public LSM loader
+binds the requested hook, overriding the ELF hook while retaining sleepable flags.
+The native program type is LSM, not TRACING. Attach accepts the program ID and
+metadata; no new hook can replace the load-time target.
+
+The same standalone pending-intent interpreter, writer authority, consuming
+receipts and confined pin APIs handle attachment, finalisation, observations,
+detach and attached-program unload. Pin adoption checks native program type, ID
+and BTF target against stored intent. Link observation and cleanup check the LSM
+MAC attach type. Live native link descriptors remain owned across unpinning and
+close after pin descriptors. The kernel refuses duplicate attachment of one
+loaded LSM program; compensation removes that pending intent while preserving
+the original link. Separately loaded programs can share a hook.
+
+SQLite keeps Go schema 2, the existing `managed_programs.attach_func` field and
+`link_lsm_details.hook_name` table. Hook/family mismatch and missing details fail
+without repair. Generic store and runtime interfaces remain storage independent.
+All modeled local program families are now supported, so obsolete program-kind
+rejection branches are removed; image loading still fails before runtime effects.
+Section compatibility remains exhaustively checked before runtime creation.
+
+Shared store contracts cover LSM batch persistence, pending/finalised intent,
+foreign/stale receipts, reopened observations and conditional deletion. The
+stateful-fake lifecycle/recovery matrix adds LSM through real SQLite, including
+forward failures, cancellation, failed compensation and reopened record-only
+cleanup. SQLite-only tests inject a failed LSM detail insert and prove atomic
+rollback, then reject hook/family mismatch and missing details.
+
+The native contract proves missing-hook and load-publication cleanup, requested
+hook override from `file_open` to `file_permission`, exact execution and
+post-detach quiescence, wrong native family/target refusal, failed link
+finalisation, cancellation after pending intent, duplicate compensation, foreign
+pin refusal, reopened record-only cleanup and retained external program holders.
+Detach itself reads stored intent while the hook is active; quiescence is measured
+from a baseline taken after detach, followed by controlled target reads. Lifetime
+controls run in the serial global stage, without sleeps or polling. BPF LSM is
+required to be active, so the native contract cannot silently skip execution.
+
+`rust-test-lsm` and the full gate select the unchanged `TestLsm_LoadAndGet` and
+`TestLsm_LinkRoundTrip` files. Both also pass against the Go reference binary with
+SQLite; the latter observes exactly 50 marked opens and unchanged counts after
+detach. Existing scripts and labels, Go, legacy Rust, dependency versions and the
+lockfile are unchanged. Evidence: `/tmp/lsm-focused.log`,
+`/tmp/lsm-go-acceptance.log` and `/tmp/lsm-full-check.log`.
+
+
+Validation: `direnv exec . make rust-check lint-make` exited zero, including
+formatting, warnings-denied Clippy/Rustdoc, userspace/store/CLI and compile-fail
+contracts, all 42 fake-kernel cases (with LSM added to the shared real-SQLite
+matrices), and all 70 discovered/selected native kernel cases. Both owned tmpfs
+scopes passed normal cleanup. Native lifetime controls remain serial and ordinary
+contracts retain eight workers. The full kernel stage took 63.23 seconds on Linux
+6.18.54 with the existing development/test `aya-obj` opt-level-two override.
+The focused LSM gate passed both native and unchanged-script contracts; the two
+unchanged scripts also passed against Go with SQLite. BPF LSM was active locally.

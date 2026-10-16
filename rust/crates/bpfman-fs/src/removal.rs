@@ -86,7 +86,12 @@ pub(super) fn remove_link(
             matches!(info.details, bpfman_model::KernelLinkDetails::Tcx { ifindex, direction } if direction == key.direction && (ifindex == 0 || ifindex == key.ifindex.get()))
         }
         LinkKind::Tracing(kind) => {
-            matches!(info.details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if attach_type == match kind { bpfman_model::TracingKind::Fentry => 24, bpfman_model::TracingKind::Fexit => 25 })
+            let expected = match kind {
+                bpfman_model::TracingKind::Fentry => 24,
+                bpfman_model::TracingKind::Fexit => 25,
+                bpfman_model::TracingKind::Lsm => 27,
+            };
+            matches!(info.details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if attach_type == expected)
         }
         LinkKind::PerfEvent => info.details == bpfman_model::KernelLinkDetails::PerfEvent,
         // EXT selects freplace; Aya creates its tracing link with attach type zero.

@@ -341,7 +341,12 @@ fn matches_standalone(
             *details == bpfman_model::KernelLinkDetails::PerfEvent
         }
         crate::removal::LinkKind::Tracing(kind) => {
-            matches!(details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if *attach_type == match kind { bpfman_model::TracingKind::Fentry => 24, bpfman_model::TracingKind::Fexit => 25 })
+            let expected = match kind {
+                bpfman_model::TracingKind::Fentry => 24,
+                bpfman_model::TracingKind::Fexit => 25,
+                bpfman_model::TracingKind::Lsm => 27,
+            };
+            matches!(details, bpfman_model::KernelLinkDetails::Tracing { attach_type, .. } if *attach_type == expected)
         }
         _ => false,
     }

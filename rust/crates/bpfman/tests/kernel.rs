@@ -574,3 +574,14 @@ fn sqlite_function_tracing_native_link_recovery() {
 fn sqlite_function_tracing_script_corpus() {
     cli::function_tracing_scripts();
 }
+
+#[path = "kernel/lsm.rs"]
+mod lsm;
+#[test]
+fn sqlite_lsm_native_link_recovery() {
+    lsm::exercise(bpfman_store_sqlite::Backend);
+}
+#[test]
+fn sqlite_lsm_script_corpus() {
+    cli::lsm_scripts();
+}

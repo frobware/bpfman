@@ -103,21 +103,6 @@ impl PreparedProgram {
         cancellation: &crate::Cancellation,
     ) -> Result<Self, LoadError<K>> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
-        if !matches!(
-            spec,
-            ProgramSpec::Tracepoint(_)
-                | ProgramSpec::Xdp(_)
-                | ProgramSpec::Tc(_)
-                | ProgramSpec::Tcx(_)
-                | ProgramSpec::Kprobe(_)
-                | ProgramSpec::Kretprobe(_)
-                | ProgramSpec::Uprobe(_)
-                | ProgramSpec::Uretprobe(_)
-                | ProgramSpec::Fentry { .. }
-                | ProgramSpec::Fexit { .. }
-        ) {
-            return Err(LoadCause::Unsupported("program type").into());
-        }
         let source_text = source
             .to_str()
             .ok_or_else(|| LoadCause::Invalid("source path is not UTF-8".into()))?;

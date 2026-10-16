@@ -1,10 +1,10 @@
-//! Function tracing acquisition; pinning and teardown share standalone ownership.
+//! BTF tracing and LSM acquisition; pinning and teardown share standalone ownership.
 use crate::{Error, TracepointLinks};
 use bpfman_fs::RuntimeWriter;
 use bpfman_model::TracingLink;
 use std::num::NonZeroU32;
 
-/// Load-bound function tracing for already-loaded native tracing programs.
+/// Load-bound function tracing and LSM hooks for already-loaded native programs.
 pub trait TracingLinks: TracepointLinks {
     /// Confined adopted tracing program.
     type PreparedTracing;

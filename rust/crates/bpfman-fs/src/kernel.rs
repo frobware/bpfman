@@ -25,6 +25,8 @@ pub enum PinProgramKind {
     Kprobe,
     /// Native BTF function tracing.
     Tracing,
+    /// Native LSM hook program.
+    Lsm,
     /// Dispatcher extension.
     Extension,
     /// XDP dispatcher.

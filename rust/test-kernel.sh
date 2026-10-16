@@ -44,8 +44,8 @@ for stage in corpus sqlite-global sqlite go; do
         case "$stage:$name" in
             corpus:*_script_corpus) set -- "$@" "$name" ;;
             *:*_script_corpus) ;;
-            sqlite-global:sqlite_function_tracing_native_link_recovery|sqlite-global:sqlite_uprobe_native_link_recovery|sqlite-global:sqlite_map_sharing_native_recovery|sqlite-global:sqlite_kprobe_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
-            *:sqlite_function_tracing_native_link_recovery|*:sqlite_uprobe_native_link_recovery|*:sqlite_map_sharing_native_recovery|*:sqlite_kprobe_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
+            sqlite-global:sqlite_lsm_native_link_recovery|sqlite-global:sqlite_function_tracing_native_link_recovery|sqlite-global:sqlite_uprobe_native_link_recovery|sqlite-global:sqlite_map_sharing_native_recovery|sqlite-global:sqlite_kprobe_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
+            *:sqlite_lsm_native_link_recovery|*:sqlite_function_tracing_native_link_recovery|*:sqlite_uprobe_native_link_recovery|*:sqlite_map_sharing_native_recovery|*:sqlite_kprobe_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
             sqlite:sqlite_*|go:go_*) set -- "$@" "$name" ;;
         esac
     done < "$listing"

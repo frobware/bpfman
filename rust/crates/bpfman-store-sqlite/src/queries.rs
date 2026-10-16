@@ -56,7 +56,7 @@ pub(super) fn stored_links(
                 x.interface, x.ifindex, x.direction, x.priority, x.netns, x.nsid, k.fn_name, k.offset, k.retprobe,
                 u.target AS user_target, u.fn_name AS user_function, u.offset AS user_offset,
                 u.pid AS user_pid, u.container_pid, u.retprobe AS user_retprobe,
-                CASE l.kind WHEN 'fentry' THEN fe.fn_name WHEN 'fexit' THEN fx.fn_name END AS tracing_function, p.attach_func
+                CASE l.kind WHEN 'fentry' THEN fe.fn_name WHEN 'fexit' THEN fx.fn_name WHEN 'lsm' THEN ls.hook_name END AS tracing_function, p.attach_func
          FROM links l
          LEFT JOIN managed_programs p ON p.program_id = l.kernel_prog_id
          LEFT JOIN link_tracepoint_details t ON t.id = l.id
@@ -65,6 +65,7 @@ pub(super) fn stored_links(
          LEFT JOIN link_uprobe_details u ON u.id = l.id
          LEFT JOIN link_fentry_details fe ON fe.id = l.id
          LEFT JOIN link_fexit_details fx ON fx.id = l.id
+         LEFT JOIN link_lsm_details ls ON ls.id = l.id
          WHERE (:id IS NULL OR l.id = :id) ORDER BY l.id",
     )?;
     statement
@@ -385,7 +386,7 @@ pub(super) fn insert_program(
         ":map_set": record.map_owner.unwrap_or(record.id).get(),
         ":name": record.spec.name().as_str(),
         ":kind": record.spec.kind().as_str(),
-        ":attach_func": match record.spec { bpfman_model::ProgramSpec::Fentry { target, .. } | bpfman_model::ProgramSpec::Fexit { target, .. } => Some(target.as_str()), _ => None },
+        ":attach_func": match record.spec { bpfman_model::ProgramSpec::Fentry { target, .. } | bpfman_model::ProgramSpec::Fexit { target, .. } | bpfman_model::ProgramSpec::Lsm { hook: target, .. } => Some(target.as_str()), _ => None },
         ":object_path": program.object_path,
         ":source_path": record.source,
         ":pin_path": program.pin_path,
@@ -570,6 +571,9 @@ pub(super) fn insert_pending_tracing(
         }
         bpfman_model::TracingKind::Fexit => {
             "INSERT INTO link_fexit_details (id, fn_name) VALUES (:id, :function)"
+        }
+        bpfman_model::TracingKind::Lsm => {
+            "INSERT INTO link_lsm_details (id, hook_name) VALUES (:id, :function)"
         }
     };
     tx.prepare_cached(sql)?

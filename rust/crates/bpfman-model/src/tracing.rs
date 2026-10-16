@@ -1,13 +1,15 @@
-//! Load-bound function tracing, independent of BTF and kernel-library types.
+//! Load-bound BTF tracing and LSM hooks, independent of BTF and kernel-library types.
 use crate::{ProgramType, Symbol};
 
-/// Native function tracing selection.
+/// Native BTF attachment selection.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TracingKind {
     /// Execute before the function body.
     Fentry,
     /// Execute when the function returns.
     Fexit,
+    /// Execute an LSM hook bound at load time.
+    Lsm,
 }
 
 impl TracingKind {
@@ -16,15 +18,16 @@ impl TracingKind {
         match self {
             Self::Fentry => ProgramType::Fentry,
             Self::Fexit => ProgramType::Fexit,
+            Self::Lsm => ProgramType::Lsm,
         }
     }
 }
 
-/// Function and selection already bound into the loaded program.
+/// Function or LSM hook and selection already bound into the loaded program.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TracingLink {
-    /// Requested load-time function spelling.
+    /// Requested load-time function or LSM hook spelling.
     pub function: Symbol,
-    /// Entry or exit selection.
+    /// Tracing or LSM selection.
     pub kind: TracingKind,
 }

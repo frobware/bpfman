@@ -2022,3 +2022,8 @@ rust-test-uprobe: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 .PHONY: rust-test-function-tracing
 rust-test-function-tracing: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- function_tracing_ --nocapture
+
+# Native LSM hooks: unchanged acceptance plus execution and recovery contracts.
+.PHONY: rust-test-lsm
+rust-test-lsm: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- lsm_ --nocapture

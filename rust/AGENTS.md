@@ -588,4 +588,23 @@ The architecture and compatibility goals are in
 - `rust-test-function-tracing` runs six unchanged acceptance files plus native
   vmlinux/module traffic and recovery contracts with SQLite. Keep immediate
   lifetime tests in the serial global stages. Retain generic real-store and
-  stateful-fake failure/cancellation/consuming retry coverage. LSM is separate.
+  stateful-fake failure/cancellation/consuming retry coverage.
+
+
+## Native LSM hooks
+
+- Bind LSM hooks at load time through vmlinux BTF's `bpf_lsm_HOOK` functions.
+  Require LSM sections and preserve their sleepable flag through Aya's public
+  loader. Keep native LSM program identity separate from TRACING identity.
+- Reuse `TracingKind::Lsm` and the standalone interpreter, contracts and consuming
+  receipts. Attach cannot replace the hook. Confined pin adoption must validate
+  native type, ID and BTF target; link observation/removal must check LSM MAC
+  attach type. Keep live-link release ordered after pin descriptor closure.
+- SQLite keeps Go schema 2, `attach_func` and `link_lsm_details.hook_name`.
+  Persisted family and hook must match the loaded program; malformed rows fail
+  without repair. Keep SQL private and shared scenarios generic over the store.
+- `rust-test-lsm` selects the two unchanged LSM scripts and native execution,
+  cancellation, compensation and reopened-retry contracts. Require active `bpf`
+  in `/sys/kernel/security/lsm` for native coverage. Immediate lifetime controls
+  belong in the serial global stage; fake-kernel coverage still uses real SQLite.
+  Preserve script labels/assertions and verify Go comparison separately.
