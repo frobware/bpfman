@@ -106,7 +106,7 @@ fn contract<S: OpenStore + CommitLoad + TcStore + Clone>(
                     shared_maps: &[],
                     id: n(42),
                     spec: &ProgramSpec::Tc("pass".try_into().expect("symbol")),
-                    source: "source.o",
+                    source: &bpfman_model::ProgramSource::File(Some("source.o".into())),
                     license: "GPL",
                     created_at: "2026-10-05T00:00:00Z",
                     metadata: &BTreeMap::new(),

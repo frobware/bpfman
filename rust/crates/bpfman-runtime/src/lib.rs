@@ -101,7 +101,7 @@ pub struct Cancellation {
 pub struct PreparedProgram {
     map_owner: Option<std::num::NonZeroU32>,
     object: kernel::LocalObject,
-    source: String,
+    source: bpfman_model::ProgramSource,
     spec: bpfman_model::ProgramSpec,
     metadata: std::collections::BTreeMap<String, String>,
 }

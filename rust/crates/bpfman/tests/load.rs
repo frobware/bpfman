@@ -104,6 +104,10 @@ fn missing_sources_and_image_requests_fail_without_creating_runtime() -> Result 
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
 
+    let config_directory = tempfile::tempdir()?;
+    let config = config_directory.path().join("policy.toml");
+    std::fs::write(&config, "[signing]\nverify_enabled = true\n")?;
+
     for (source, name) in [
         ("file", "missing-object.o"),
         ("image", "example.invalid/never-pull:latest"),
@@ -111,6 +115,8 @@ fn missing_sources_and_image_requests_fail_without_creating_runtime() -> Result 
         for format in ["text", "json"] {
             let output = command(&runtime)
                 .current_dir(temporary.path())
+                .arg("--config")
+                .arg(&config)
                 .args([
                     source,
                     name,
@@ -134,7 +140,7 @@ fn missing_sources_and_image_requests_fail_without_creating_runtime() -> Result 
                 if source == "file" {
                     "read local ELF"
                 } else {
-                    "program load image execution is not implemented"
+                    "OCI signature verification is not implemented"
                 },
             )?;
 
@@ -177,7 +183,7 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
                 2
             };
             let diagnostic = if code == 1 {
-                "execution is not implemented"
+                "private registry authentication is not implemented"
             } else {
                 "registry auth"
             };

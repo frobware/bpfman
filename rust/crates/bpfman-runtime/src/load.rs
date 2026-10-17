@@ -19,6 +19,33 @@ pub(super) use effects::{CleanupEffects, FailureFor, LoadEffects};
 pub(super) use real::Effects;
 
 impl PreparedProgram {
+    /// Prepare exact image bytes through the same ELF validation boundary used
+    /// for file sources. Provenance contains no transport or cache credentials.
+    pub fn from_image<K: bpfman_kernel::ProgramLoad>(
+        kernel: &K,
+        bytes: Vec<u8>,
+        source: bpfman_model::ProgramSource,
+        spec: ProgramSpec,
+        metadata: BTreeMap<String, String>,
+        cancellation: &crate::Cancellation,
+    ) -> Result<Self, LoadError<K>> {
+        cancellation.check().map_err(|_| LoadCause::Cancelled)?;
+        if !matches!(source, bpfman_model::ProgramSource::Image { .. }) {
+            return Err(
+                LoadCause::Invalid("image preparation requires image provenance".into()).into(),
+            );
+        }
+        let object = LocalObject::from_bytes(kernel, bytes, &spec)?;
+        cancellation.check().map_err(|_| LoadCause::Cancelled)?;
+        Ok(Self {
+            map_owner: None,
+            object,
+            source,
+            spec,
+            metadata,
+        })
+    }
+
     /// Join an existing map set. Validation and reuse happen under the writer lock.
     pub fn with_map_owner(mut self, owner: std::num::NonZeroU32) -> Self {
         self.map_owner = Some(owner);
@@ -113,7 +140,7 @@ impl PreparedProgram {
         Ok(Self {
             map_owner: None,
             object,
-            source: source_text.into(),
+            source: bpfman_model::ProgramSource::File(Some(source_text.into())),
             spec,
             metadata,
         })

@@ -96,7 +96,7 @@ fn seed<S: CommitLoad>(store: &Faults<S>, writer: &RuntimeWriter<'_>) {
                 spec: &bpfman_model::ProgramSpec::Tracepoint(
                     bpfman_model::Symbol::try_from("trace").expect("symbol"),
                 ),
-                source: "input.o",
+                source: &bpfman_model::ProgramSource::File(Some("input.o".into())),
                 license: "GPL",
                 created_at: "2026-10-03T00:00:00Z",
                 metadata: &BTreeMap::from([("bpfman.io/application".into(), "test".into())]),

@@ -1129,8 +1129,10 @@ rust-fmt:
 rust-fmt-fix:
 	cargo fmt --manifest-path $(RUST_MANIFEST) --all
 
+# Optional RUST_LOCK_ARGS can scope updates, for example --package bpfman.
+RUST_LOCK_ARGS ?=
 rust-lock:
-	cargo generate-lockfile --manifest-path $(RUST_MANIFEST)
+	cargo update --manifest-path $(RUST_MANIFEST) $(RUST_LOCK_ARGS)
 
 rust-lint: $(RUST_DISPATCHER)
 	cargo clippy --manifest-path $(RUST_MANIFEST) --workspace --all-targets --all-features --locked -- -D warnings
@@ -2027,3 +2029,9 @@ rust-test-function-tracing: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 .PHONY: rust-test-lsm
 rust-test-lsm: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- lsm_ --nocapture
+
+# Public OCI loading uses local anonymous registry contracts in the normal gate.
+.PHONY: rust-test-image
+rust-test-image: rust-build $(RUST_TEST_INPUTS)
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --locked
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- image_ --nocapture

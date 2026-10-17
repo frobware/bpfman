@@ -18,7 +18,8 @@ impl Cancellation {
         self.flag.load(Ordering::Acquire)
     }
 
-    pub(super) fn flag(&self) -> &AtomicBool {
+    /// Borrow the cancellation observation for synchronous effect adapters.
+    pub fn flag(&self) -> &AtomicBool {
         &self.flag
     }
 

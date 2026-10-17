@@ -518,6 +518,10 @@ The architecture and compatibility goals are in
 - Keep PinByName pins and map-set aliases separate. Validate existing-only opened
   map sources and compare type, dimensions, capacity, flags and map-extra before
   Aya reuse. Keep shared BTF loading inside the existing private syscall boundary.
+- Preserve DATASEC/VAR when sanitizing shared-map BTF so Aya fixes ELF
+  section sizes and symbol offsets. Its unsupported-DATASEC struct fallback
+  cannot represent padded multi-variable read-only layouts. Keep the native
+  padded-section creation/BTF-identity/teardown regression in the map-sharing gate.
 - New name pins acquire consuming receipts before program loading. Reused pins
   never confer compensation authority. Check cancellation between acquisitions.
 - Validate root/parent/inode evidence before cleanup retries. If new durable users
@@ -608,3 +612,24 @@ The architecture and compatibility goals are in
   in `/sys/kernel/security/lsm` for native coverage. Immediate lifetime controls
   belong in the serial global stage; fake-kernel coverage still uses real SQLite.
   Preserve script labels/assertions and verify Go comparison separately.
+
+
+## Public OCI images
+
+- Keep OCI transport synchronous and outside the runtime/kernel/store contracts.
+  `bpfman-image-oci` owns public registry resolution, descriptor checks, bounded
+  in-memory extraction and cache admission. Supply full ELF/selection/global
+  validation from the kernel adapter before cache publication and on cache hits,
+  keeping ELF interpretation outside the transport adapter.
+- Require explicit signing verification disablement until verification exists.
+  Reject unsupported credentials/policies before pulling. Never persist or log
+  tokens or registry credentials. Preserve caller reference and selected manifest
+  digest in `ProgramSource`; SQLite retains schema 2 and its image-source column.
+- Managed cache I/O belongs in `bpfman-fs`, under cache-root writer authority.
+  Preserve one atomic envelope, descriptor confinement, lock-free reads, consuming
+  stage receipts and failed cleanup retries. Cache artifacts survive program-load
+  failures. Do not adopt Go multi-file entries or abandoned stages implicitly.
+- `rust-test-image` selects local anonymous-registry cache/native contracts. Keep
+  them in the normal network-independent gate. Published-image scripts remain
+  unchanged external contracts, explicitly selected against Rust and Go with
+  SQLite and `e2e/config/no-signature-verification.toml`.

@@ -35,6 +35,14 @@ impl LocalObject {
 
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).map_err(LoadCause::Read)?;
+        Self::from_bytes(kernel, bytes, spec)
+    }
+
+    pub(super) fn from_bytes(
+        kernel: &impl bpfman_kernel::ObjectLoader,
+        bytes: Vec<u8>,
+        spec: &ProgramSpec,
+    ) -> Result<Self, LoadCause> {
         let info = kernel.validate_object(&bytes, spec)?;
         Ok(Self {
             bytes,

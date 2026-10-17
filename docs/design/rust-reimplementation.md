@@ -112,7 +112,8 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
-| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families, shared map-of-maps, OCI sources |
+| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
+| Public OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle | Private credentials, signature verification, image build/push, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2699,7 +2700,8 @@ wrong, change it here before broadening feature coverage.
   shared map-of-maps definitions remain pending.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
-- OCI pull, cache, authentication, and signature verification.
+- Public OCI pull/cache and anonymous bearer authentication are implemented.
+  Private-registry credentials and signature verification remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -4997,3 +4999,197 @@ contracts retain eight workers. The full kernel stage took 63.23 seconds on Linu
 6.18.54 with the existing development/test `aya-obj` opt-level-two override.
 The focused LSM gate passed both native and unchanged-script contracts; the two
 unchanged scripts also passed against Go with SQLite. BPF LSM was active locally.
+
+
+## Public OCI bytecode checkpoint (17 October 2026)
+
+The synchronous `bpfman-image-oci` adapter resolves bare, tagged and SHA256 digest
+references through OCI and Docker v2 manifests/indexes. Linux platform selection
+matches the current host architecture. Public bearer-token challenges are handled
+without credentials or credential-store access. Index children, config and layer
+bodies are size-bounded and verified against SHA256 descriptors. Bare names use
+an explicit `latest` tag for registry access and cache identity, while stored
+program provenance retains the caller's operand and the selected child digest.
+`image inspect IMAGE` returns Go-compatible image/index metadata without creating
+runtime or cache state.
+
+`program load image` requires explicit `[signing] verify_enabled = false`. The
+Go-compatible default requires verification and fails before pulling. Explicit
+registry credentials also fail before I/O and are never echoed, persisted or
+logged. Signature verification, private-registry authentication, image build/push
+and cache eviction are separate slices. IPv6 registry authorities and non-SHA256
+content digests are explicitly unsupported in this slice.
+
+The default persistent cache root is `/var/cache/bpfman`, configurable through
+`--image-cache-dir`. Rust uses a separate `images-v1` collection and the cache
+root's own Go-compatible `.lock`. It does not adopt Go's older multi-file cache
+entries. Cache readers bypass writer acquisition. `Always` resolves afresh;
+`IfNotPresent` and `Never` consume a validated cached envelope, with `Never`
+performing no registry requests. Corrupt entries fail closed for cached policies;
+`Always` can replace corrupt content. Publication rechecks `IfNotPresent` under
+the cache lock to preserve a concurrently published entry.
+
+Each versioned envelope contains the normalized reference, host platform, resolved
+manifest digest, bytecode digest, exact bytecode and explicit verification-disabled
+admission policy. Metadata and bytecode are replaced by one atomic rename.
+`bpfman-fs` owns all managed mutations: descriptor-confined collection access,
+unnamed-file staging, file sync, receipt-bearing named staging, rename and directory
+sync. Symlinks, hard links, changed parents and foreign writer roots are refused.
+Failed publication or cancellation attempts stage cleanup once; failed cleanup
+retains its consuming receipt and diagnostics for explicit retries. A crash after
+linking a stage can leave an uncommitted `.stage-*` file; this slice refuses an
+existing stage rather than claiming recovery authority over it. Cache entries are
+independent reusable artifacts and are retained when a later program load fails.
+
+Layers may contain raw ELF, gzip-compressed ELF, plain tar or gzip-compressed tar.
+Extraction stays in memory, refuses escaping paths and non-regular bytecode
+entries, and bounds compressed, expanded and ELF sizes. Native BPF ELF header
+admission and the caller-supplied kernel adapter validator both precede cache
+publication. The adapter performs full ELF, selected-section and global validation
+on pulled bytes and cache hits, before program state initialization. Image
+bytes then use the same prepared batch, globals, map sharing, writer lock,
+pinning, compensation and unload paths as local file inputs.
+
+`LoadRecord` carries the backend-independent `ProgramSource` enum. SQLite retains
+Go schema 2 and writes `image_source` with a null original file source, in the same
+transaction as program/map relationships. Published provenance also records the
+image identity. Generic store contracts cover every pull policy, duplicate-batch
+rollback and reopened records. Native local-registry contracts cover loading,
+Rust/Go reopened observations, cache-only subsequent loads, commit failure,
+cancellation and unload cleanup. Cache contracts cover anonymous tokens, indexes,
+reference normalization, corrupt-cache refusal/refresh, failed pulls, immutable
+reader generations, unsafe destinations, staged cancellation and retained cleanup
+retry. They run without external registry access in the normal gate;
+`make rust-test-image` selects the focused cache/native contracts.
+
+The unchanged `TestPublishedImage_XDPExample.bpfman` and
+`TestImageReferenceForms_PublishedXDP.bpfman` scripts were explicitly selected with
+SQLite and verification disabled and passed against both Go and Rust. XDP packet
+counts increased while attached and remained unchanged after detach. Bare, tagged
+and digest loads matched inspected platform-child provenance. The scripts and
+their labels remain unchanged; external registry tests remain outside the default
+network-independent gate.
+
+The final `direnv exec . make rust-check lint-make` gate passed formatting,
+Clippy with warnings denied, userspace/store/CLI/compile-fail contracts, all 42
+stateful-fake cases, all 72 discovered and selected native contracts, and docs.
+The kernel stage completed in 60.66 seconds on Linux 6.18.54, with the retained
+`aya-obj` development/test optimization. Fake and real tmpfs fixture cleanup
+passed. Makefile lint and undefined-variable probes were clean. A regression
+fixture supplies its own signing configuration rather than depending on the
+host's potentially unreadable `/etc/bpfman/bpfman.toml`. Inspection layer summaries
+use Go's `media_type` wire spelling, and the full-validation regression proves a
+truncated ELF leaves neither a new cache entry nor program runtime state.
+
+### Broader image-mode acceptance audit (17 October 2026)
+
+The existing `BPFMAN_E2E_BYTECODE_SOURCE=image` switch brokers DSL file loads
+through `bpfman image build` and then `program load image --pull-policy Always`.
+A direct run with the Rust binary fails at fixture publishing because Rust's
+`image build` command remains unimplemented. To test the image consumer across
+the existing corpus, a temporary, logged dispatcher delegated only `image build`
+to Go, restricted to the runner-owned `127.0.0.1` registry. All remaining commands
+executed Rust. This is fixture preparation, not evidence of Rust image-build
+parity. The completed dispatch audit recorded 312 Go fixture-build invocations, 490
+Rust image-load calls, zero Rust file-load calls and zero Go program operations.
+
+The Rust selection was the union of the eight currently admitted script cohorts,
+with the unchanged `!external` selector: 134 files, expanded to 188 independently
+scheduled cases. Of those, 133 files / 187 cases passed. The sole failure was
+`TestProgram_FileLifecycle.bpfman`: in image mode the shell comparison evaluator
+rejects `if $prog.record.load.image_source == null` because the left side is an
+object. This was initially misdiagnosed as a checker failure; the static checker
+permits the unknown kind, and evaluation then fails at runtime. The corresponding
+Go run selected all 101 shared files (108 cases): 99 files /
+106 cases passed, the same file failed with the same shell diagnostic, and one
+file/case (`TestTC_ClsactReclaimedOnLastDetach`) was skipped by Go's normal
+production-policy guard. Thus 100 shared files / 107 cases actually executed;
+the skip was not counted as a pass.
+No script, label or assertion was changed, and checking was not disabled. Both
+runs used SQLite and isolated runtimes with the runner's normal artifact checks.
+
+Remote pulls were selected separately with
+`BPFMAN_E2E_SCRIPT_SELECTOR='external=true,image=true'`, without a filename filter.
+All ten matching files executed against Go and Rust, with verification explicitly
+disabled. The initial Rust run exposed a genuine shared-map BTF failure loading
+`quay.io/bpfman-bytecode/go-app-counter`: unsupported-DATASEC sanitization replaced
+its multi-variable read-only section with an undersized struct. The adapter now
+preserves DATASEC/VAR and uses Aya's public fixups for ELF section extents and
+symbol offsets while lowering optional newer BTF kinds. A padded multi-variable
+read-only fixture extends the existing native map-sharing contract; successful
+shared-map creation, BTF identity and teardown are required. The focused
+map-sharing gate passed, and the previously failing app-image traffic script
+passed on the subsequent complete remote-selector run.
+
+After this fix, Go and Rust both passed seven of the ten remote scripts. The
+three failures are identical manifest-label expectations in the unchanged
+published kprobe/uprobe/uretprobe scripts: they assert `probe`, whereas the current
+remote images advertise `kprobe`, `uprobe` and `uretprobe`, respectively. All three
+scripts nevertheless completed their traffic and detach-quiescence assertions.
+These failures remain reported rather than changing scripts or normalizing away
+registry metadata. The seven passing files include the app image, container
+app-test uprobes, XDP, TC, TCX, tracepoint, and all reference forms.
+
+After the BTF correction and regression fixture, `direnv exec . make rust-check
+lint-make` passed again: all 42 stateful-fake cases, all 72 discovered/selected
+native contracts, userspace/CLI/store contracts, formatting, Clippy, docs and Make
+checks. Both fake and real tmpfs cleanup passed. The unchanged-script image-mode
+and remote-selector runs above retain their nonzero exits for the explicitly
+reported shared failures; the green default gate is not presented as a substitute
+for those broader results.
+
+
+### Canonical probe image labels (17 October 2026)
+
+The legacy Rust mapping collapsed Aya's kprobe/kretprobe/uprobe/uretprobe sections
+into bpfman's generic `probe` spelling. The current image builder instead infers
+bpfman's distinct logical program kinds from ELF sections. This is an image
+metadata convention change, not a difference in the metadata returned by the
+current Go and Rust inspectors. The public label vocabulary is now documented in
+`docs/developer-guide/image-build.md`: it is independent of loading libraries and
+kernel program-type names, and inspection continues to report raw published
+metadata, including legacy values when present.
+
+The three published probe scripts now assert exactly `kprobe`, `uprobe` and
+`uretprobe`, respectively. Their selection labels, load/attach assertions, traffic
+checks and cleanup requirements are unchanged. Following these expectation
+corrections, all ten files selected by
+`BPFMAN_E2E_SCRIPT_SELECTOR='external=true,image=true'` passed against both Go and
+Rust, with SQLite, isolated runtimes and explicit verification disablement. The
+selection used no filename filter, and the executed pass set was checked against
+the selector's complete manifest. The separate brokered image-mode shell comparison
+failure is addressed below; the Rust image-build boundary remains outstanding.
+
+### Shell null comparisons in image mode (17 October 2026)
+
+The image-mode lifecycle failure came from the shared shell evaluator, rather
+than static checking: it rejected the non-null image-source object before
+applying the equality rules for null. The static checker had the same ordering
+problem for known record kinds. Both now handle equality with null before
+requiring scalar operands. A present object, list or typed record compares
+unequal to null in either operand order. Absent values remain errors, null has
+no ordering, and ordinary structured-to-structured comparisons remain errors.
+Regression tests cover those boundaries, statically known program records, and
+the exact nested image-source condition with both file and image provenance.
+
+All shell package tests passed with
+`direnv exec . go test -ldflags=-linkmode=external ./cmd/bpfman-shell/...`.
+External linking follows the repository's script-test recipe and avoids the
+development shell's cgo internal-linker failure.
+
+The same complete brokered selections and fixture-publisher boundary described
+in the broader audit were rerun with the rebuilt shell. Rust passed all 134 files
+/ 188 cases; Go passed 100 files / 107 cases, with its one existing
+`TestTC_ClsactReclaimedOnLastDetach` policy skip. Both runs exited successfully.
+The actual file outcomes were checked against both complete selection manifests;
+no failed case or missing file was hidden by a selector change. The lifecycle
+script is unchanged, static checking stays enabled, and SQLite and isolated
+runtimes remain in use. These runs exercise Rust image consumption; Go still
+publishes the local fixtures because native Rust `image build` is separate work.
+
+The final `direnv exec . make rust-check` also passed: userspace, store and CLI
+contracts, all 42 stateful-fake cases, all 72 discovered/selected native contracts,
+formatting, Clippy and docs. Both owned tmpfs cleanup checks passed. The native
+stage took 62.11 seconds on Linux 6.18.54 with the existing optimized `aya-obj`
+development/test profile. The changed Go files also passed the configured
+formatter/import check.

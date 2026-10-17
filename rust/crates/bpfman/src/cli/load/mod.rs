@@ -15,9 +15,9 @@ pub(crate) struct PreparedLoad {
 
 #[derive(Subcommand)]
 pub(crate) enum LoadCommand {
-    /// Load one tracepoint from a local ELF object file.
+    /// Load programs from a local ELF object file.
     File(FileArgs),
-    /// Load from an OCI image (execution not implemented).
+    /// Load from a public OCI bytecode image.
     Image(ImageArgs),
 }
 
@@ -117,4 +117,14 @@ struct LoadRequest {
     globals: BTreeMap<String, Vec<u8>>,
     map_owner_id: Option<NonZeroU32>,
     output: LoadOutput,
+}
+
+impl From<PullPolicy> for bpfman_model::ImagePullPolicy {
+    fn from(policy: PullPolicy) -> Self {
+        match policy {
+            PullPolicy::Always => Self::Always,
+            PullPolicy::IfNotPresent => Self::IfNotPresent,
+            PullPolicy::Never => Self::Never,
+        }
+    }
 }

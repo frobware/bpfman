@@ -9,6 +9,22 @@ const DEFAULT_CONFIG_PATH: &str = "/etc/bpfman/bpfman.toml";
 pub(super) struct Config {
     #[serde(default)]
     interfaces: HashMap<String, InterfaceConfig>,
+    #[serde(default)]
+    signing: Signing,
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+struct Signing {
+    verify_enabled: bool,
+}
+
+impl Default for Signing {
+    fn default() -> Self {
+        Self {
+            verify_enabled: true,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -26,6 +42,15 @@ impl Default for InterfaceConfig {
 }
 
 impl Config {
+    pub(super) fn admit_public_image(&self) -> anyhow::Result<()> {
+        if self.signing.verify_enabled {
+            anyhow::bail!(
+                "OCI signature verification is not implemented; public image loading requires explicit [signing] verify_enabled = false"
+            );
+        }
+        Ok(())
+    }
+
     pub(super) fn load(path: Option<&Path>) -> anyhow::Result<Self> {
         let selected = path.unwrap_or(Path::new(DEFAULT_CONFIG_PATH));
         let contents = match std::fs::read_to_string(selected) {

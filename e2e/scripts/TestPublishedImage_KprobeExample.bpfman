@@ -13,7 +13,7 @@ import ../lib.bpfman
 let image = "quay.io/bpfman-bytecode/go-kprobe-counter"
 
 guard published <- inspect_published_image $image kprobe_counter
-assert $published.manifest.programs.kprobe_counter == probe
+assert $published.manifest.programs.kprobe_counter == kprobe
 assert $published.manifest.maps.kprobe_stats_map == per_cpu_array
 
 guard fn <- kfunc acquire

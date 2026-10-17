@@ -35,7 +35,7 @@ fn scope(test: impl FnOnce(&RuntimeWriter<'_>, &Connection, &mut Store) -> Resul
                     globals: &Default::default(),
                     id: NonZeroU32::new(42).expect("id"),
                     spec: &bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from("trace")?),
-                    source: "source.o",
+                    source: &bpfman_model::ProgramSource::File(Some("source.o".into())),
                     license: "GPL",
                     created_at: "2026-10-04T12:00:00Z",
                     metadata: &BTreeMap::new(),

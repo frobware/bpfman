@@ -374,12 +374,29 @@ pub(super) fn insert_program(
     program: ProgramInsert<'_>,
 ) -> rusqlite::Result<()> {
     let record = program.record;
+    let image_source = match record.source {
+        bpfman_model::ProgramSource::Image {
+            url,
+            digest,
+            pull_policy,
+        } => Some(
+            serde_json::json!({
+                "url": url, "digest": digest, "pull_policy": match pull_policy {
+                    bpfman_model::ImagePullPolicy::Always => "Always",
+                    bpfman_model::ImagePullPolicy::IfNotPresent => "IfNotPresent",
+                    bpfman_model::ImagePullPolicy::Never => "Never",
+                }
+            })
+            .to_string(),
+        ),
+        bpfman_model::ProgramSource::File(_) => None,
+    };
     tx.prepare_cached(
         "INSERT INTO managed_programs
          (program_id, program_name, program_type, object_path, source_path, pin_path,
-          map_set_id, license, gpl_compatible, metadata_json, created_at, global_data, attach_func)
+          map_set_id, license, gpl_compatible, metadata_json, created_at, global_data, attach_func, image_source)
          VALUES (:program_id, :name, :kind, :object_path, :source_path, :pin_path,
-                 :map_set, :license, :gpl_compatible, :metadata, :created_at, :globals, :attach_func)",
+                 :map_set, :license, :gpl_compatible, :metadata, :created_at, :globals, :attach_func, :image_source)",
     )?
     .execute(named_params! {
         ":program_id": record.id.get(),
@@ -388,7 +405,8 @@ pub(super) fn insert_program(
         ":kind": record.spec.kind().as_str(),
         ":attach_func": match record.spec { bpfman_model::ProgramSpec::Fentry { target, .. } | bpfman_model::ProgramSpec::Fexit { target, .. } | bpfman_model::ProgramSpec::Lsm { hook: target, .. } => Some(target.as_str()), _ => None },
         ":object_path": program.object_path,
-        ":source_path": record.source,
+        ":source_path": match record.source { bpfman_model::ProgramSource::File(path) => path.as_deref(), bpfman_model::ProgramSource::Image { .. } => None },
+        ":image_source": image_source,
         ":pin_path": program.pin_path,
         ":license": record.license,
         ":gpl_compatible": program.gpl_compatible,

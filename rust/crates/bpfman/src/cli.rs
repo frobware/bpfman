@@ -9,6 +9,7 @@ use clap::{
 
 mod config;
 mod dispatcher;
+mod image;
 mod link;
 mod load;
 
@@ -21,6 +22,9 @@ pub(super) struct Cli {
     /// Root directory for runtime files (must be absolute).
     #[arg(long = "runtime-dir", value_name = "RUNTIME_DIR", global = true, env = "BPFMAN_RUNTIME_DIR", default_value = DEFAULT_RUNTIME_ROOT, value_parser = PathBufValueParser::new().try_map(RuntimeLayout::try_from))]
     pub(super) layout: RuntimeLayout,
+    /// Persistent cache root for OCI bytecode images.
+    #[arg(long = "image-cache-dir", global = true, default_value = "/var/cache/bpfman", value_parser = PathBufValueParser::new().try_map(RuntimeLayout::try_from))]
+    pub(super) image_cache: RuntimeLayout,
     /// Timeout for acquiring the writer lock (0 waits indefinitely).
     #[arg(long, global = true, env = "BPFMAN_LOCK_TIMEOUT", default_value = "30s", value_parser = lock_timeout)]
     pub(super) lock_timeout: Duration,
@@ -41,6 +45,7 @@ pub(super) enum PreparedCommand {
     },
     List(ListArgs),
     Load(load::PreparedLoad),
+    Image(image::ImageCommand),
     Link(link::LinkCommand, bpfman_model::XdpMode),
     Dispatcher(dispatcher::DispatcherCommand),
 }
@@ -51,9 +56,12 @@ impl Command {
         layout: &RuntimeLayout,
         cancellation: &bpfman_runtime::Cancellation,
         config: Option<&std::path::Path>,
+        cache: &RuntimeLayout,
+        lock_timeout: Duration,
     ) -> Result<PreparedCommand, crate::error::Error> {
         let command = match self {
             Self::Program { command } => command,
+            Self::Image { command } => return Ok(PreparedCommand::Image(command)),
             Self::NsHelper { .. } => {
                 return Err(anyhow::anyhow!(
                     "namespace helper must dispatch before runtime initialization"
@@ -75,15 +83,24 @@ impl Command {
             ProgramCommand::Get { id, output } => PreparedCommand::Get { id, output },
             ProgramCommand::Unload { id } => PreparedCommand::Unload { id },
             ProgramCommand::List(args) => PreparedCommand::List(args),
-            ProgramCommand::Load { source } => {
-                PreparedCommand::Load(source.prepare(layout, cancellation)?)
-            }
+            ProgramCommand::Load { source } => PreparedCommand::Load(source.prepare(
+                layout,
+                cancellation,
+                config,
+                cache,
+                lock_timeout,
+            )?),
         })
     }
 }
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Inspect public OCI bytecode images.
+    Image {
+        #[command(subcommand)]
+        command: image::ImageCommand,
+    },
     #[command(name = "__ns-helper", hide = true)]
     NsHelper {
         #[command(subcommand)]

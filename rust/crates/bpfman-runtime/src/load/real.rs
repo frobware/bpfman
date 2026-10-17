@@ -211,10 +211,32 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
                 cause: cause.into(),
                 remaining: Vec::new(),
             })?;
+        let (source_kind, source, image_source) = match input.source {
+            bpfman_model::ProgramSource::File(path) => ("file", path.as_deref(), None),
+            bpfman_model::ProgramSource::Image {
+                url,
+                digest,
+                pull_policy,
+            } => {
+                let policy = match pull_policy {
+                    bpfman_model::ImagePullPolicy::Always => "Always",
+                    bpfman_model::ImagePullPolicy::IfNotPresent => "IfNotPresent",
+                    bpfman_model::ImagePullPolicy::Never => "Never",
+                };
+                (
+                    "image",
+                    Some(url.as_str()),
+                    Some(serde_json::json!({
+                        "url": url, "digest": digest, "pull_policy": policy,
+                    })),
+                )
+            }
+        };
         let provenance = serde_json::to_vec_pretty(&serde_json::json!({
             "map_set": input.map_owner.unwrap_or(id).get(), "map_inventory": inventory,
             "version": 1, "program_id": id.get(), "program_name": input.spec.name().as_str(),
-            "source": input.source, "source_kind": "file", "loaded_at": input.created_at,
+            "source": source, "source_kind": source_kind,
+            "image_source": image_source, "loaded_at": input.created_at,
         }))
         .map_err(|cause| EffectFailure {
             cause: LoadCause::Json(cause),

@@ -10,7 +10,7 @@ pub(crate) struct Inputs<'a> {
     pub(super) cancellation: &'a crate::Cancellation,
     pub(super) map_owner: Option<NonZeroU32>,
     pub(super) object: &'a LocalObject,
-    pub(super) source: &'a str,
+    pub(super) source: &'a bpfman_model::ProgramSource,
     pub(super) spec: &'a bpfman_model::ProgramSpec,
     pub(super) metadata: &'a BTreeMap<String, String>,
     pub(super) created_at: &'a str,

@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use bpfman_kernel::ObjectLoader;
 use clap::error::ErrorKind;
 
 use super::{
@@ -11,9 +12,12 @@ impl LoadCommand {
         self,
         layout: &bpfman_fs::RuntimeLayout,
         cancellation: &bpfman_runtime::Cancellation,
+        config: Option<&std::path::Path>,
+        cache: &bpfman_fs::RuntimeLayout,
+        lock_timeout: std::time::Duration,
     ) -> Result<PreparedLoad, crate::error::Error> {
         let request = self.into_request().unwrap_or_else(|error| error.exit());
-        request.prepare(layout, cancellation)
+        request.prepare(layout, cancellation, config, cache, lock_timeout)
     }
 
     fn into_request(self) -> Result<LoadRequest, clap::Error> {
@@ -95,6 +99,9 @@ impl LoadRequest {
         self,
         layout: &bpfman_fs::RuntimeLayout,
         cancellation: &bpfman_runtime::Cancellation,
+        config: Option<&std::path::Path>,
+        cache: &bpfman_fs::RuntimeLayout,
+        lock_timeout: std::time::Duration,
     ) -> Result<PreparedLoad, crate::error::Error> {
         let Self {
             source,
@@ -105,37 +112,65 @@ impl LoadRequest {
             map_owner_id,
             output,
         } = self;
-        let path = match source {
-            LoadSource::File(path) => path,
+        if layout.root().to_str().is_none() {
+            return Err(anyhow::anyhow!("load persistence requires a UTF-8 runtime path").into());
+        }
+        let kernel = bpfman_kernel_aya::Kernel::default();
+        let request = match source {
+            LoadSource::File(path) => bpfman_runtime::PreparedProgram::new_with_cancellation(
+                &kernel,
+                &path,
+                first,
+                metadata,
+                cancellation,
+            )?,
             LoadSource::Image {
                 reference,
                 pull_policy,
                 auth,
             } => {
-                let _image = (reference, pull_policy);
-
                 if let Some(super::RegistryAuth { username, password }) = auth {
                     let _credentials = (username, password);
+                    return Err(anyhow::anyhow!(
+                        "private registry authentication is not implemented"
+                    )
+                    .into());
                 }
-
-                return Err(anyhow::anyhow!(
-                    "program load image execution is not implemented in the Rust CLI; no runtime state was changed"
-                ).into());
+                super::super::config::Config::load(config)?.admit_public_image()?;
+                let parsed = bpfman_image_oci::Reference::parse(&reference)?;
+                let image = bpfman_image_oci::pull(
+                    &parsed,
+                    pull_policy.into(),
+                    cache,
+                    lock_timeout,
+                    cancellation.flag(),
+                    |bytes| {
+                        for spec in std::iter::once(&first).chain(&remaining) {
+                            kernel.validate_object(bytes, spec)?;
+                        }
+                        if globals.is_empty() {
+                            Ok(())
+                        } else {
+                            kernel.validate_globals(bytes, &globals)
+                        }
+                    },
+                )?;
+                let provenance = bpfman_model::ProgramSource::Image {
+                    url: reference,
+                    digest: image.digest().into(),
+                    pull_policy: pull_policy.into(),
+                };
+                bpfman_runtime::PreparedProgram::from_image(
+                    &kernel,
+                    image.bytes().to_vec(),
+                    provenance,
+                    first,
+                    metadata,
+                    cancellation,
+                )?
             }
-        };
-
-        if layout.root().to_str().is_none() {
-            return Err(anyhow::anyhow!("load persistence requires a UTF-8 runtime path").into());
         }
-
-        let request = bpfman_runtime::PreparedProgram::new_with_cancellation(
-            &bpfman_kernel_aya::Kernel::default(),
-            &path,
-            first,
-            metadata,
-            cancellation,
-        )?
-        .with_globals(&bpfman_kernel_aya::Kernel::default(), globals)?;
+        .with_globals(&kernel, globals)?;
         let request = match map_owner_id {
             Some(owner) => request.with_map_owner(owner),
             None => request,

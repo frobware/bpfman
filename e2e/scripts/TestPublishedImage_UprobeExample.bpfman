@@ -13,7 +13,7 @@ import ../lib.bpfman
 let image = "quay.io/bpfman-bytecode/go-uprobe-counter"
 
 guard published <- inspect_published_image $image uprobe_counter
-assert $published.manifest.programs.uprobe_counter == probe
+assert $published.manifest.programs.uprobe_counter == uprobe
 assert $published.manifest.maps.uprobe_stats_map == per_cpu_array
 
 guard target <- uprobe target

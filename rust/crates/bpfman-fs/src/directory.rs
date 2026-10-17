@@ -109,13 +109,31 @@ impl RuntimeDirectory {
             CONFINED,
         )
         .map_err(|e| io("open runtime writer lock", e))?;
-        self.with_lock_file(fd, options, work)
+        self.with_lock_file(fd, options, true, work)
+    }
+
+    /// Borrow authority for a cache root without preparing a program database.
+    pub fn with_cache_writer<T>(
+        &self,
+        options: AcquireOptions<'_>,
+        work: impl for<'scope> FnOnce(RuntimeWriter<'scope>) -> T,
+    ) -> Result<T, Error> {
+        let fd = openat2(
+            &self.root,
+            LOCK_FILE,
+            OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NONBLOCK,
+            Mode::from_raw_mode(0o600),
+            CONFINED,
+        )
+        .map_err(|e| io("open image cache writer lock", e))?;
+        self.with_lock_file(fd, options, false, work)
     }
 
     fn with_lock_file<T>(
         &self,
         fd: OwnedFd,
         options: AcquireOptions<'_>,
+        database: bool,
         work: impl for<'scope> FnOnce(RuntimeWriter<'scope>) -> T,
     ) -> Result<T, Error> {
         let stat = fstat(&fd).map_err(|e| io("inspect runtime writer lock", e))?;
@@ -151,7 +169,9 @@ impl RuntimeDirectory {
                     runtime: self,
                     _permit: permit,
                 };
-                writer.prepare_database_directory()?;
+                if database {
+                    writer.prepare_database_directory()?;
+                }
 
                 Ok(work(writer))
             },
@@ -280,7 +300,7 @@ mod tests {
         std::fs::write(&path, b"replacement")?;
         let called = std::cell::Cell::new(false);
         let error = runtime
-            .with_lock_file(old, options(), |_| called.set(true))
+            .with_lock_file(old, options(), true, |_| called.set(true))
             .expect_err("lock inode was replaced");
 
         assert_eq!(error.kind(), crate::ErrorKind::UnsafeLayout);

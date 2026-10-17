@@ -21,6 +21,8 @@ panic = "deny"
 dbg_macro = "deny"
 
 [dependencies]
+bpfman-kernel.workspace = true
+bpfman-image-oci.workspace = true
 bpfman-lock.workspace = true
 rustix = { workspace = true, features = ["thread"] }
 libc.workspace = true
@@ -44,7 +46,7 @@ tracing-subscriber.workspace = true
 tracing-chrome.workspace = true
 
 [dev-dependencies]
-bpfman-kernel.workspace = true
+sha2.workspace = true
 aya.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true

@@ -1113,9 +1113,8 @@ func valueToArg(v Value, span source.Span) (Arg, error) {
 // explicit JSON null is "null" -- a first-class comparable
 // value with the equality rules `null == null` true and `null
 // == X` false for any non-null X (no ordering). Anything else
-// (map, slice, absent values) returns "" and is rejected by
-// evalCompare with an error citing the actual underlying type
-// so users see why the operands are incomparable.
+// (map, slice, absent values) returns "". Structured values
+// can be tested against null; otherwise evalCompare rejects them.
 func compareKind(v Value) string {
 	if v.IsNull() {
 		return "null"
@@ -1131,9 +1130,10 @@ func compareKind(v Value) string {
 	return ""
 }
 
-// evalCompare performs a strict, type-aware comparison. Both
-// operands must classify as the same compareKind: number-vs-number
-// compares as floats, string-vs-string as text, bool-vs-bool only
+// evalCompare performs a strict, type-aware comparison. Equality with
+// null is defined for any present value, including structured values.
+// Otherwise both operands must classify as the same compareKind:
+// number-vs-number compares as floats, string-vs-string as text, bool-vs-bool only
 // supports == and != (booleans have no defined ordering). Cross-type
 // comparisons are an error rather than a silent false, matching
 // jq's strict equality and surfacing operator misuse loudly. To
@@ -1142,12 +1142,6 @@ func compareKind(v Value) string {
 func evalCompare(op string, l, r Value, span source.Span) (Value, error) {
 	lk := compareKind(l)
 	rk := compareKind(r)
-	if lk == "" {
-		return Value{}, syntax.SpanErrorf(span, "%s: left side is a %s; only scalars (numbers, strings, booleans) can be compared with %s", op, l.Kind(), op)
-	}
-	if rk == "" {
-		return Value{}, syntax.SpanErrorf(span, "%s: right side is a %s; only scalars (numbers, strings, booleans) can be compared with %s", op, r.Kind(), op)
-	}
 	// Null comparisons are special: `null == null` is true,
 	// `null == X` (X non-null) is false, and the cross-kind
 	// case is well-defined rather than an error. The language
@@ -1156,13 +1150,20 @@ func evalCompare(op string, l, r Value, span source.Span) (Value, error) {
 	// strict same-kind rule when at least one operand is null.
 	// Ordering operators (<, <=, >, >=) are not defined for
 	// null and surface as an explicit error.
-	if lk == "null" || rk == "null" {
+	// An absent value is not JSON null and must still be rejected.
+	if !l.IsNil() && !r.IsNil() && (lk == "null" || rk == "null") {
 		if op != "==" && op != "!=" {
 			return Value{}, syntax.SpanErrorf(span, "binary %s: null supports only == and != (no ordering)", op)
 		}
 		bothNull := lk == "null" && rk == "null"
 		pass := (op == "==") == bothNull
 		return BoolValue(pass), nil
+	}
+	if lk == "" {
+		return Value{}, syntax.SpanErrorf(span, "%s: left side is a %s; only scalars (numbers, strings, booleans) can be compared with %s", op, l.Kind(), op)
+	}
+	if rk == "" {
+		return Value{}, syntax.SpanErrorf(span, "%s: right side is a %s; only scalars (numbers, strings, booleans) can be compared with %s", op, r.Kind(), op)
 	}
 	if lk != rk {
 		return Value{}, syntax.SpanErrorf(span, "binary %s: cannot compare %s to %s; coerce explicitly (e.g. \"$x |> jq tonumber\" for stringy numeric input)", op, lk, rk)

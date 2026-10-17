@@ -38,7 +38,7 @@ fn scope(
                     shared_maps: &[],
                     id: id(42),
                     spec: &ProgramSpec::Xdp("pass".try_into()?),
-                    source: "source.o",
+                    source: &bpfman_model::ProgramSource::File(Some("source.o".into())),
                     license: "GPL",
                     created_at: "2026-10-05T00:00:00Z",
                     globals: &Default::default(),

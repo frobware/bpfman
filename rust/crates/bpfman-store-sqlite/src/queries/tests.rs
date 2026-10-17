@@ -32,7 +32,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
             globals: &Default::default(),
             id,
             spec: &bpfman_model::ProgramSpec::Tracepoint(name.clone()),
-            source: &source,
+            source: &bpfman_model::ProgramSource::File(Some(source.clone())),
             license,
             created_at: &created_at,
             metadata: &metadata,

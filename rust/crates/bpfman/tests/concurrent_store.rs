@@ -129,7 +129,9 @@ where
                                     spec: &bpfman_model::ProgramSpec::Tracepoint(
                                         Symbol::try_from("trace").expect("symbol"),
                                     ),
-                                    source: "/source.o",
+                                    source: &bpfman_model::ProgramSource::File(Some(
+                                        "/source.o".into(),
+                                    )),
                                     license: "GPL",
                                     created_at: "2026-10-03T12:00:00Z",
                                     metadata: &BTreeMap::from([(

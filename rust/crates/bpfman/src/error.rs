@@ -127,3 +127,13 @@ impl<S: bpfman_store::TcStore + 'static> From<bpfman_runtime::TcError<S, bpfman_
         }
     }
 }
+
+impl From<bpfman_image_oci::Error> for Error {
+    fn from(cause: bpfman_image_oci::Error) -> Self {
+        let cancelled = cause.is_cancelled();
+        Self {
+            cause: cause.into(),
+            cancelled,
+        }
+    }
+}

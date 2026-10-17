@@ -258,3 +258,6 @@ pub struct PreparedUprobeAttach<P: UprobeProgram> {
     links: OwnedFd,
     retprobe: bool,
 }
+
+mod image;
+pub use image::{ImageCacheKey, ImageCacheStage};

@@ -26,7 +26,7 @@ fn seed(writer: &RuntimeWriter<'_>, id: NonZeroU32) -> Result {
             globals: &Default::default(),
             id,
             spec: &bpfman_model::ProgramSpec::Tracepoint(Symbol::try_from("trace")?),
-            source: "source.o",
+            source: &bpfman_model::ProgramSource::File(Some("source.o".into())),
             license: "GPL",
             created_at: "2026-10-03T12:00:00Z",
             metadata: &BTreeMap::new(),

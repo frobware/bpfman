@@ -156,8 +156,10 @@ Comparisons are strict by kind:
 - number-to-number comparisons are numeric (exact for integers);
 - string-to-string comparisons use lexical text comparison;
 - boolean-to-boolean comparisons support only `==` and `!=`;
-- null supports only `==` and `!=`;
-- cross-kind comparisons are errors.
+- null supports only `==` and `!=`: it equals null and differs from every
+  present non-null value, including objects, lists, and typed records;
+- other cross-kind comparisons and structured-to-structured comparisons are
+  errors. Absent values cannot be compared, including against null.
 
 Arithmetic operands must be numeric. Division and modulo by zero are
 errors. The sign of integer remainder follows Go `big.Int.Rem`

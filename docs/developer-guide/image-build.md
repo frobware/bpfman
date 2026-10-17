@@ -34,6 +34,19 @@ and images built for the following architectures:
 * ppc64le
 * s390x
 
+## Bytecode Program Labels
+
+The `io.ebpf.programs` label maps ELF program names to bpfman's logical program
+kinds, inferred from their ELF sections. These names are independent of the
+loading library and the kernel's program-type names. Probe programs use the
+distinct values `kprobe`, `kretprobe`, `uprobe`, and `uretprobe`; for example,
+`{"uprobe_counter":"uprobe"}`. The image builder preserves these distinctions.
+
+Older bpfman image tooling collapsed these four kinds to `probe`. Image
+inspection reports the metadata actually published in the image, so it can
+still show that legacy spelling for an older image. It does not rewrite labels
+according to the inspecting binary's backend.
+
 ## Locally Build bpfman-operator and bpfman-agent Container Images
 
 When testing or developing in bpfman-operator, it may be necessary to run with updated changes

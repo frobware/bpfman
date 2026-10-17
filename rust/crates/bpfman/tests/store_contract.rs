@@ -34,7 +34,7 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
                 spec: &bpfman_model::ProgramSpec::Tracepoint(
                     Symbol::try_from("trace").expect("symbol"),
                 ),
-                source: "/source.o",
+                source: &bpfman_model::ProgramSource::File(Some("/source.o".into())),
                 license: "GPL",
                 created_at: "2026-10-03T12:00:00Z",
                 metadata: &BTreeMap::from([("bpfman.io/application".into(), "contract".into())]),
@@ -141,12 +141,13 @@ fn batch_contract<S: OpenStore + CommitLoad>(backend: S) {
     let metadata = BTreeMap::new();
     let globals = BTreeMap::new();
     let spec = bpfman_model::ProgramSpec::Tracepoint(name.clone());
+    let source = bpfman_model::ProgramSource::File(Some("/source.o".into()));
     let record = |id| LoadRecord {
         map_owner: None,
         shared_maps: &[],
         id: NonZeroU32::new(id).expect("id"),
         spec: &spec,
-        source: "/source.o",
+        source: &source,
         license: "GPL",
         created_at: "2026-10-05T00:00:00Z",
         metadata: &metadata,
@@ -212,12 +213,13 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
     };
     let metadata = BTreeMap::new();
     let globals = BTreeMap::new();
+    let source = bpfman_model::ProgramSource::File(Some("source.o".into()));
     let record = |id, spec| LoadRecord {
         map_owner: None,
         shared_maps: &[],
         id: NonZeroU32::new(id).expect("id"),
         spec,
-        source: "source.o",
+        source: &source,
         license: "GPL",
         created_at: "2026-10-05T00:00:00Z",
         metadata: &metadata,
@@ -313,4 +315,67 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
 #[test]
 fn sqlite_program_kinds() {
     program_kinds(bpfman_store_sqlite::Backend);
+}
+
+fn image_provenance<S: OpenStore + CommitLoad>(backend: S) {
+    use bpfman_model::{ImagePullPolicy, ProgramSource};
+    let temp = tempfile::tempdir().expect("temporary");
+    let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
+    let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
+    let store =
+        bpfman_runtime::ActiveStore::open(backend, &layout, Duration::from_secs(1)).expect("store");
+    let spec = bpfman_model::ProgramSpec::Xdp(Symbol::try_from("pass").expect("name"));
+    let metadata = BTreeMap::new();
+    let globals = BTreeMap::new();
+    with_writer(&runtime, |writer| {
+        let mut reader = store.open(writer).expect("reader");
+        for (index, policy) in [
+            ImagePullPolicy::Always,
+            ImagePullPolicy::IfNotPresent,
+            ImagePullPolicy::Never,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let source = ProgramSource::Image {
+                url: "quay.io/example/bytecode".into(),
+                digest: format!("sha256:{}", "a".repeat(64)),
+                pull_policy: policy,
+            };
+            let id = NonZeroU32::new(index as u32 + 42).expect("id");
+            let record = |id| LoadRecord {
+                map_owner: None,
+                shared_maps: &[],
+                id,
+                spec: &spec,
+                source: &source,
+                license: "GPL",
+                created_at: "2026-10-17T00:00:00Z",
+                metadata: &metadata,
+                globals: &globals,
+            };
+            let before = reader.read_records().expect("before");
+            assert!(
+                store
+                    .commit_programs(writer, &[record(id), record(id)])
+                    .is_err()
+            );
+            assert_eq!(reader.read_records().expect("rollback"), before);
+            store
+                .commit_program(writer, record(id))
+                .expect("image commit");
+            let records = reader.read_records().expect("records");
+            assert_eq!(
+                records.iter().find(|p| p.id == id).expect("image").source,
+                source
+            );
+            let mut reopened = store.open(writer).expect("reopened reader");
+            assert_eq!(reopened.read_records().expect("reopened"), records);
+        }
+    });
+}
+
+#[test]
+fn sqlite_image_provenance_and_atomic_failure() {
+    image_provenance(bpfman_store_sqlite::Backend);
 }

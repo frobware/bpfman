@@ -87,6 +87,32 @@ where
     assert!(!shared.exists());
     c.no_artifacts();
 
+    // Shared-map BTF must retain the real extents of padded, multi-variable
+    // read-only sections, even when only one program is selected.
+    let padded = app
+        .load(prepared(
+            "shared_map_contract.bpf.o",
+            ProgramSpec::Kprobe("shared_map_good".try_into().expect("name")),
+        ))
+        .expect("shared map with padded read-only BTF");
+    assert!(shared.exists());
+    assert!(
+        bpfman_kernel_aya::Kernel::default()
+            .map(map(&padded))
+            .expect("map")
+            .btf_id
+            .is_some()
+    );
+    assert_eq!(
+        app.unload(padded.record.id)
+            .expect("padded unload")
+            .unresolved(),
+        0
+    );
+    absent(padded.record.id);
+    assert!(!shared.exists());
+    c.no_artifacts();
+
     store.set(Some(Point::Commit));
     let error = app
         .load(tracepoint(true))

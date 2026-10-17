@@ -524,7 +524,7 @@ fn invoke_cancellable<F: LoadEffects>(
                 license: "GPL".into(),
                 maps: maps.iter().map(|s| (*s).into()).collect(),
             },
-            source: "original.o",
+            source: &bpfman_model::ProgramSource::File(Some("original.o".into())),
             spec: &bpfman_model::ProgramSpec::Tracepoint(
                 Symbol::try_from("trace").expect("symbol"),
             ),

@@ -78,8 +78,8 @@ pub struct LoadRecord<'a> {
     pub id: NonZeroU32,
     /// Validated ELF selection.
     pub spec: &'a ProgramSpec,
-    /// Original local file operand.
-    pub source: &'a str,
+    /// File or image provenance, without transport credentials.
+    pub source: &'a bpfman_model::ProgramSource,
     /// ELF license.
     pub license: &'a str,
     /// RFC3339 time captured before load.

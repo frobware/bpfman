@@ -585,3 +585,16 @@ fn sqlite_lsm_native_link_recovery() {
 fn sqlite_lsm_script_corpus() {
     cli::lsm_scripts();
 }
+
+#[path = "kernel/image.rs"]
+mod image;
+
+#[test]
+fn sqlite_image_native_lifecycle() {
+    image::exercise();
+}
+
+#[test]
+fn sqlite_image_failure_and_cancellation() {
+    image::failures();
+}

@@ -13,11 +13,16 @@ struct {
   __uint(pinning, LIBBPF_PIN_BY_NAME);
 } tracepoint_stats_map SEC(".maps");
 
+// Multiple read-only variables with a nonzero offset exercise shared-map BTF
+// section extent fixups. Member count is not the section's byte size.
+const volatile char shared_btf_padding[64] = {1};
+const volatile __u32 shared_btf_marker = 1;
+
 SEC("kprobe/shared_map_good")
 int shared_map_good(void *ctx) {
   __u32 key = 0;
   __u32 *value = bpf_map_lookup_elem(&tracepoint_stats_map, &key);
-  if (value)
+  if (value && shared_btf_padding[0] == 1 && shared_btf_marker == 1)
     (*value)++;
   return 0;
 }

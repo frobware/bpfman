@@ -187,7 +187,7 @@ where
                             shared_maps: &[],
                             id,
                             spec: &record.spec,
-                            source: "original.o",
+                            source: &bpfman_model::ProgramSource::File(Some("original.o".into())),
                             license: "GPL",
                             created_at: &record.created_at,
                             metadata: &BTreeMap::new(),
@@ -395,7 +395,7 @@ fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpReplacementStor
                             spec: &bpfman_model::ProgramSpec::Xdp(
                                 "xdp_pass".try_into().expect("symbol"),
                             ),
-                            source: "original.o",
+                            source: &bpfman_model::ProgramSource::File(Some("original.o".into())),
                             license: "GPL",
                             created_at: "2026-10-03T00:00:00Z",
                             metadata: &BTreeMap::new(),

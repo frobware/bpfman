@@ -41,6 +41,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
 | `bpfman-kernel` | 3 | Backend-independent observation and lifecycle capabilities with opaque ownership |
 | `bpfman-kernel-aya` | 4 | Aya loading, Linux observations, attachment handles, and private BPF syscall boundaries |
+| `bpfman-image-oci` | 3 | Synchronous OCI transport, extraction and cache admission |
 | `bpfman-fs` | 2 | Runtime authority, bpffs preparation, owned pins, and bytecode publication/removal |
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
@@ -111,6 +112,44 @@ load retains its original error and exposes the acquisition failure through
 
 The crate owns no CLI formatting or telemetry subscriber. This is a reusable
 library boundary today; packaging and publishing remain a separate step.
+
+## Public OCI bytecode
+
+`image inspect IMAGE` reads public registry metadata without creating runtime or
+cache state. `program load image IMAGE --programs TYPE:NAME` accepts bare names,
+tags and SHA256 digest references, selects the host's Linux platform, and uses the
+existing load/attach/unload lifecycle. Stored provenance retains the original
+reference and resolved platform-manifest digest.
+
+Image loads currently require an explicit configuration with
+`[signing] verify_enabled = false`; the default verification requirement and
+explicit registry credentials are rejected before pulling. Signature verification
+and private authentication remain pending. The unchanged verification-disabled
+acceptance configuration is `e2e/config/no-signature-verification.toml`.
+
+`--image-cache-dir` defaults to `/var/cache/bpfman`. Its independent writer lock
+protects Rust's `images-v1` collection. A single envelope atomically publishes
+metadata and bytecode. `Always` refreshes, `IfNotPresent` uses the cache or pulls,
+and `Never` requires the cache without network access. Corrupt entries fail closed
+for cached policies; `Always` can refresh them. Go cache entries use a separate
+format. Cache eviction and abandoned-stage recovery are not implemented.
+
+`direnv exec . make rust-test-image` runs local-registry cache and native lifecycle
+contracts. The normal `rust-check` includes these contracts without network
+access. Two unchanged published-XDP/reference scripts have also passed separately
+against Go and Rust with SQLite and explicit verification-disabled configuration.
+All ten remote-image scripts selected by `external=true,image=true` pass against
+both implementations after correcting three legacy `probe` expectations to
+bpfman's distinct `kprobe`, `uprobe` and `uretprobe` metadata names. The label
+vocabulary is [documented independently of loading libraries](../docs/developer-guide/image-build.md#bytecode-program-labels).
+Brokered image mode passes all 134 admitted Rust files / 188 cases using Go solely
+to publish local fixtures. The shared Go run passes 100 files / 107 cases, with
+one existing clsact-policy skip. A shared shell null-comparison bug exposed by
+image provenance has been fixed in the evaluator and static checker without
+changing the lifecycle script or disabling checking. Native Rust `image build`
+remains unimplemented. See the
+[broader audit](../docs/design/rust-reimplementation.md#broader-image-mode-acceptance-audit-17-october-2026)
+for selectors, case counts and the shared-map BTF fix exposed by that audit.
 
 ## Persistence scope
 

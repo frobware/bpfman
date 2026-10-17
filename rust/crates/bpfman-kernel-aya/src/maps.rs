@@ -123,14 +123,18 @@ impl Kernel {
             remaining: Vec::new(),
         })?;
         use std::os::fd::AsFd;
-        // Conservative BTF sanitization preserves key/value type IDs and works
-        // without assuming optional kernel BTF features. Keep the original ELF
-        // unchanged for Aya's normal program loading and provenance.
+        // Retain DATASEC/VAR so Aya fixes their ELF extents and symbol offsets.
+        // The unsupported-DATASEC fallback converts sections to structs sized by
+        // member count, which cannot represent padded/multi-variable .rodata.
+        // Lower optional newer kinds while preserving map key/value type IDs.
+        // Keep the original ELF unchanged for loading and provenance.
         let btf = if names.is_empty() {
             None
         } else {
             object
-                .fixup_and_sanitize_btf(&aya_obj::btf::BtfFeatures::default())
+                .fixup_and_sanitize_btf(&aya_obj::btf::BtfFeatures::new(
+                    false, false, true, false, false, false, false, false,
+                ))
                 .map_err(|e| bpfman_core::EffectFailure {
                     cause: Error::new(
                         bpfman_kernel::ErrorKind::InvalidInput,

@@ -1912,18 +1912,12 @@ func isArithmeticOpText(op string) bool {
 
 // classifyComparison returns whether two kinds can be compared
 // under op, and a human-readable explanation when they cannot.
-// The rules mirror evalCompare: non-scalar operands cannot be
-// compared; Bool supports only == and !=; Scalar-vs-Bool is a
-// kind mismatch; otherwise the operands are comparable. The
+// The rules mirror evalCompare: any present value supports == and !=
+// with null; otherwise non-scalar operands cannot be compared.
+// Bool supports only == and !=; Scalar-vs-Bool is a kind mismatch. The
 // caller has already filtered out semantics.OriginUnknown so this
 // classifier never sees a wildcard.
 func classifyComparison(l, r semantics.OriginKind, op string) (ok bool, msg string) {
-	if !isScalarLikeKind(l) {
-		return false, fmt.Sprintf("left side has kind %s; only scalars (numbers, strings, booleans) can be compared with %s", l, op)
-	}
-	if !isScalarLikeKind(r) {
-		return false, fmt.Sprintf("right side has kind %s; only scalars (numbers, strings, booleans) can be compared with %s", r, op)
-	}
 	// Null is a first-class comparable value: `null == null`
 	// is true, `null == X` (X non-null) is false, and the
 	// cross-kind case is well-defined for == / != rather than
@@ -1937,6 +1931,12 @@ func classifyComparison(l, r semantics.OriginKind, op string) (ok bool, msg stri
 			return false, fmt.Sprintf("null supports only == and !=, not %s", op)
 		}
 		return true, ""
+	}
+	if !isScalarLikeKind(l) {
+		return false, fmt.Sprintf("left side has kind %s; only scalars (numbers, strings, booleans) can be compared with %s", l, op)
+	}
+	if !isScalarLikeKind(r) {
+		return false, fmt.Sprintf("right side has kind %s; only scalars (numbers, strings, booleans) can be compared with %s", r, op)
 	}
 	if l != r {
 		return false, fmt.Sprintf("cannot compare %s to %s; coerce explicitly", l, r)

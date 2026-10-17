@@ -17,6 +17,7 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-store", 3),
     ("bpfman-store-sqlite", 4),
     ("bpfman-runtime", 4),
+    ("bpfman-image-oci", 3),
     ("bpfman", 5),
 ];
 const PURE: &[&str] = &["bpfman-model", "bpfman-core"];

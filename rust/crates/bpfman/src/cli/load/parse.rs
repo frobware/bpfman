@@ -97,12 +97,7 @@ pub(super) fn global(value: &str) -> Result<Global, String> {
 }
 
 pub(super) fn image_reference(value: &str) -> Result<String, String> {
-    if value.is_empty() || value.chars().any(|c| c.is_whitespace() || c.is_control()) {
-        return Err(
-            "image reference must be nonempty and contain no whitespace or control characters"
-                .into(),
-        );
-    }
+    bpfman_image_oci::Reference::parse(value).map_err(|e| e.to_string())?;
 
     Ok(value.into())
 }
