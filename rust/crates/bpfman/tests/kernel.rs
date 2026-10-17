@@ -598,3 +598,13 @@ fn sqlite_image_native_lifecycle() {
 fn sqlite_image_failure_and_cancellation() {
     image::failures();
 }
+
+#[test]
+fn sqlite_image_build_script_corpus() {
+    cli::image_build_scripts();
+}
+
+#[test]
+fn sqlite_image_build_interoperability() {
+    image::build_interoperability();
+}

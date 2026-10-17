@@ -12,7 +12,7 @@ use std::{
 type Labels = BTreeMap<String, String>;
 
 const ACCEPT: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
-const MANIFEST_LIMIT: usize = 4 * 1024 * 1024;
+pub(super) const MANIFEST_LIMIT: usize = 4 * 1024 * 1024;
 pub(super) const BYTECODE_LIMIT: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Deserialize)]
@@ -38,10 +38,10 @@ pub(super) struct Manifest {
 }
 
 pub(super) struct Registry<'a> {
-    reference: &'a Reference,
-    agent: ureq::Agent,
-    token: Option<String>,
-    flag: &'a AtomicBool,
+    pub(super) reference: &'a Reference,
+    pub(super) agent: ureq::Agent,
+    pub(super) token: Option<String>,
+    pub(super) flag: &'a AtomicBool,
 }
 
 pub(super) fn check(flag: &AtomicBool) -> Result<(), Error> {
@@ -66,17 +66,28 @@ pub(super) fn verify(bytes: &[u8], digest: &str) -> Result<(), Error> {
 
 impl<'a> Registry<'a> {
     pub(super) fn new(reference: &'a Reference, flag: &'a AtomicBool) -> Self {
+        Self::configured(reference, flag, 10)
+    }
+
+    pub(super) fn publisher(reference: &'a Reference, flag: &'a AtomicBool) -> Self {
+        Self::configured(reference, flag, 0)
+    }
+
+    fn configured(reference: &'a Reference, flag: &'a AtomicBool, redirects: u32) -> Self {
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
+            .max_redirects(redirects)
             .timeout_global(Some(Duration::from_secs(60)))
             .timeout_connect(Some(Duration::from_secs(5)))
             .timeout_resolve(Some(Duration::from_secs(5)))
             .timeout_recv_response(Some(Duration::from_secs(5)))
             .timeout_recv_body(Some(Duration::from_secs(5)))
+            .timeout_send_request(Some(Duration::from_secs(5)))
+            .timeout_send_body(Some(Duration::from_secs(5)))
             .build();
         Self {
             reference,
-            agent: config.into(),
+            agent: crate::transport::agent(config),
             token: None,
             flag,
         }
@@ -98,52 +109,63 @@ impl<'a> Registry<'a> {
         response
     }
 
+    pub(super) fn authenticate(
+        &mut self,
+        response: &ureq::http::Response<ureq::Body>,
+        actions: &str,
+    ) -> Result<(), Error> {
+        check(self.flag)?;
+        let challenge = response
+            .headers()
+            .get("www-authenticate")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| {
+                Error::invalid(
+                    "registry authentication required; private credentials are not supported",
+                )
+            })?;
+        let (realm, service) = bearer_challenge(challenge)?;
+        if !realm.starts_with("https://")
+            && !(self.reference.base().starts_with("http://")
+                && realm.starts_with(&format!("http://{}/", self.reference.registry)))
+        {
+            return Err(Error::invalid("unsupported registry token realm"));
+        }
+        let mut request = self.agent.get(&realm).query(
+            "scope",
+            format!("repository:{}:{actions}", self.reference.repository),
+        );
+        if let Some(service) = service {
+            request = request.query("service", service);
+        }
+        let token_response = request.call();
+        check(self.flag)?;
+        let token_response =
+            token_response.map_err(|e| Error::caused("request anonymous registry token", e))?;
+        if token_response.status() != 200 {
+            return Err(Error::invalid("anonymous registry token request failed"));
+        }
+        let bytes = read_body(token_response, 1024 * 1024, self.flag)?;
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| Error::caused("decode anonymous token", e))?;
+        let token = value
+            .get("token")
+            .or_else(|| value.get("access_token"))
+            .and_then(Value::as_str)
+            .filter(|token| {
+                !token.is_empty()
+                    && token.len() <= 64 * 1024
+                    && token.bytes().all(|b| b.is_ascii_graphic())
+            })
+            .ok_or_else(|| Error::invalid("registry returned no usable anonymous token"))?;
+        self.token = Some(token.into());
+        Ok(())
+    }
+
     fn get(&mut self, path: &str, limit: usize) -> Result<(Vec<u8>, Option<String>), Error> {
         let mut response = self.request(path)?;
         if response.status() == 401 && self.token.is_none() {
-            let challenge = response
-                .headers()
-                .get("www-authenticate")
-                .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| {
-                    Error::invalid(
-                        "registry authentication required; private credentials are not supported",
-                    )
-                })?;
-            let (realm, service) = bearer_challenge(challenge)?;
-            if !realm.starts_with("https://")
-                && !(self.reference.base().starts_with("http://")
-                    && realm.starts_with(&format!("http://{}/", self.reference.registry)))
-            {
-                return Err(Error::invalid("unsupported registry token realm"));
-            }
-            let mut request = self.agent.get(&realm).query(
-                "scope",
-                format!("repository:{}:pull", self.reference.repository),
-            );
-            if let Some(service) = service {
-                request = request.query("service", service);
-            }
-            let token_response = request
-                .call()
-                .map_err(|e| Error::caused("request anonymous registry token", e))?;
-            if token_response.status() != 200 {
-                return Err(Error::invalid("anonymous registry token request failed"));
-            }
-            let bytes = read_body(token_response, 1024 * 1024, self.flag)?;
-            let value: Value = serde_json::from_slice(&bytes)
-                .map_err(|e| Error::caused("decode anonymous token", e))?;
-            let token = value
-                .get("token")
-                .or_else(|| value.get("access_token"))
-                .and_then(Value::as_str)
-                .filter(|token| {
-                    !token.is_empty()
-                        && token.len() <= 64 * 1024
-                        && token.bytes().all(|b| b.is_ascii_graphic())
-                })
-                .ok_or_else(|| Error::invalid("registry returned no usable anonymous token"))?;
-            self.token = Some(token.into());
+            self.authenticate(&response, "pull")?;
             response = self.request(path)?;
         }
         if response.status() != 200 {

@@ -633,3 +633,24 @@ The architecture and compatibility goals are in
   them in the normal network-independent gate. Published-image scripts remain
   unchanged external contracts, explicitly selected against Rust and Go with
   SQLite and `e2e/config/no-signature-verification.toml`.
+- Image building retains fully validated input bytes before registry effects.
+  Keep ELF interpretation and canonical labels in the kernel adapter, CLI source
+  selection/output in the front end, and OCI packaging/upload in the transport
+  adapter. Publishing must not initialize the program store or image cache.
+- Publish blobs and digest-addressed children before the destination manifest.
+  Abort failed/cancelled upload sessions once, retaining failed abort receipts for
+  explicit retry. Completed registry objects belong to registry GC. A successful
+  final PUT wins over cancellation; failed transport can leave its outcome unknown.
+  Confine upload locations to the same registry/repository and refuse write
+  redirects. Resume EINTR response reads on their existing connection within the
+  original timeout; never replay a mutating request to recover its response.
+- `rust-test-image-build` covers rootless build contracts, Go metadata/inspection
+  compatibility, upload failure/cancellation/retry, synchronized SIGINT/SIGTERM
+  cleanup, and six unchanged image-build scripts. Keep it in the normal gate.
+  Run the admitted script corpus with `BPFMAN_E2E_BYTECODE_SOURCE=image` using
+  Rust directly; a Go fixture-publishing wrapper is no longer necessary.
+- Aya 0.3's BTF reader assumes host byte order. Cross-endian image metadata uses
+  the private checked ELF/BTF reader inside the kernel adapter, never a fork or
+  rewritten bytecode. Preserve bounded type/string/extension references and
+  qualifier resolution. Keep the real `bpfeb` fixture, four big-endian slot
+  comparisons against Go and mixed-endian index inspection in the normal gate.

@@ -1,6 +1,6 @@
 use bpfman_fs::{ImageCacheStage, RuntimeWriter};
 
-/// OCI admission failure. Failed stage cleanup retains its consuming receipt.
+/// OCI operation failure. Failed local or remote cleanup retains ownership.
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 pub struct Error {
@@ -9,6 +9,7 @@ pub struct Error {
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
     remaining: Option<ImageCacheStage>,
     cancelled: bool,
+    uploads: Vec<crate::upload::Upload>,
 }
 
 impl Error {
@@ -18,6 +19,7 @@ impl Error {
             source: None,
             remaining: None,
             cancelled: false,
+            uploads: Vec::new(),
         }
     }
 
@@ -30,6 +32,7 @@ impl Error {
             source: Some(Box::new(source)),
             remaining: None,
             cancelled: false,
+            uploads: Vec::new(),
         }
     }
 
@@ -58,12 +61,14 @@ impl Error {
         self
     }
 
-    pub(super) fn cancelled() -> Self {
+    /// Construct a cancellation result before acquiring external resources.
+    pub fn cancelled() -> Self {
         Self {
             message: "image operation cancelled".into(),
             source: None,
             remaining: None,
             cancelled: true,
+            uploads: Vec::new(),
         }
     }
 
@@ -74,7 +79,35 @@ impl Error {
 
     /// Whether cleanup retained ownership requiring an explicit retry.
     pub fn has_pending_cleanup(&self) -> bool {
-        self.remaining.is_some()
+        self.remaining.is_some() || !self.uploads.is_empty()
+    }
+
+    pub(super) fn upload_cleanup_failed(
+        mut self,
+        upload: crate::upload::Upload,
+        cause: Self,
+    ) -> Self {
+        self.message
+            .push_str(&format!("; upload cleanup failed: {}", chain(&cause)));
+        self.uploads.push(upload);
+        self
+    }
+
+    /// Retry each unresolved registry upload abort once. Completed blobs and
+    /// manifests are content-addressed registry objects, not upload sessions.
+    pub fn retry_upload_cleanup(&mut self) -> Result<(), Error> {
+        let mut first = None;
+        for upload in std::mem::take(&mut self.uploads) {
+            if let Err(cause) = upload.abort() {
+                self.message
+                    .push_str(&format!("; upload cleanup retry failed: {}", chain(&cause)));
+                self.uploads.push(upload);
+                if first.is_none() {
+                    first = Some(cause);
+                }
+            }
+        }
+        first.map_or(Ok(()), Err)
     }
 
     /// Attempt unresolved stage removal once under the same cache root's writer.

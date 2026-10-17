@@ -6,6 +6,7 @@
 mod backend;
 mod failure;
 mod function_tracing;
+mod image;
 mod kprobe;
 mod maps;
 mod netns;
@@ -24,6 +25,7 @@ mod uprobe;
 mod verification;
 mod xdp;
 
+pub use image::{BytecodeMetadata, inspect_bytecode};
 pub use netns::XdpNamespace;
 
 use bpfman_kernel::{Error, ErrorKind};

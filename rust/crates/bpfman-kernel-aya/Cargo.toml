@@ -29,6 +29,7 @@ bpfman-kernel.workspace = true
 bpfman-fs.workspace = true
 bpfman-model.workspace = true
 aya-obj.workspace = true
+object.workspace = true
 libc.workspace = true
 chrono.workspace = true
 thiserror.workspace = true

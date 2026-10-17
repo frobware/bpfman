@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| Public OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle | Private credentials, signature verification, image build/push, cache eviction |
+| Public OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation | Private credentials, signature verification, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2700,7 +2700,7 @@ wrong, change it here before broadening feature coverage.
   shared map-of-maps definitions remain pending.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
-- Public OCI pull/cache and anonymous bearer authentication are implemented.
+- Public OCI pull/cache, native image build/push and anonymous bearer authentication are implemented.
   Private-registry credentials and signature verification remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
@@ -5193,3 +5193,73 @@ formatting, Clippy and docs. Both owned tmpfs cleanup checks passed. The native
 stage took 62.11 seconds on Linux 6.18.54 with the existing optimized `aya-obj`
 development/test profile. The changed Go files also passed the configured
 formatter/import check.
+
+## Native OCI image building checkpoint (17 October 2026)
+
+`image generate-build-args` and `image build` now use Rust directly. The CLI
+accepts one host object, explicit `linux/arch=BYTECODE` mappings, or a directory
+of cilium/bpf2go objects. The same thirteen architecture/endian slots as Go drive
+validation and build-argument names. Project inputs sort by platform; explicit
+mappings preserve their order. Mixed sources, duplicate/unknown platforms,
+missing paths, malformed ELF and endian mismatches fail before registry effects.
+Every object is fully parsed by the kernel adapter and its original bytes are
+retained, avoiding a validation/publication file-replacement gap. Labels use
+bpfman's canonical program/map names, excluding internal maps, and come from
+the first input as in Go. Text and JSON build-argument output match Go's shape.
+
+The synchronous OCI adapter packages one deterministic regular-file tar layer
+per platform with mode 0644, root ownership and an epoch-zero timestamp, or the
+validated `SOURCE_DATE_EPOCH`. Config records the layer's uncompressed digest.
+Bare inputs publish a single host image; explicit platform inputs publish an OCI
+index, including a one-platform index. All packaging and digest-destination
+validation precede registry I/O. Blob uploads and digest-addressed child manifests
+precede the destination manifest. Publication returns `published: REPO@sha256:...`
+and never creates the program store, runtime files or image cache.
+
+Anonymous bearer-token requests use repository pull/push scope. Upload response
+locations are confined to the destination registry/repository and write requests
+refuse redirects. Cancellation and failure abort an acquired upload session once;
+a failed abort retains an opaque receipt, redacting signed upload-state URLs,
+for a separate explicit retry. Cleanup attempts preserve the primary failure and
+retry history. Completed blobs and untagged child manifests remain registry GC
+objects. A successful final manifest PUT wins over concurrent cancellation;
+transport failure during that PUT can leave its outcome unknown. An interrupted
+response read resumes on the existing connection under its original timeout,
+without replaying the request. Synchronized real SIGINT/SIGTERM contracts exposed
+and now cover that receipt-preservation requirement.
+
+`rust-test-image-build` covers deterministic single/multi-platform packaging,
+Go/Rust metadata and index inspection compatibility, invalid-input admission,
+registry failure and cancellation, failed abort/retry, upload-location refusal,
+real CLI signals and child reaping, plus all six unchanged image-build scripts.
+Native interoperability loads and unloads a Rust-published image through both Go
+and Rust, preserving image provenance and leaving no managed program/link pins.
+These contracts are discovered by the normal userspace and native gates.
+
+Positive cross-endian testing found that Aya 0.3 reads BTF headers in native
+byte order. Image metadata inspection therefore uses a private, checked foreign
+ELF/BTF decoder in the kernel adapter, with no Aya fork or bytecode rewriting.
+It bounds record extents, type/string references, extension-record counts and
+qualifier resolution, and reads BTF and legacy map labels in the object's byte
+order. A real `bpfeb` fixture matches Go for linux/mips, linux/mips64,
+linux/ppc64 and linux/s390x. A mixed amd64/arm64/s390x index is reproducible and
+inspectable by both implementations. Truncation, bad references, cycles and
+oversized extension counts have focused unit coverage.
+
+The admitted corpus passes with `BPFMAN_E2E_BYTECODE_SOURCE=image` and the real
+Rust executable as `BPFMAN_UNDER_TEST`: all 134 files / 188 cases pass, with no
+Go publisher dispatcher. The selection matches the previous admitted manifest.
+The ten remote-image files selected by `external=true,image=true` pass against
+both implementations, and Go separately passes all six files selected by
+`area=image-build`. Acceptance scripts and their assertions remain unchanged.
+Private-registry credentials, signature verification and cache eviction remain
+separate work.
+
+Final validation: `direnv exec . make rust-check lint-make` passed, including all
+42 fake-kernel lifecycle cases, all 74 discovered/selected native tests, format,
+Clippy with warnings denied, userspace/CLI/store contracts and documentation.
+Native kernel stages took 61.93 seconds on Linux 6.18.54 with the retained
+`aya-obj` optimized development/test profile; owned fake/native tmpfs scopes were
+clean at release. No acceptance script changes or dependency version updates
+were needed. The lockfile only records additional uses of existing `chrono` and
+`object` dependencies.

@@ -242,6 +242,15 @@ pub(super) fn corpus() {
 }
 
 fn run_dsl(scripts: Option<&[&str]>, binary: &std::path::Path, isolated: bool) {
+    run_dsl_source(scripts, binary, isolated, "file");
+}
+
+fn run_dsl_source(
+    scripts: Option<&[&str]>,
+    binary: &std::path::Path,
+    isolated: bool,
+    source: &str,
+) {
     let c = Context::new();
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -309,7 +318,14 @@ fn run_dsl(scripts: Option<&[&str]>, binary: &std::path::Path, isolated: bool) {
         "TestTC_IngressLifecycle.bpfman",
     ];
     let mixed = isolated && scripts.is_none();
-    let output = Command::new("timeout")
+    let mut command = Command::new("timeout");
+    if source == "image" {
+        command.env(
+            "BPFMAN_CONFIG",
+            repository().join("e2e/config/no-signature-verification.toml"),
+        );
+    }
+    let output = command
         .arg("300s")
         .arg("make")
         .arg("run-e2e-scripts")
@@ -337,7 +353,7 @@ fn run_dsl(scripts: Option<&[&str]>, binary: &std::path::Path, isolated: bool) {
             },
         )
         .env("BPFMAN_STORE", "sqlite")
-        .env("BPFMAN_E2E_BYTECODE_SOURCE", "file")
+        .env("BPFMAN_E2E_BYTECODE_SOURCE", source)
         .env(
             "BPFMAN_E2E_CLSACT_RECLAIM",
             if binary == rust() { "true" } else { "" },
@@ -520,5 +536,21 @@ pub(super) fn lsm_scripts() {
         Some(&["TestLsm_LoadAndGet", "TestLsm_LinkRoundTrip"]),
         &rust(),
         true,
+    );
+}
+
+pub(super) fn image_build_scripts() {
+    run_dsl_source(
+        Some(&[
+            "TestImageBuild_GenerateBuildArgsText",
+            "TestImageBuild_GenerateBuildArgsJSONSingleArch",
+            "TestImageBuild_GenerateBuildArgsJSONMultiArch",
+            "TestImageBuild_GenerateBuildArgsCiliumProject",
+            "TestImageBuild_GenerateBuildArgsFailures",
+            "TestImageBuild_BuildLoadAttachXDP",
+        ]),
+        &rust(),
+        true,
+        "image",
     );
 }

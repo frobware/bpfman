@@ -1072,6 +1072,7 @@ rust-build: $(RUST_DISPATCHER)
 # is required; unavailable privileges fail the gate rather than skipping tests.
 RUST_TEST_INPUTS = e2e/testdata/bpf/fentry_counter.bpf.o e2e/testdata/bpf/fentry_kmod_exact.bpf.o e2e/testdata/bpf/fexit_kmod_exact.bpf.o e2e/testdata/bpf/multi_prog_fentry_kmod_counter.bpf.o e2e/testdata/bpf/multi_prog_fexit_kmod_counter.bpf.o e2e/testdata/bpf/uprobe_exact.bpf.o e2e/testdata/bpf/uprobe_counter.bpf.o e2e/testdata/bpf/multi_prog_uprobe_counter.bpf.o e2e/testdata/bpf/shared_map_contract.bpf.o e2e/testdata/bpf/tc_counter_pinned.bpf.o e2e/testdata/bpf/kprobe_counter.bpf.o e2e/testdata/bpf/multi_prog_kprobe_kmod_counter.bpf.o e2e/testdata/bpf/tcx_counter.bpf.o e2e/testdata/bpf/tc_ingress.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_hash.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_hash.bpf.o e2e/testdata/bpf/xdp_devmap_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_egress.bpf.o e2e/testdata/bpf/xdp_devmap_egress_frags.bpf.o e2e/testdata/bpf/xdp_redirect_error.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_frags.bpf.o e2e/testdata/bpf/xdp_delivery_frags.bpf.o e2e/testdata/bpf/xdp_devmap_frags.bpf.o $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_devmap.bpf.o e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
 RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
+RUST_TEST_INPUTS += e2e/testdata/bpf/xdp_pass_be.bpf.o
 RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh", "$(abspath rust/test-runner.sh)"]'
 
 # A raw-Ethernet test fixture; Go and x/sys are already in the test toolchain.
@@ -1524,6 +1525,11 @@ e2e/testdata/bpf/%.bpf.o: e2e/testdata/bpf/%.bpf.c Makefile
 	$(call quiet_cmd,CLANG-BPF,$@)
 	$(Q)clang $(LIBBPF_CFLAGS) $(BPF_CFLAGS) -g -O2 -target bpfel -c $(BPF_TARGET_ARCH) \
 		-MD -MP -MF$(@:.bpf.o=.bpf.d) $< -o $@
+
+# Cross-endian image metadata must be inspected without loading it on this host.
+e2e/testdata/bpf/xdp_pass_be.bpf.o: e2e/testdata/bpf/xdp_pass.bpf.c Makefile
+	$(call quiet_cmd,CLANG-BPF,$@)
+	$(Q)clang $(LIBBPF_CFLAGS) $(BPF_CFLAGS) -g -O2 -target bpfeb -c $(BPF_TARGET_ARCH) $< -o $@
 
 # platform/ebpf consumes the same .bpf.c sources as the e2e tests
 # but its unit tests read the compiled object next to the Go test
@@ -2035,3 +2041,9 @@ rust-test-lsm: rust-build $(RUST_TEST_INPUTS)
 rust-test-image: rust-build $(RUST_TEST_INPUTS)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- image_ --nocapture
+
+.PHONY: rust-test-image-build
+rust-test-image-build: rust-build $(RUST_TEST_INPUTS)
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --test publish --locked
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test image_build --locked
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- image_build --nocapture

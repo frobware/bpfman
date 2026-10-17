@@ -27,6 +27,7 @@ bpfman-store-sqlite = { path = "crates/bpfman-store-sqlite" }
 bpfman-runtime = { path = "crates/bpfman-runtime" }
 aya = { version = "0.14", default-features = false }
 aya-obj = { version = "0.3", default-features = false }
+object = { version = "0.39", default-features = false, features = ["elf", "read_core"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 anyhow = "1"
 base64 = "0.22"

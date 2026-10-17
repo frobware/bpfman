@@ -146,10 +146,40 @@ Brokered image mode passes all 134 admitted Rust files / 188 cases using Go sole
 to publish local fixtures. The shared Go run passes 100 files / 107 cases, with
 one existing clsact-policy skip. A shared shell null-comparison bug exposed by
 image provenance has been fixed in the evaluator and static checker without
-changing the lifecycle script or disabling checking. Native Rust `image build`
-remains unimplemented. See the
+changing the lifecycle script or disabling checking. Native image building now
+removes that fixture-publisher dependency; see below. See the
 [broader audit](../docs/design/rust-reimplementation.md#broader-image-mode-acceptance-audit-17-october-2026)
 for selectors, case counts and the shared-map BTF fix exposed by that audit.
+
+`image generate-build-args BYTECODE [-o text|json]` and `image build IMAGE
+BYTECODE` inspect and publish bytecode without a container runtime, program store,
+or image-cache writes. Both accept a single host file, explicit
+`linux/arch=BYTECODE` mappings, or `--cilium-ebpf-project DIR`. Every input is
+validated for its requested ELF byte order before registry I/O, and the retained
+bytes supply both metadata and archive contents. Explicit mappings publish an OCI
+index, even with one platform; bare files publish a single host image. Canonical
+program/map labels come from the first input, matching Go's build contract.
+Foreign-endian objects use a checked metadata-only ELF/BTF reader in the kernel
+adapter because Aya's BTF reader assumes native byte order. Actual big-endian
+fixtures cover all four big-endian architecture slots and mixed-endian indexes;
+the original bytecode remains unchanged.
+
+Publication is deterministic, with epoch-zero timestamps by default and
+`SOURCE_DATE_EPOCH` support. A single regular-file tar layer holds each input;
+config and layer digests precede manifest publication. Anonymous bearer auth uses
+the repository's pull/push scope. Upload locations stay within the destination
+registry and repository, and writes refuse redirects. Failed or cancelled uploads
+abort their sessions once; failed aborts retain opaque receipts for explicit
+`retry_upload_cleanup`. Completed blobs and untagged child manifests belong to
+registry garbage collection. A successful final manifest write wins over concurrent
+cancellation; a lost response can leave the publication outcome unknown.
+
+`make rust-test-image-build` runs publishing/CLI contracts and the six unchanged
+image-build scripts, also included in `rust-check`. The admitted 134 Rust files /
+188 cases pass with `BPFMAN_E2E_BYTECODE_SOURCE=image` using Rust directly for
+publication and loading. Both implementations pass all ten remote-image scripts;
+Go also passes the six image-build scripts. Private authentication, signature
+verification and cache eviction remain separate work.
 
 ## Persistence scope
 
