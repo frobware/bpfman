@@ -93,7 +93,7 @@ enum LoadSource {
     Image {
         reference: String,
         pull_policy: PullPolicy,
-        auth: Option<bpfman_image_oci::Credentials>,
+        auth: bpfman_image_oci::Credentials,
     },
 }
 

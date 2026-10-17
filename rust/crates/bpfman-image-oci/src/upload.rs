@@ -121,7 +121,7 @@ impl Registry<'_> {
         let upload = Upload {
             reference: self.reference.clone(),
             location,
-            credentials: self.credentials.cloned(),
+            credentials: self.credentials.as_deref().cloned(),
         };
         let result = (|| {
             check(self.flag)?;

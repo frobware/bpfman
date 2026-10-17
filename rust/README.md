@@ -189,7 +189,30 @@ redirects strip authorization, and redirected hosts cannot supply authentication
 challenges. The CLI caps HTTP dependency logging below trace, even under explicit
 `RUST_LOG` overrides, because their raw wire dumps bypass header redaction;
 application tracing remains available. Embedders must apply the same collection
-policy. Ambient credential files/helpers are not implemented.
+policy.
+
+Without explicit credentials, the CLI captures credential-file locations from
+its current process environment, in this order: `REGISTRY_AUTH_FILE`,
+`XDG_RUNTIME_DIR/containers/auth.json`, `HOME/.config/containers/auth.json`, then
+`DOCKER_CONFIG/config.json` or `HOME/.docker/config.json`. As in Go, Docker paths
+are considered when `HOME` is present. Empty variables are ignored and duplicate
+paths are removed. The first existing file is the selected store: a missing
+registry entry does not fall through to later files. Under sudo, use
+`REGISTRY_AUTH_FILE` explicitly to select the invoking user's file; the CLI does
+not search `SUDO_USER`'s home.
+
+Lookup happens only after an authentication challenge from the original registry.
+Unchallenged requests and admitted cache hits do not open credential files. Inline
+base64 `auth` and legacy `username`/`password` entries support Basic and bearer
+exchange; `registrytoken` supplies a bearer token directly to the registry.
+Credentials match the registry authority, including its port; legacy URL keys and
+Docker Hub aliases are supported. Exact keys win; ambiguous aliases fail.
+Files are read-only, bounded to 4 MiB, and opened nonblocking with regular-file
+validation; ordinary operator-managed symlinks are allowed. Malformed selected
+files fail without falling through, and content/decoder diagnostics are redacted.
+Configured credential helpers and identity-token exchange fail explicitly and
+remain separate work. Library callers opt into deferred discovery through
+`Credentials::from_environment`; passing `None` retains anonymous-only behavior.
 
 `--image-cache-dir` defaults to `/var/cache/bpfman`. Its independent writer lock
 protects Rust's `images-v1` collection. A single envelope atomically publishes

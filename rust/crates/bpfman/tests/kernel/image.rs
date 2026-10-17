@@ -26,6 +26,10 @@ pub(super) fn exercise() {
             .arg("--config")
             .arg(&config)
             .env_remove("BPFMAN_REGISTRY_AUTH")
+            .env_remove("REGISTRY_AUTH_FILE")
+            .env_remove("HOME")
+            .env_remove("XDG_RUNTIME_DIR")
+            .env_remove("DOCKER_CONFIG")
             .output()
             .expect("CLI");
         assert_eq!(
@@ -168,6 +172,10 @@ fn signed_lifecycle() {
             .arg("--config")
             .arg(&config)
             .env_remove("BPFMAN_REGISTRY_AUTH")
+            .env_remove("REGISTRY_AUTH_FILE")
+            .env_remove("HOME")
+            .env_remove("XDG_RUNTIME_DIR")
+            .env_remove("DOCKER_CONFIG")
             .output()
             .expect("signed load");
         assert!(

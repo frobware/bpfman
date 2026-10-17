@@ -16,11 +16,18 @@ pub(crate) struct RegistryAuth {
 }
 
 impl RegistryAuth {
-    pub(super) fn credentials(self) -> Result<Option<Credentials>, clap::Error> {
+    pub(super) fn credentials(
+        self,
+        reference: &bpfman_image_oci::Reference,
+    ) -> Result<Credentials, clap::Error> {
         self.registry_auth
             .map(parse)
             .transpose()
-            .map(Option::flatten)
+            .map(|value| {
+                value
+                    .flatten()
+                    .unwrap_or_else(|| Credentials::from_environment(reference))
+            })
             .map_err(|message| clap::Error::raw(clap::error::ErrorKind::ValueValidation, message))
     }
 }

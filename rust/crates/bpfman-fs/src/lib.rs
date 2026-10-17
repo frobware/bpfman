@@ -24,6 +24,8 @@ pub use xdp::{
 
 mod artifacts;
 mod bytecode;
+mod credentials;
+pub use credentials::open_registry_credentials;
 mod directory;
 mod error;
 mod layout;

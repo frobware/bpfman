@@ -3,6 +3,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     io::Read,
     sync::atomic::{AtomicBool, Ordering},
@@ -43,7 +44,7 @@ pub(super) struct Registry<'a> {
     pub(super) reference: &'a Reference,
     pub(super) agent: ureq::Agent,
     pub(super) authorization: Option<ureq::http::HeaderValue>,
-    pub(super) credentials: Option<&'a Credentials>,
+    pub(super) credentials: Option<Cow<'a, Credentials>>,
     token_agent: ureq::Agent,
     pub(super) flag: &'a AtomicBool,
 }
@@ -111,7 +112,7 @@ impl<'a> Registry<'a> {
             token_agent: crate::transport::agent(agent_config(0)),
             agent: crate::transport::agent(agent_config(redirects)),
             authorization: None,
-            credentials,
+            credentials: credentials.map(Cow::Borrowed),
             flag,
         }
     }
@@ -158,14 +159,24 @@ impl<'a> Registry<'a> {
         let (scheme, _) = challenge
             .split_once(' ')
             .ok_or_else(|| Error::invalid("unsupported registry authentication challenge"))?;
+        if let Some(credentials) = self.credentials.take() {
+            self.credentials = credentials
+                .resolve(self.reference, self.flag)?
+                .map(Cow::Owned);
+        }
         if scheme.eq_ignore_ascii_case("Basic") {
             let credentials = self
                 .credentials
+                .as_deref()
                 .ok_or_else(|| Error::invalid("registry authentication requires credentials"))?;
-            self.authorization = Some(secret_header(credentials.basic())?);
+            self.authorization = Some(secret_header(credentials.basic()?)?);
             return Ok(());
         }
         let (realm, service) = bearer_challenge(challenge)?;
+        if let Some(token) = self.credentials.as_deref().and_then(Credentials::bearer) {
+            self.authorization = Some(secret_header(token)?);
+            return Ok(());
+        }
         validate_realm(&realm, self.reference)?;
         // Token endpoints never follow redirects, even for public pulls. Registry
         // redirects strip Authorization independently of the destination origin.
@@ -176,8 +187,8 @@ impl<'a> Registry<'a> {
         if let Some(service) = service {
             request = request.query("service", service);
         }
-        if let Some(credentials) = self.credentials {
-            request = request.header("Authorization", secret_header(credentials.basic())?);
+        if let Some(credentials) = self.credentials.as_deref() {
+            request = request.header("Authorization", secret_header(credentials.basic()?)?);
         }
         let token_response = request.call();
         check(self.flag)?;

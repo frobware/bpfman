@@ -25,7 +25,11 @@ fn command(root: &Path, config: &Path, trust: &Path) -> Command {
         .arg(root.join("images"))
         .arg("--sigstore-cache-dir")
         .arg(trust)
-        .env_remove("BPFMAN_REGISTRY_AUTH");
+        .env_remove("BPFMAN_REGISTRY_AUTH")
+        .env_remove("REGISTRY_AUTH_FILE")
+        .env_remove("HOME")
+        .env_remove("XDG_RUNTIME_DIR")
+        .env_remove("DOCKER_CONFIG");
     command
 }
 

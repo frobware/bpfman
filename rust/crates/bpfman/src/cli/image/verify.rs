@@ -39,9 +39,10 @@ impl Verify {
         trust_cache: Option<&bpfman_fs::RuntimeLayout>,
         lock_timeout: std::time::Duration,
     ) -> Result<(), crate::error::Error> {
+        let reference = Reference::parse(&self.reference)?;
         let credentials = self
             .registry_auth
-            .credentials()
+            .credentials(&reference)
             .unwrap_or_else(|error| error.exit());
         let identity = if self.certificate_identity.is_some()
             || self.certificate_identity_regexp.is_some()
@@ -65,12 +66,8 @@ impl Verify {
             trust_cache,
             lock_timeout,
         )?;
-        let status = bpfman_image_oci::verify(
-            &Reference::parse(&self.reference)?,
-            credentials.as_ref(),
-            &policy,
-            cancellation.flag(),
-        )?;
+        let status =
+            bpfman_image_oci::verify(&reference, Some(&credentials), &policy, cancellation.flag())?;
         let result = match status {
             VerificationStatus::Verified => "signature verified",
             VerificationStatus::UnsignedAccepted => "unsigned image accepted by policy",

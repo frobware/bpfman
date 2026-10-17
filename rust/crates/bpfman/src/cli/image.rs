@@ -63,13 +63,10 @@ impl ImageCommand {
                 registry_auth,
             } => {
                 let credentials = registry_auth
-                    .credentials()
+                    .credentials(&reference)
                     .unwrap_or_else(|error| error.exit());
-                let value = bpfman_image_oci::inspect(
-                    &reference,
-                    credentials.as_ref(),
-                    cancellation.flag(),
-                )?;
+                let value =
+                    bpfman_image_oci::inspect(&reference, Some(&credentials), cancellation.flag())?;
                 serde_json::to_writer_pretty(std::io::stdout().lock(), &value)
                     .map_err(anyhow::Error::from)?;
                 writeln!(std::io::stdout().lock())?;
@@ -86,7 +83,7 @@ impl ImageCommand {
                 registry_auth,
             } => {
                 let credentials = registry_auth
-                    .credentials()
+                    .credentials(&reference)
                     .unwrap_or_else(|error| error.exit());
                 let plan = inputs.prepare(cancellation)?;
                 let raw = std::env::var("SOURCE_DATE_EPOCH").unwrap_or_default();
@@ -100,7 +97,7 @@ impl ImageCommand {
                 let (publication, labels) = plan.publication()?;
                 let pinned = bpfman_image_oci::publish(
                     &reference,
-                    credentials.as_ref(),
+                    Some(&credentials),
                     publication,
                     &labels,
                     timestamp,

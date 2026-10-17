@@ -646,7 +646,18 @@ The architecture and compatibility goals are in
   registry credentials. Explicit credentials enter only the OCI adapter; keep
   them out of model/runtime/store requests. Share deferred CLI decoding between
   image load, inspect and build so Clap diagnostics never echo secret values.
-  Support Basic and bearer challenges without ambient credential-store lookup.
+  Support Basic and bearer challenges with explicit credentials taking precedence
+  over deferred credential-file discovery. Capture only the current process's
+  REGISTRY_AUTH_FILE/XDG_RUNTIME_DIR/HOME/DOCKER_CONFIG paths; do not discover
+  another user's files through SUDO_USER. The first existing store wins, without
+  per-registry fallthrough. Resolve only after a challenge from the original
+  registry, keeping unchallenged requests and admitted cache hits independent of file
+  errors. Bound regular-file reads and redact parser errors. Match exact registry
+  authorities/ports, legacy URL keys and Docker Hub aliases; reject ambiguous
+  aliases. Registry tokens go directly to the registry; configured helpers and
+  identity-token exchange fail explicitly until implemented. Keep library ambient
+  discovery opt-in. Retain resolved credentials with upload cleanup so explicit
+  retries do not reread changed/deleted files.
   Token requests refuse redirects; registry read redirects strip authorization.
   Reject foreign response challenges before credential-bearing token requests.
   Retain in-memory credentials with upload-abort receipts for explicit retries.

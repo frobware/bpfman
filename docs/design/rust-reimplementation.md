@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Ambient credentials, custom trust roots, cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials and ambient credential files; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Credential helpers, identity-token exchange, custom trust roots, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2702,8 +2702,9 @@ wrong, change it here before broadening feature coverage.
   LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
   explicit private-registry credentials, Cosign signature/identity policy and
-  synchronous production TUF trust-root refresh are implemented. Ambient credential
-  stores, custom trust roots and cache eviction remain pending.
+  synchronous production TUF trust-root refresh and ambient credential-file
+  discovery are implemented. Credential helpers, identity-token exchange, custom
+  trust roots and cache eviction remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -5495,3 +5496,68 @@ using another fresh production TUF cache. Cache inspection confirms timestamp
 version 810 and complete generations without stages. The signing configuration
 is empty/default for these external lanes; verification is enabled throughout.
 Go sources, Go tests, acceptance assertions and script labels are unchanged.
+
+
+## OCI ambient credential-file checkpoint (17 October 2026)
+
+Rust image inspect, pull/load, verification and publication now discover inline
+Docker/Podman credentials when explicit registry auth is absent. The CLI captures
+paths from the current process environment without I/O: REGISTRY_AUTH_FILE,
+XDG_RUNTIME_DIR/containers/auth.json, HOME/.config/containers/auth.json, then
+DOCKER_CONFIG/config.json or HOME/.docker/config.json. This preserves Go's path
+order, HOME condition for Docker paths, deduplication and first-existing-store
+selection. Missing registry entries never merge or fall through to later stores.
+SUDO_USER and XDG_CONFIG_HOME do not select files. Explicit flags override the
+registry-auth environment variable, and either explicit source bypasses file
+lookup. Empty explicit auth retains ambient discovery.
+
+The OCI adapter opens files only after a challenge from the original registry;
+unchallenged requests and admitted cache hits remain independent of credential-file
+errors. Libraries opt in through Credentials::from_environment; None remains
+anonymous-only. Captured discovery is bound to its registry. Reads use nonblocking
+regular-file descriptors, preserve native path bytes, check caller cancellation,
+and enforce a 4 MiB limit. Operator-managed symlinks are allowed. Malformed,
+unsupported or inaccessible selected stores fail without fallback. JSON/base64
+errors never retain secret-bearing diagnostic sources; file contents, tokens and
+credentials are not logged or persisted. No credential files are written.
+
+Exact registry authority keys win, with ports kept distinct. Legacy URL keys and
+Docker Hub aliases are recognized; ambiguous aliases fail deterministically.
+Base64 auth overrides legacy username/password fields, preserving password colons.
+Registry tokens are sent directly to the registry on a bearer challenge, without
+token-service exchange. Configured helpers and identity-token exchange fail
+explicitly; process-based helper support remains a separate slice. Existing
+redirect/authentication confinement and HTTP TRACE ceilings remain in force.
+Resolved credentials are retained with upload cleanup receipts, so failed aborts
+can retry after the original credential file is deleted. No runtime, kernel,
+store contracts or SQLite schema change. The nonblocking regular-file open
+belongs to bpfman-fs; the OCI adapter owns bounded reads, cancellation and format
+policy. Dependency manifests, the lockfile and architecture laws are unchanged.
+
+Coverage includes native path bytes, process-context/sudo path selection,
+first-store selection, authority/port/URL/Docker matching, ambiguous aliases,
+legacy/auth precedence, helpers and token boundaries, malformed/oversized/special
+files, symlinks, cancellation and redaction. Adapter traffic tests prove direct
+registry-token use without token-service requests, cache hits with a subsequently
+corrupted file, foreign-challenge refusal before file lookup, and authenticated
+abort retries after file deletion. Four new CLI contracts cover all five file
+locations with both Basic and bearer exchange, native publication, inspection,
+unsigned and real signed verification, load admission, explicit precedence and
+empty-auth fallback. Rust's existing registry fixtures clear inherited credential
+locations; their assertions remain intact. The shared Rust publisher fixture now
+returns a valid OCI MANIFEST_UNKNOWN body for absent manifests. No Go sources,
+Go tests, acceptance scripts or script labels change.
+
+Validation: `direnv exec . make rust-check lint-make` passes formatting, strict
+Clippy, unchanged architecture laws, all userspace/CLI/store contracts, 26 OCI
+unit tests, 42 fake-kernel cases, all 74 discovered/selected native tests, rustdoc
+and Make checks. Native stages took 60.86 seconds on Linux 6.18.54 with the
+retained optimized aya-obj profile; owned fixture cleanup passed. The normal gate
+remains independent of external services. The ten unchanged remote-image scripts
+pass with default signature verification enabled against Go (serial) and Rust
+(32 slots), selecting external=true,image=true and a fresh Rust production TUF
+cache. The exact admitted Rust image-mode corpus also passes: 134 files / 188
+leaf cases, 214 script/case PASS records, no selected skips or failures, forcing
+every file load through Rust image publication/loading with default verification
+enabled and another fresh production TUF cache. These acceptance lanes ran
+serially to respect the shared test-runner lock.

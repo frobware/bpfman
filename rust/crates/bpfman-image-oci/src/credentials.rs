@@ -1,4 +1,4 @@
-//! Explicit caller credentials; no ambient credential-store lookup.
+//! Explicit credentials and deferred, registry-bound credential-file lookup.
 use crate::Error;
 use base64::{Engine, engine::general_purpose::STANDARD};
 
@@ -6,8 +6,20 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 /// Debug output is redacted; credentials are never part of cache keys or records.
 #[derive(Clone)]
 pub struct Credentials {
-    basic: String,
+    source: Source,
 }
+
+#[derive(Clone)]
+enum Source {
+    Basic(String),
+    Bearer(String),
+    Files {
+        registry: String,
+        paths: Vec<std::path::PathBuf>,
+    },
+}
+
+mod files;
 
 impl Credentials {
     /// Capture a nonempty username and password. Passwords may contain colons.
@@ -22,15 +34,60 @@ impl Credentials {
             ));
         }
         Ok(Self {
-            basic: format!(
+            source: Source::Basic(format!(
                 "Basic {}",
                 STANDARD.encode(format!("{username}:{password}"))
-            ),
+            )),
         })
     }
 
-    pub(super) fn basic(&self) -> &str {
-        &self.basic
+    /// Capture credential-file locations from the current process environment.
+    /// No file is opened until the selected registry challenges authentication.
+    /// Explicit callers can keep passing `None` for anonymous-only operation.
+    /// The first existing file wins; helper execution and identity-token exchange
+    /// are unsupported and fail explicitly when selected.
+    pub fn from_environment(reference: &crate::Reference) -> Self {
+        Self {
+            source: Source::Files {
+                registry: reference.registry.clone(),
+                paths: files::paths(|key| std::env::var_os(key)),
+            },
+        }
+    }
+
+    pub(super) fn resolve(
+        &self,
+        reference: &crate::Reference,
+        flag: &std::sync::atomic::AtomicBool,
+    ) -> Result<Option<Self>, Error> {
+        crate::registry::check(flag)?;
+        match &self.source {
+            Source::Files { registry, paths } => {
+                if registry != &reference.registry {
+                    return Err(Error::invalid(
+                        "credential lookup belongs to a different registry",
+                    ));
+                }
+                files::resolve(registry, paths, flag)
+            }
+            _ => Ok(Some(self.clone())),
+        }
+    }
+
+    pub(super) fn basic(&self) -> Result<&str, Error> {
+        match &self.source {
+            Source::Basic(value) => Ok(value),
+            _ => Err(Error::invalid(
+                "registry Basic authentication requires username and password",
+            )),
+        }
+    }
+
+    pub(super) fn bearer(&self) -> Option<&str> {
+        match &self.source {
+            Source::Bearer(value) => Some(value),
+            _ => None,
+        }
     }
 }
 
@@ -39,3 +96,6 @@ impl std::fmt::Debug for Credentials {
         f.write_str("Credentials { .. }")
     }
 }
+
+#[cfg(test)]
+mod tests;

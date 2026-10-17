@@ -2042,7 +2042,7 @@ rust-test-lsm: rust-build $(RUST_TEST_INPUTS)
 .PHONY: rust-test-image
 rust-test-image: rust-build $(RUST_TEST_INPUTS)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --locked
-	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test image_signatures --test image_trust --test load --locked
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test image_signatures --test image_trust --test image_credentials --test load --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- image_ --nocapture
 
 .PHONY: rust-test-image-build

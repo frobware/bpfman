@@ -36,7 +36,9 @@ impl LoadCommand {
                 (LoadSource::File(args.path), args.options)
             }
             Self::Image(args) => {
-                let auth = args.registry_auth.credentials()?;
+                let parsed = bpfman_image_oci::Reference::parse(&args.reference)
+                    .map_err(|_| invalid("invalid OCI image reference"))?;
+                let auth = args.registry_auth.credentials(&parsed)?;
                 (
                     LoadSource::Image {
                         reference: args.reference,
@@ -136,7 +138,7 @@ impl LoadRequest {
                 let parsed = bpfman_image_oci::Reference::parse(&reference)?;
                 let image = bpfman_image_oci::pull(
                     &parsed,
-                    auth.as_ref(),
+                    Some(&auth),
                     &signing,
                     pull_policy.into(),
                     cache,
@@ -284,9 +286,7 @@ mod tests {
 
         match req.source {
             LoadSource::Image {
-                pull_policy,
-                auth: Some(auth),
-                ..
+                pull_policy, auth, ..
             } => {
                 assert_eq!(pull_policy, super::super::PullPolicy::Never);
                 assert!(!format!("{auth:?}").contains("pass:word"));

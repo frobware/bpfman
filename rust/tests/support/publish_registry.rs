@@ -197,7 +197,7 @@ impl Registry {
                     } else {
                         match state.manifests.get(selector) {
                             Some(body) => (200, body.clone()),
-                            None => (404, Vec::new()),
+                            None => (404, br#"{"errors":[{"code":"MANIFEST_UNKNOWN"}]}"#.to_vec()),
                         }
                     }
                 } else if let Some(digest) = path.strip_prefix("/v2/test/blobs/") {

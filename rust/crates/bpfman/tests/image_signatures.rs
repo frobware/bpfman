@@ -122,7 +122,11 @@ fn command(root: &Path, config: &Path) -> Command {
         .arg(root.join("runtime"))
         .arg("--image-cache-dir")
         .arg(root.join("cache"))
-        .env_remove("BPFMAN_REGISTRY_AUTH");
+        .env_remove("BPFMAN_REGISTRY_AUTH")
+        .env_remove("REGISTRY_AUTH_FILE")
+        .env_remove("HOME")
+        .env_remove("XDG_RUNTIME_DIR")
+        .env_remove("DOCKER_CONFIG");
     command
 }
 

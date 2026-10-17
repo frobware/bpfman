@@ -26,6 +26,10 @@ fn command(root: &Path) -> Command {
         .env_remove("BPFMAN_CONFIG")
         .env_remove("BPFMAN_RUNTIME_DIR")
         .env_remove("BPFMAN_REGISTRY_AUTH")
+        .env_remove("REGISTRY_AUTH_FILE")
+        .env_remove("HOME")
+        .env_remove("XDG_RUNTIME_DIR")
+        .env_remove("DOCKER_CONFIG")
         .env_remove("SOURCE_DATE_EPOCH");
     command
 }
@@ -100,6 +104,10 @@ fn build_contract_and_multi_arch_publication() -> Result {
             )
             .args(["image", "inspect", &registry.reference])
             .env_remove("BPFMAN_REGISTRY_AUTH")
+            .env_remove("REGISTRY_AUTH_FILE")
+            .env_remove("HOME")
+            .env_remove("XDG_RUNTIME_DIR")
+            .env_remove("DOCKER_CONFIG")
             .output()?,
     ))?;
     assert_eq!(
