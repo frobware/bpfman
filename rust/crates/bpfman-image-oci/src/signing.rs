@@ -1,6 +1,10 @@
 use crate::{Error, registry::hash};
 use regex::Regex;
 use sigstore_verify::trust_root::SIGSTORE_PRODUCTION_TRUSTED_ROOT;
+use std::{
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
 
 /// Validated certificate identity and OIDC issuer rule. Rules are ORed.
 #[derive(Clone, Debug)]
@@ -75,6 +79,7 @@ impl TrustedIdentity {
 #[derive(Clone, Debug)]
 pub struct SigningPolicy {
     pub(super) verification: Option<Verification>,
+    trust: Option<crate::trust::TrustCache>,
 }
 
 #[derive(Clone, Debug)]
@@ -82,12 +87,16 @@ pub(super) struct Verification {
     pub(super) allow_unsigned: bool,
     pub(super) identities: Vec<TrustedIdentity>,
     id: String,
+    pub(super) root: Arc<str>,
 }
 
 impl SigningPolicy {
     /// Explicitly disable all signature verification, including for signed images.
     pub fn disabled() -> Self {
-        Self { verification: None }
+        Self {
+            verification: None,
+            trust: None,
+        }
     }
 
     /// Verify keyless Cosign signatures against the bundled Sigstore production
@@ -102,28 +111,69 @@ impl SigningPolicy {
                 "wildcard signing identity cannot be mixed with specific identities",
             ));
         }
-        let mut canonical: Vec<_> = identities
+        let root: Arc<str> = SIGSTORE_PRODUCTION_TRUSTED_ROOT.into();
+        let mut policy = Self {
+            verification: Some(Verification {
+                allow_unsigned,
+                identities,
+                id: String::new(),
+                root,
+            }),
+            trust: None,
+        };
+        policy.identify()?;
+        Ok(policy)
+    }
+
+    /// Refresh Sigstore production trust through TUF before image admission.
+    /// Construction performs no I/O. Operations reuse an authenticated cache for
+    /// up to 24 hours, subject to all metadata expiry checks. Never does no network
+    /// I/O and requires a valid cache. Disabled verification never accesses TUF.
+    pub fn with_trust_cache(mut self, layout: bpfman_fs::RuntimeLayout, timeout: Duration) -> Self {
+        if self.verification.is_some() {
+            self.trust = Some(crate::trust::TrustCache { layout, timeout });
+        }
+        self
+    }
+
+    pub(super) fn resolve(&self, online: bool, flag: &AtomicBool) -> Result<Self, Error> {
+        let mut policy = self.clone();
+        if let Some(cache) = &self.trust {
+            let root = crate::trust::resolve(cache, online, flag)?;
+            if let Some(verification) = &mut policy.verification {
+                verification.root = root.into();
+            }
+            policy.trust = None;
+            policy.identify()?;
+        }
+        Ok(policy)
+    }
+
+    fn identify(&mut self) -> Result<(), Error> {
+        let Some(verification) = &mut self.verification else {
+            return Ok(());
+        };
+        let mut canonical: Vec<_> = verification
+            .identities
             .iter()
             .map(|rule| (rule.subject.canonical(), rule.issuer.canonical()))
             .collect();
         canonical.sort_unstable();
         canonical.dedup();
-        // Include implementation and trust material: a changed root or verifier
-        // must never inherit another build's cached admission decision.
         let policy = serde_json::to_vec(&(
             "sigstore-verify-0.14.0-cosign-v1",
-            hash(SIGSTORE_PRODUCTION_TRUSTED_ROOT.as_bytes()),
-            allow_unsigned,
+            hash(verification.root.as_bytes()),
+            verification.allow_unsigned,
             canonical,
         ))
         .map_err(|e| Error::caused("encode signing policy", e))?;
-        Ok(Self {
-            verification: Some(Verification {
-                allow_unsigned,
-                identities,
-                id: hash(&policy),
-            }),
-        })
+        verification.id = hash(&policy);
+        Ok(())
+    }
+
+    /// Whether this policy requires signature admission.
+    pub fn verification_enabled(&self) -> bool {
+        self.verification.is_some()
     }
 
     pub(super) fn id(&self) -> &str {
@@ -136,6 +186,7 @@ impl SigningPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::signed_image;
 
     #[test]
     fn identity_pairs_are_anchored_and_configuration_is_unambiguous() {
@@ -171,5 +222,60 @@ mod tests {
         assert_eq!(original.id(), reordered.id());
         assert_ne!(original.id(), permissive.id());
         assert_ne!(original.id(), SigningPolicy::disabled().id());
+    }
+    #[test]
+    fn changed_trust_material_requires_image_revalidation_before_cache_reuse() {
+        use bpfman_model::ImagePullPolicy::{Always, IfNotPresent, Never};
+        use std::sync::atomic::Ordering;
+        let server = signed_image::registry();
+        let temp = tempfile::tempdir().expect("temporary");
+        let layout =
+            bpfman_fs::RuntimeLayout::try_from(temp.path().join("images")).expect("layout");
+        let flag = AtomicBool::new(false);
+        let reference = crate::Reference::parse(&server.reference).expect("reference");
+        let original = SigningPolicy::verify(
+            false,
+            vec![
+                TrustedIdentity::new(signed_image::SUBJECT, "", signed_image::ISSUER, "")
+                    .expect("identity"),
+            ],
+        )
+        .expect("policy");
+        let resolve = |policy: &SigningPolicy, mode| {
+            crate::pull(
+                &reference,
+                None,
+                policy,
+                mode,
+                &layout,
+                Duration::ZERO,
+                &flag,
+                |_| Ok::<_, std::convert::Infallible>(()),
+            )
+        };
+        let image = resolve(&original, Always).expect("signed image");
+        let mut changed = original.clone();
+        // TUF target bytes, even with the same semantic keys, are bound into
+        // admission. Actual root rotations also change this identity.
+        changed.verification.as_mut().expect("verification").root =
+            format!("{}\n", SIGSTORE_PRODUCTION_TRUSTED_ROOT).into();
+        changed.identify().expect("policy identity");
+        assert_ne!(original.id(), changed.id());
+        let count = server.requests.load(Ordering::Relaxed);
+        assert!(resolve(&changed, Never).is_err());
+        assert_eq!(server.requests.load(Ordering::Relaxed), count);
+        assert_eq!(
+            resolve(&changed, IfNotPresent).expect("reverified").bytes(),
+            image.bytes()
+        );
+        let count = server.requests.load(Ordering::Relaxed);
+        assert!(resolve(&original, Never).is_err());
+        assert_eq!(
+            resolve(&changed, Never).expect("new policy cached").bytes(),
+            image.bytes()
+        );
+        assert_eq!(server.requests.load(Ordering::Relaxed), count);
+        assert_eq!(image.digest(), server.digest);
+        assert!(server.bearer.load(Ordering::Relaxed));
     }
 }

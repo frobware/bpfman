@@ -627,8 +627,21 @@ The architecture and compatibility goals are in
   failures and invalid signatures must fail. Validate paired, anchored identity
   rules before registry I/O. Keep crypto in synchronous sigstore-verify with its
   default features disabled; no async runtime or blocking wrapper around async.
-  Bundled production trust roots are updated through reviewed dependency changes;
-  automatic TUF refresh and custom trust-root overrides are not implemented.
+  CLI signing defaults to synchronous TUF refresh. Use sigstore-tuf's transport-free
+  TrustedMetadataSet with default features disabled; never invoke its async client.
+  Reauthenticate cache history from the pinned bootstrap, preserve authenticated
+  rollback floors (including expired metadata) across failures/restarts, and check
+  current expiry before target use. Sequential root updates require both thresholds;
+  unchanged lower-role authority retains its version floors. Authenticate timestamp
+  and snapshot floors independently: rotating only timestamp keys must preserve
+  snapshot/per-target floors, including across failed refresh and reopen. Root-role
+  key-ID order does not change authority. Reject target length/hash
+  mismatches and bound downloads/rotations. Publish one atomic generation through
+  bpfman-fs under separate trust-cache writer authority, re-reading after acquisition;
+  readers remain lock-free. Never does no network and requires unexpired trust metadata.
+  Failed refresh must not fall back to bundled or expired trust. Explicit bundled
+  mode and library policies without with_trust_cache retain embedded production roots.
+  Custom trust-root overrides remain unimplemented.
   Never persist or log tokens or
   registry credentials. Explicit credentials enter only the OCI adapter; keep
   them out of model/runtime/store requests. Share deferred CLI decoding between
@@ -657,6 +670,10 @@ The architecture and compatibility goals are in
   them in the normal network-independent gate. Published-image scripts remain
   unchanged external contracts, explicitly selected against Rust and Go with
   SQLite and `e2e/config/no-signature-verification.toml`.
+  Offline signed fixture tests explicitly select trust_source = 'bundled'; do not
+  add internet dependencies to the normal gate. Retain fixed-time, generated signed
+  TUF fixtures, rotation/rollback/expiry/tampering, concurrent refreshers and readers,
+  partial-progress persistence, stage-cleanup retries and real trust-lock signal tests.
   Include signed release fixtures, offline Go/Rust public/private verification,
   cache policy changes/races and real SIGINT/SIGTERM signature-read cancellation.
   Run the remote-image selector additionally with verification enabled. Go's TUF

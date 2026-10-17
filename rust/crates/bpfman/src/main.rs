@@ -79,10 +79,16 @@ where
         cli.config.as_deref(),
         &cli.image_cache,
         cli.lock_timeout,
+        cli.trust_cache.as_ref(),
     )?;
     let command = match command {
         cli::PreparedCommand::Image(command) => {
-            return command.execute(cancellation, cli.config.as_deref());
+            return command.execute(
+                cancellation,
+                cli.config.as_deref(),
+                cli.trust_cache.as_ref(),
+                cli.lock_timeout,
+            );
         }
         other => other,
     };
@@ -134,9 +140,12 @@ where
             }
         }
 
-        cli::PreparedCommand::Image(command) => {
-            command.execute(cancellation, cli.config.as_deref())?
-        }
+        cli::PreparedCommand::Image(command) => command.execute(
+            cancellation,
+            cli.config.as_deref(),
+            cli.trust_cache.as_ref(),
+            cli.lock_timeout,
+        )?,
         cli::PreparedCommand::Load(request) => request.execute(&bpfman, cancellation)?,
         cli::PreparedCommand::Dispatcher(command) => command.execute(&bpfman)?,
         cli::PreparedCommand::Link(command, mode) => {

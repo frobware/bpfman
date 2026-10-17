@@ -132,3 +132,44 @@ fn symlink_and_hardlink_destinations_are_refused_without_removal() -> Result {
     }
     Ok(())
 }
+
+#[test]
+fn trust_generations_are_atomic_and_stages_are_bound_to_the_original_root() -> Result {
+    let temp = tempfile::tempdir()?;
+    let root =
+        RuntimeDirectory::open_or_create(RuntimeLayout::try_from(temp.path().join("trust"))?)?;
+    let foreign =
+        RuntimeDirectory::open_or_create(RuntimeLayout::try_from(temp.path().join("foreign"))?)?;
+    root.with_cache_writer(options(), |writer| {
+        let first = writer.stage_trust_cache(b"first").expect("stage");
+        assert_eq!(root.read_trust_cache().expect("read"), None);
+        writer
+            .publish_trust_cache(first)
+            .map_err(|e| e.cause)
+            .expect("publish");
+        let next = writer.stage_trust_cache(b"second").expect("stage");
+        assert_eq!(
+            root.read_trust_cache().expect("read").expect("generation"),
+            b"first"
+        );
+        let next = foreign
+            .with_cache_writer(options(), |other| other.remove_trust_cache_stage(next))
+            .expect("writer")
+            .expect_err("foreign root")
+            .remaining;
+        writer
+            .publish_trust_cache(next)
+            .map_err(|e| e.cause)
+            .expect("publish");
+        assert_eq!(
+            root.read_trust_cache().expect("read").expect("generation"),
+            b"second"
+        );
+    })?;
+    assert!(!root.layout().database_path().exists());
+    assert_eq!(
+        fs::read_dir(root.layout().root().join("sigstore-tuf-v1"))?.count(),
+        1
+    );
+    Ok(())
+}

@@ -19,6 +19,15 @@ struct Signing {
     verify_enabled: bool,
     allow_unsigned: bool,
     trusted_identities: Vec<Identity>,
+    trust_source: TrustSource,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum TrustSource {
+    #[default]
+    Tuf,
+    Bundled,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +46,7 @@ impl Default for Signing {
             verify_enabled: true,
             allow_unsigned: true,
             trusted_identities: Vec::new(),
+            trust_source: TrustSource::default(),
         }
     }
 }
@@ -56,6 +66,33 @@ impl Default for InterfaceConfig {
 }
 
 impl Config {
+    pub(super) fn trust(
+        &self,
+        policy: bpfman_image_oci::SigningPolicy,
+        cache: Option<&bpfman_fs::RuntimeLayout>,
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<bpfman_image_oci::SigningPolicy> {
+        if matches!(self.signing.trust_source, TrustSource::Bundled)
+            || !policy.verification_enabled()
+        {
+            return Ok(policy);
+        }
+        let layout = match cache {
+            Some(layout) => layout.clone(),
+            None => {
+                let root = if let Some(cache) =
+                    std::env::var_os("XDG_CACHE_HOME").filter(|value| !value.is_empty())
+                {
+                    std::path::PathBuf::from(cache)
+                } else {
+                    std::path::PathBuf::from(std::env::var_os("HOME").context("Sigstore trust cache requires HOME, XDG_CACHE_HOME or --sigstore-cache-dir")?).join(".cache")
+                };
+                bpfman_fs::RuntimeLayout::try_from(root.join("bpfman/sigstore"))?
+            }
+        };
+        Ok(policy.with_trust_cache(layout, timeout))
+    }
+
     pub(super) fn signing(&self) -> anyhow::Result<bpfman_image_oci::SigningPolicy> {
         let policy = self.verification(None, None)?;
         Ok(if self.signing.verify_enabled {

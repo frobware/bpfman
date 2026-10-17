@@ -131,18 +131,52 @@ registry errors and malformed evidence never count as unsigned images.
 `certificate_oidc_issuer`, or their `_regexp` forms. Each rule requires both
 fields; exact and regexp forms are mutually exclusive, regexps match the whole
 value, and rules are ORed. An empty list accepts any valid Sigstore signer.
-`image verify IMAGE` checks signatures without creating runtime/cache state and
+`image verify IMAGE` checks signatures without creating program runtime or bytecode
+cache state and
 always enables verification. Its `--allow-unsigned`, `--certificate-identity`,
 `--certificate-identity-regexp`, `--certificate-oidc-issuer` and
 `--certificate-oidc-issuer-regexp` flags override configuration.
 
-Verification uses synchronous `sigstore-verify` with bundled Sigstore production
-trust roots, checking the signature, certificate chain, code-signing usage, SCT,
+Verification uses synchronous `sigstore-verify`, checking the signature,
+certificate chain, code-signing usage, SCT,
 authenticated signing time and Rekor evidence. Legacy Cosign `.sig` images and
 their embedded bundles match Go's currently enabled format. Missing bundles use
-bounded, redirect-free lookup at the public Rekor service. Automatic TUF trust-root
-refresh, custom trust-root overrides and OCI 1.1 signature discovery remain
-unimplemented; bundled roots change through reviewed dependency updates.
+bounded, redirect-free lookup at the public Rekor service. Custom trust-root
+overrides and OCI 1.1 signature discovery remain unimplemented.
+
+The CLI defaults to `[signing] trust_source = "tuf"`. A pinned, self-signed
+Sigstore production TUF bootstrap authenticates sequential root rotations and
+signed timestamp, snapshot and top-level targets metadata before accepting
+`trusted_root.json`. Verification stays synchronous using `sigstore-tuf` with
+its network features disabled and the existing bounded, redirect-free HTTP
+transport. Registry credentials are never sent to TUF.
+
+`--sigstore-cache-dir` / `BPFMAN_SIGSTORE_CACHE_DIR` selects the separate trust
+cache; the default is `$XDG_CACHE_HOME/bpfman/sigstore`, or
+`$HOME/.cache/bpfman/sigstore`. Complete generations publish atomically in
+`sigstore-tuf-v1` under a single writer lock. Readers need no lock and reauthenticate
+metadata from the pinned bootstrap on every operation. Refreshers serialize and
+re-read after acquiring authority. The trust writer may perform network I/O;
+it never holds the program-store or bytecode-cache writer lock.
+
+Online operations refresh absent, incomplete, expired or 24-hour-old metadata.
+A fresh authenticated cache requires no TUF network access. `Never` never refreshes
+and requires unexpired cached metadata as well as an image admitted under the
+selected trust material. Failed refreshes fail the operation without falling back
+to bundled or expired roots. Verified root/timestamp/snapshot progress is persisted
+even if a later step fails, preserving rollback floors across processes; an
+incomplete generation cannot authorize target use. Deleting or replacing the
+entire cache also removes its learned version floors; this cache assumes the same
+local writer authority as the image cache. Root history is bounded to 512 rotations
+from the bundled bootstrap, with at most 32 rotations per refresh.
+
+Explicit `[signing] trust_source = "bundled"` selects the dependency's embedded
+production roots and performs no TUF I/O. Offline fixture comparisons select this
+mode explicitly; it has no metadata refresh/expiry protection. Library policies
+constructed with `SigningPolicy::verify` likewise use embedded roots unless the
+caller selects `with_trust_cache`. Disabling signature verification avoids all
+trust-cache access. Synchronous downloads have a 30-second request deadline;
+cancellation is checked between requests, reads, verification and publication.
 
 `program load image`, `image verify`, `image inspect` and `image build` accept
 `--registry-auth BASE64` or `BPFMAN_REGISTRY_AUTH`, containing base64-encoded
@@ -165,8 +199,8 @@ for cached policies; `Always` can refresh them. Go cache entries use a separate
 format. Cache eviction and abandoned-stage recovery are not implemented.
 
 Cache admission records the signing policy and original top-level digest, including
-the index digest for a multi-platform image. Policy identity includes the bundled
-trust roots and verifier version. A policy change makes `Never` fail without
+the index digest for a multi-platform image. Policy identity includes the selected
+trust-root bytes and verifier version. A policy change makes `Never` fail without
 network access; `IfNotPresent` reverifies the recorded digest and atomically
 updates admission without resolving a mutable tag again. Entries predating digest
 tracking require a fresh pull. Failed verification and concurrent replacement
@@ -174,7 +208,8 @@ preserve the previous or newer complete generation respectively.
 
 `direnv exec . make rust-test-image` runs local-registry cache and native lifecycle
 contracts, fixed signed-release verification, offline Go/Rust public/private auth
-comparison, cache revalidation races and real signal cancellation. The normal
+comparison, TUF rotation/rollback/expiry/concurrency, cache revalidation races and
+real signal cancellation during signature reads and trust-writer waits. The normal
 `rust-check` includes these contracts without external network access. All ten
 remote-image scripts selected by `external=true,image=true` and six image-build
 scripts pass against both implementations with verification enabled. Go's external
@@ -219,8 +254,7 @@ image-build scripts, also included in `rust-check`. The admitted 134 Rust files 
 188 cases pass with `BPFMAN_E2E_BYTECODE_SOURCE=image` using Rust directly for
 publication and loading. Both implementations pass all ten remote-image scripts;
 Go also passes the six image-build scripts. Explicit private authentication is
-implemented; ambient credentials, signature verification and cache eviction
-remain separate work.
+implemented; ambient credentials and cache eviction remain separate work.
 
 ## Persistence scope
 

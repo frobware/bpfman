@@ -260,4 +260,4 @@ pub struct PreparedUprobeAttach<P: UprobeProgram> {
 }
 
 mod image;
-pub use image::{ImageCacheKey, ImageCacheStage};
+pub use image::{ImageCacheKey, ImageCacheStage, TrustCacheStage};

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sigstore_verify::{
     VerificationPolicy, Verifier,
-    trust_root::{SIGSTORE_PRODUCTION_TRUSTED_ROOT, TrustedRoot},
+    trust_root::TrustedRoot,
     types::{Bundle, DerCertificate},
 };
 use std::sync::atomic::AtomicBool;
@@ -38,12 +38,13 @@ pub fn verify(
     policy: &SigningPolicy,
     cancelled: &AtomicBool,
 ) -> Result<VerificationStatus, Error> {
+    let policy = policy.resolve(true, cancelled)?;
     let mut registry = Registry::new(reference, credentials, cancelled);
     let manifest = registry.manifest(&reference.selector)?;
     if !registry::is_index(&manifest) {
         registry::require_image(&manifest)?;
     }
-    admit(&mut registry, &manifest.digest, policy)
+    admit(&mut registry, &manifest.digest, &policy)
 }
 
 #[derive(Deserialize)]
@@ -99,8 +100,8 @@ pub(super) fn admit(
             ))
         };
     }
-    let root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT)
-        .map_err(|e| Error::caused("decode bundled Sigstore trust root", e))?;
+    let root = TrustedRoot::from_json(&policy.root)
+        .map_err(|e| Error::caused("decode selected Sigstore trust root", e))?;
     let verifier =
         Verifier::new(&root).map_err(|e| Error::caused("prepare Sigstore verifier", e))?;
     let mut last = None;
@@ -381,7 +382,9 @@ mod tests {
         ))
         .expect("lookup")
         .remove(0);
-        let root = TrustedRoot::from_json(SIGSTORE_PRODUCTION_TRUSTED_ROOT).expect("root");
+        let root =
+            TrustedRoot::from_json(sigstore_verify::trust_root::SIGSTORE_PRODUCTION_TRUSTED_ROOT)
+                .expect("root");
         let verifier = Verifier::new(&root).expect("verifier");
         let policy = VerificationPolicy::any_identity();
         let signature = annotation(layer, SIGNATURE).expect("signature");

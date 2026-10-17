@@ -26,6 +26,9 @@ thiserror.workspace = true
 chrono.workspace = true
 sigstore-verify.workspace = true
 regex.workspace = true
+sigstore-tuf.workspace = true
+jiff.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+sigstore-crypto = { version = "=0.14.0", default-features = false }

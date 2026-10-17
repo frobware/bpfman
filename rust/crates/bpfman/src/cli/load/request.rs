@@ -13,9 +13,17 @@ impl LoadCommand {
         config: Option<&std::path::Path>,
         cache: &bpfman_fs::RuntimeLayout,
         lock_timeout: std::time::Duration,
+        trust_cache: Option<&bpfman_fs::RuntimeLayout>,
     ) -> Result<PreparedLoad, crate::error::Error> {
         let request = self.into_request().unwrap_or_else(|error| error.exit());
-        request.prepare(layout, cancellation, config, cache, lock_timeout)
+        request.prepare(
+            layout,
+            cancellation,
+            config,
+            cache,
+            lock_timeout,
+            trust_cache,
+        )
     }
 
     fn into_request(self) -> Result<LoadRequest, clap::Error> {
@@ -95,6 +103,7 @@ impl LoadRequest {
         config: Option<&std::path::Path>,
         cache: &bpfman_fs::RuntimeLayout,
         lock_timeout: std::time::Duration,
+        trust_cache: Option<&bpfman_fs::RuntimeLayout>,
     ) -> Result<PreparedLoad, crate::error::Error> {
         let Self {
             source,
@@ -122,7 +131,8 @@ impl LoadRequest {
                 pull_policy,
                 auth,
             } => {
-                let signing = super::super::config::Config::load(config)?.signing()?;
+                let config = super::super::config::Config::load(config)?;
+                let signing = config.trust(config.signing()?, trust_cache, lock_timeout)?;
                 let parsed = bpfman_image_oci::Reference::parse(&reference)?;
                 let image = bpfman_image_oci::pull(
                     &parsed,

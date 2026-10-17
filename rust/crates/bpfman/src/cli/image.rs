@@ -6,7 +6,7 @@ mod verify;
 
 #[derive(Subcommand)]
 pub(crate) enum ImageCommand {
-    /// Verify an image signature without creating runtime or cache state.
+    /// Verify an image signature without creating program runtime or bytecode cache state.
     Verify(verify::Verify),
     /// Build and push an OCI bytecode image without a container runtime.
     Build {
@@ -51,9 +51,13 @@ impl ImageCommand {
         self,
         cancellation: &bpfman_runtime::Cancellation,
         config: Option<&std::path::Path>,
+        trust_cache: Option<&bpfman_fs::RuntimeLayout>,
+        lock_timeout: std::time::Duration,
     ) -> Result<(), crate::error::Error> {
         match self {
-            Self::Verify(command) => command.execute(cancellation, config)?,
+            Self::Verify(command) => {
+                command.execute(cancellation, config, trust_cache, lock_timeout)?
+            }
             Self::Inspect {
                 reference,
                 registry_auth,

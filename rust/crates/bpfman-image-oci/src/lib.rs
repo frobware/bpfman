@@ -13,6 +13,7 @@ mod reference;
 mod registry;
 mod signing;
 mod transport;
+mod trust;
 mod upload;
 mod verification;
 pub use credentials::Credentials;
@@ -23,3 +24,10 @@ pub use reference::Reference;
 pub use registry::inspect;
 pub use signing::{SigningPolicy, TrustedIdentity};
 pub use verification::{VerificationStatus, verify};
+
+#[cfg(test)]
+#[path = "../../../tests/support/oci.rs"]
+mod fixture;
+#[cfg(test)]
+#[path = "../../../tests/support/signed_image.rs"]
+mod signed_image;

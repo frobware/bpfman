@@ -146,6 +146,25 @@ pub fn pull<E: std::error::Error + Send + Sync + 'static>(
     validate: impl Fn(&[u8]) -> Result<(), E>,
 ) -> Result<Image, Error> {
     check(cancelled)?;
+    // Capture and validate one generation before trust I/O. Never misses retain
+    // their existing diagnostic and do not create or refresh trust state.
+    let existing = if policy != ImagePullPolicy::Always {
+        RuntimeDirectory::open_existing(cache_layout.clone())
+            .map_err(|e| Error::caused("open image cache", e))?
+            .as_ref()
+            .map(|cache| cached(cache, reference, &validate))
+            .transpose()?
+            .flatten()
+    } else {
+        None
+    };
+    if existing.is_none() && policy == ImagePullPolicy::Never {
+        return Err(Error::invalid(
+            "image not in cache and pull policy is Never",
+        ));
+    }
+    let resolved = signing.resolve(policy != ImagePullPolicy::Never, cancelled)?;
+    let signing = &resolved;
     let admission = CacheAdmission {
         reference,
         signing,
@@ -154,42 +173,27 @@ pub fn pull<E: std::error::Error + Send + Sync + 'static>(
         lock_timeout,
         cancelled,
     };
-    if policy != ImagePullPolicy::Always {
-        if let Some(cache) = RuntimeDirectory::open_existing(cache_layout.clone())
-            .map_err(|e| Error::caused("open image cache", e))?
-        {
-            if let Some(mut entry) = cached(&cache, reference, &validate)? {
-                check(cancelled)?;
-                if entry.admitted(signing) {
-                    return Ok(entry.image);
-                }
-                if policy == ImagePullPolicy::Never {
-                    return Err(Error::invalid(
-                        "image cached under a different signing policy and pull policy is Never",
-                    ));
-                }
-                if !entry.envelope.verified_digest.is_empty() {
-                    let mut registry = Registry::new(reference, credentials, cancelled);
-                    crate::verification::admit(
-                        &mut registry,
-                        &entry.envelope.verified_digest,
-                        signing,
-                    )?;
-                    entry.envelope.policy = signing.id().into();
-                    return store(
-                        &admission,
-                        &validate,
-                        entry.envelope,
-                        entry.image,
-                        Some(entry.encoded),
-                    );
-                }
-            }
+    if let Some(mut entry) = existing {
+        check(cancelled)?;
+        if entry.admitted(signing) {
+            return Ok(entry.image);
         }
         if policy == ImagePullPolicy::Never {
             return Err(Error::invalid(
-                "image not in cache and pull policy is Never",
+                "image cached under a different signing policy and pull policy is Never",
             ));
+        }
+        if !entry.envelope.verified_digest.is_empty() {
+            let mut registry = Registry::new(reference, credentials, cancelled);
+            crate::verification::admit(&mut registry, &entry.envelope.verified_digest, signing)?;
+            entry.envelope.policy = signing.id().into();
+            return store(
+                &admission,
+                &validate,
+                entry.envelope,
+                entry.image,
+                Some(entry.encoded),
+            );
         }
     }
     let mut registry = Registry::new(reference, credentials, cancelled);

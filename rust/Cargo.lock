@@ -263,10 +263,13 @@ dependencies = [
  "bpfman-model",
  "chrono",
  "flate2",
+ "jiff",
  "regex",
  "serde",
  "serde_json",
  "sha2",
+ "sigstore-crypto",
+ "sigstore-tuf",
  "sigstore-verify",
  "tar",
  "tempfile",
@@ -736,6 +739,12 @@ dependencies = [
  "libc",
  "r-efi 6.0.0",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "hashbrown"
@@ -1493,6 +1502,25 @@ dependencies = [
  "thiserror",
  "tracing",
  "x509-cert",
+]
+
+[[package]]
+name = "sigstore-tuf"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9da0d2e44d8c02a84fb15473329015fd2983a62c26cdc226b4138a9ec9fc1c6"
+dependencies = [
+ "glob",
+ "hex",
+ "jiff",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sigstore-crypto",
+ "sigstore-types",
+ "tempfile",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

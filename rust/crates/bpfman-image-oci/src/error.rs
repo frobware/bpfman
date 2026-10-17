@@ -1,4 +1,4 @@
-use bpfman_fs::{ImageCacheStage, RuntimeWriter};
+use bpfman_fs::{ImageCacheStage, RuntimeWriter, TrustCacheStage};
 
 /// OCI operation failure. Failed local or remote cleanup retains ownership.
 #[derive(Debug, thiserror::Error)]
@@ -7,7 +7,8 @@ pub struct Error {
     message: String,
     #[source]
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
-    remaining: Option<ImageCacheStage>,
+    remaining: Option<Box<ImageCacheStage>>,
+    trust_stage: Option<Box<TrustCacheStage>>,
     cancelled: bool,
     uploads: Vec<crate::upload::Upload>,
 }
@@ -18,6 +19,7 @@ impl Error {
             message: message.into(),
             source: None,
             remaining: None,
+            trust_stage: None,
             cancelled: false,
             uploads: Vec::new(),
         }
@@ -31,6 +33,7 @@ impl Error {
             message: message.into(),
             source: Some(Box::new(source)),
             remaining: None,
+            trust_stage: None,
             cancelled: false,
             uploads: Vec::new(),
         }
@@ -57,7 +60,7 @@ impl Error {
     ) -> Self {
         self.message
             .push_str(&format!("; cache stage cleanup failed: {}", chain(&cause)));
-        self.remaining = Some(stage);
+        self.remaining = Some(Box::new(stage));
         self
     }
 
@@ -67,6 +70,7 @@ impl Error {
             message: "image operation cancelled".into(),
             source: None,
             remaining: None,
+            trust_stage: None,
             cancelled: true,
             uploads: Vec::new(),
         }
@@ -79,7 +83,7 @@ impl Error {
 
     /// Whether cleanup retained ownership requiring an explicit retry.
     pub fn has_pending_cleanup(&self) -> bool {
-        self.remaining.is_some() || !self.uploads.is_empty()
+        self.remaining.is_some() || self.trust_stage.is_some() || !self.uploads.is_empty()
     }
 
     pub(super) fn upload_cleanup_failed(
@@ -114,16 +118,37 @@ impl Error {
     /// Failure retains the receipt; the original operation failure stays intact.
     pub fn retry_cleanup(&mut self, writer: &RuntimeWriter<'_>) -> Result<(), bpfman_fs::Error> {
         if let Some(stage) = self.remaining.take() {
-            if let Err(failure) = writer.remove_image_cache_stage(stage) {
+            if let Err(failure) = writer.remove_image_cache_stage(*stage) {
                 self.message.push_str(&format!(
                     "; cache cleanup retry failed: {}",
                     chain(&failure.cause)
                 ));
-                self.remaining = Some(failure.remaining);
+                self.remaining = Some(Box::new(failure.remaining));
+                return Err(failure.cause);
+            }
+        }
+        if let Some(stage) = self.trust_stage.take() {
+            if let Err(failure) = writer.remove_trust_cache_stage(*stage) {
+                self.message.push_str(&format!(
+                    "; trust cache cleanup retry failed: {}",
+                    chain(&failure.cause)
+                ));
+                self.trust_stage = Some(Box::new(failure.remaining));
                 return Err(failure.cause);
             }
         }
         Ok(())
+    }
+
+    pub(super) fn trust_cleanup_failed(
+        mut self,
+        cause: bpfman_fs::Error,
+        stage: TrustCacheStage,
+    ) -> Self {
+        self.message
+            .push_str(&format!("; trust cache cleanup failed: {}", chain(&cause)));
+        self.trust_stage = Some(Box::new(stage));
+        self
     }
 }
 

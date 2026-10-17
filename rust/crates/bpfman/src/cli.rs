@@ -26,6 +26,9 @@ pub(super) struct Cli {
     /// Persistent cache root for OCI bytecode images.
     #[arg(long = "image-cache-dir", global = true, default_value = "/var/cache/bpfman", value_parser = PathBufValueParser::new().try_map(RuntimeLayout::try_from))]
     pub(super) image_cache: RuntimeLayout,
+    /// Sigstore TUF cache root (defaults to the user's cache directory).
+    #[arg(long = "sigstore-cache-dir", global = true, env = "BPFMAN_SIGSTORE_CACHE_DIR", value_parser = PathBufValueParser::new().try_map(RuntimeLayout::try_from))]
+    pub(super) trust_cache: Option<RuntimeLayout>,
     /// Timeout for acquiring the writer lock (0 waits indefinitely).
     #[arg(long, global = true, env = "BPFMAN_LOCK_TIMEOUT", default_value = "30s", value_parser = lock_timeout)]
     pub(super) lock_timeout: Duration,
@@ -59,6 +62,7 @@ impl Command {
         config: Option<&std::path::Path>,
         cache: &RuntimeLayout,
         lock_timeout: Duration,
+        trust_cache: Option<&RuntimeLayout>,
     ) -> Result<PreparedCommand, crate::error::Error> {
         let command = match self {
             Self::Program { command } => command,
@@ -90,6 +94,7 @@ impl Command {
                 config,
                 cache,
                 lock_timeout,
+                trust_cache,
             )?),
         })
     }

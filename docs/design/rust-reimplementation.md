@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials; Cosign signature/identity policy and cache revalidation with bundled trust roots | Ambient credentials, automatic trust-root refresh, cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Ambient credentials, custom trust roots, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2701,9 +2701,9 @@ wrong, change it here before broadening feature coverage.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
-  explicit private-registry credentials and Cosign signature/identity policy with
-  bundled trust roots are implemented. Ambient credential stores and automatic
-  trust-root refresh remain pending.
+  explicit private-registry credentials, Cosign signature/identity policy and
+  synchronous production TUF trust-root refresh are implemented. Ambient credential
+  stores, custom trust roots and cache eviction remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -5412,3 +5412,86 @@ Go unit suite, and `direnv exec . make lint-go` reported zero issues. The extern
 linker is required by this Nix development shell. All six unchanged image-build
 scripts also pass on both binaries with verification enabled, in addition to the
 ten remote-image files and exact 134-file / 188-case Rust image-mode corpus above.
+
+
+## OCI TUF trust-root refresh checkpoint (17 October 2026)
+
+CLI image load and signature verification now default to production Sigstore TUF
+trust refresh. The adapter uses sigstore-tuf 0.14.0's transport-free
+TrustedMetadataSet with default features disabled, plus the existing synchronous
+ureq transport. No async client, runtime or synchronous wrapper around async code
+is used. Only two package versions are added to the lockfile (sigstore-tuf and
+its glob dependency); existing locked versions and SQLite schema 2 are unchanged.
+
+A reviewed copy of Sigstore's production root version 15 anchors each session.
+Cached root history is authenticated consecutively from that bootstrap; every
+rotation needs both the previous authority and the new root's self-threshold.
+Timestamp, snapshot and top-level targets signatures, version pins, lengths,
+hashes and expiry authorize the bounded trusted_root.json target. The target is
+parsed and used to prepare the real Sigstore verifier before admission. Production
+trust currently resides in top-level targets; missing or delegated-only trust is
+an explicit failure. Downloads refuse redirects, never receive registry credentials,
+retain a 30-second per-request deadline, and check cancellation between requests,
+reads, verification and publication. Root rotation has per-refresh and history bounds.
+
+Trust state lives in a separate root and atomic sigstore-tuf-v1 envelope, using
+bpfman-fs descriptor confinement and typed stage receipts. The same local filesystem
+writer authority assumption as the image cache applies: replacing or deleting all
+cache contents also removes learned version floors. Fresh readers take no lock
+and reauthenticate every generation. Refreshers acquire a single cache writer and
+re-read before network effects, avoiding stale concurrent publication; program-store
+and bytecode-cache writers are never held during trust I/O. Failed stage cleanup
+retains its receipt, primary error and history for explicit retry under the original
+root. Authenticated root/timestamp/snapshot progress survives later refresh failure
+so replay cannot reset learned floors. Timestamp and snapshot signatures authenticate
+floors independently; rotating only timestamp keys preserves snapshot/per-target
+floors across failed refresh and reopen. Key-ID reordering does not reset authority.
+Expired metadata establishes floors only;
+it never authorizes current target use. Incomplete generations fail closed.
+
+The CLI reuses authenticated, unexpired trust metadata for up to 24 hours. Absent,
+incomplete, expired or older state refreshes online. Never does no network or trust
+cache creation: a missing image still returns the existing cache-miss diagnostic;
+a cached image requires valid, unexpired trust state and matching signing admission.
+Other pulls reverify the original image digest when selected trust bytes change,
+using the existing generation comparison and atomic bytecode-cache publication.
+Invalid updates or failed refreshes do not fall back to bundled or expired trust.
+
+--sigstore-cache-dir / BPFMAN_SIGSTORE_CACHE_DIR selects the trust root directory;
+the default uses XDG_CACHE_HOME/bpfman/sigstore or HOME/.cache/bpfman/sigstore.
+Explicit [signing] trust_source = 'bundled' selects the preceding embedded-root
+behavior for reproducible offline verification. It carries no TUF freshness
+protection. Library policies likewise retain explicit bundled behavior unless the
+caller selects with_trust_cache. Disabled signature verification, inspection and
+publication do not touch trust state; image verify still forces verification on.
+Offline signed fixtures explicitly select bundled mode, keeping the normal gate
+independent of external services. No existing Go tests or acceptance scripts change.
+
+Fixed-time signed test repositories cover old/new root thresholds, valid rotation,
+reopened trust, unchanged-key floor preservation, expired and partial-refresh floors,
+per-target rollback, tampered metadata/targets, authentic expiry of every role,
+rotation/download bounds, HTTP/auth/redirect failures, cancellation, concurrent
+refreshers and lock-free readers. Real-filesystem contracts cover atomic generations,
+foreign roots, preserved old snapshots, cancellation after staging and explicit
+cleanup retries. Image-cache tests prove changed trust bytes require revalidation.
+CLI contracts prove default TUF selection, explicit bundled selection, disabled
+load/inspection behavior, forced verification and real SIGINT/SIGTERM during trust
+writer waits for both image verify and image load, with reaping and no program state.
+
+Final validation: `direnv exec . make rust-check lint-make` passes format, strict
+Clippy, all userspace/CLI/store contracts, 18 OCI unit tests, 42 fake-kernel cases,
+all 74 discovered/selected native tests, rustdoc and Make checks. Native stages
+took 60.72 seconds on Linux 6.18.54 with the retained optimized aya-obj profile;
+owned fixture cleanup passed. The normal gate remains independent of external
+services and includes the six unchanged Rust image-build acceptance scripts.
+
+A fresh production TUF session verifies the fixed signed v0.5.6 release with
+unsigned admission disabled. The ten unchanged remote-image scripts pass with
+default verification enabled against Go (serial) and final Rust (32 slots), with
+an explicitly selected fresh Rust TUF cache. The exact previously admitted Rust
+image-mode manifest also passes against final code: 134 files / 188 leaf cases,
+no selected skips or failures, forcing every file load through image loading and
+using another fresh production TUF cache. Cache inspection confirms timestamp
+version 810 and complete generations without stages. The signing configuration
+is empty/default for these external lanes; verification is enabled throughout.
+Go sources, Go tests, acceptance assertions and script labels are unchanged.

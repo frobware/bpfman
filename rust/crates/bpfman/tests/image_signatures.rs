@@ -28,7 +28,10 @@ fn go_and_rust_verify_the_same_private_signatures_and_reject_wrong_identities() 
     let roots_file = temp.path().join("fulcio.pem");
     std::fs::write(&roots_file, roots)?;
     let config = temp.path().join("config.toml");
-    std::fs::write(&config, "[signing]\nallow_unsigned = false\n")?;
+    std::fs::write(
+        &config,
+        "[signing]\ntrust_source = 'bundled'\nallow_unsigned = false\n",
+    )?;
     let captured = signed_image::registry();
     let go = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)
@@ -129,7 +132,7 @@ fn verify_forces_verification_and_honours_identity_overrides_without_runtime_sta
     let config = temp.path().join("config.toml");
     std::fs::write(
         &config,
-        "[signing]\nverify_enabled = false\nallow_unsigned = false\n",
+        "[signing]\ntrust_source = 'bundled'\nverify_enabled = false\nallow_unsigned = false\n",
     )?;
     let server = signed_image::registry();
     for options in [
@@ -297,7 +300,10 @@ fn signals_during_signature_reads_reap_the_cli_without_cache_or_runtime_state() 
         for load in [false, true] {
             let temp = tempfile::tempdir()?;
             let config = temp.path().join("config.toml");
-            std::fs::write(&config, "[signing]\nallow_unsigned = false\n")?;
+            std::fs::write(
+                &config,
+                "[signing]\ntrust_source = 'bundled'\nallow_unsigned = false\n",
+            )?;
             let server = publisher::Registry::new();
             let encoded = STANDARD.encode("private-user:private-password:with:colons");
             let (waiting, wait) = mpsc::sync_channel(1);

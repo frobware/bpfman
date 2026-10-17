@@ -144,7 +144,7 @@ fn signed_lifecycle() {
     let parent = c.layout.root().parent().expect("parent");
     let cache = parent.join("signed-cache");
     let config = parent.join("signed.toml");
-    fs::write(&config, format!("[signing]\nallow_unsigned = false\n[[signing.trusted_identities]]\ncertificate_identity = '{}'\ncertificate_oidc_issuer = '{}'\n", signed_image::SUBJECT, signed_image::ISSUER)).expect("config");
+    fs::write(&config, format!("[signing]\ntrust_source = 'bundled'\nallow_unsigned = false\n[[signing.trusted_identities]]\ncertificate_identity = '{}'\ncertificate_oidc_issuer = '{}'\n", signed_image::SUBJECT, signed_image::ISSUER)).expect("config");
     for policy in ["Always", "Never", "IfNotPresent"] {
         let before = server.requests.load(Ordering::Relaxed);
         let output = c

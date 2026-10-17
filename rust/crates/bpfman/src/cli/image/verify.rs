@@ -36,6 +36,8 @@ impl Verify {
         self,
         cancellation: &bpfman_runtime::Cancellation,
         config: Option<&Path>,
+        trust_cache: Option<&bpfman_fs::RuntimeLayout>,
+        lock_timeout: std::time::Duration,
     ) -> Result<(), crate::error::Error> {
         let credentials = self
             .registry_auth
@@ -57,8 +59,12 @@ impl Verify {
         };
         // This command always enables verification, including when load policy
         // explicitly disables it. Optional flags replace the configured rule set.
-        let policy = super::super::config::Config::load(config)?
-            .verification(self.allow_unsigned, identity)?;
+        let config = super::super::config::Config::load(config)?;
+        let policy = config.trust(
+            config.verification(self.allow_unsigned, identity)?,
+            trust_cache,
+            lock_timeout,
+        )?;
         let status = bpfman_image_oci::verify(
             &Reference::parse(&self.reference)?,
             credentials.as_ref(),

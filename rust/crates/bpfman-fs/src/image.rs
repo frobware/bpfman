@@ -13,6 +13,8 @@ use std::{
 };
 
 const COLLECTION: &str = "images-v1";
+const TRUST_COLLECTION: &str = "sigstore-tuf-v1";
+const TRUST_KEY: ImageCacheKey = ImageCacheKey([0; 32]);
 const LIMIT: u64 = 32 * 1024 * 1024;
 
 /// A full SHA256 cache identity with no caller-controlled path components.
@@ -34,14 +36,28 @@ impl ImageCacheKey {
 pub struct ImageCacheStage {
     entry: Box<Entry>,
     key: ImageCacheKey,
+    collection: &'static str,
 }
+
+/// Ownership of a complete TUF metadata stage. Drop does not remove it.
+#[derive(Debug)]
+pub struct TrustCacheStage(ImageCacheStage);
 
 impl RuntimeDirectory {
     /// Read an envelope without a writer. Only absence is a cache miss.
     pub fn read_image_cache(&self, key: ImageCacheKey) -> Result<Option<Vec<u8>>, Error> {
+        self.read_cache(COLLECTION, key)
+    }
+
+    /// Read one complete Sigstore TUF generation without a writer lock.
+    pub fn read_trust_cache(&self) -> Result<Option<Vec<u8>>, Error> {
+        self.read_cache(TRUST_COLLECTION, TRUST_KEY)
+    }
+
+    fn read_cache(&self, collection: &str, key: ImageCacheKey) -> Result<Option<Vec<u8>>, Error> {
         let fd = match openat2(
             &self.root,
-            format!("{COLLECTION}/{}", key.name()),
+            format!("{collection}/{}", key.name()),
             OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
             Mode::empty(),
             CONFINED,
@@ -76,14 +92,29 @@ impl RuntimeWriter<'_> {
         key: ImageCacheKey,
         bytes: &[u8],
     ) -> Result<ImageCacheStage, Error> {
+        self.stage_cache(COLLECTION, key, bytes)
+    }
+
+    /// Sync and stage a complete TUF generation under this root's writer.
+    pub fn stage_trust_cache(&self, bytes: &[u8]) -> Result<TrustCacheStage, Error> {
+        self.stage_cache(TRUST_COLLECTION, TRUST_KEY, bytes)
+            .map(TrustCacheStage)
+    }
+
+    fn stage_cache(
+        &self,
+        collection: &'static str,
+        key: ImageCacheKey,
+        bytes: &[u8],
+    ) -> Result<ImageCacheStage, Error> {
         if bytes.len() as u64 > LIMIT {
-            return Err(Failure::Unsafe("image envelope exceeds size limit").into());
+            return Err(Failure::Unsafe("cache envelope exceeds size limit").into());
         }
-        let parent = ensure_directory(&self.runtime.root, COLLECTION, CONFINED)?;
+        let parent = ensure_directory(&self.runtime.root, collection, CONFINED)?;
         let owned = entry(
             self,
             &parent,
-            COLLECTION.into(),
+            collection.into(),
             format!(".stage-{}", key.name()),
             false,
         )?;
@@ -103,6 +134,7 @@ impl RuntimeWriter<'_> {
         let mut stage = ImageCacheStage {
             entry: Box::new(owned),
             key,
+            collection,
         };
         let retained =
             rustix::io::fcntl_dupfd_cloexec(&file, 0).map_err(|e| io("retain image stage", e))?;
@@ -128,7 +160,7 @@ impl RuntimeWriter<'_> {
         let result = (|| {
             stage.entry.check_writer(self)?;
             let _opened = crate::removal::open_owned(&stage.entry)?;
-            let _existing = self.directory().read_image_cache(stage.key)?;
+            let _existing = self.directory().read_cache(stage.collection, stage.key)?;
             renameat(
                 &stage.entry.parent,
                 &stage.entry.name,
@@ -152,6 +184,30 @@ impl RuntimeWriter<'_> {
             cause: io("sync published image cache", e),
             remaining: None,
         })
+    }
+
+    /// Atomically publish a verified TUF generation, returning unresolved stage ownership.
+    pub fn publish_trust_cache(
+        &self,
+        stage: TrustCacheStage,
+    ) -> Result<(), EffectFailure<Option<TrustCacheStage>, Error>> {
+        self.publish_image_cache(stage.0)
+            .map_err(|failure| EffectFailure {
+                cause: failure.cause,
+                remaining: failure.remaining.map(TrustCacheStage),
+            })
+    }
+
+    /// Remove exactly the retained TUF stage, preserving ownership on failure.
+    pub fn remove_trust_cache_stage(
+        &self,
+        stage: TrustCacheStage,
+    ) -> Result<(), EffectFailure<TrustCacheStage, Error>> {
+        self.remove_image_cache_stage(stage.0)
+            .map_err(|failure| EffectFailure {
+                cause: failure.cause,
+                remaining: TrustCacheStage(failure.remaining),
+            })
     }
 
     /// Remove exactly the retained stage, preserving ownership on failure.
