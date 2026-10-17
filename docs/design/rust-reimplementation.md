@@ -124,7 +124,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
 | Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
-| Program inventory | Managed listing and `program list --all` with unmanaged kernel rows, exact managed/coarse kernel type filtering, text/quiet/JSON output, cancellation and lock-free reads | Attachment-state and metadata-selector CLI compatibility |
+| Program inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact managed/coarse kernel type filtering, text/quiet/JSON output, cancellation and lock-free reads | Metadata-selector CLI compatibility |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2717,7 +2717,8 @@ wrong, change it here before broadening feature coverage.
 ### Phase 5: public surfaces and cutover
 
 - Complete gRPC and CLI compatibility. Program inventory (`program list --all`)
-  is implemented; attachment-state and metadata-selector CLI compatibility remain.
+  and active-link `--attached`/`--unattached` filtering are implemented;
+  metadata-selector CLI compatibility remains.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -5819,3 +5820,49 @@ fixture cleanup. The final gate log is
 `/tmp/bpfman-list-all-rust-check-final2.log`. Earlier runs exposed new-test
 compile/lint issues and the helper fixture race described above; these were
 corrected without skipping or weakening checks.
+
+## Attachment-state listing checkpoint (17 October 2026)
+
+`program list --attached` and `--unattached` now match Go's active-link
+selection. A stored kernel link ID is intent, not proof of attachment. A
+program is attached when at least one of its stored links is observed in the
+kernel; pending intent and stale links remain unattached even with a surviving
+pin. A live kernel link still counts without its pin. Both filters exclude
+unmanaged programs even with `--all`, combine with exact managed type and
+application selection, and preserve program-ID order and text/quiet/JSON output.
+Quiet output still takes precedence over JSON. Clap rejects both flags together
+before runtime creation. Metadata and Kubernetes-style selectors remain pending.
+
+The pure core owns the attachment selection over complete observations, separately
+from metadata-only filtering. The runtime exposes a cancellable managed listing
+operation using the existing generic store/link-reader and kernel observation
+capabilities. It never acquires writer authority. Program, link and pin reads are
+independent snapshots; the result does not promise an atomic view across adapters.
+Missing kernel links are inactive, while denied, malformed or inconsistent
+observations remain failures. Cancellation is checked before and after each link
+and pin observation, including failed reads, and stops before another observation.
+Default text/quiet listing remains store-only and unprivileged; either attachment
+filter requires kernel observation privileges in every format.
+
+Pure selection tests and the stateful fake with real SQLite cover missing kernel
+programs, stale and pending intent, surviving and absent pins, unrelated links,
+writer-held reads, disappearing links, observation failures and cancellation.
+CLI contracts cover parsing, conflicts and rejection before runtime creation.
+Two new shared acceptance files, `TestProgramList_AttachmentState.bpfman` and
+`TestProgramList_AttachmentStateNetwork.bpfman`, exercise multiple tracepoint
+links, stale intent after external unpinning, unmanaged exclusion, output modes,
+combined filters and XDP/TC/TCX lifecycle transitions. They join the two unchanged
+inventory files in the serial Go/Rust comparison batch in the normal native gate.
+Existing Go source/tests, acceptance scripts/labels, dependencies, store contracts,
+SQLite schema and architecture laws are unchanged.
+
+Validation: `direnv exec . make rust-fmt-fix rust-check` exits zero. Formatting,
+strict Clippy, unchanged architecture laws, userspace/store/fake/CLI contracts,
+doctests, all 75 discovered native tests, owned-fixture cleanup and warnings-denied
+Rustdoc pass. The four inventory/attachment-state scripts pass the same assertions
+against Go and Rust with SQLite; both new scripts pass the shell checker and
+canonical formatter. The native suite takes 65.03 seconds on Linux 6.18.54:
+37.62 seconds corpus, 4.99 seconds serial SQLite lifetime tests, 22.03 seconds
+parallel SQLite contracts and 0.38 seconds Go comparison. These timings retain the
+workspace's existing `aya-obj` dependency optimization at level two. The full gate
+log is `/tmp/bpfman-attachment-rust-check-final.log`.

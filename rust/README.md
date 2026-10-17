@@ -600,6 +600,17 @@ the runtime writer lock. Programs disappearing during the walk are omitted from
 the kernel inventory; their managed records remain visible with null kernel data.
 Other enumeration/observation failures remain errors. The combined store/kernel
 view is not an atomic snapshot.
+
+`program list --attached` / `--unattached` selects managed programs by whether
+at least one stored link is observed in the kernel. Pending intent, a stale
+kernel link ID or a pin alone does not establish attachment; a live kernel link
+still counts when its pin is missing. Both flags require kernel observation
+privileges in every output format, are mutually exclusive, and exclude unmanaged
+rows even with `--all`. They combine with the existing type/application filters.
+Link observation failures remain errors, reads remain cancellable and never take
+the writer lock, and quiet IDs still take precedence over JSON. Metadata and
+Kubernetes-style selectors remain pending.
+
 `program get ID [-o text|json]` observes one managed program,
 including its maps, statistics, and links. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. Link `--all` and

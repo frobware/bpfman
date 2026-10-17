@@ -11,6 +11,39 @@ pub struct ProgramFilter {
     pub application: Option<String>,
 }
 
+/// Selection requiring live link observations rather than stored intent alone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AttachmentFilter {
+    /// Programs with at least one observed kernel link.
+    Attached,
+    /// Programs with no observed kernel links, including stale or pending intent.
+    Unattached,
+}
+
+/// Select managed rows by observed kernel link presence. Kernel-only rows are
+/// excluded for either selection, matching Go's lack of managed link state.
+pub fn select_program_attachments(
+    entries: Vec<bpfman_model::ProgramListEntry>,
+    links: &[bpfman_model::ObservedLink],
+    filter: AttachmentFilter,
+) -> Vec<bpfman_model::ProgramListEntry> {
+    let active: alloc::collections::BTreeSet<_> = links
+        .iter()
+        .filter(|link| link.kernel.is_some())
+        .map(|link| link.record.program_id)
+        .collect();
+
+    entries
+        .into_iter()
+        .filter(|entry| match entry {
+            bpfman_model::ProgramListEntry::Managed(program) => {
+                active.contains(&program.record.id) == (filter == AttachmentFilter::Attached)
+            }
+            bpfman_model::ProgramListEntry::KernelOnly(_) => false,
+        })
+        .collect()
+}
+
 /// Filter complete store observations and order results by program ID.
 pub fn list_programs(
     programs: Vec<StoredProgramSummary>,

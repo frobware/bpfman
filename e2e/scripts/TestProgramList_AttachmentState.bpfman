@@ -1,0 +1,75 @@
+# -*- mode: bpfman -*-
+#
+# Active kernel links determine attachment, including multiple links, stale
+# stored intent and unmanaged programs under --all. Shared Go/Rust contract.
+
+guard loaded <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder --application listing
+let prog = $loaded.programs[0]
+let pid = $prog.record.program_id
+defer bpfman program unload $pid
+
+guard other <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass --application other
+let otherID = $other.programs[0].record.program_id
+defer bpfman program unload $otherID
+
+let strayPin = "/sys/fs/bpf/bpfman_e2e_list_attachment_${pid}"
+guard _ <- exec bpftool prog load testdata/bpf/xdp_pass.bpf.o $strayPin type xdp
+defer exec rm -f $strayPin
+guard strayShow <- proginfo pinned $strayPin
+let strayID = $strayShow.id
+
+guard before <- bpfman program list --unattached -o json
+let beforeCount = $before |> jq "[.programs[] | select(.program_id == ${pid} or .program_id == ${otherID})] | length"
+assert $beforeCount == 2
+guard empty <- exec bpfman program list --attached --application listing
+assert $empty.stdout == ""
+
+guard first <- bpfman link attach tracepoint $prog syscalls/sys_enter_kill
+guard second <- bpfman link attach tracepoint $prog syscalls/sys_exit_kill
+guard active <- bpfman program list --attached --type tracepoint --application listing -o json
+assert ($active.programs |> jq "length") == 1
+assert $active.programs[0].program_id == $pid
+assert $active.programs[0].managed
+assert ($active.programs[0].links |> jq "length") == 2
+
+guard quiet <- exec bpfman program list --attached --application listing -q -o json
+let quietIDs = $quiet.stdout |> jq 'split("\n") | map(select(length > 0) | tonumber)'
+assert ($quietIDs |> jq "length") == 1
+assert $quietIDs[0] == $pid
+guard table <- exec bpfman program list --attached --application listing
+assert contains $table.stdout "PROGRAM ID"
+assert contains $table.stdout "tracepoint_kill_recorder"
+
+guard allAttached <- bpfman program list --all --attached -o json
+let strayAttached = $allAttached |> jq "[.programs[] | select(.program_id == ${strayID})] | length"
+assert $strayAttached == 0
+guard allUnattached <- bpfman program list --all --unattached -o json
+let strayUnattached = $allUnattached |> jq "[.programs[] | select(.program_id == ${strayID})] | length"
+assert $strayUnattached == 0
+let activeUnattached = $allUnattached |> jq "[.programs[] | select(.program_id == ${pid})] | length"
+assert $activeUnattached == 0
+let otherUnattached = $allUnattached |> jq "[.programs[] | select(.program_id == ${otherID})] | length"
+assert $otherUnattached == 1
+
+# Removing one pin leaves stale stored intent alongside one active link.
+guard _ <- exec rm -f $first.record.pin_path
+guard stillActive <- bpfman program list --attached --application listing -o json
+assert ($stillActive.programs |> jq "length") == 1
+assert $stillActive.programs[0].program_id == $pid
+
+# Removing the last pin leaves two stored links but no active kernel link.
+guard _ <- exec rm -f $second.record.pin_path
+guard staleAttached <- bpfman program list --attached --application listing -o json
+assert ($staleAttached.programs |> jq "length") == 0
+guard staleUnattached <- bpfman program list --unattached --application listing -o json
+assert ($staleUnattached.programs |> jq "length") == 1
+assert $staleUnattached.programs[0].program_id == $pid
+assert ($staleUnattached.programs[0].links |> jq "length") == 2
+
+# A managed detach removes stale intent and leaves the program unattached.
+bpfman link detach $first
+bpfman link detach $second
+guard detached <- bpfman program list --unattached --application listing -o json
+assert ($detached.programs |> jq "length") == 1
+assert ($detached.programs[0].links |> jq "length") == 0
+assert fail bpfman program list --attached --unattached

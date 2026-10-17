@@ -160,6 +160,12 @@ pub(super) enum ProgramCommand {
 
 #[derive(Args)]
 pub(super) struct ListArgs {
+    /// Show only managed programs with active kernel links.
+    #[arg(long, conflicts_with = "unattached")]
+    pub(super) attached: bool,
+    /// Show only managed programs without active kernel links.
+    #[arg(long, conflicts_with = "attached")]
+    pub(super) unattached: bool,
     /// Include unmanaged kernel programs.
     #[arg(short = 'a', long)]
     pub(super) all: bool,
@@ -175,6 +181,18 @@ pub(super) struct ListArgs {
     /// Filter by exact bpfman.io/application metadata value.
     #[arg(long)]
     pub(super) application: Option<String>,
+}
+
+impl ListArgs {
+    pub(super) fn attachment(&self) -> Option<bpfman_core::AttachmentFilter> {
+        if self.attached {
+            Some(bpfman_core::AttachmentFilter::Attached)
+        } else if self.unattached {
+            Some(bpfman_core::AttachmentFilter::Unattached)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -286,6 +304,28 @@ mod tests {
                 }
             ));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn attachment_filters_parse_and_conflict_before_execution() -> Result<(), clap::Error> {
+        for (flag, expected) in [
+            ("--attached", bpfman_core::AttachmentFilter::Attached),
+            ("--unattached", bpfman_core::AttachmentFilter::Unattached),
+        ] {
+            let cli = Cli::try_parse_from(["bpfman", "program", "list", "--all", flag])?;
+            assert!(matches!(cli.command,
+                Command::Program { command: ProgramCommand::List(args) }
+                    if args.attachment() == Some(expected)
+            ));
+        }
+        let error =
+            Cli::try_parse_from(["bpfman", "program", "list", "--attached", "--unattached"])
+                .err()
+                .ok_or_else(|| {
+                    clap::Error::raw(clap::error::ErrorKind::InvalidValue, "expected conflict")
+                })?;
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
         Ok(())
     }
 }

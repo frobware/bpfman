@@ -126,12 +126,20 @@ where
         }
 
         cli::PreparedCommand::List(args) => {
+            let attachment = args.attachment();
             let filter = bpfman_core::ProgramFilter {
                 types: args.types,
                 application: args.application,
             };
 
-            if args.all {
+            if let Some(attachment) = attachment {
+                let entries = bpfman.list_entries_by_attachment_with_cancellation(
+                    &filter,
+                    attachment,
+                    cancellation,
+                )?;
+                output::all_entries(&mut io::stdout().lock(), &entries, args.output, args.quiet)?;
+            } else if args.all {
                 let entries = bpfman.list_all_entries_with_cancellation(&filter, cancellation)?;
                 output::all_entries(&mut io::stdout().lock(), &entries, args.output, args.quiet)?;
             } else if args.output == cli::OutputFormat::Json && !args.quiet {

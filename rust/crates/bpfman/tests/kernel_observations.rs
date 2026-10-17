@@ -38,6 +38,7 @@ struct State {
     fault: Option<(&'static str, ErrorKind)>,
     cancel: Option<(&'static str, Cancellation)>,
     disappear: Option<NonZeroU32>,
+    disappear_link: Option<NonZeroU32>,
     repeat_id: bool,
 }
 
@@ -272,7 +273,11 @@ fn sqlite_inventory_preserves_managed_identity_and_observation_failures() {
 
 impl LinkObservations for FakeKernel {
     fn tracepoint_link(&self, id: NonZeroU32) -> Result<KernelLink, Error> {
-        self.enter("tracepoint link")?
+        let mut state = self.enter("tracepoint link")?;
+        if state.disappear_link == Some(id) {
+            state.links.remove(&id);
+        }
+        state
             .links
             .get(&id)
             .cloned()
@@ -322,6 +327,8 @@ where
         .expect("runtime exists");
     let fake = FakeKernel::new(&runtime);
     let app = Bpfman::new(active, fake.clone(), BUDGET);
+    let attached = bpfman_core::AttachmentFilter::Attached;
+    let unattached = bpfman_core::AttachmentFilter::Unattached;
     let record = sample::record();
     let id = record.id;
     let link = KernelLink {
@@ -417,6 +424,17 @@ where
                     app.list_entries(&Default::default()).expect("list")[0].kernel,
                     Some(sample::kernel())
                 );
+                assert_eq!(
+                    app.list_entries_by_attachment(&Default::default(), attached)
+                        .expect("attachment read while writer held")
+                        .len(),
+                    1
+                );
+                assert!(
+                    app.list_entries_by_attachment(&Default::default(), unattached)
+                        .expect("active link")
+                        .is_empty()
+                );
             },
         )
         .expect("writer");
@@ -425,8 +443,135 @@ where
         "fake reads must never mount or inspect real bpffs"
     );
 
+    // Pending intent with a pin but no recorded kernel identity is inactive.
+    let pending = runtime
+        .with_writer(
+            bpfman_lock::AcquireOptions {
+                timeout: BUDGET,
+                cancelled: None,
+            },
+            |writer| {
+                backend
+                    .create_pending_tracepoint(
+                        &writer,
+                        PendingTracepoint {
+                            program_id: id,
+                            target: &"syscalls/sys_enter_kill".parse().expect("target"),
+                            metadata: &BTreeMap::new(),
+                            created_at: &record.created_at,
+                        },
+                    )
+                    .expect("real pending intent")
+                    .0
+            },
+        )
+        .expect("writer");
+    fake.state
+        .lock()
+        .expect("kernel")
+        .pins
+        .insert(pending.id, link.clone());
+
+    // Every selected link is inspected: permission and malformed observation
+    // failures cannot be hidden by another active link or turned into absence.
+    for operation in ["tracepoint link", "tracepoint pin"] {
+        for kind in [ErrorKind::Unavailable, ErrorKind::InvalidData] {
+            fake.state.lock().expect("kernel").fault = Some((operation, kind));
+            for filter in [attached, unattached] {
+                assert_eq!(
+                    app.list_entries_by_attachment(&Default::default(), filter)
+                        .expect_err("failed observation")
+                        .kind(),
+                    ObservationErrorKind::Unavailable
+                );
+            }
+        }
+        for fault in [
+            None,
+            Some((operation, ErrorKind::Unavailable)),
+            Some((operation, ErrorKind::Missing)),
+        ] {
+            let cancellation = Cancellation::new();
+            {
+                let mut state = fake.state.lock().expect("kernel");
+                state.fault = fault;
+                state.cancel = Some((operation, cancellation.clone()));
+                state.calls.clear();
+            }
+            assert_eq!(
+                app.list_entries_by_attachment_with_cancellation(
+                    &Default::default(),
+                    attached,
+                    &cancellation,
+                )
+                .expect_err("cancel during link observation")
+                .kind(),
+                ObservationErrorKind::Cancelled
+            );
+            assert_eq!(
+                fake.state.lock().expect("kernel").calls.last(),
+                Some(&operation)
+            );
+        }
+    }
+    {
+        let mut state = fake.state.lock().expect("kernel");
+        state.cancel = None;
+        state.fault = None;
+        state.disappear_link = Some(link.id);
+    }
+    assert!(
+        app.list_entries_by_attachment(&Default::default(), attached)
+            .expect("stale and pending intent")
+            .is_empty()
+    );
+    assert_eq!(
+        app.list_entries_by_attachment(&Default::default(), unattached)
+            .expect("pins alone are inactive")
+            .len(),
+        1
+    );
+    {
+        let mut state = fake.state.lock().expect("kernel");
+        state.pins.clear();
+        state.disappear_link = None;
+        state.links.insert(link.id, link.clone());
+    }
+    assert_eq!(
+        app.list_entries_by_attachment(&Default::default(), attached)
+            .expect("kernel link without pin remains active")
+            .len(),
+        1
+    );
+    fake.state
+        .lock()
+        .expect("kernel")
+        .pins
+        .insert(stored_link.id, link.clone());
+
+    let cancellation = Cancellation::new();
+    cancellation.cancel();
+    fake.state.lock().expect("kernel").calls.clear();
+    assert_eq!(
+        app.list_entries_by_attachment_with_cancellation(
+            &Default::default(),
+            attached,
+            &cancellation,
+        )
+        .expect_err("pre-cancelled")
+        .kind(),
+        ObservationErrorKind::Cancelled
+    );
+    assert!(fake.state.lock().expect("kernel").calls.is_empty());
+
     // Changed simulated state is visible through the existing application instance.
     fake.state.lock().expect("kernel").programs.remove(&id);
+    let rows = app
+        .list_entries_by_attachment(&Default::default(), attached)
+        .expect("independent link and program observations");
+    assert!(
+        matches!(rows.as_slice(), [bpfman_model::ProgramListEntry::Managed(p)] if p.kernel.is_none())
+    );
     assert!(
         app.list_entries(&Default::default())
             .expect("missing kernel")[0]

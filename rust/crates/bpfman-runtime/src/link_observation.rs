@@ -36,6 +36,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     record: bpfman_model::StoredLink,
     cancellation: &Cancellation,
 ) -> Result<ObservedLink, LinkCause> {
+    cancellation.check().map_err(|_| Cause::Cancelled)?;
     let path = match &record.details {
         bpfman_model::LinkDetails::Tcx(d) => {
             runtime.layout().tcx_link_path(d.key, record.program_id)
@@ -61,7 +62,7 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
         LinkState::Pending => None,
         LinkState::Attached { kernel_id } => Some(kernel_id),
     };
-    let kernel = match kernel_id
+    let observed = kernel_id
         .map(|id| match &record.details {
             bpfman_model::LinkDetails::Tracepoint(_)
             | bpfman_model::LinkDetails::Kprobe(_)
@@ -72,8 +73,9 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
                 backend.extension_link(id)
             }
         })
-        .transpose()
-    {
+        .transpose();
+    cancellation.check().map_err(|_| Cause::Cancelled)?;
+    let kernel = match observed {
         Ok(kernel) => kernel,
         Err(error) if error.kind() == bpfman_kernel::ErrorKind::Missing => None,
         Err(error) => return Err(error.into()),
@@ -81,12 +83,14 @@ pub(super) fn observe_record<K: bpfman_kernel::LinkObservations>(
     let pin = match &record.details {
         bpfman_model::LinkDetails::Tracepoint(_)
         | bpfman_model::LinkDetails::Kprobe(_)
-        | bpfman_model::LinkDetails::Uprobe(_) => backend.tracepoint_pin(runtime, record.id)?,
-        bpfman_model::LinkDetails::Tracing(d) => backend.tracing_pin(runtime, record.id, d.kind)?,
-        bpfman_model::LinkDetails::Tcx(d) => backend.tcx_pin(runtime, d, record.program_id)?,
-        bpfman_model::LinkDetails::Tc(details) => backend.tc_pin(runtime, details)?,
-        bpfman_model::LinkDetails::Xdp(details) => backend.extension_pin(runtime, details)?,
+        | bpfman_model::LinkDetails::Uprobe(_) => backend.tracepoint_pin(runtime, record.id),
+        bpfman_model::LinkDetails::Tracing(d) => backend.tracing_pin(runtime, record.id, d.kind),
+        bpfman_model::LinkDetails::Tcx(d) => backend.tcx_pin(runtime, d, record.program_id),
+        bpfman_model::LinkDetails::Tc(details) => backend.tc_pin(runtime, details),
+        bpfman_model::LinkDetails::Xdp(details) => backend.extension_pin(runtime, details),
     };
+    cancellation.check().map_err(|_| Cause::Cancelled)?;
+    let pin = pin?;
     if kernel
         .as_ref()
         .is_some_and(|k| k.program_id != record.program_id)

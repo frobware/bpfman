@@ -98,3 +98,73 @@ fn fine_types_project_to_kernel_taxonomy_and_unknown_types_remain_visible() {
         );
     }
 }
+
+#[test]
+fn attachment_filters_use_kernel_links_and_exclude_unmanaged_rows() {
+    use bpfman_core::{AttachmentFilter, select_program_attachments};
+    use bpfman_model::{
+        KernelLink, KernelLinkDetails, LinkDetails, LinkState, ObservedLink, StoredLink,
+    };
+    use std::num::NonZeroU64;
+
+    let record = sample::record();
+    let rows = list_program_entries(
+        vec![record.clone()],
+        vec![sample::kernel()],
+        &Default::default(),
+    );
+    let stray = ProgramListEntry::KernelOnly(sample::kernel());
+    let mut rows = rows;
+    rows.push(stray);
+    let mut link = ObservedLink {
+        record: StoredLink {
+            id: NonZeroU64::MIN,
+            program_id: record.id,
+            details: LinkDetails::Tracepoint("syscalls/sys_enter_kill".parse().expect("target")),
+            state: LinkState::Attached {
+                kernel_id: NonZeroU32::MIN,
+            },
+            pin_path: "/runtime/fs/links/1".into(),
+            metadata: Default::default(),
+            created_at: record.created_at,
+        },
+        kernel: None,
+        pin_present: true,
+    };
+
+    // A stored kernel ID and a surviving pin never substitute for observation.
+    assert!(
+        select_program_attachments(rows.clone(), &[link.clone()], AttachmentFilter::Attached)
+            .is_empty()
+    );
+    assert_eq!(
+        select_program_attachments(rows.clone(), &[link.clone()], AttachmentFilter::Unattached)
+            .len(),
+        1
+    );
+
+    link.kernel = Some(KernelLink {
+        id: NonZeroU32::MIN,
+        program_id: record.id,
+        details: KernelLinkDetails::PerfEvent,
+    });
+    link.pin_present = false;
+    assert_eq!(
+        select_program_attachments(rows.clone(), &[link.clone()], AttachmentFilter::Attached).len(),
+        1
+    );
+    assert!(
+        select_program_attachments(rows.clone(), &[link.clone()], AttachmentFilter::Unattached)
+            .is_empty()
+    );
+
+    // Only a link associated with this managed program can establish attachment.
+    link.record.program_id = NonZeroU32::MIN;
+    assert!(
+        select_program_attachments(rows.clone(), &[link], AttachmentFilter::Attached).is_empty()
+    );
+    assert_eq!(
+        select_program_attachments(rows, &[], AttachmentFilter::Unattached).len(),
+        1
+    );
+}

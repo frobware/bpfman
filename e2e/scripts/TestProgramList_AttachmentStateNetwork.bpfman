@@ -1,0 +1,51 @@
+# -*- mode: bpfman -*-
+#
+# Dispatcher extensions and native TCX links use the same active-link selection.
+# Shared Go/Rust contract; all resources belong to this isolated runtime.
+
+guard pair <- net veth-pair
+defer net release $pair
+
+guard xdp <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass --application listing-network
+let xp = $xdp.programs[0]
+let xid = $xp.record.program_id
+defer bpfman program unload $xid
+guard tc <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats --application listing-network
+let tp = $tc.programs[0]
+let tid = $tp.record.program_id
+defer bpfman program unload $tid
+guard tcx <- bpfman program load file testdata/bpf/tcx_counter.bpf.o --programs tcx:tcx_stats --application listing-network
+let cp = $tcx.programs[0]
+let cid = $cp.record.program_id
+defer bpfman program unload $cid
+
+guard before <- bpfman program list --unattached --application listing-network -o json
+assert ($before.programs |> jq "length") == 3
+guard xl <- bpfman link attach xdp $xp $pair.host_link --priority 50
+guard tl <- bpfman link attach tc $tp $pair.host_link ingress --priority 50
+guard cl <- bpfman link attach tcx $cp $pair.host_link egress --priority 50
+
+guard active <- bpfman program list --attached --application listing-network -o json
+assert ($active.programs |> jq "length") == 3
+let managedIDs = $active |> jq "[.programs[].program_id] | sort | tojson"
+let expectedIDs = "[${xid},${tid},${cid}]" |> jq "fromjson | sort | tojson"
+assert $managedIDs == $expectedIDs
+guard noUnattached <- bpfman program list --unattached --application listing-network -o json
+assert ($noUnattached.programs |> jq "length") == 0
+guard onlyTC <- bpfman program list --attached --type tc --application listing-network -o json
+assert ($onlyTC.programs |> jq "length") == 1
+assert $onlyTC.programs[0].program_id == $tid
+guard onlyTCX <- bpfman program list --attached --type tcx --application listing-network -o json
+assert ($onlyTCX.programs |> jq "length") == 1
+assert $onlyTCX.programs[0].program_id == $cid
+
+bpfman link detach $tl
+guard afterTC <- bpfman program list --unattached --application listing-network -o json
+assert ($afterTC.programs |> jq "length") == 1
+assert $afterTC.programs[0].program_id == $tid
+bpfman link detach $xl
+bpfman link detach $cl
+guard after <- bpfman program list --unattached --application listing-network -o json
+assert ($after.programs |> jq "length") == 3
+guard quiet <- exec bpfman program list --attached --application listing-network -q
+assert $quiet.stdout == ""

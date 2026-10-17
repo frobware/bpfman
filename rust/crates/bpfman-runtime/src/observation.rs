@@ -116,6 +116,65 @@ impl<S: OpenStore, K: bpfman_kernel::ProgramObservations + bpfman_kernel::LinkOb
 where
     S::Reader: bpfman_store::LinkReader,
 {
+    /// List managed programs selected by active kernel links, without taking
+    /// the writer lock. Both attachment selections exclude unmanaged programs.
+    /// Store, program, link and pin observations form independent snapshots.
+    pub fn list_entries_by_attachment(
+        &self,
+        filter: &bpfman_core::ProgramFilter,
+        attachment: bpfman_core::AttachmentFilter,
+    ) -> Result<Vec<bpfman_model::ProgramListEntry>, ObservationError> {
+        self.list_entries_by_attachment_with_cancellation(
+            filter,
+            attachment,
+            &crate::Cancellation::new(),
+        )
+    }
+
+    /// Observe every selected program's stored links with cancellation before
+    /// and after each observation. Missing links are inactive; failed inspection
+    /// is an error, even if another link already proves the program attached.
+    #[tracing::instrument(name = "program.list_by_attachment", level = "debug", skip_all, err)]
+    pub fn list_entries_by_attachment_with_cancellation(
+        &self,
+        filter: &bpfman_core::ProgramFilter,
+        attachment: bpfman_core::AttachmentFilter,
+        cancellation: &crate::Cancellation,
+    ) -> Result<Vec<bpfman_model::ProgramListEntry>, ObservationError> {
+        let entries = self.list_entries_with_cancellation(filter, cancellation)?;
+        let selected: std::collections::BTreeSet<_> =
+            entries.iter().map(|entry| entry.record.id).collect();
+        let records = self
+            .list_link_records_with_cancellation(cancellation)
+            .map_err(Failure::from)?;
+        let mut links = Vec::new();
+
+        for record in records
+            .into_iter()
+            .filter(|record| selected.contains(&record.program_id))
+        {
+            check(cancellation)?;
+            let observed = crate::link_observation::observe_record(
+                &self.kernel,
+                self.store.runtime(),
+                record,
+                cancellation,
+            );
+            check(cancellation)?;
+            links.push(observed.map_err(Failure::from)?);
+        }
+
+        check(cancellation)?;
+        Ok(bpfman_core::select_program_attachments(
+            entries
+                .into_iter()
+                .map(|entry| bpfman_model::ProgramListEntry::Managed(Box::new(entry)))
+                .collect(),
+            &links,
+            attachment,
+        ))
+    }
+
     /// Observe a managed record and its live kernel data without the writer lock.
     /// Kernel and pin observations may change after the store snapshot.
     pub fn get(&self, id: NonZeroU32) -> Result<ObservedProgram, ObservationError> {

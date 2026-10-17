@@ -19,7 +19,7 @@ fn invalid_flags_are_rejected_before_opening_the_database() -> Result<(), Box<dy
         vec!["--runtime-dir", "relative", "program", "list"],
         vec!["program", "list", "--type", "bogus"],
         vec!["program", "list", "--output", "yaml"],
-        vec!["program", "list", "--attached"],
+        vec!["program", "list", "--attached", "--unattached"],
         vec!["--store", "unknown", "program", "list"],
         vec!["--store", "sqlite", "program", "list"],
         vec!["--store", "json", "program", "list"],
@@ -127,6 +127,23 @@ fn invalid_timeout_does_not_touch_runtime() -> Result<(), Box<dyn std::error::Er
         assert!(!runtime.exists());
     }
 
+    Ok(())
+}
+
+#[test]
+fn conflicting_attachment_filters_do_not_create_runtime() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempfile::tempdir()?;
+    let runtime = directory.path().join("absent");
+    let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .arg("--runtime-dir")
+        .arg(&runtime)
+        .args(["program", "list", "--attached", "--unattached"])
+        .output()?;
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(!runtime.exists());
     Ok(())
 }
 
