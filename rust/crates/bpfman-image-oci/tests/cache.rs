@@ -18,7 +18,7 @@ fn pull(
     timeout: Duration,
     flag: &AtomicBool,
 ) -> std::result::Result<bpfman_image_oci::Image, bpfman_image_oci::Error> {
-    resolve(reference, policy, layout, timeout, flag, |_| {
+    resolve(reference, None, policy, layout, timeout, flag, |_| {
         Ok::<(), std::convert::Infallible>(())
     })
 }
@@ -81,7 +81,7 @@ fn policies_reference_forms_index_and_atomic_cache_generations() -> Result {
             }
         }
         assert_eq!(server.requests.load(Ordering::Relaxed), count);
-        let inspected = inspect(&reference, &flag)?;
+        let inspected = inspect(&reference, None, &flag)?;
         let pinned = Reference::parse(&format!(
             "{}@{}",
             server.reference,
@@ -187,6 +187,7 @@ fn full_validator_rejection_precedes_cache_publication() -> Result {
     assert!(
         resolve(
             &reference,
+            None,
             Always,
             &layout,
             Duration::ZERO,
@@ -201,6 +202,7 @@ fn full_validator_rejection_precedes_cache_publication() -> Result {
     assert!(
         resolve(
             &reference,
+            None,
             Never,
             &layout,
             Duration::ZERO,

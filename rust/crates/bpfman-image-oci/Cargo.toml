@@ -1,6 +1,6 @@
 [package]
 name = "bpfman-image-oci"
-description = "Synchronous public OCI bytecode resolution and cache admission"
+description = "Synchronous OCI bytecode resolution and cache admission"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

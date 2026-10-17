@@ -1,5 +1,5 @@
 use crate::{
-    Error, Reference,
+    Credentials, Error, Reference,
     registry::{self, BYTECODE_LIMIT, Registry, check, hash},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -93,7 +93,7 @@ fn cached<E: std::error::Error + Send + Sync + 'static>(
     }))
 }
 
-/// Resolve public bytecode with explicit cache policy and caller cancellation.
+/// Resolve bytecode with explicit cache policy and caller cancellation.
 /// Registry and ELF validation finish before cache creation. Cache publication
 /// has its own writer authority, separate from the program lifecycle lock.
 /// Corrupt cache entries fail closed for cached policies; Always refreshes them.
@@ -102,6 +102,7 @@ fn cached<E: std::error::Error + Send + Sync + 'static>(
 /// IfNotPresent writer wins publication.
 pub fn pull<E: std::error::Error + Send + Sync + 'static>(
     reference: &Reference,
+    credentials: Option<&Credentials>,
     policy: ImagePullPolicy,
     cache_layout: &RuntimeLayout,
     lock_timeout: Duration,
@@ -124,7 +125,7 @@ pub fn pull<E: std::error::Error + Send + Sync + 'static>(
             ));
         }
     }
-    let mut registry = Registry::new(reference, cancelled);
+    let mut registry = Registry::new(reference, credentials, cancelled);
     let mut manifest = registry.manifest(&reference.selector)?;
     if registry::is_index(&manifest) {
         manifest = registry.child(&registry::select(&manifest)?)?;

@@ -11,6 +11,8 @@ pub(crate) enum ImageCommand {
         #[arg(value_name = "IMAGE", value_parser = reference)]
         reference: bpfman_image_oci::Reference,
         #[command(flatten)]
+        registry_auth: super::registry_auth::RegistryAuth,
+        #[command(flatten)]
         inputs: build::Inputs,
     },
     /// Print OCI build arguments and labels without publishing.
@@ -21,11 +23,13 @@ pub(crate) enum ImageCommand {
         #[arg(short = 'o', long, value_enum, default_value = "text")]
         output: BuildOutput,
     },
-    /// Inspect public registry metadata without creating runtime state.
+    /// Inspect registry metadata without creating runtime state.
     Inspect {
         /// Bare, tagged or digest image reference.
         #[arg(value_name = "IMAGE", value_parser = reference)]
         reference: bpfman_image_oci::Reference,
+        #[command(flatten)]
+        registry_auth: super::registry_auth::RegistryAuth,
     },
 }
 
@@ -45,8 +49,18 @@ impl ImageCommand {
         cancellation: &bpfman_runtime::Cancellation,
     ) -> Result<(), crate::error::Error> {
         match self {
-            Self::Inspect { reference } => {
-                let value = bpfman_image_oci::inspect(&reference, cancellation.flag())?;
+            Self::Inspect {
+                reference,
+                registry_auth,
+            } => {
+                let credentials = registry_auth
+                    .credentials()
+                    .unwrap_or_else(|error| error.exit());
+                let value = bpfman_image_oci::inspect(
+                    &reference,
+                    credentials.as_ref(),
+                    cancellation.flag(),
+                )?;
                 serde_json::to_writer_pretty(std::io::stdout().lock(), &value)
                     .map_err(anyhow::Error::from)?;
                 writeln!(std::io::stdout().lock())?;
@@ -57,7 +71,14 @@ impl ImageCommand {
                     .lock()
                     .write_all(plan.render(matches!(output, BuildOutput::Json))?.as_bytes())?;
             }
-            Self::Build { reference, inputs } => {
+            Self::Build {
+                reference,
+                inputs,
+                registry_auth,
+            } => {
+                let credentials = registry_auth
+                    .credentials()
+                    .unwrap_or_else(|error| error.exit());
                 let plan = inputs.prepare(cancellation)?;
                 let raw = std::env::var("SOURCE_DATE_EPOCH").unwrap_or_default();
                 let timestamp = if raw.trim().is_empty() {
@@ -70,6 +91,7 @@ impl ImageCommand {
                 let (publication, labels) = plan.publication()?;
                 let pinned = bpfman_image_oci::publish(
                     &reference,
+                    credentials.as_ref(),
                     publication,
                     &labels,
                     timestamp,

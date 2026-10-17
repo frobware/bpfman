@@ -12,6 +12,7 @@ mod dispatcher;
 mod image;
 mod link;
 mod load;
+mod registry_auth;
 
 #[derive(Parser)]
 #[command(name = "bpfman", version, about, max_term_width = 80)]

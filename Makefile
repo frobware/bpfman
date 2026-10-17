@@ -2036,7 +2036,7 @@ rust-test-function-tracing: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 rust-test-lsm: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- lsm_ --nocapture
 
-# Public OCI loading uses local anonymous registry contracts in the normal gate.
+# OCI loading uses local public/private registry contracts in the normal gate.
 .PHONY: rust-test-image
 rust-test-image: rust-build $(RUST_TEST_INPUTS)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --locked
@@ -2044,6 +2044,6 @@ rust-test-image: rust-build $(RUST_TEST_INPUTS)
 
 .PHONY: rust-test-image-build
 rust-test-image-build: rust-build $(RUST_TEST_INPUTS)
-	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --test publish --locked
+	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --test publish --test authentication --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test image_build --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- image_build --nocapture

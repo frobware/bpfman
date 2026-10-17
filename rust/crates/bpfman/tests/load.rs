@@ -158,6 +158,9 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
     let temporary = tempfile::tempdir()?;
     let runtime = temporary.path().join("runtime");
 
+    let config = temporary.path().join("config.toml");
+    std::fs::write(&config, "")?;
+
     // Valid, invalid base64, missing separator, and empty username/password.
     for secret in [
         "dXNlcjpwYXNzOndvcmQ=",
@@ -168,6 +171,7 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
     ] {
         for via_environment in [false, true] {
             let mut process = command(&runtime);
+            process.arg("--config").arg(&config);
             process.args(["image", "example.invalid/test", "--programs", "xdp:p"]);
 
             if via_environment {
@@ -183,7 +187,7 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
                 2
             };
             let diagnostic = if code == 1 {
-                "private registry authentication is not implemented"
+                "signature verification"
             } else {
                 "registry auth"
             };

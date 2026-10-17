@@ -3,9 +3,7 @@ use std::collections::BTreeSet;
 use bpfman_kernel::ObjectLoader;
 use clap::error::ErrorKind;
 
-use super::{
-    Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, PreparedLoad, parse,
-};
+use super::{Global, LoadCommand, LoadOptions, LoadRequest, LoadSource, Metadata, PreparedLoad};
 
 impl LoadCommand {
     pub(crate) fn prepare(
@@ -30,12 +28,7 @@ impl LoadCommand {
                 (LoadSource::File(args.path), args.options)
             }
             Self::Image(args) => {
-                let auth = args
-                    .registry_auth
-                    .map(parse::registry_auth)
-                    .transpose()
-                    .map_err(invalid)?
-                    .flatten();
+                let auth = args.registry_auth.credentials()?;
                 (
                     LoadSource::Image {
                         reference: args.reference,
@@ -129,17 +122,11 @@ impl LoadRequest {
                 pull_policy,
                 auth,
             } => {
-                if let Some(super::RegistryAuth { username, password }) = auth {
-                    let _credentials = (username, password);
-                    return Err(anyhow::anyhow!(
-                        "private registry authentication is not implemented"
-                    )
-                    .into());
-                }
-                super::super::config::Config::load(config)?.admit_public_image()?;
+                super::super::config::Config::load(config)?.admit_image()?;
                 let parsed = bpfman_image_oci::Reference::parse(&reference)?;
                 let image = bpfman_image_oci::pull(
                     &parsed,
+                    auth.as_ref(),
                     pull_policy.into(),
                     cache,
                     lock_timeout,
@@ -270,8 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn image_options_are_source_specific_and_auth_preserves_password_colons()
-    -> Result<(), clap::Error> {
+    fn image_options_are_source_specific_and_auth_is_redacted() -> Result<(), clap::Error> {
         let req = request(&[
             "image",
             "quay.io/bpfman/test:latest",
@@ -292,8 +278,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(pull_policy, super::super::PullPolicy::Never);
-                assert_eq!(auth.username, "user");
-                assert_eq!(auth.password, "pass:word");
+                assert!(!format!("{auth:?}").contains("pass:word"));
             }
             _ => return Err(invalid("expected authenticated image")),
         }

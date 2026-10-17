@@ -1,7 +1,6 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
 use bpfman_model::ProgramType;
 
-use super::{Global, Metadata, ProgramSpec, RegistryAuth, Symbol};
+use super::{Global, Metadata, ProgramSpec, Symbol};
 
 fn symbol(value: &str) -> Result<Symbol, String> {
     Symbol::try_from(value.trim()).map_err(|error| error.to_string())
@@ -100,29 +99,4 @@ pub(super) fn image_reference(value: &str) -> Result<String, String> {
     bpfman_image_oci::Reference::parse(value).map_err(|e| e.to_string())?;
 
     Ok(value.into())
-}
-
-// Validate after Clap so its value diagnostics cannot echo registry credentials.
-pub(super) fn registry_auth(value: String) -> Result<Option<RegistryAuth>, &'static str> {
-    if value.is_empty() {
-        return Ok(None);
-    }
-
-    let bytes = STANDARD
-        .decode(value)
-        .map_err(|_| "registry auth must be valid base64")?;
-    let decoded = String::from_utf8(bytes)
-        .map_err(|_| "registry auth must contain UTF-8 username:password")?;
-    let (username, password) = decoded
-        .split_once(':')
-        .ok_or("registry auth requires username:password")?;
-
-    if username.is_empty() || password.is_empty() {
-        return Err("registry auth requires nonempty username and password");
-    }
-
-    Ok(Some(RegistryAuth {
-        username: username.into(),
-        password: password.into(),
-    }))
 }

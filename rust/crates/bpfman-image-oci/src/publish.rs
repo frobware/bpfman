@@ -1,6 +1,6 @@
 //! Deterministic OCI packaging. ELF interpretation is supplied by the caller.
 use crate::{
-    Error, Reference,
+    Credentials, Error, Reference,
     registry::{BYTECODE_LIMIT, Registry, check, hash},
 };
 use serde_json::{Value, json};
@@ -116,13 +116,14 @@ fn image(
     })
 }
 
-/// Package and anonymously publish OCI bytecode without cache or runtime state.
+/// Package and publish OCI bytecode without cache or runtime state.
 /// Inputs are packaged before I/O. Child manifests are addressed by digest;
 /// the requested tag is written only after every dependency succeeds. A completed
 /// final manifest PUT wins over concurrent cancellation. Registry transport
 /// failures during that PUT can leave the publication outcome unknown.
 pub fn publish(
     reference: &Reference,
+    credentials: Option<&Credentials>,
     publication: Publication,
     labels: &BTreeMap<String, String>,
     timestamp: u64,
@@ -168,11 +169,20 @@ pub fn publish(
             MANIFEST,
         )
     };
-    publish_images(reference, &images, &bytes, media_type, index, cancelled)
+    publish_images(
+        reference,
+        credentials,
+        &images,
+        &bytes,
+        media_type,
+        index,
+        cancelled,
+    )
 }
 
 fn publish_images(
     reference: &Reference,
+    credentials: Option<&Credentials>,
     images: &[Image],
     bytes: &[u8],
     media_type: &str,
@@ -185,7 +195,7 @@ fn publish_images(
             "publication digest does not match destination digest",
         ));
     }
-    let mut registry = Registry::publisher(reference, cancelled);
+    let mut registry = Registry::publisher(reference, credentials, cancelled);
     for image in images {
         registry.upload_blob(&image.layer)?;
         registry.upload_blob(&image.config)?;

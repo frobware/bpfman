@@ -113,19 +113,32 @@ load retains its original error and exposes the acquisition failure through
 The crate owns no CLI formatting or telemetry subscriber. This is a reusable
 library boundary today; packaging and publishing remain a separate step.
 
-## Public OCI bytecode
+## OCI bytecode
 
-`image inspect IMAGE` reads public registry metadata without creating runtime or
+`image inspect IMAGE` reads registry metadata without creating runtime or
 cache state. `program load image IMAGE --programs TYPE:NAME` accepts bare names,
 tags and SHA256 digest references, selects the host's Linux platform, and uses the
 existing load/attach/unload lifecycle. Stored provenance retains the original
 reference and resolved platform-manifest digest.
 
 Image loads currently require an explicit configuration with
-`[signing] verify_enabled = false`; the default verification requirement and
-explicit registry credentials are rejected before pulling. Signature verification
-and private authentication remain pending. The unchanged verification-disabled
-acceptance configuration is `e2e/config/no-signature-verification.toml`.
+`[signing] verify_enabled = false`; the default verification requirement is
+rejected before pulling. Signature verification remains pending. The unchanged
+verification-disabled acceptance configuration is
+`e2e/config/no-signature-verification.toml`.
+
+`program load image`, `image inspect` and `image build` accept
+`--registry-auth BASE64` or `BPFMAN_REGISTRY_AUTH`, containing base64-encoded
+`username:password`. Passwords may contain colons; an explicit flag overrides the
+environment. Basic challenges and authenticated bearer-token exchange are
+supported. Credentials stay in memory, including retained upload-abort receipts;
+cache entries and program records contain no credentials. Cache policies do not
+reauthenticate cached content. Token requests refuse redirects, registry read
+redirects strip authorization, and redirected hosts cannot supply authentication
+challenges. The CLI caps HTTP dependency logging below trace, even under explicit
+`RUST_LOG` overrides, because their raw wire dumps bypass header redaction;
+application tracing remains available. Embedders must apply the same collection
+policy. Ambient credential files/helpers are not implemented.
 
 `--image-cache-dir` defaults to `/var/cache/bpfman`. Its independent writer lock
 protects Rust's `images-v1` collection. A single envelope atomically publishes
@@ -178,8 +191,9 @@ cancellation; a lost response can leave the publication outcome unknown.
 image-build scripts, also included in `rust-check`. The admitted 134 Rust files /
 188 cases pass with `BPFMAN_E2E_BYTECODE_SOURCE=image` using Rust directly for
 publication and loading. Both implementations pass all ten remote-image scripts;
-Go also passes the six image-build scripts. Private authentication, signature
-verification and cache eviction remain separate work.
+Go also passes the six image-build scripts. Explicit private authentication is
+implemented; ambient credentials, signature verification and cache eviction
+remain separate work.
 
 ## Persistence scope
 
@@ -444,8 +458,8 @@ options. Fentry/fexit/LSM variants carry required load-time targets. Invalid inp
 exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry, fexit and LSM batches
 with private or shared maps and
 metadata/application labels are executable, with Go's detailed text output or
-JSON load envelope in selection order. Image loads
-exit with status 1 before source access or runtime effects.
+JSON load envelope in selection order. Image loads use the same lifecycle after
+registry/cache admission and require explicit signing-verification disablement.
 Explicit map owners and ordinary PinByName maps are supported. PinByName
 map-of-maps definitions and section/type mismatches are rejected
 before runtime setup. Credentials are not echoed in auth diagnostics or help.

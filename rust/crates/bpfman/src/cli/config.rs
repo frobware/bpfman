@@ -42,10 +42,10 @@ impl Default for InterfaceConfig {
 }
 
 impl Config {
-    pub(super) fn admit_public_image(&self) -> anyhow::Result<()> {
+    pub(super) fn admit_image(&self) -> anyhow::Result<()> {
         if self.signing.verify_enabled {
             anyhow::bail!(
-                "OCI signature verification is not implemented; public image loading requires explicit [signing] verify_enabled = false"
+                "OCI signature verification is not implemented; image loading requires explicit [signing] verify_enabled = false"
             );
         }
         Ok(())

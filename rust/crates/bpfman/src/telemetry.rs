@@ -29,6 +29,18 @@ pub(super) fn init(path: Option<&Path>) -> anyhow::Result<Option<tracing_chrome:
     };
 
     tracing_subscriber::registry()
+        // ureq-proto's trace logs contain raw HTTP bytes and bypass sensitive
+        // HeaderValue formatting. ureq also reveals signed Location URLs when
+        // trace is enabled. Keep both below trace even with explicit RUST_LOG
+        // directives, for stderr and the timeline. Application trace stays on.
+        .with(tracing_subscriber::filter::filter_fn(|metadata| {
+            let target = metadata.target();
+            *metadata.level() != tracing::Level::TRACE
+                || !(target == "ureq"
+                    || target.starts_with("ureq::")
+                    || target == "ureq_proto"
+                    || target.starts_with("ureq_proto::"))
+        }))
         .with(filter)
         .with(
             tracing_subscriber::fmt::layer()

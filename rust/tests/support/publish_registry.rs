@@ -22,6 +22,10 @@ pub(super) struct State {
     pub(super) cancel_on: Option<String>,
     pub(super) location: Option<String>,
     pub(super) bearer: bool,
+    pub(super) required_auth: Option<String>,
+    pub(super) authorizations: Vec<(String, Option<String>)>,
+    pub(super) realm: Option<String>,
+    pub(super) redirects: BTreeMap<String, String>,
     pub(super) corrupt_digest: bool,
     pub(super) pause: Option<(
         String,
@@ -95,17 +99,51 @@ impl Registry {
                 let mut state = worker_state.lock().expect("state");
                 state.requests.push(format!("{method} {url}"));
                 let mut headers = String::new();
-                let (status, output) = if path == "/v2/" {
-                    (200, Vec::new())
-                } else if path == "/token" {
-                    (200, b"{\"token\":\"publish-token\"}".to_vec())
-                } else if state.bearer
-                    && !header
-                        .to_ascii_lowercase()
-                        .contains("authorization: bearer publish-token")
-                {
-                    headers.push_str(&format!("WWW-Authenticate: Bearer realm=\"http://{address}/token\",service=\"fixture\"\r\n"));
+                let authorization = header
+                    .lines()
+                    .filter_map(|line| line.split_once(':'))
+                    .find(|(key, _)| key.eq_ignore_ascii_case("authorization"))
+                    .map(|(_, value)| value.trim().to_owned());
+                state
+                    .authorizations
+                    .push((key.clone(), authorization.clone()));
+                let (status, output) = if path == "/token" {
+                    if state
+                        .required_auth
+                        .as_ref()
+                        .is_some_and(|expected| authorization.as_ref() != Some(expected))
+                    {
+                        (401, Vec::new())
+                    } else if let Some(location) = state.redirects.get(&key) {
+                        headers.push_str(&format!("Location: {location}\r\n"));
+                        (302, Vec::new())
+                    } else if let Some(status) = state.faults.get(&key) {
+                        (*status, Vec::new())
+                    } else {
+                        (200, b"{\"token\":\"publish-token\"}".to_vec())
+                    }
+                } else if state.bearer && authorization.as_deref() != Some("Bearer publish-token") {
+                    let realm = state
+                        .realm
+                        .clone()
+                        .unwrap_or_else(|| format!("http://{address}/token"));
+                    headers.push_str(&format!(
+                        "WWW-Authenticate: Bearer realm=\"{realm}\",service=\"fixture\"\r\n"
+                    ));
                     (401, Vec::new())
+                } else if !state.bearer
+                    && state
+                        .required_auth
+                        .as_ref()
+                        .is_some_and(|expected| authorization.as_ref() != Some(expected))
+                {
+                    headers.push_str("WWW-Authenticate: Basic realm=\"fixture\"\r\n");
+                    (401, Vec::new())
+                } else if let Some(location) = state.redirects.get(&key) {
+                    headers.push_str(&format!("Location: {location}\r\n"));
+                    (307, Vec::new())
+                } else if path == "/v2/" {
+                    (200, Vec::new())
                 } else if let Some(status) = state
                     .faults
                     .iter()

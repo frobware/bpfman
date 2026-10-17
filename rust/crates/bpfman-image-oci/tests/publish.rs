@@ -41,13 +41,27 @@ fn images_indexes_reproducibility_and_consumption() -> Result {
                 Publication::Image(input("amd64"))
             }
         };
-        let pinned = publish(&reference, publication(), &labels(), 123, &server.cancelled)?;
+        let pinned = publish(
+            &reference,
+            None,
+            publication(),
+            &labels(),
+            123,
+            &server.cancelled,
+        )?;
         assert!(pinned.contains("@sha256:"));
         assert_eq!(
             pinned,
-            publish(&reference, publication(), &labels(), 123, &server.cancelled)?
+            publish(
+                &reference,
+                None,
+                publication(),
+                &labels(),
+                123,
+                &server.cancelled
+            )?
         );
-        let inspection = inspect(&reference, &server.cancelled)?;
+        let inspection = inspect(&reference, None, &server.cancelled)?;
         let child = if index {
             &inspection["manifests"][0]
         } else {
@@ -56,6 +70,7 @@ fn images_indexes_reproducibility_and_consumption() -> Result {
         assert_eq!(child["programs"]["pass"], "xdp");
         let image = pull(
             &reference,
+            None,
             bpfman_model::ImagePullPolicy::Always,
             &cache,
             Duration::ZERO,
@@ -110,6 +125,7 @@ fn failures_and_cancellation_preserve_tag_and_abort_sessions() -> Result {
         }
         let error = publish(
             &reference,
+            None,
             Publication::Image(input("amd64")),
             &labels(),
             0,
@@ -139,6 +155,7 @@ fn failed_abort_retains_receipt_for_explicit_retry() -> Result {
     }
     let mut error = publish(
         &reference,
+        None,
         Publication::Image(input("amd64")),
         &labels(),
         0,
@@ -167,6 +184,7 @@ fn cancellation_admission_digest_refusal_and_final_commit() -> Result {
     assert!(
         publish(
             &reference,
+            None,
             Publication::Image(input("amd64")),
             &labels(),
             0,
@@ -190,6 +208,7 @@ fn cancellation_admission_digest_refusal_and_final_commit() -> Result {
     assert!(
         publish(
             &mismatched,
+            None,
             Publication::Image(input("amd64")),
             &labels(),
             0,
@@ -202,6 +221,7 @@ fn cancellation_admission_digest_refusal_and_final_commit() -> Result {
     assert!(
         publish(
             &reference,
+            None,
             Publication::Image(input("amd64")),
             &labels(),
             0,
@@ -239,6 +259,7 @@ fn upload_locations_never_escape_the_repository() -> Result {
         assert!(
             publish(
                 &Reference::parse(&server.reference)?,
+                None,
                 Publication::Image(input("amd64")),
                 &labels(),
                 0,

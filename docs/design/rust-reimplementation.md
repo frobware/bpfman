@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| Public OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation | Private credentials, signature verification, cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials | Ambient credentials, signature verification, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2700,8 +2700,9 @@ wrong, change it here before broadening feature coverage.
   shared map-of-maps definitions remain pending.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
-- Public OCI pull/cache, native image build/push and anonymous bearer authentication are implemented.
-  Private-registry credentials and signature verification remain pending.
+- OCI pull/cache, native image build/push, anonymous bearer authentication and
+  explicit private-registry credentials are implemented. Ambient credential stores
+  and signature verification remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -5263,3 +5264,67 @@ Native kernel stages took 61.93 seconds on Linux 6.18.54 with the retained
 clean at release. No acceptance script changes or dependency version updates
 were needed. The lockfile only records additional uses of existing `chrono` and
 `object` dependencies.
+
+## Explicit OCI registry authentication checkpoint (17 October 2026)
+
+`program load image` now uses its existing `--registry-auth` /
+`BPFMAN_REGISTRY_AUTH` credentials. `image inspect` and `image build` accept the
+same explicit input. Shared CLI admission decodes base64 `username:password`
+after Clap parsing, preserving password colons and flag-over-environment
+precedence while keeping secret values out of validation errors and help. The
+OCI adapter captures bounded credentials with redacted Debug output; credentials
+never enter model/runtime/store requests, image provenance or cache envelopes.
+No ambient credential-file or helper lookup is performed in this slice.
+
+Registry requests initially carry no authorization. A Basic challenge enables
+Basic authorization for that registry; a bearer challenge obtains a token using
+the explicit credentials when supplied, or anonymous exchange otherwise. Token
+requests use the requested repository's pull or pull/push scope. The token
+endpoint must use HTTPS, or same-registry HTTP for the already permitted local
+registry transport; userinfo and fragments are refused. Token requests never
+follow redirects. Read redirects strip authorization, and authentication
+challenges from a different response origin are refused before credential-bearing
+requests. Publication and upload cleanup continue to refuse all redirects and
+confine upload locations to the original repository.
+
+Failed or cancelled authenticated uploads abort once with independent
+cancellation state. A failed abort retains its own in-memory credential copy with
+the opaque upload receipt, allowing explicit cleanup retries after the original
+caller credentials have gone out of scope. Primary errors and attempt history
+remain intact. No authentication failure creates program/runtime state or a new
+cache entry. `Never` and cache-hit `IfNotPresent` do not authenticate against the
+registry; `Always` requires a successful current pull, and a rejected refresh
+preserves the previous validated cache generation.
+
+Trace-level process tests exposed ureq-proto's raw HTTP byte dumps, which bypass
+sensitive-header formatting. The CLI now enforces a ceiling below TRACE for
+`ureq` and `ureq_proto`, independently of explicit `RUST_LOG` overrides and across
+both stderr and timeline sinks. Application trace telemetry remains available.
+The adapter installs no subscriber and documents the same collection requirement
+for embedding applications. This also prevents ureq's trace-enabled logging of
+signed upload Location URLs.
+
+Five local-registry contracts cover Basic and authenticated bearer publishing,
+inspection, pull/cache policies, missing/wrong credentials, token-service failure
+and cancellation, redirect/realm confinement, and failed authenticated aborts with
+explicit retry. CLI contracts check environment/flag precedence, password colons,
+pre-I/O validation, secret-free help/errors, and successful trace-level stderr /
+timeline output. Synchronized real SIGINT and SIGTERM tests run public, Basic and
+bearer upload cleanup and reap every child. Native interoperability publishes
+through Rust and loads/unloads through both Go and Rust for all three
+authentication modes and all three cache policies, with no managed pin residue.
+
+The six unchanged image-build scripts pass against both binaries. All ten
+unchanged remote-image scripts selected by `external=true,image=true` pass against
+Go and Rust with SQLite, private test mount namespaces and explicit
+`e2e/config/no-signature-verification.toml`. Signature verification, ambient
+credentials and cache eviction remain separate work; SQLite stays at schema 2.
+
+Final validation: `direnv exec . make rust-check lint-make` passed format, strict
+Clippy, userspace/CLI/store contracts, all 42 fake-kernel lifecycle cases, all 74
+discovered native tests, documentation and Make lint. Native stages took 63.42
+seconds on Linux 6.18.54 with the retained `aya-obj` optimized profile; owned
+fixture cleanup passed. The exact previous admitted image-mode manifest also
+passed using Rust directly: 134 files / 188 leaf cases, no failures or skips,
+with `BPFMAN_E2E_BYTECODE_SOURCE=image`. Acceptance scripts, dependency versions
+and the lockfile remain unchanged.

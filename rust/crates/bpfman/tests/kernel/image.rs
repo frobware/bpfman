@@ -179,72 +179,94 @@ pub(super) fn failures() {
 pub(super) fn build_interoperability() {
     #[path = "../../../../tests/support/publish_registry.rs"]
     mod publisher;
-    let c = Context::new();
-    let server = publisher::Registry::new();
-    let parent = c.layout.root().parent().expect("parent");
-    let config = parent.join("image-build.toml");
-    let cache = parent.join("build-cache");
-    fs::write(&config, "[signing]\nverify_enabled = false\n").expect("config");
-    let execute = |binary: &std::path::Path, args: &[&str]| {
-        let output = c
-            .command(binary, args)
-            .arg("--config")
-            .arg(&config)
-            .arg("--image-cache-dir")
-            .arg(&cache)
-            .env_remove("BPFMAN_REGISTRY_AUTH")
-            .output()
-            .expect("CLI");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        output
-    };
-    execute(
-        &rust(),
-        &[
-            "image",
-            "build",
-            &server.reference,
-            fixture("xdp_pass.bpf.o").to_str().expect("path"),
-        ],
-    );
-    assert!(!c.layout.root().exists());
-    assert!(!cache.exists());
-    let go = std::env::var_os("BPFMAN_GO_BIN")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| repository().join("bin/bpfman"));
-    for binary in [&go, &rust()] {
-        let loaded = execute(
-            binary,
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    for authentication in ["public", "basic", "bearer"] {
+        let c = Context::new();
+        let server = publisher::Registry::new();
+        let encoded = STANDARD.encode("private-user:private-password:with:colons");
+        if authentication != "public" {
+            let mut state = server.state.lock().expect("state");
+            state.required_auth = Some(format!("Basic {encoded}"));
+            state.bearer = authentication == "bearer";
+        }
+        let parent = c.layout.root().parent().expect("parent");
+        let config = parent.join("image-build.toml");
+        let cache = parent.join("build-cache");
+        fs::write(&config, "[signing]\nverify_enabled = false\n").expect("config");
+        let execute = |binary: &std::path::Path, args: &[&str]| {
+            let output = c
+                .command(binary, args)
+                .arg("--config")
+                .arg(&config)
+                .arg("--image-cache-dir")
+                .arg(&cache)
+                .env(
+                    "BPFMAN_REGISTRY_AUTH",
+                    if authentication == "public" {
+                        ""
+                    } else {
+                        &encoded
+                    },
+                )
+                .output()
+                .expect("CLI");
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            output
+        };
+        execute(
+            &rust(),
             &[
-                "program",
-                "load",
                 "image",
+                "build",
                 &server.reference,
-                "--pull-policy",
-                "Always",
-                "--programs",
-                "xdp:pass",
-                "-o",
-                "json",
+                fixture("xdp_pass.bpf.o").to_str().expect("path"),
             ],
         );
-        let loaded: serde_json::Value =
-            serde_json::from_slice(&loaded.stdout).expect("load report");
-        let id = loaded["programs"][0]["record"]["program_id"]
-            .as_u64()
-            .expect("program id")
-            .to_string();
-        assert_eq!(
-            loaded["programs"][0]["record"]["load"]["image_source"]["url"],
-            server.reference
-        );
-        execute(binary, &["program", "unload", &id]);
-        c.no_artifacts();
+        assert!(!c.layout.root().exists());
+        assert!(!cache.exists());
+        let go = std::env::var_os("BPFMAN_GO_BIN")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| repository().join("bin/bpfman"));
+        for binary in [&go, &rust()] {
+            for policy in ["Always", "Never", "IfNotPresent"] {
+                let requests = server.state.lock().expect("state").requests.len();
+                let loaded = execute(
+                    binary,
+                    &[
+                        "program",
+                        "load",
+                        "image",
+                        &server.reference,
+                        "--pull-policy",
+                        policy,
+                        "--programs",
+                        "xdp:pass",
+                        "-o",
+                        "json",
+                    ],
+                );
+                let loaded: serde_json::Value =
+                    serde_json::from_slice(&loaded.stdout).expect("load report");
+                let id = loaded["programs"][0]["record"]["program_id"]
+                    .as_u64()
+                    .expect("program id")
+                    .to_string();
+                assert_eq!(
+                    loaded["programs"][0]["record"]["load"]["image_source"]["url"],
+                    server.reference
+                );
+                execute(binary, &["program", "unload", &id]);
+                c.no_artifacts();
+                if policy != "Always" {
+                    assert_eq!(server.state.lock().expect("state").requests.len(), requests);
+                }
+            }
+        }
+        assert!(server.state.lock().expect("state").uploads.is_empty());
+        assert!(!server.cancelled.load(Ordering::Relaxed));
     }
-    assert!(server.state.lock().expect("state").uploads.is_empty());
-    assert!(!server.cancelled.load(Ordering::Relaxed));
 }

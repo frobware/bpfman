@@ -17,7 +17,7 @@ pub(crate) struct PreparedLoad {
 pub(crate) enum LoadCommand {
     /// Load programs from a local ELF object file.
     File(FileArgs),
-    /// Load from a public OCI bytecode image.
+    /// Load from an OCI bytecode image.
     Image(ImageArgs),
 }
 
@@ -38,14 +38,8 @@ pub(crate) struct ImageArgs {
     /// When to pull the image.
     #[arg(short = 'p', long, value_enum, ignore_case = true, default_value_t = PullPolicy::IfNotPresent)]
     pull_policy: PullPolicy,
-    /// Base64 username:password. Prefer the environment to process arguments.
-    #[arg(
-        long,
-        env = "BPFMAN_REGISTRY_AUTH",
-        hide_env_values = true,
-        hide_possible_values = true
-    )]
-    registry_auth: Option<String>,
+    #[command(flatten)]
+    registry_auth: super::registry_auth::RegistryAuth,
     #[command(flatten)]
     options: LoadOptions,
 }
@@ -94,18 +88,12 @@ enum LoadOutput {
     Json,
 }
 
-// Deliberately no Debug for credentials or requests that contain them.
-struct RegistryAuth {
-    username: String,
-    password: String,
-}
-
 enum LoadSource {
     File(PathBuf),
     Image {
         reference: String,
         pull_policy: PullPolicy,
-        auth: Option<RegistryAuth>,
+        auth: Option<bpfman_image_oci::Credentials>,
     },
 }
 

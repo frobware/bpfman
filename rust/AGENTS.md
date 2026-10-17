@@ -614,16 +614,26 @@ The architecture and compatibility goals are in
   Preserve script labels/assertions and verify Go comparison separately.
 
 
-## Public OCI images
+## OCI images
 
 - Keep OCI transport synchronous and outside the runtime/kernel/store contracts.
-  `bpfman-image-oci` owns public registry resolution, descriptor checks, bounded
+  `bpfman-image-oci` owns registry resolution, descriptor checks, bounded
   in-memory extraction and cache admission. Supply full ELF/selection/global
   validation from the kernel adapter before cache publication and on cache hits,
   keeping ELF interpretation outside the transport adapter.
 - Require explicit signing verification disablement until verification exists.
-  Reject unsupported credentials/policies before pulling. Never persist or log
-  tokens or registry credentials. Preserve caller reference and selected manifest
+  Reject unsupported policies before pulling. Never persist or log tokens or
+  registry credentials. Explicit credentials enter only the OCI adapter; keep
+  them out of model/runtime/store requests. Share deferred CLI decoding between
+  image load, inspect and build so Clap diagnostics never echo secret values.
+  Support Basic and bearer challenges without ambient credential-store lookup.
+  Token requests refuse redirects; registry read redirects strip authorization.
+  Reject foreign response challenges before credential-bearing token requests.
+  Retain in-memory credentials with upload-abort receipts for explicit retries.
+  ureq-proto TRACE dumps raw HTTP bytes; ureq TRACE also exposes Location URLs.
+  The CLI must enforce a non-overridable ceiling below TRACE for both dependency
+  targets, across stderr and timeline sinks. Keep application tracing available;
+  adapters never install subscribers. Document the same requirement for embedders. Preserve caller reference and selected manifest
   digest in `ProgramSource`; SQLite retains schema 2 and its image-source column.
 - Managed cache I/O belongs in `bpfman-fs`, under cache-root writer authority.
   Preserve one atomic envelope, descriptor confinement, lock-free reads, consuming

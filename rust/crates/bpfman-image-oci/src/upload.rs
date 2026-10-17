@@ -1,6 +1,6 @@
 //! Registry-owned upload sessions, with explicit abort and retry ownership.
 use crate::{
-    Error, Reference,
+    Credentials, Error, Reference,
     registry::{Registry, check, hash, verify},
 };
 use std::sync::atomic::AtomicBool;
@@ -8,6 +8,7 @@ use std::sync::atomic::AtomicBool;
 pub(super) struct Upload {
     reference: Reference,
     location: String,
+    credentials: Option<Credentials>,
 }
 
 impl std::fmt::Debug for Upload {
@@ -22,7 +23,7 @@ impl std::fmt::Debug for Upload {
 impl Upload {
     pub(super) fn abort(&self) -> Result<(), Error> {
         let flag = AtomicBool::new(false);
-        let mut registry = Registry::publisher(&self.reference, &flag);
+        let mut registry = Registry::publisher(&self.reference, self.credentials.as_ref(), &flag);
         let response =
             registry.write_request("DELETE", &self.location, &[], "application/octet-stream")?;
         if matches!(response.status().as_u16(), 202 | 204 | 404) {
@@ -46,7 +47,7 @@ impl Registry<'_> {
     ) -> Result<ureq::http::Response<ureq::Body>, Error> {
         check(self.flag)?;
         let mut response = self.send(method, url, bytes, content_type)?;
-        if response.status() == 401 && self.token.is_none() {
+        if response.status() == 401 && self.authorization.is_none() {
             self.authenticate(&response, "pull,push")?;
             check(self.flag)?;
             response = self.send(method, url, bytes, content_type)?;
@@ -68,8 +69,8 @@ impl Registry<'_> {
             .uri(url)
             .header("Content-Type", content_type)
             .header("Content-Length", bytes.len());
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("Bearer {token}"));
+        if let Some(authorization) = &self.authorization {
+            request = request.header("Authorization", authorization.clone());
         }
         let request = request
             .body(bytes)
@@ -120,6 +121,7 @@ impl Registry<'_> {
         let upload = Upload {
             reference: self.reference.clone(),
             location,
+            credentials: self.credentials.cloned(),
         };
         let result = (|| {
             check(self.flag)?;

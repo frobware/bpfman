@@ -1,4 +1,4 @@
-use crate::{Error, Reference, reference::validate_digest};
+use crate::{Credentials, Error, Reference, reference::validate_digest};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -8,6 +8,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
+use ureq::ResponseExt;
 
 type Labels = BTreeMap<String, String>;
 
@@ -40,7 +41,9 @@ pub(super) struct Manifest {
 pub(super) struct Registry<'a> {
     pub(super) reference: &'a Reference,
     pub(super) agent: ureq::Agent,
-    pub(super) token: Option<String>,
+    pub(super) authorization: Option<ureq::http::HeaderValue>,
+    pub(super) credentials: Option<&'a Credentials>,
+    token_agent: ureq::Agent,
     pub(super) flag: &'a AtomicBool,
 }
 
@@ -64,31 +67,50 @@ pub(super) fn verify(bytes: &[u8], digest: &str) -> Result<(), Error> {
     Ok(())
 }
 
+fn agent_config(redirects: u32) -> ureq::config::Config {
+    ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .max_redirects(redirects)
+        .redirect_auth_headers(ureq::config::RedirectAuthHeaders::Never)
+        .timeout_global(Some(Duration::from_secs(60)))
+        .timeout_connect(Some(Duration::from_secs(5)))
+        .timeout_resolve(Some(Duration::from_secs(5)))
+        .timeout_recv_response(Some(Duration::from_secs(5)))
+        .timeout_recv_body(Some(Duration::from_secs(5)))
+        .timeout_send_request(Some(Duration::from_secs(5)))
+        .timeout_send_body(Some(Duration::from_secs(5)))
+        .build()
+}
+
 impl<'a> Registry<'a> {
-    pub(super) fn new(reference: &'a Reference, flag: &'a AtomicBool) -> Self {
-        Self::configured(reference, flag, 10)
+    pub(super) fn new(
+        reference: &'a Reference,
+        credentials: Option<&'a Credentials>,
+        flag: &'a AtomicBool,
+    ) -> Self {
+        Self::configured(reference, credentials, flag, 10)
     }
 
-    pub(super) fn publisher(reference: &'a Reference, flag: &'a AtomicBool) -> Self {
-        Self::configured(reference, flag, 0)
+    pub(super) fn publisher(
+        reference: &'a Reference,
+        credentials: Option<&'a Credentials>,
+        flag: &'a AtomicBool,
+    ) -> Self {
+        Self::configured(reference, credentials, flag, 0)
     }
 
-    fn configured(reference: &'a Reference, flag: &'a AtomicBool, redirects: u32) -> Self {
-        let config = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .max_redirects(redirects)
-            .timeout_global(Some(Duration::from_secs(60)))
-            .timeout_connect(Some(Duration::from_secs(5)))
-            .timeout_resolve(Some(Duration::from_secs(5)))
-            .timeout_recv_response(Some(Duration::from_secs(5)))
-            .timeout_recv_body(Some(Duration::from_secs(5)))
-            .timeout_send_request(Some(Duration::from_secs(5)))
-            .timeout_send_body(Some(Duration::from_secs(5)))
-            .build();
+    fn configured(
+        reference: &'a Reference,
+        credentials: Option<&'a Credentials>,
+        flag: &'a AtomicBool,
+        redirects: u32,
+    ) -> Self {
         Self {
             reference,
-            agent: crate::transport::agent(config),
-            token: None,
+            token_agent: crate::transport::agent(agent_config(0)),
+            agent: crate::transport::agent(agent_config(redirects)),
+            authorization: None,
+            credentials,
             flag,
         }
     }
@@ -99,8 +121,8 @@ impl<'a> Registry<'a> {
             .agent
             .get(format!("{}{path}", self.reference.base()))
             .header("Accept", ACCEPT);
-        if let Some(token) = &self.token {
-            request = request.header("Authorization", format!("Bearer {token}"));
+        if let Some(authorization) = &self.authorization {
+            request = request.header("Authorization", authorization.clone());
         }
         let response = request
             .call()
@@ -115,39 +137,59 @@ impl<'a> Registry<'a> {
         actions: &str,
     ) -> Result<(), Error> {
         check(self.flag)?;
+        let origin = self
+            .reference
+            .base()
+            .parse::<ureq::http::Uri>()
+            .map_err(|_| Error::invalid("invalid registry origin"))?;
+        if response.get_uri().scheme() != origin.scheme()
+            || response.get_uri().authority() != origin.authority()
+        {
+            return Err(Error::invalid(
+                "refuse authentication challenge from redirected registry response",
+            ));
+        }
         let challenge = response
             .headers()
             .get("www-authenticate")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| {
-                Error::invalid(
-                    "registry authentication required; private credentials are not supported",
-                )
-            })?;
-        let (realm, service) = bearer_challenge(challenge)?;
-        if !realm.starts_with("https://")
-            && !(self.reference.base().starts_with("http://")
-                && realm.starts_with(&format!("http://{}/", self.reference.registry)))
-        {
-            return Err(Error::invalid("unsupported registry token realm"));
+            .ok_or_else(|| Error::invalid("registry authentication required; missing challenge"))?;
+        let (scheme, _) = challenge
+            .split_once(' ')
+            .ok_or_else(|| Error::invalid("unsupported registry authentication challenge"))?;
+        if scheme.eq_ignore_ascii_case("Basic") {
+            let credentials = self
+                .credentials
+                .ok_or_else(|| Error::invalid("registry authentication requires credentials"))?;
+            self.authorization = Some(secret_header(credentials.basic())?);
+            return Ok(());
         }
-        let mut request = self.agent.get(&realm).query(
+        let (realm, service) = bearer_challenge(challenge)?;
+        validate_realm(&realm, self.reference)?;
+        // Token endpoints never follow redirects, even for public pulls. Registry
+        // redirects strip Authorization independently of the destination origin.
+        let mut request = self.token_agent.get(&realm).query(
             "scope",
             format!("repository:{}:{actions}", self.reference.repository),
         );
         if let Some(service) = service {
             request = request.query("service", service);
         }
+        if let Some(credentials) = self.credentials {
+            request = request.header("Authorization", secret_header(credentials.basic())?);
+        }
         let token_response = request.call();
         check(self.flag)?;
+        // A token endpoint URL may itself contain secrets. Do not retain transport
+        // errors that can embed that URL in their diagnostic source chain.
         let token_response =
-            token_response.map_err(|e| Error::caused("request anonymous registry token", e))?;
+            token_response.map_err(|_| Error::invalid("request registry token failed"))?;
         if token_response.status() != 200 {
-            return Err(Error::invalid("anonymous registry token request failed"));
+            return Err(Error::invalid("registry token request failed"));
         }
         let bytes = read_body(token_response, 1024 * 1024, self.flag)?;
         let value: Value = serde_json::from_slice(&bytes)
-            .map_err(|e| Error::caused("decode anonymous token", e))?;
+            .map_err(|_| Error::invalid("decode registry token failed"))?;
         let token = value
             .get("token")
             .or_else(|| value.get("access_token"))
@@ -157,14 +199,14 @@ impl<'a> Registry<'a> {
                     && token.len() <= 64 * 1024
                     && token.bytes().all(|b| b.is_ascii_graphic())
             })
-            .ok_or_else(|| Error::invalid("registry returned no usable anonymous token"))?;
-        self.token = Some(token.into());
+            .ok_or_else(|| Error::invalid("registry returned no usable token"))?;
+        self.authorization = Some(secret_header(&format!("Bearer {token}"))?);
         Ok(())
     }
 
     fn get(&mut self, path: &str, limit: usize) -> Result<(Vec<u8>, Option<String>), Error> {
         let mut response = self.request(path)?;
-        if response.status() == 401 && self.token.is_none() {
+        if response.status() == 401 && self.authorization.is_none() {
             self.authenticate(&response, "pull")?;
             response = self.request(path)?;
         }
@@ -339,9 +381,36 @@ pub(super) fn select(manifest: &Manifest) -> Result<Descriptor, Error> {
         .ok_or_else(|| Error::invalid(format!("no linux/{} manifest in OCI index", host_arch())))
 }
 
+fn secret_header(value: &str) -> Result<ureq::http::HeaderValue, Error> {
+    let mut header = ureq::http::HeaderValue::from_str(value)
+        .map_err(|_| Error::invalid("invalid registry authorization header"))?;
+    header.set_sensitive(true);
+    Ok(header)
+}
+
+fn validate_realm(realm: &str, reference: &Reference) -> Result<(), Error> {
+    let uri = realm
+        .parse::<ureq::http::Uri>()
+        .map_err(|_| Error::invalid("invalid registry token realm"))?;
+    let authority = uri
+        .authority()
+        .filter(|a| !a.as_str().contains('@'))
+        .ok_or_else(|| Error::invalid("invalid registry token realm"))?;
+    if realm.contains('#')
+        || !(uri.scheme_str() == Some("https")
+            || (uri.scheme_str() == Some("http")
+                && reference.base().starts_with("http://")
+                && authority.as_str() == reference.registry))
+    {
+        return Err(Error::invalid("unsupported registry token realm"));
+    }
+    Ok(())
+}
+
 fn bearer_challenge(value: &str) -> Result<(String, Option<String>), Error> {
-    let params = value
-        .strip_prefix("Bearer ")
+    let (_, params) = value
+        .split_once(' ')
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
         .ok_or_else(|| Error::invalid("unsupported registry authentication challenge"))?;
     let mut values = BTreeMap::new();
     for part in params.split(',') {
@@ -386,10 +455,14 @@ fn summary(registry: &mut Registry<'_>, manifest: &Manifest) -> Result<Value, Er
     Ok(result)
 }
 
-/// Inspect public image metadata without creating cache, store or kernel state.
+/// Inspect image metadata without creating cache, store or kernel state.
 /// Index observations retain the published child digests and their labels.
-pub fn inspect(reference: &Reference, cancelled: &AtomicBool) -> Result<Value, Error> {
-    let mut registry = Registry::new(reference, cancelled);
+pub fn inspect(
+    reference: &Reference,
+    credentials: Option<&Credentials>,
+    cancelled: &AtomicBool,
+) -> Result<Value, Error> {
+    let mut registry = Registry::new(reference, credentials, cancelled);
     let manifest = registry.manifest(&reference.selector)?;
     let mut result = json!({"reference": reference.normalized(), "digest": manifest.digest, "media_type": manifest.media_type});
     if is_index(&manifest) {

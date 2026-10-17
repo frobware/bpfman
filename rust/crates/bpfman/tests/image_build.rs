@@ -176,9 +176,23 @@ fn signals_abort_acquired_uploads_and_reap_the_cli() -> Result {
             let _ = self.0.wait();
         }
     }
-    for signal in ["INT", "TERM"] {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    for (signal, authentication) in [
+        ("INT", "public"),
+        ("TERM", "public"),
+        ("INT", "basic"),
+        ("TERM", "basic"),
+        ("INT", "bearer"),
+        ("TERM", "bearer"),
+    ] {
         let temp = tempfile::tempdir()?;
         let server = registry::Registry::new();
+        let encoded = STANDARD.encode("private-user:private-password:with:colons");
+        if authentication != "public" {
+            let mut state = server.state.lock().expect("state");
+            state.required_auth = Some(format!("Basic {encoded}"));
+            state.bearer = authentication == "bearer";
+        }
         let (waiting, wait) = mpsc::sync_channel(1);
         let (resume, resumed) = mpsc::sync_channel(1);
         server.state.lock().expect("state").pause =
@@ -187,7 +201,15 @@ fn signals_abort_acquired_uploads_and_reap_the_cli() -> Result {
             command(temp.path())
                 .args(["image", "build", &server.reference])
                 .arg(fixture())
-                .env("RUST_LOG", "debug")
+                .env("RUST_LOG", "trace")
+                .env(
+                    "BPFMAN_REGISTRY_AUTH",
+                    if authentication == "public" {
+                        ""
+                    } else {
+                        &encoded
+                    },
+                )
                 .stdout(Stdio::null())
                 .stderr(Stdio::piped())
                 .spawn()?,
@@ -232,6 +254,14 @@ fn signals_abort_acquired_uploads_and_reap_the_cli() -> Result {
             Some(if signal == "INT" { 130 } else { 143 }),
             "{stderr}"
         );
+        for secret in [
+            "private-user",
+            "private-password:with:colons",
+            &encoded,
+            "publish-token",
+        ] {
+            assert!(!stderr.contains(secret), "signal logs leaked credentials");
+        }
         let state = server.state.lock().expect("state");
         assert!(state.uploads.is_empty());
         assert!(state.manifests.is_empty());
@@ -314,6 +344,119 @@ fn foreign_endian_contract_matches_go() -> Result {
                 .output()?,
         ))?;
         assert_eq!(rust, go, "{arch}");
+    }
+    Ok(())
+}
+
+#[test]
+fn private_registry_cli_credentials_and_redaction() -> Result {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    const PASSWORD: &str = "private-password:with:colons";
+    let encoded = STANDARD.encode(format!("private-user:{PASSWORD}"));
+    for bearer in [false, true] {
+        let temp = tempfile::tempdir()?;
+        let server = registry::Registry::new();
+        {
+            let mut state = server.state.lock().expect("state");
+            state.bearer = bearer;
+            state.required_auth = Some(format!("Basic {encoded}"));
+        }
+        for via_environment in [false, true] {
+            let mut build = command(temp.path());
+            build
+                .args(["image", "build", &server.reference])
+                .arg(fixture());
+            if via_environment {
+                build.env("BPFMAN_REGISTRY_AUTH", &encoded);
+            } else {
+                build.args(["--registry-auth", &encoded]);
+            }
+            let output = build
+                .env("RUST_LOG", "trace,ureq_proto::util=trace,ureq::util=trace")
+                .arg("--trace-file")
+                .arg(temp.path().join(format!("auth-{via_environment}.json")))
+                .output()?;
+            for secret in [PASSWORD, &encoded, "publish-token"] {
+                assert!(
+                    !String::from_utf8_lossy(&output.stderr).contains(secret),
+                    "successful request logs leaked credentials"
+                );
+            }
+            let timeline =
+                std::fs::read_to_string(temp.path().join(format!("auth-{via_environment}.json")))?;
+            for secret in [PASSWORD, &encoded, "publish-token"] {
+                assert!(!timeline.contains(secret), "timeline leaked credentials");
+            }
+            for line in String::from_utf8_lossy(&output.stderr).lines() {
+                let event: Value = serde_json::from_str(line)?;
+                assert!(
+                    !(event["level"] == "TRACE"
+                        && event["target"]
+                            .as_str()
+                            .is_some_and(|t| t.starts_with("ureq"))),
+                    "HTTP wire tracing escaped the ceiling"
+                );
+            }
+            let output = success(output);
+            assert!(output.starts_with(b"published: "));
+            let inspected: Value = serde_json::from_slice(&success(
+                command(temp.path())
+                    .args([
+                        "image",
+                        "inspect",
+                        &server.reference,
+                        "--registry-auth",
+                        &encoded,
+                    ])
+                    .env("BPFMAN_REGISTRY_AUTH", "invalid-env-overridden-by-flag")
+                    .output()?,
+            ))?;
+            assert_eq!(inspected["programs"]["pass"], "xdp");
+        }
+        for args in [
+            vec!["image", "inspect", &server.reference],
+            vec![
+                "image",
+                "build",
+                &server.reference,
+                fixture().to_str().expect("path"),
+            ],
+        ] {
+            for secret in ["malformed-secret!", "dXNlcjp3cm9uZw=="] {
+                let before = server.state.lock().expect("state").requests.len();
+                let output = command(temp.path())
+                    .args(&args)
+                    .args(["--registry-auth", secret])
+                    .env("RUST_LOG", "trace")
+                    .output()?;
+                assert!(!output.status.success());
+                for value in [
+                    secret,
+                    PASSWORD,
+                    &encoded,
+                    "publish-token",
+                    "Basic dXNlcjp3cm9uZw==",
+                ] {
+                    assert!(
+                        !String::from_utf8_lossy(&output.stderr).contains(value),
+                        "credential diagnostic leak"
+                    );
+                }
+                if secret == "malformed-secret!" {
+                    assert_eq!(output.status.code(), Some(2));
+                    assert_eq!(server.state.lock().expect("state").requests.len(), before);
+                }
+            }
+            let output = command(temp.path())
+                .args(&args)
+                .arg("--help")
+                .env("BPFMAN_REGISTRY_AUTH", &encoded)
+                .output()?;
+            assert!(output.status.success());
+            assert!(!String::from_utf8_lossy(&output.stdout).contains(&encoded));
+        }
+        assert!(!temp.path().join("runtime").exists());
+        assert!(!temp.path().join("cache").exists());
     }
     Ok(())
 }
