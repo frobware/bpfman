@@ -146,10 +146,10 @@ pub(super) enum ProgramCommand {
         #[arg(value_name = "PROGRAM_ID")]
         id: std::num::NonZeroU32,
     },
-    /// List managed programs; JSON includes live kernel observations.
+    /// List programs; --all includes unmanaged kernel programs.
     ///
     /// Text/quiet output reads stored summaries without kernel privileges.
-    /// --all and attachment-state filtering are not yet implemented.
+    /// --all observes the kernel for every output format.
     List(ListArgs),
     /// Load a local tracepoint/XDP/TC batch; other requests are explicitly rejected.
     Load {
@@ -160,6 +160,9 @@ pub(super) enum ProgramCommand {
 
 #[derive(Args)]
 pub(super) struct ListArgs {
+    /// Include unmanaged kernel programs.
+    #[arg(short = 'a', long)]
+    pub(super) all: bool,
     /// Print only program IDs, one per line.
     #[arg(short, long)]
     pub(super) quiet: bool,
@@ -269,6 +272,20 @@ mod tests {
             ]
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn all_program_listing_accepts_long_and_short_flags() -> Result<(), clap::Error> {
+        for flag in ["--all", "-a"] {
+            let cli = Cli::try_parse_from(["bpfman", "program", "list", flag])?;
+            assert!(matches!(
+                cli.command,
+                Command::Program {
+                    command: ProgramCommand::List(ListArgs { all: true, .. })
+                }
+            ));
+        }
         Ok(())
     }
 }

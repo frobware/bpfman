@@ -19,7 +19,6 @@ fn invalid_flags_are_rejected_before_opening_the_database() -> Result<(), Box<dy
         vec!["--runtime-dir", "relative", "program", "list"],
         vec!["program", "list", "--type", "bogus"],
         vec!["program", "list", "--output", "yaml"],
-        vec!["program", "list", "--all"],
         vec!["program", "list", "--attached"],
         vec!["--store", "unknown", "program", "list"],
         vec!["--store", "sqlite", "program", "list"],

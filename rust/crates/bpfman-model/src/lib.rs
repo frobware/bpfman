@@ -44,7 +44,7 @@ mod summary;
 
 pub use observation::{
     ImagePullPolicy, KernelMap, KernelProgram, ObservedMap, ObservedProgram, ProgramEntry,
-    ProgramSource, ProgramStats, StoredProgram,
+    ProgramListEntry, ProgramSource, ProgramStats, StoredProgram,
 };
 
 pub use link::{

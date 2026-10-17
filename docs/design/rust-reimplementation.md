@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; Cosign signature/identity policy, synchronous production TUF trust refresh, explicit local trust roots and trust-bound cache revalidation | Cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; Cosign signature/identity policy, synchronous production TUF trust refresh, explicit local trust roots and trust-bound cache revalidation | Cache eviction deferred to separate design work, outside Go parity |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -124,6 +124,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
 | Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
+| Program inventory | Managed listing and `program list --all` with unmanaged kernel rows, exact managed/coarse kernel type filtering, text/quiet/JSON output, cancellation and lock-free reads | Attachment-state and metadata-selector CLI compatibility |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2704,15 +2705,19 @@ wrong, change it here before broadening feature coverage.
   explicit private-registry credentials, Cosign signature/identity policy and
   synchronous production TUF trust-root refresh, ambient credential-file
   discovery, configured credential helpers and identity-token exchange are
-  implemented. Explicit local Sigstore trust roots are implemented; cache eviction
-  remains pending.
+  implemented. Explicit local Sigstore trust roots are implemented. Cache eviction
+  is deferred to separate design work: Go has no eviction implementation or
+  acceptance tests to port, so it is not a prerequisite for parity. Automatic
+  pruning and abandoned-stage recovery also require an explicit design rather
+  than being inferred from this port.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
 
 ### Phase 5: public surfaces and cutover
 
-- Complete gRPC and CLI compatibility.
+- Complete gRPC and CLI compatibility. Program inventory (`program list --all`)
+  is implemented; attachment-state and metadata-selector CLI compatibility remain.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -5758,3 +5763,59 @@ are `/tmp/bpfman-local-root-rust-check-final.log`,
 `/tmp/bpfman-local-root-remote-go.log`, `/tmp/bpfman-local-root-remote-rust.log`
 and `/tmp/bpfman-local-root-image-corpus.log`; the orchestrator exited zero after
 checking the selected filenames and leaf counts against the admitted manifest.
+
+## Go parity scope and all-program inventory checkpoint (17 October 2026)
+
+Cache eviction is deferred to separate design work. Go has no eviction code or
+acceptance tests to port; an eviction command, automatic pruning and abandoned-stage
+recovery require explicit policy and ownership decisions. They do not block Go
+parity. Historical OCI checkpoints above retain their original pending-work notes;
+this decision supersedes scheduling cache eviction as the next porting slice.
+
+The next implemented parity slice is `program list --all` / `-a`. It joins one
+complete store snapshot with a read-only kernel program-ID walk, preserving every
+stored identity before filtering. Managed rows retain their records and exact
+bpfman types, including records whose kernel objects are absent. A filtered managed
+row cannot reappear as an unmanaged row. Kernel-only rows have null records, empty
+managed links/application, and actual kernel names/types. The pure core projects
+TC/TCX filters onto `schedcls`, probe variants onto `kprobe`, and fentry/fexit onto
+`tracing` for kernel-only rows. Application filters exclude kernel-only rows;
+unfiltered unknown kernel types remain visible. All results sort by program ID.
+
+The model represents managed and kernel-only entries with payload-bearing enum
+variants. A separate backend-independent `ProgramInventory` capability exposes
+incremental IDs; the Aya adapter reuses the existing private read-only BPF ABI
+boundary. Runtime checks cancellation before/after enumeration and observation,
+rejects inconsistent identities/order, omits kernel objects disappearing during
+the walk, and propagates other errors. It never acquires writer authority. The
+combined store/kernel view is not an atomic snapshot. Existing managed summary
+listing retains its unprivileged text/quiet behavior. `--all` observes the kernel
+for text, quiet and JSON output; quiet takes precedence over JSON as before.
+Attachment-state and metadata-selector CLI compatibility remain separate work.
+
+Pure contracts cover identity-preserving joins, missing managed objects, application
+selection, every fine-to-coarse type projection, unknown kernel types and ordering.
+The stateful observation fake uses real SQLite to cover writer-held reads,
+disappearance, denied/invalid observations, cancellation and invalid enumeration.
+CLI contracts cover both flag spellings, output variants and nullability. The two
+unchanged `TestProgramList_All.bpfman` and
+`TestProgramList_AllTypeFilterKernelOnly.bpfman` scripts run against both Go and
+Rust with SQLite in a new serial corpus batch in the normal native gate. No Go
+source/tests, existing scripts/labels, dependencies, architecture laws or SQLite
+schema change.
+
+The userspace run also exposed an existing Rust credential-helper fixture race:
+the successful helper could exit before the parent wrote its registry input.
+That fixture now consumes input before returning credentials, preserving all
+upload-abort/retry assertions and production helper behavior.
+
+Validation: `direnv exec . make rust-fmt-fix rust-check lint-make` exits zero.
+Formatting, strict Clippy, unchanged architecture laws, userspace/store/CLI
+contracts, warnings-denied Rustdoc and Makefile checks pass. The native suite
+discovers and selects all 75 tests, including both unchanged inventory scripts
+against each implementation and the established acceptance corpus. It completes
+in 65.81 s on Linux 6.18.54 with aya-obj opt-level two and successful owned tmpfs
+fixture cleanup. The final gate log is
+`/tmp/bpfman-list-all-rust-check-final2.log`. Earlier runs exposed new-test
+compile/lint issues and the helper fixture race described above; these were
+corrected without skipping or weakening checks.

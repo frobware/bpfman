@@ -33,6 +33,8 @@ pub(super) enum Failure {
     Filesystem(#[from] bpfman_fs::Error),
     #[error("observed runtime path is not UTF-8")]
     Path,
+    #[error("kernel enumeration returned inconsistent program identity or ordering")]
+    Inventory,
 }
 
 impl From<bpfman_kernel::Error> for Failure {
@@ -316,6 +318,57 @@ fn entries<K: KernelObservations>(
             Ok(ProgramEntry { record, kernel })
         })
         .collect()
+}
+
+impl<S: OpenStore, K: bpfman_kernel::ProgramInventory> Bpfman<S, K> {
+    /// Join a store snapshot with all observable kernel programs without the
+    /// writer lock. Objects disappearing during the walk are omitted; other
+    /// observation failures fail the operation. The combined view is not atomic
+    /// across the store and kernel.
+    pub fn list_all_entries(
+        &self,
+        filter: &bpfman_core::ProgramFilter,
+    ) -> Result<Vec<bpfman_model::ProgramListEntry>, ObservationError> {
+        self.list_all_entries_with_cancellation(filter, &crate::Cancellation::new())
+    }
+
+    /// List managed and kernel-only entries with cancellation between every
+    /// enumeration and observation, including disappearing objects.
+    #[tracing::instrument(name = "program.list_all", level = "debug", skip_all, err)]
+    pub fn list_all_entries_with_cancellation(
+        &self,
+        filter: &bpfman_core::ProgramFilter,
+        cancellation: &crate::Cancellation,
+    ) -> Result<Vec<bpfman_model::ProgramListEntry>, ObservationError> {
+        check(cancellation)?;
+        let records = records(&self.store)?;
+        let mut kernel = Vec::new();
+        let mut previous = None;
+
+        loop {
+            check(cancellation)?;
+            let next = self.kernel.next_program_id(previous);
+            check(cancellation)?;
+            let Some(id) = next.map_err(Failure::from)? else {
+                break;
+            };
+            if previous.is_some_and(|previous| id <= previous) {
+                return Err(Failure::Inventory.into());
+            }
+            previous = Some(id);
+            let observed = self.kernel.program(id);
+            check(cancellation)?;
+            match observed {
+                Ok((program, _)) if program.id == id => kernel.push(program),
+                Ok(_) => return Err(Failure::Inventory.into()),
+                Err(error) if error.kind() == bpfman_kernel::ErrorKind::Missing => {}
+                Err(error) => return Err(Failure::from(error).into()),
+            }
+        }
+
+        check(cancellation)?;
+        Ok(bpfman_core::list_program_entries(records, kernel, filter))
+    }
 }
 
 #[cfg(test)]

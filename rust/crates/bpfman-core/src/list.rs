@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 
 use bpfman_model::{ProgramType, StoredProgramSummary};
 
@@ -46,4 +46,63 @@ pub fn select_records(
         .collect();
     selected.sort_by_key(|p| p.id);
     selected
+}
+
+/// Join one store snapshot with a kernel inventory, preserving managed identity
+/// before applying exact managed and coarse kernel-only type filters.
+pub fn list_program_entries(
+    records: Vec<bpfman_model::StoredProgram>,
+    kernel: Vec<bpfman_model::KernelProgram>,
+    filter: &ProgramFilter,
+) -> Vec<bpfman_model::ProgramListEntry> {
+    use bpfman_model::{ProgramEntry, ProgramListEntry};
+
+    let mut kernel: BTreeMap<_, _> = kernel.into_iter().map(|p| (p.id, p)).collect();
+    let mut managed_kernel = BTreeMap::new();
+
+    // Remove every stored identity before filtering; a filtered managed program
+    // must never reappear as an unmanaged row under the coarser kernel taxonomy.
+    for record in &records {
+        if let Some(observed) = kernel.remove(&record.id) {
+            managed_kernel.insert(record.id, observed);
+        }
+    }
+
+    let mut entries: Vec<_> = select_records(records, filter)
+        .into_iter()
+        .map(|record| {
+            ProgramListEntry::Managed(Box::new(ProgramEntry {
+                kernel: managed_kernel.remove(&record.id),
+                record,
+            }))
+        })
+        .collect();
+
+    if filter.application.as_ref().is_none_or(String::is_empty) {
+        entries.extend(
+            kernel
+                .into_values()
+                .filter(|p| {
+                    filter.types.is_empty()
+                        || filter.types.iter().any(|kind| {
+                            let projected = match kind {
+                                ProgramType::Xdp => "xdp",
+                                ProgramType::Tc | ProgramType::Tcx => "schedcls",
+                                ProgramType::Tracepoint => "tracepoint",
+                                ProgramType::Kprobe
+                                | ProgramType::Kretprobe
+                                | ProgramType::Uprobe
+                                | ProgramType::Uretprobe => "kprobe",
+                                ProgramType::Fentry | ProgramType::Fexit => "tracing",
+                                ProgramType::Lsm => "lsm",
+                            };
+                            p.kind == projected
+                        })
+                })
+                .map(ProgramListEntry::KernelOnly),
+        );
+    }
+
+    entries.sort_by_key(ProgramListEntry::id);
+    entries
 }

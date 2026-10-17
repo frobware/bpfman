@@ -15,6 +15,12 @@ fn failure(operation: &'static str, source: std::io::Error) -> Error {
     Error::new(kind, operation, source)
 }
 
+pub(crate) fn next_program_id(after: Option<NonZeroU32>) -> Result<Option<NonZeroU32>, Error> {
+    syscall::program_next(after.map_or(0, NonZeroU32::get))
+        .map(|id| id.and_then(NonZeroU32::new))
+        .map_err(|error| failure("enumerate kernel programs", error))
+}
+
 fn fdinfo(fd: &OwnedFd) -> BTreeMap<String, u64> {
     std::fs::read_to_string(format!("/proc/self/fdinfo/{}", fd.as_raw_fd()))
         .ok()

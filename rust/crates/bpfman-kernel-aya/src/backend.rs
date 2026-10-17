@@ -30,6 +30,12 @@ impl ProgramObservations for Kernel {
     }
 }
 
+impl bpfman_kernel::ProgramInventory for Kernel {
+    fn next_program_id(&self, after: Option<NonZeroU32>) -> Result<Option<NonZeroU32>, Error> {
+        observe::next_program_id(after)
+    }
+}
+
 impl LinkObservations for Kernel {
     fn tcx_link(&self, id: NonZeroU32) -> Result<KernelLink, Error> {
         crate::tcx::observe(id)

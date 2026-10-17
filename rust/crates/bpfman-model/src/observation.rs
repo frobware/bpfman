@@ -1,7 +1,7 @@
 //! Backend-independent stored and observed values. Wire nullability is a CLI concern.
 
 use crate::ProgramSpec;
-use alloc::{collections::BTreeMap, string::String, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 use core::num::{NonZeroU32, NonZeroU64};
 
 /// Provenance of committed bytecode, separate from its stored copy.
@@ -178,4 +178,23 @@ pub struct ProgramEntry {
     pub record: StoredProgram,
     /// Absent only when the kernel object does not exist.
     pub kernel: Option<KernelProgram>,
+}
+
+/// A managed record or an independently loaded kernel program in an all-program listing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ProgramListEntry {
+    /// Stored intent, including when its kernel object is absent.
+    Managed(Box<ProgramEntry>),
+    /// A live kernel program with no record in the captured store snapshot.
+    KernelOnly(KernelProgram),
+}
+
+impl ProgramListEntry {
+    /// Program identity used for deterministic listing order.
+    pub fn id(&self) -> NonZeroU32 {
+        match self {
+            Self::Managed(entry) => entry.record.id,
+            Self::KernelOnly(kernel) => kernel.id,
+        }
+    }
 }

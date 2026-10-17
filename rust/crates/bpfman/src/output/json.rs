@@ -74,6 +74,16 @@ pub(super) fn entry(p: &ProgramEntry) -> Value {
         "type":p.record.spec.kind().as_str(),"function_name":p.record.spec.name().as_str(),"links":p.record.links,"record":record(&p.record),"kernel":p.kernel.as_ref().map(kernel)})
 }
 
+pub(super) fn list_entry(p: &bpfman_model::ProgramListEntry) -> Value {
+    match p {
+        bpfman_model::ProgramListEntry::Managed(p) => entry(p),
+        bpfman_model::ProgramListEntry::KernelOnly(p) => json!({
+            "program_id":p.id.get(),"managed":false,"application":"",
+            "type":p.kind,"function_name":p.name,"links":[],"record":null,"kernel":kernel(p),
+        }),
+    }
+}
+
 #[cfg(test)]
 #[path = "../../../../tests/observation.rs"]
 mod sample;
@@ -154,5 +164,61 @@ mod tests {
         assert_eq!(value["record"]["handles"]["map_owner_id"], 7);
         assert!(value["record"]["load"]["map_owner_id"].is_null());
         assert_eq!(value.as_object().map(|o| o.len()), Some(8));
+    }
+
+    #[test]
+    fn unmanaged_rows_have_kernel_identity_without_manufactured_records_or_links() {
+        let mut program = sample::kernel();
+        program.kind = "schedcls".into();
+        let value = list_entry(&bpfman_model::ProgramListEntry::KernelOnly(program));
+
+        assert_eq!(value["program_id"], 42);
+        assert_eq!(value["managed"], false);
+        assert_eq!(value["type"], "schedcls");
+        assert_eq!(value["function_name"], "tracepoint_kill");
+        assert_eq!(value["links"], json!([]));
+        assert_eq!(value["application"], "");
+        assert!(value["record"].is_null());
+        assert_eq!(value["kernel"]["id"], 42);
+        assert_eq!(value.as_object().map(|o| o.len()), Some(8));
+    }
+
+    #[test]
+    fn all_program_formats_preserve_names_and_quiet_takes_precedence() {
+        use crate::cli::OutputFormat;
+        use bpfman_model::ProgramListEntry;
+
+        let mut record = sample::record();
+        record
+            .metadata
+            .insert("bpfman.io/application".into(), "app".into());
+        let mut stray = sample::kernel();
+        stray.id = std::num::NonZeroU32::new(43).expect("id");
+        let entries = [
+            ProgramListEntry::Managed(Box::new(ProgramEntry {
+                record,
+                kernel: None,
+            })),
+            ProgramListEntry::KernelOnly(stray),
+        ];
+
+        for format in [OutputFormat::Text, OutputFormat::Json] {
+            let mut bytes = Vec::new();
+            super::super::all_entries(&mut bytes, &entries, format, true).expect("quiet");
+            assert_eq!(bytes, b"42\n43\n");
+        }
+        let mut bytes = Vec::new();
+        super::super::all_entries(&mut bytes, &entries, OutputFormat::Text, false).expect("table");
+        let text = String::from_utf8(bytes).expect("UTF-8");
+        assert!(text.contains("APPLICATION"));
+        assert!(text.contains("tracepoint_kill_recorder"));
+        assert!(text.contains("tracepoint_kill"));
+        assert_eq!(text.lines().count(), 3);
+
+        let mut bytes = Vec::new();
+        super::super::all_entries(&mut bytes, &entries, OutputFormat::Json, false).expect("JSON");
+        let value: Value = serde_json::from_slice(&bytes).expect("JSON");
+        assert!(value["programs"][0]["kernel"].is_null());
+        assert!(value["programs"][1]["record"].is_null());
     }
 }

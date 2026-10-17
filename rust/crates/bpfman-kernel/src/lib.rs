@@ -45,6 +45,14 @@ pub trait ProgramObservations {
     ) -> Result<Vec<ObservedMapPin>, Error>;
 }
 
+/// Read-only kernel program enumeration, separate from managed-ID observations.
+pub trait ProgramInventory: ProgramObservations {
+    /// Return the next live program ID strictly greater than `after`.
+    /// None starts at zero; an empty result ends this walk. Objects can disappear
+    /// before a subsequent observation, and errors must not be treated as absence.
+    fn next_program_id(&self, after: Option<NonZeroU32>) -> Result<Option<NonZeroU32>, Error>;
+}
+
 /// Standalone and dispatcher-member link observations.
 pub trait LinkObservations {
     /// Read a canonical legacy TC freplace pin.

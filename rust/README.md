@@ -277,7 +277,9 @@ protects Rust's `images-v1` collection. A single envelope atomically publishes
 metadata and bytecode. `Always` refreshes, `IfNotPresent` uses the cache or pulls,
 and `Never` requires the cache without network access. Corrupt entries fail closed
 for cached policies; `Always` can refresh them. Go cache entries use a separate
-format. Cache eviction and abandoned-stage recovery are not implemented.
+format. Cache eviction is deferred to separate design work: Go has no eviction
+implementation or acceptance tests to port, so it is outside the parity work.
+Abandoned-stage recovery also needs a separate design.
 
 Cache admission records the signing policy and original top-level digest, including
 the index digest for a multi-platform image. Policy identity includes the selected
@@ -336,7 +338,8 @@ image-build scripts, also included in `rust-check`. The admitted 134 Rust files 
 publication and loading. Both implementations pass all ten remote-image scripts;
 Go also passes the six image-build scripts. Explicit private authentication,
 ambient credential files, configured helpers, identity-token exchange and custom
-local trust roots are implemented; cache eviction remains separate work.
+local trust roots are implemented; cache eviction is deferred design work outside
+Go parity.
 
 ## Persistence scope
 
@@ -584,11 +587,22 @@ the uprobe mount-namespace subprocess helper inherits its writer descriptor.
 No privileges are needed for text/quiet listing in a writable temporary runtime.
 Loading requires BPF and mount privileges; `/run/bpfman` will normally require sudo.
 
-Listing supports managed table, quiet-ID and JSON output. Text and quiet output
+Listing supports table, quiet-ID and JSON output. Default text and quiet output
 use stored summaries without kernel privileges; JSON adds full records and live
-kernel observations. `program get ID [-o text|json]` observes one managed program,
+kernel observations. `program list --all` (or `-a`) also includes unmanaged kernel
+programs in every output format and requires kernel observation privileges.
+Managed rows retain their records and exact bpfman types; unmanaged rows have no
+record or managed links and report kernel names/types. Type filters project TC/TCX
+onto `schedcls`, probe variants onto `kprobe`, and fentry/fexit onto `tracing` only
+for unmanaged rows. Application filters exclude unmanaged rows. Results are sorted
+by program ID. Enumeration and individual reads remain cancellable and never take
+the runtime writer lock. Programs disappearing during the walk are omitted from
+the kernel inventory; their managed records remain visible with null kernel data.
+Other enumeration/observation failures remain errors. The combined store/kernel
+view is not an atomic snapshot.
+`program get ID [-o text|json]` observes one managed program,
 including its maps, statistics, and links. Link observations use the same
-record/status shape as `link get` and do not take the writer lock. `--all` and
+record/status shape as `link get` and do not take the writer lock. Link `--all` and
 kernel link state filters remain unsupported. Unload supports the implemented program
 families with private or shared maps and pending or finalised links. Dispatcher
 cleanup completes before program teardown. Map sets survive while any member

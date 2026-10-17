@@ -258,9 +258,11 @@ fn resolved_helper_credentials_survive_failed_abort_and_explicit_retry() -> Resu
         let server = registry::Registry::new();
         let reference = Reference::parse(&server.reference)?;
         let mut command = shell(if identity {
-            r#"printf '{"Username":"<token>","Secret":"retry-secret"}'"#
+            r#"IFS= read -r registry || [ -n "$registry" ] || exit 9
+            printf '{"Username":"<token>","Secret":"retry-secret"}'"#
         } else {
-            r#"printf '{"Username":"helper-user","Secret":"retry-secret"}'"#
+            r#"IFS= read -r registry || [ -n "$registry" ] || exit 9
+            printf '{"Username":"helper-user","Secret":"retry-secret"}'"#
         });
         command.env_clear();
         let credentials = decode(&execute(

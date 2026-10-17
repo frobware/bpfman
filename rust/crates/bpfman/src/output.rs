@@ -25,15 +25,33 @@ pub(super) fn programs(
         return Ok(());
     }
 
-    table(out, programs)
+    let rows: Vec<_> = programs
+        .iter()
+        .map(|p| TableEntry {
+            id: p.id(),
+            application: p.application().into(),
+            kind: p.kind().to_string(),
+            name: p.name().into(),
+            links: p.links().to_vec(),
+        })
+        .collect();
+    table(out, &rows)
 }
 
-fn table(out: &mut impl Write, programs: &[StoredProgramSummary]) -> io::Result<()> {
+struct TableEntry {
+    id: std::num::NonZeroU32,
+    application: String,
+    kind: String,
+    name: String,
+    links: Vec<std::num::NonZeroU64>,
+}
+
+fn table(out: &mut impl Write, programs: &[TableEntry]) -> io::Result<()> {
     if programs.is_empty() {
         return Ok(());
     }
 
-    let with_application = programs.iter().any(|p| !p.application().is_empty());
+    let with_application = programs.iter().any(|p| !p.application.is_empty());
     let mut headers = vec!["PROGRAM ID"];
 
     if with_application {
@@ -44,23 +62,23 @@ fn table(out: &mut impl Write, programs: &[StoredProgramSummary]) -> io::Result<
     let mut rows = vec![headers.into_iter().map(String::from).collect::<Vec<_>>()];
 
     for program in programs {
-        let mut row = vec![program.id().to_string()];
+        let mut row = vec![program.id.to_string()];
 
         if with_application {
-            row.push(program.application().into());
+            row.push(program.application.clone());
         }
 
-        let links = if program.links().is_empty() {
+        let links = if program.links.is_empty() {
             "<none>".into()
         } else {
             program
-                .links()
+                .links
                 .iter()
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join(" ")
         };
-        row.extend([program.kind().to_string(), program.name().into(), links]);
+        row.extend([program.kind.clone(), program.name.clone(), links]);
         rows.push(row);
     }
 
@@ -113,6 +131,54 @@ pub(super) fn entries(
         out,
         &serde_json::json!({"programs":entries.iter().map(json::entry).collect::<Vec<_>>()}),
     )
+}
+
+pub(super) fn all_entries(
+    out: &mut impl Write,
+    entries: &[bpfman_model::ProgramListEntry],
+    format: OutputFormat,
+    quiet: bool,
+) -> io::Result<()> {
+    use bpfman_model::ProgramListEntry;
+
+    if quiet {
+        for entry in entries {
+            writeln!(out, "{}", entry.id())?;
+        }
+        return Ok(());
+    }
+    if format == OutputFormat::Json {
+        return write_json(
+            out,
+            &serde_json::json!({"programs":entries.iter().map(json::list_entry).collect::<Vec<_>>()}),
+        );
+    }
+
+    let rows: Vec<_> = entries
+        .iter()
+        .map(|entry| match entry {
+            ProgramListEntry::Managed(p) => TableEntry {
+                id: p.record.id,
+                application: p
+                    .record
+                    .metadata
+                    .get("bpfman.io/application")
+                    .cloned()
+                    .unwrap_or_default(),
+                kind: p.record.spec.kind().to_string(),
+                name: p.record.spec.name().as_str().into(),
+                links: p.record.links.clone(),
+            },
+            ProgramListEntry::KernelOnly(p) => TableEntry {
+                id: p.id,
+                application: String::new(),
+                kind: p.kind.clone(),
+                name: p.name.clone(),
+                links: Vec::new(),
+            },
+        })
+        .collect();
+    table(out, &rows)
 }
 
 fn write_json(out: &mut impl Write, value: &serde_json::Value) -> io::Result<()> {

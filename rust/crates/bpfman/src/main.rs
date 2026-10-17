@@ -131,7 +131,10 @@ where
                 application: args.application,
             };
 
-            if args.output == cli::OutputFormat::Json && !args.quiet {
+            if args.all {
+                let entries = bpfman.list_all_entries_with_cancellation(&filter, cancellation)?;
+                output::all_entries(&mut io::stdout().lock(), &entries, args.output, args.quiet)?;
+            } else if args.output == cli::OutputFormat::Json && !args.quiet {
                 let entries = bpfman.list_entries_with_cancellation(&filter, cancellation)?;
                 output::entries(&mut io::stdout().lock(), &entries)?;
             } else {

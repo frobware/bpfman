@@ -470,6 +470,12 @@ fn sqlite_script_corpus() {
 }
 
 #[test]
+fn sqlite_program_inventory_script_corpus() {
+    let _timing = support::TestTiming::start("sqlite_program_inventory_script_corpus");
+    cli::program_inventory_scripts();
+}
+
+#[test]
 fn sqlite_tc_egress_lifecycle() {
     let _timing = support::TestTiming::start("sqlite_tc_egress_lifecycle");
     tc::exercise(

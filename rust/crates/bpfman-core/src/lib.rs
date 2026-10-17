@@ -38,7 +38,7 @@ pub use link::{
     LinkAttempt, LinkCleanup, LinkCleanupContinuation, LinkCleanupKind, LinkCleanupReport,
     LinkCleanupStep, LinkResource,
 };
-pub use list::{ProgramFilter, list_programs, select_records};
+pub use list::{ProgramFilter, list_program_entries, list_programs, select_records};
 pub use store::plan_store_open;
 
 use alloc::{collections::VecDeque, vec::Vec};

@@ -241,6 +241,19 @@ pub(super) fn corpus() {
     run_dsl(None, &rust(), true);
 }
 
+pub(super) fn program_inventory_scripts() {
+    let scripts = [
+        "TestProgramList_All",
+        "TestProgramList_AllTypeFilterKernelOnly",
+    ];
+    let go = std::env::var_os("BPFMAN_GO_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repository().join("bin/bpfman"));
+    for binary in [go, rust()] {
+        run_dsl(Some(&scripts), &binary, true);
+    }
+}
+
 fn run_dsl(scripts: Option<&[&str]>, binary: &std::path::Path, isolated: bool) {
     run_dsl_source(scripts, binary, isolated, "file");
 }

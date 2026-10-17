@@ -37,6 +37,8 @@ struct State {
     calls: Vec<&'static str>,
     fault: Option<(&'static str, ErrorKind)>,
     cancel: Option<(&'static str, Cancellation)>,
+    disappear: Option<NonZeroU32>,
+    repeat_id: bool,
 }
 
 fn failure(kind: ErrorKind) -> Error {
@@ -110,6 +112,162 @@ impl ProgramObservations for FakeKernel {
             .cloned()
             .unwrap_or_default())
     }
+}
+
+impl bpfman_kernel::ProgramInventory for FakeKernel {
+    fn next_program_id(&self, after: Option<NonZeroU32>) -> Result<Option<NonZeroU32>, Error> {
+        let mut state = self.enter("next program")?;
+        if state.repeat_id && after.is_some() {
+            return Ok(after);
+        }
+        let next = state
+            .programs
+            .keys()
+            .copied()
+            .find(|id| after.is_none_or(|after| *id > after));
+        if let Some(id) = next.filter(|_| next == state.disappear) {
+            state.programs.remove(&id);
+        }
+        Ok(next)
+    }
+}
+
+fn inventory<S: OpenStore + CommitLoad + Copy>(backend: S) {
+    use bpfman_model::ProgramListEntry;
+
+    let temp = tempfile::tempdir().expect("runtime");
+    let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
+    let active = ActiveStore::open(backend, &layout, BUDGET).expect("real store");
+    let runtime = RuntimeDirectory::open_existing(layout)
+        .expect("adopt")
+        .expect("runtime exists");
+    let fake = FakeKernel::new(&runtime);
+    let app = Bpfman::new(active, fake.clone(), BUDGET);
+    let record = sample::record();
+    runtime
+        .with_writer(
+            bpfman_lock::AcquireOptions {
+                timeout: BUDGET,
+                cancelled: None,
+            },
+            |writer| {
+                backend
+                    .commit_program(
+                        &writer,
+                        LoadRecord {
+                            map_owner: None,
+                            shared_maps: &[],
+                            id: record.id,
+                            spec: &record.spec,
+                            source: &record.source,
+                            license: &record.license,
+                            created_at: &record.created_at,
+                            metadata: &record.metadata,
+                            globals: &BTreeMap::new(),
+                        },
+                    )
+                    .expect("commit");
+            },
+        )
+        .expect("writer");
+    let mut stray = sample::kernel();
+    stray.id = NonZeroU32::new(43).expect("id");
+    {
+        let mut state = fake.state.lock().expect("kernel");
+        state.programs.insert(record.id, sample::kernel());
+        state.programs.insert(stray.id, stray.clone());
+    }
+    runtime.with_writer(bpfman_lock::AcquireOptions { timeout: BUDGET, cancelled: None }, |_| {
+        let rows = app.list_all_entries(&Default::default()).expect("reader bypasses writer");
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(&rows[0], ProgramListEntry::Managed(p) if p.record.id == record.id && p.kernel.is_some()));
+        assert_eq!(rows[1], ProgramListEntry::KernelOnly(stray.clone()));
+    }).expect("writer");
+
+    // Disappearance between enumeration and lookup is ordinary churn, never
+    // a fabricated kernel-only row or a reason to lose the managed record.
+    {
+        let mut state = fake.state.lock().expect("kernel");
+        state.disappear = Some(record.id);
+    }
+    let rows = app
+        .list_all_entries(&Default::default())
+        .expect("disappeared managed program");
+    assert!(matches!(&rows[0], ProgramListEntry::Managed(p) if p.kernel.is_none()));
+    fake.state.lock().expect("kernel").disappear = Some(stray.id);
+    assert_eq!(
+        app.list_all_entries(&Default::default())
+            .expect("disappeared stray")
+            .len(),
+        1
+    );
+
+    for operation in ["next program", "program"] {
+        for kind in [ErrorKind::Unavailable, ErrorKind::InvalidData] {
+            let mut state = fake.state.lock().expect("kernel");
+            state.disappear = None;
+            state.programs.insert(stray.id, stray.clone());
+            state.fault = Some((operation, kind));
+            drop(state);
+            assert_eq!(
+                app.list_all_entries(&Default::default())
+                    .expect_err("not absence")
+                    .kind(),
+                ObservationErrorKind::Unavailable
+            );
+        }
+        let cancellation = Cancellation::new();
+        {
+            let mut state = fake.state.lock().expect("kernel");
+            state.fault = None;
+            state.calls.clear();
+            state.cancel = Some((operation, cancellation.clone()));
+            state.disappear = Some(stray.id);
+        }
+        assert_eq!(
+            app.list_all_entries_with_cancellation(&Default::default(), &cancellation)
+                .expect_err("cancel between effects")
+                .kind(),
+            ObservationErrorKind::Cancelled
+        );
+        assert_eq!(
+            fake.state.lock().expect("kernel").calls,
+            if operation == "next program" {
+                vec!["next program"]
+            } else {
+                vec!["next program", "program"]
+            }
+        );
+    }
+    {
+        let mut state = fake.state.lock().expect("kernel");
+        state.cancel = None;
+        state.disappear = None;
+        state.programs.insert(stray.id, stray);
+        state.repeat_id = true;
+    }
+    assert_eq!(
+        app.list_all_entries(&Default::default())
+            .expect_err("non-increasing ID")
+            .kind(),
+        ObservationErrorKind::Unavailable
+    );
+    let cancellation = Cancellation::new();
+    cancellation.cancel();
+    fake.state.lock().expect("kernel").calls.clear();
+    assert_eq!(
+        app.list_all_entries_with_cancellation(&Default::default(), &cancellation)
+            .expect_err("pre-cancelled")
+            .kind(),
+        ObservationErrorKind::Cancelled
+    );
+    assert!(fake.state.lock().expect("kernel").calls.is_empty());
+    assert!(!runtime.layout().root().join("fs").exists());
+}
+
+#[test]
+fn sqlite_inventory_preserves_managed_identity_and_observation_failures() {
+    inventory(bpfman_store_sqlite::Backend);
 }
 
 impl LinkObservations for FakeKernel {

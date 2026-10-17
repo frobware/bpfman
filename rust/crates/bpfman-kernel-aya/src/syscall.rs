@@ -178,14 +178,23 @@ pub(super) fn program_info(fd: BorrowedFd<'_>) -> io::Result<bpf_prog_info> {
 }
 
 pub(super) fn btf_next(start: u32) -> io::Result<Option<u32>> {
+    next_id(start, 23)
+}
+
+pub(super) fn program_next(start: u32) -> io::Result<Option<u32>> {
+    next_id(start, 11)
+}
+
+fn next_id(start: u32, command: u32) -> io::Result<Option<u32>> {
     let mut attr = IdAttr {
         id: start,
         next_id: 0,
         open_flags: 0,
     };
-    // SAFETY: BPF_BTF_GET_NEXT_ID reads start_id and writes next_id in this
-    // initialized fixed ABI layout. The exclusive buffer remains live.
-    let rc = unsafe { libc::syscall(libc::SYS_bpf, 23u32, &mut attr, size_of::<IdAttr>()) };
+    // SAFETY: private callers select BPF_BTF_GET_NEXT_ID or BPF_PROG_GET_NEXT_ID,
+    // which read start_id and write next_id in this initialized fixed ABI layout.
+    // The exclusive buffer remains live for this synchronous call.
+    let rc = unsafe { libc::syscall(libc::SYS_bpf, command, &mut attr, size_of::<IdAttr>()) };
     if rc < 0 {
         let error = io::Error::last_os_error();
         return if error.raw_os_error() == Some(libc::ENOENT) {
@@ -197,7 +206,7 @@ pub(super) fn btf_next(start: u32) -> io::Result<Option<u32>> {
     if attr.next_id <= start {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "non-increasing BTF ID",
+            "non-increasing BPF object ID",
         ));
     }
     Ok(Some(attr.next_id))
