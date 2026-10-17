@@ -1,6 +1,9 @@
 use super::OutputFormat;
 use bpfman_model::Tracepoint;
-use clap::Subcommand;
+use clap::{
+    Args, Subcommand,
+    builder::{PossibleValuesParser, TypedValueParser},
+};
 use std::num::{NonZeroU32, NonZeroU64};
 
 #[derive(Subcommand)]
@@ -23,10 +26,57 @@ pub(crate) enum LinkCommand {
         output: OutputFormat,
     },
     /// List stored links, including pending intent, without a writer lock.
-    List {
-        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
-        output: OutputFormat,
-    },
+    List(ListArgs),
+}
+
+#[derive(Args)]
+pub(crate) struct ListArgs {
+    /// Output format.
+    #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+    output: OutputFormat,
+    /// Print only link IDs, one per line.
+    #[arg(short, long)]
+    quiet: bool,
+    /// Filter by owning program ID.
+    #[arg(long)]
+    program_id: Option<NonZeroU32>,
+    /// Filter by attachment kind; comma-separated or repeated.
+    #[arg(long, value_delimiter = ',', value_parser = link_kind_parser())]
+    kind: Vec<bpfman_model::LinkKind>,
+    /// Filter by the owning program's type; comma-separated or repeated.
+    #[arg(short = 'p', long = "program-type", value_delimiter = ',', ignore_case = true, value_parser = super::program_type_parser())]
+    program_type: Vec<bpfman_model::ProgramType>,
+    /// Filter by the owning program's application metadata.
+    #[arg(long)]
+    application: Option<String>,
+    /// Filter by the owning program's KEY=VALUE metadata; repeat for more pairs.
+    #[arg(short = 'm', long = "metadata-selector", value_name = "KEY=VALUE", value_parser = super::list_metadata)]
+    metadata: Vec<(String, String)>,
+}
+
+fn link_kind_parser() -> impl TypedValueParser<Value = bpfman_model::LinkKind> {
+    use bpfman_model::LinkKind;
+    PossibleValuesParser::new(LinkKind::ALL.map(LinkKind::as_str))
+        .try_map(|value| value.parse::<LinkKind>())
+}
+
+impl ListArgs {
+    fn filter(self) -> bpfman_core::LinkFilter {
+        let program = bpfman_core::ProgramFilter {
+            types: self.program_type,
+            application: self.application.filter(|app| !app.is_empty()),
+            metadata: self.metadata.into_iter().collect(),
+            ..Default::default()
+        };
+        let scoped = !program.types.is_empty()
+            || program.application.is_some()
+            || !program.metadata.is_empty();
+        bpfman_core::LinkFilter {
+            program_id: self.program_id,
+            kinds: self.kind,
+            program: scoped.then_some(program),
+        }
+    }
 }
 
 impl LinkCommand {
@@ -483,9 +533,11 @@ impl LinkCommand {
                 let link = app.get_link_with_cancellation(id, cancellation)?;
                 crate::output::link(&mut std::io::stdout().lock(), &link, output)?;
             }
-            Self::List { output } => {
-                let links = app.list_link_records_with_cancellation(cancellation)?;
-                crate::output::links(&mut std::io::stdout().lock(), &links, output)?;
+            Self::List(args) => {
+                let output = args.output;
+                let quiet = args.quiet;
+                let links = app.list_links_with_cancellation(&args.filter(), cancellation)?;
+                crate::output::links(&mut std::io::stdout().lock(), &links, output, quiet)?;
             }
         }
 
@@ -529,4 +581,85 @@ fn user_target(raw: &str) -> Result<String, String> {
 
 fn user_symbol(raw: &str) -> Result<bpfman_model::Symbol, bpfman_model::InvalidSymbol> {
     raw.try_into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn list_filters_parse_aliases_unions_and_raw_pairs() -> Result<(), clap::Error> {
+        let cli = crate::cli::Cli::try_parse_from([
+            "bpfman",
+            "link",
+            "list",
+            "-q",
+            "-o",
+            "json",
+            "--program-id",
+            "42",
+            "--kind",
+            "kprobe,tracepoint",
+            "--kind",
+            "kretprobe",
+            "-p",
+            "kprobe,tracepoint",
+            "--program-type",
+            "kretprobe",
+            "--application",
+            "demo",
+            "-m",
+            "owner=old",
+            "--metadata-selector",
+            " owner =acme",
+            "-m",
+            "arbitrary key=raw=value with spaces",
+        ])?;
+        let crate::cli::Command::Link {
+            command: LinkCommand::List(args),
+        } = cli.command
+        else {
+            unreachable!("link list");
+        };
+        assert!(args.quiet);
+        assert!(matches!(args.output, OutputFormat::Json));
+        let filter = args.filter();
+        assert_eq!(filter.program_id.map(NonZeroU32::get), Some(42));
+        assert_eq!(
+            filter.kinds,
+            [
+                bpfman_model::LinkKind::Kprobe,
+                bpfman_model::LinkKind::Tracepoint,
+                bpfman_model::LinkKind::Kretprobe
+            ]
+        );
+        let program = filter.program.expect("scope");
+        assert_eq!(program.application.as_deref(), Some("demo"));
+        assert_eq!(
+            program.types,
+            [
+                bpfman_model::ProgramType::Kprobe,
+                bpfman_model::ProgramType::Tracepoint,
+                bpfman_model::ProgramType::Kretprobe
+            ]
+        );
+        assert_eq!(program.metadata["owner"], "acme");
+        assert_eq!(program.metadata["arbitrary key"], "raw=value with spaces");
+        for application in [None, Some("")] {
+            let mut argv = vec!["bpfman", "link", "list"];
+            if let Some(app) = application {
+                argv.extend(["--application", app]);
+            }
+            let cli = crate::cli::Cli::try_parse_from(argv)?;
+            let crate::cli::Command::Link {
+                command: LinkCommand::List(args),
+            } = cli.command
+            else {
+                unreachable!("link list");
+            };
+            assert!(args.filter().program.is_none());
+        }
+        Ok(())
+    }
 }

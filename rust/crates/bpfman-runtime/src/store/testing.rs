@@ -24,11 +24,17 @@ pub(crate) struct Faults<S> {
 struct State {
     calls: Vec<&'static str>,
     faults: BTreeMap<&'static str, ErrorKind>,
+    cancel: Option<(&'static str, crate::Cancellation)>,
 }
 
 fn check(state: &Mutex<State>, call: &'static str) -> Result<(), Error> {
     let mut state = state.lock().expect("fault controls");
     state.calls.push(call);
+    if let Some((point, cancellation)) = &state.cancel {
+        if *point == call {
+            cancellation.cancel();
+        }
+    }
     match state.faults.get(call) {
         Some(kind) => Err(Error::new(*kind, std::io::Error::other(call))),
         None => Ok(()),
@@ -49,6 +55,10 @@ impl<S> Faults<S> {
             .expect("fault controls")
             .faults
             .insert(call, kind);
+    }
+
+    pub(crate) fn cancel_at(&self, call: &'static str, cancellation: &crate::Cancellation) {
+        self.state.lock().expect("fault controls").cancel = Some((call, cancellation.clone()));
     }
 
     pub(crate) fn clear_faults(&self) {
@@ -203,6 +213,7 @@ impl<R: bpfman_store::LinkReader> bpfman_store::LinkReader for Reader<R> {
     }
 
     fn read_links(&mut self) -> Result<Vec<bpfman_model::StoredLink>, Error> {
+        check(&self.state, "links")?;
         self.reader.read_links()
     }
 }

@@ -620,8 +620,20 @@ also match missing keys. Selector keys/values follow Kubernetes validation, whil
 exact metadata pairs allow arbitrary metadata. Malformed input fails before
 runtime creation. Any nonempty metadata filter excludes unmanaged rows under
 `--all`, including negative selectors. Text/quiet selection remains store-only
-and unprivileged unless `--all` or an attachment filter is supplied. Link-list
-metadata and owning-program filtering remain separate work.
+and unprivileged unless `--all` or an attachment filter is supplied.
+
+`link list` accepts `--program-id`, comma-separated or repeated `--kind`, and
+owning-program filters `-p/--program-type`, `--application`, and repeatable
+`-m/--metadata-selector KEY=VALUE`. Kinds and program types each form a union;
+all supplied filters combine with AND. Metadata matches the owning program's
+load-time labels; returned records retain the link's own attach-time metadata.
+Exact pairs and application overrides follow the program-list rules above.
+Without an owning-program filter, links whose stored owner is absent remain
+visible; supplying one excludes them. Empty `--application` adds no restriction.
+Pending and stale intent remains visible. All output modes use stored records,
+require no kernel inspection and bypass the writer lock. Program and link reads
+are independent committed snapshots. `-q/--quiet` prints IDs in ascending order
+and takes precedence over JSON. Malformed filters fail before runtime creation.
 
 `program get ID [-o text|json]` observes one managed program,
 including its maps, statistics, and links. Link observations use the same

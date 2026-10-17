@@ -275,6 +275,14 @@ fn invalid_link_requests_fail_before_runtime_creation() -> Result<(), Box<dyn st
         vec!["attach", "tracepoint", "42", "a/b", "-m", "=value"],
         vec!["attach", "xdp", "42", "lo"],
         vec!["list", "--all"],
+        vec!["list", "--program-id", "0"],
+        vec!["list", "--program-id", "4294967296"],
+        vec!["list", "--kind", "tracing"],
+        vec!["list", "--kind", "tracepoint,"],
+        vec!["list", "--program-type", "bogus"],
+        vec!["list", "-m", "owner"],
+        vec!["list", "--metadata-selector", "  =value"],
+        vec!["list", "--selector", "owner=acme"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
             .env("BPFMAN_RUNTIME_DIR", &runtime)

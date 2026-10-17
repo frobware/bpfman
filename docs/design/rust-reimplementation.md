@@ -124,7 +124,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
 | Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
-| Program inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact metadata pairs and Kubernetes label selectors, exact managed/coarse kernel type filtering, text/quiet/JSON output, cancellation and lock-free reads | Link-list metadata and owning-program filtering |
+| Program and link inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact metadata pairs and Kubernetes label selectors, exact managed/coarse kernel type filtering; link identity/kind and owning-program type/metadata filters; text/quiet/JSON output, cancellation and lock-free reads | Broader CLI compatibility and cutover |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2718,8 +2718,9 @@ wrong, change it here before broadening feature coverage.
 
 - Complete gRPC and CLI compatibility. Program inventory (`program list --all`)
   and active-link `--attached`/`--unattached` filtering, exact metadata pairs and
-  Kubernetes label selectors are implemented. Link-list metadata and
-  owning-program filtering remain.
+  Kubernetes label selectors are implemented. Link-list identity/kind and
+  owning-program type, application and exact metadata filtering are implemented,
+  including quiet output.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -5917,3 +5918,55 @@ checker and canonical formatter. The native suite takes 67.81 seconds on Linux
 seconds parallel SQLite contracts and 0.37 seconds Go comparison, retaining the
 existing `aya-obj` dependency optimization at level two. Full gate log:
 `/tmp/bpfman-selector-rust-check-complete.log`.
+
+
+## Link-list selection checkpoint (17 October 2026)
+
+`link list` now accepts `--program-id`, comma-separated or repeated `--kind`,
+`-p/--program-type`, `--application`, repeatable `-m/--metadata-selector KEY=VALUE`
+and `-q/--quiet`. Attachment kinds and owning-program types each form a union;
+different filters combine with AND. Managed attachment kinds are derived from
+stored intent, retaining entry/return and TC/TCX distinctions independently of
+kernel taxonomy. Program-scoped metadata matches the owning program's load-time
+labels, never the link's attach labels. Exact pairs retain raw values, including
+empty strings and further equals signs, trim keys, and use the last repeated key.
+A nonempty application overrides its exact metadata pair; an empty application
+adds no scope. No Kubernetes selector flag is added to link listing because Go
+has none.
+
+Pure link selection joins stored summaries only when an owning-program scope is
+supplied. An unscoped listing retains orphan intent; a scoped listing excludes
+links whose owner is absent. Both pending and finalised records remain eligible,
+without claiming kernel presence. Results are sorted by managed link ID, quiet
+output takes precedence over JSON, and empty text/quiet output stays empty.
+Returned records preserve link metadata and the existing JSON shape.
+
+The generic runtime acquires no writer lock and performs no kernel inspection.
+Each program and link read observes its own committed snapshot; the join does
+not promise atomicity across them. Cancellation is checked before reads, between
+them, after each observation (including failed observations), and after selection.
+Read failures remain failures, without retries or empty-list substitution.
+Malformed CLI filters are rejected before runtime/store creation. Store contracts,
+SQLite schema 2, architecture boundaries and dependencies are unchanged.
+
+Coverage includes pure joins and ordering, exact owner/type/kind composition,
+entry/return and tracing kinds, orphan and pending intent, CLI admission, and
+real-store fault/cancellation contracts under writer contention. The unchanged
+`TestLinkMetadata_PersistAndFilter.bpfman` and new shared
+`TestLinkList_Filters.bpfman` are explicitly selected against Go and Rust alongside
+the five program-inventory scripts, without changing existing scripts or labels.
+Cache eviction remains deferred design work outside parity.
+
+Validation passed with `direnv exec . make rust-fmt-fix rust-check`: formatting,
+strict Clippy, unchanged architecture laws, all userspace/core/store/CLI/fake
+contracts and doctests, all 75 discovered native functions, and warnings-denied
+Rustdoc. The inventory batch passed all seven shared scripts against both Go and
+Rust (14 script passes), including both link-list scripts. The existing admitted
+corpus and owned kernel-fixture cleanup passed. The new script also passed the
+shell checker and canonical formatting check. No existing Go source, tests,
+acceptance scripts or labels changed.
+
+On Linux 6.18.54, with the existing `aya-obj` opt-level-two override, the complete
+kernel suite took 65.73 seconds, including its script comparisons; all 75 tests
+were selected. Remote-image and forced-image lanes were not rerun for this
+store-only listing slice.

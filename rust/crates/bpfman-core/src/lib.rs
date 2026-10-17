@@ -26,7 +26,9 @@ pub use xdp_replace::{
 };
 
 mod link;
+mod link_list;
 mod list;
+pub use link_list::{LinkFilter, list_links};
 mod load;
 mod metadata_selector;
 mod rollback;

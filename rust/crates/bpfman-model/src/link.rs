@@ -86,6 +86,28 @@ pub enum LinkDetails {
     Tc(crate::TcLink),
 }
 
+impl LinkDetails {
+    /// Managed attachment kind derived from the stored intent.
+    pub fn kind(&self) -> crate::LinkKind {
+        use crate::{LinkKind, TracingKind};
+        match self {
+            Self::Tracepoint(_) => LinkKind::Tracepoint,
+            Self::Xdp(_) => LinkKind::Xdp,
+            Self::Tc(_) => LinkKind::Tc,
+            Self::Tcx(_) => LinkKind::Tcx,
+            Self::Kprobe(d) if d.retprobe => LinkKind::Kretprobe,
+            Self::Kprobe(_) => LinkKind::Kprobe,
+            Self::Uprobe(d) if d.retprobe() => LinkKind::Uretprobe,
+            Self::Uprobe(_) => LinkKind::Uprobe,
+            Self::Tracing(d) => match d.kind {
+                TracingKind::Fentry => LinkKind::Fentry,
+                TracingKind::Fexit => LinkKind::Fexit,
+                TracingKind::Lsm => LinkKind::Lsm,
+            },
+        }
+    }
+}
+
 /// Stored progress of the pending-link protocol. Neither variant asserts that
 /// the kernel object is still present at observation time.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

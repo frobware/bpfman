@@ -96,7 +96,14 @@ pub(crate) fn links(
     out: &mut impl Write,
     links: &[StoredLink],
     format: OutputFormat,
+    quiet: bool,
 ) -> io::Result<()> {
+    if quiet {
+        for link in links {
+            writeln!(out, "{}", link.id)?;
+        }
+        return Ok(());
+    }
     if format == OutputFormat::Json {
         return super::write_json(
             out,

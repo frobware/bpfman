@@ -248,6 +248,8 @@ pub(super) fn program_inventory_scripts() {
         "TestProgramList_AttachmentState",
         "TestProgramList_AttachmentStateNetwork",
         "TestProgramList_MetadataSelectors",
+        "TestLinkMetadata_PersistAndFilter",
+        "TestLinkList_Filters",
     ];
     let go = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)

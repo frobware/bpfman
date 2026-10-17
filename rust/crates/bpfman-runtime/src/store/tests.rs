@@ -133,6 +133,126 @@ fn runtime_reads_the_real_store<S: TestStore>(backend: S) {
     assert!(layout(&runtime).database_path().exists());
 }
 
+fn link_listing_uses_cancellable_independent_store_reads<S: TestStore>(backend: S) {
+    let (_temp, runtime, store, app) = setup(backend);
+    let link = scope(&runtime, |writer| {
+        seed(&store, writer);
+        store
+            .create_pending_tracepoint(
+                writer,
+                bpfman_store::PendingTracepoint {
+                    program_id: id(),
+                    target: &"syscalls/sys_enter_kill".parse().expect("target"),
+                    metadata: &BTreeMap::from([(
+                        "bpfman.io/application".into(),
+                        "link-app".into(),
+                    )]),
+                    created_at: "2026-10-17T00:00:00Z",
+                },
+            )
+            .expect("pending link")
+            .0
+    });
+    let selected = bpfman_core::LinkFilter {
+        program: Some(bpfman_core::ProgramFilter {
+            application: Some("test".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    store.clear_calls();
+    scope(&runtime, |_| {
+        assert_eq!(
+            app.list_links(&selected)
+                .expect("read while locked")
+                .as_slice(),
+            std::slice::from_ref(&link)
+        );
+    });
+    assert_eq!(calls(&store), ["summaries", "links"]);
+    let excluded = bpfman_core::LinkFilter {
+        program: Some(bpfman_core::ProgramFilter {
+            application: Some("link-app".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert!(
+        app.list_links(&excluded)
+            .expect("owner metadata")
+            .is_empty()
+    );
+    store.clear_calls();
+    store.fail("summaries", ErrorKind::Unavailable);
+    assert_eq!(app.list_link_records().expect("no owner read"), [link]);
+    assert_eq!(calls(&store), ["links"]);
+    assert_eq!(
+        app.list_links(&selected).expect_err("owner failure").kind(),
+        crate::LinkErrorKind::Unavailable
+    );
+
+    for point in ["summaries", "links"] {
+        for (failure, expected) in [
+            (ErrorKind::Unavailable, crate::LinkErrorKind::Unavailable),
+            (ErrorKind::InvalidData, crate::LinkErrorKind::InvalidState),
+            (
+                ErrorKind::IncompatibleState,
+                crate::LinkErrorKind::InvalidState,
+            ),
+        ] {
+            store.clear_faults();
+            store.clear_calls();
+            store.fail(point, failure);
+            assert_eq!(
+                app.list_links(&selected).expect_err("read failure").kind(),
+                expected
+            );
+            assert_eq!(
+                calls(&store),
+                if point == "summaries" {
+                    vec!["summaries"]
+                } else {
+                    vec!["summaries", "links"]
+                }
+            );
+        }
+        for fails in [false, true] {
+            store.clear_faults();
+            store.clear_calls();
+            let cancellation = crate::Cancellation::new();
+            store.cancel_at(point, &cancellation);
+            if fails {
+                store.fail(point, ErrorKind::Unavailable);
+            }
+            assert_eq!(
+                app.list_links_with_cancellation(&selected, &cancellation)
+                    .expect_err("cancel at read boundary")
+                    .kind(),
+                crate::LinkErrorKind::Cancelled
+            );
+            assert_eq!(
+                calls(&store),
+                if point == "summaries" {
+                    vec!["summaries"]
+                } else {
+                    vec!["summaries", "links"]
+                }
+            );
+        }
+    }
+    store.clear_calls();
+    let cancellation = crate::Cancellation::new();
+    cancellation.cancel();
+    assert_eq!(
+        app.list_links_with_cancellation(&selected, &cancellation)
+            .expect_err("pre-cancelled")
+            .kind(),
+        crate::LinkErrorKind::Cancelled
+    );
+    assert!(calls(&store).is_empty());
+    assert!(!runtime.layout().root().join("fs").exists());
+}
+
 fn store_errors_keep_their_category_and_are_not_retried<S: TestStore>(backend: S) {
     for (fault, kind, expected) in [
         (
@@ -198,10 +318,13 @@ fn retained_backend_receipts_survive_failed_unload_and_explicit_retry<S: TestSto
             "validate",
             "records",
             "validate",
+            "links",
             "validate",
             "records",
             "validate",
+            "links",
             "validate",
+            "links",
             "delete program"
         ]
     );
@@ -375,6 +498,10 @@ macro_rules! backend_tests {
             #[test]
             fn runtime_reads_the_real_store() {
                 super::runtime_reads_the_real_store($backend);
+            }
+            #[test]
+            fn link_listing_uses_cancellable_independent_store_reads() {
+                super::link_listing_uses_cancellable_independent_store_reads($backend);
             }
             #[test]
             fn store_errors_keep_their_category_and_are_not_retried() {

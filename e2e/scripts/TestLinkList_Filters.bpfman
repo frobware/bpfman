@@ -1,0 +1,85 @@
+# -*- mode: bpfman -*-
+# Link filters compose with owning-program metadata and output modes.
+
+import ../lib.bpfman
+
+guard fn <- kfunc acquire
+defer kfunc release $fn
+
+guard loaded <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder --application link-demo -m owner=acme -m empty= -m "arbitrary key=raw=value with spaces"
+let prog = $loaded.programs[0]
+let pid = $prog.record.program_id
+defer bpfman program unload $pid
+
+guard other <- bpfman program load file testdata/bpf/kprobe_counter.bpf.o --programs kretprobe:kprobe_counter --application link-other -m owner=other
+let otherProg = $other.programs[0]
+let otherID = $otherProg.record.program_id
+defer bpfman program unload $otherID
+
+guard first <- bpfman link attach tracepoint $prog syscalls/sys_enter_kill -m owner=link-owner
+let firstID = $first.record.id
+defer bpfman link detach $first
+
+guard second <- bpfman link attach tracepoint $prog syscalls/sys_exit_kill
+let secondID = $second.record.id
+defer bpfman link detach $second
+
+guard probe <- bpfman link attach kprobe $otherProg $fn.name
+let probeID = $probe.record.id
+defer bpfman link detach $probe
+
+guard all <- bpfman link list -o json
+assert ($all.links |> jq "length") == 3
+let sortedIDs = $all |> jq "[.links[].id] | tojson"
+let expectedIDs = [$firstID $secondID $probeID] |> jq "sort | tojson"
+assert $sortedIDs == $expectedIDs
+
+guard exact <- bpfman link list --program-id $pid --kind tracepoint,kretprobe -p tracepoint,kretprobe --metadata-selector owner=wrong -m " owner =acme" -m empty= -m "arbitrary key=raw=value with spaces" -o json
+assert ($exact.links |> jq "length") == 2
+let exactIDs = $exact |> jq "[.links[].id] | tojson"
+let expectedTraceIDs = [$firstID $secondID] |> jq "sort | tojson"
+assert $exactIDs == $expectedTraceIDs
+let linkOwner = $exact |> jq ".links[] | select(.id == ${firstID}) | .metadata.owner"
+assert $linkOwner == link-owner
+
+guard overridden <- bpfman link list -m bpfman.io/application=wrong --application link-demo -o json
+assert ($overridden.links |> jq "length") == 2
+guard emptyApp <- bpfman link list --application "" -m bpfman.io/application=link-other -o json
+assert ($emptyApp.links |> jq "length") == 1
+assert $emptyApp.links[0].id == $probeID
+guard noScope <- bpfman link list --application "" -o json
+assert ($noScope.links |> jq "length") == 3
+
+guard byReturn <- bpfman link list --kind kretprobe --program-type kretprobe --program-id $otherID -o json
+assert ($byReturn.links |> jq "length") == 1
+assert $byReturn.links[0].id == $probeID
+
+guard repeated <- bpfman link list --kind tracepoint --kind kretprobe -p tracepoint --program-type kretprobe -o json
+assert ($repeated.links |> jq "length") == 3
+
+guard wrongKind <- bpfman link list --kind kprobe -o json
+assert ($wrongKind.links |> jq "length") == 0
+guard wrongType <- bpfman link list -p kprobe -o json
+assert ($wrongType.links |> jq "length") == 0
+guard wrongOwner <- bpfman link list -m owner=link-owner -o json
+assert ($wrongOwner.links |> jq "length") == 0
+guard absentEmpty <- bpfman link list -m absent= -o json
+assert ($absentEmpty.links |> jq "length") == 0
+guard contradictory <- bpfman link list --program-id $pid --kind kretprobe -o json
+assert ($contradictory.links |> jq "length") == 0
+
+guard quiet <- exec bpfman link list --application link-other -q -o json
+let quietIDs = $quiet.stdout |> jq 'split("\n") | map(select(length > 0) | tonumber)'
+assert ($quietIDs |> jq "length") == 1
+assert $quietIDs[0] == $probeID
+guard table <- exec bpfman link list --program-id $pid --kind tracepoint
+assert contains $table.stdout "LINK ID"
+assert contains $table.stdout "tracepoint"
+guard emptyTable <- exec bpfman link list --application absent
+assert $emptyTable.stdout == ""
+guard emptyQuiet <- exec bpfman link list --application absent --quiet
+assert $emptyQuiet.stdout == ""
+
+foreach bad in ["owner" "=value" "  =value"] {
+    assert fail bpfman link list -m $bad -o json
+}

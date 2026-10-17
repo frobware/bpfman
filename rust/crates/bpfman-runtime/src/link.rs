@@ -422,12 +422,41 @@ where
         &self,
         cancellation: &Cancellation,
     ) -> Result<Vec<StoredLink>, LinkCause> {
-        use bpfman_store::LinkReader;
-        check(cancellation)?;
-        let records = self.store.reader().read_links()?;
-        check(cancellation)?;
+        self.list_links_with_cancellation(&bpfman_core::LinkFilter::default(), cancellation)
+    }
 
-        Ok(records)
+    /// Select stored links by identity, kind and owning-program metadata without
+    /// kernel inspection or the writer lock. Pending and stale intent is included.
+    pub fn list_links(
+        &self,
+        filter: &bpfman_core::LinkFilter,
+    ) -> Result<Vec<StoredLink>, LinkCause> {
+        self.list_links_with_cancellation(filter, &Cancellation::new())
+    }
+
+    /// Cancellable link selection. Program and link reads each observe a fresh
+    /// committed snapshot; they do not promise an atomic cross-snapshot join.
+    #[tracing::instrument(name = "link.list", level = "debug", skip_all, err)]
+    pub fn list_links_with_cancellation(
+        &self,
+        filter: &bpfman_core::LinkFilter,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<StoredLink>, LinkCause> {
+        use bpfman_store::{LinkReader, ProgramReader};
+        check(cancellation)?;
+        let mut reader = self.store.reader();
+        let programs = if filter.program.is_some() {
+            let observed = reader.read_programs();
+            check(cancellation)?;
+            observed?
+        } else {
+            Vec::new()
+        };
+        let records = reader.read_links();
+        check(cancellation)?;
+        let selected = bpfman_core::list_links(records?, programs, filter);
+        check(cancellation)?;
+        Ok(selected)
     }
 }
 

@@ -37,9 +37,11 @@ mod xdp_config;
 pub use xdp_config::{InvalidXdpConfig, XDP_MAX_MEMBERS, XdpConfig, XdpPriority, XdpSlot};
 
 mod link;
+mod link_kind;
 mod load;
 mod observation;
 mod program_type;
+pub use link_kind::{LinkKind, ParseLinkKindError};
 mod summary;
 
 pub use observation::{
