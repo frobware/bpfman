@@ -120,7 +120,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
-| XDP observations | Program/link get and list; dispatcher get/list as JSON | Broader dispatcher CLI |
+| XDP observations | Program/link get and list; dispatcher get/list with text and JSON output, default listing and key filters | Broader CLI compatibility |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
 | Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
@@ -2720,7 +2720,8 @@ wrong, change it here before broadening feature coverage.
   and active-link `--attached`/`--unattached` filtering, exact metadata pairs and
   Kubernetes label selectors are implemented. Link-list identity/kind and
   owning-program type, application and exact metadata filtering are implemented,
-  including quiet output.
+  including quiet output. Dispatcher get/list supports text and JSON output,
+  defaults to text, and bare `dispatcher` lists with the same key filters.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -5970,3 +5971,57 @@ On Linux 6.18.54, with the existing `aya-obj` opt-level-two override, the comple
 kernel suite took 65.73 seconds, including its script comparisons; all 75 tests
 were selected. Remote-image and forced-image lanes were not rerun for this
 store-only listing slice.
+
+
+## Dispatcher CLI presentation checkpoint (17 October 2026)
+
+Dispatcher list/get now supports text and JSON output for XDP, TC ingress and TC
+egress. Text is the default, and bare `dispatcher` performs a listing with the
+same `--type`, `--nsid`, `--ifindex` and output flags as `dispatcher list`.
+List filters retain zero as the unfiltered namespace/interface sentinel.
+Malformed types, formats and numeric inputs fail during Clap parsing before
+runtime creation. Go has no dispatcher quiet flag; none is introduced.
+
+Text summaries expose type, namespace/interface identity, revision, dispatcher
+program ID, XDP kernel link ID or TC priority/hexadecimal filter handle, member
+count and namespace path. Detail output exposes runtime identity and members in
+execution-slot order, with function names, managed and kernel link IDs, priority
+and decoded proceed-on actions. TC decodes bit zero as UNSPEC and bit 31 as
+dispatcher-return; XDP uses its own ABI. Empty text listings are empty, while
+JSON retains its existing summary wrapper and complete snapshot fields.
+Presentation DTOs remain private to the front end, with XDP/TC runtime evidence
+in separate enum variants. Validated domain snapshots already supply contiguous
+execution order; rendering does not mutate stored membership.
+
+The existing generic, lock-free store reads are reused without kernel
+inspection or new writer authority. XDP and TC listings observe independent
+committed snapshots, with no atomic join guarantee. Store contracts, SQLite
+schema 2, runtime lifecycle, dependencies and architecture laws are unchanged.
+The hidden Go dispatcher-delete command remains outside this presentation slice.
+
+New shared `TestDispatcher_OutputAndFilters.bpfman` exercises three coexisting
+namespaced dispatchers, zero-priority insertion, exact JSON/text member order,
+every proceed-on action name, runtime identities, default/explicit listing,
+combined filters and empty/missing results. It is explicitly selected against Go
+and Rust alongside the unchanged XDP/TC zero-priority ordering and last-detach
+lifecycle scripts in the inventory batch. Process contracts also cover empty
+unprivileged reopening and malformed admission without runtime creation.
+Existing Go code, tests, acceptance scripts and labels remain unchanged.
+
+Validation: `direnv exec . make rust-fmt-fix rust-check` exits zero. Formatting,
+strict Clippy, unchanged architecture laws, all userspace/store/fake/CLI contracts,
+doctests, all 75 discovered native functions, owned-fixture cleanup and
+warnings-denied Rustdoc pass. The expanded inventory batch passes 12 shared
+scripts against each implementation (24 script passes), including the new
+presentation script and four unchanged dispatcher ordering/lifecycle scripts.
+The new script also passes the shell checker and canonical formatter.
+
+Raw CLI JSON is compared for default versus explicit listing: the shell's typed
+summary decoder omits TC priority, so its normalised objects cannot establish
+raw-output equality. No shell decoder or existing assertion was changed.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the full
+native suite takes 69.37 seconds: 41.83 seconds corpus, 5.16 seconds serial
+SQLite lifetime contracts, 22.00 seconds parallel SQLite contracts and 0.35
+seconds Go comparison. Gate log: `/tmp/bpfman-dispatcher-check-complete.log`.
+Remote-image and forced-image lanes were not rerun for this presentation slice.

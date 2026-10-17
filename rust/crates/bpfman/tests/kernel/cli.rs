@@ -250,6 +250,11 @@ pub(super) fn program_inventory_scripts() {
         "TestProgramList_MetadataSelectors",
         "TestLinkMetadata_PersistAndFilter",
         "TestLinkList_Filters",
+        "TestDispatcher_OutputAndFilters",
+        "TestDispatcher_ZeroPriorityDefaultOrderingXDP",
+        "TestDispatcher_ZeroPriorityDefaultOrderingTC",
+        "TestDispatcher_LifecycleAfterLastDetachXDP",
+        "TestDispatcher_LifecycleAfterLastDetachTC",
     ];
     let go = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)

@@ -1,0 +1,114 @@
+# -*- mode: bpfman -*-
+# Dispatcher default listing, filters and text/JSON output across all hooks.
+
+import ../lib.bpfman
+
+guard pair <- net netns-veth-pair
+defer net release $pair
+let netns = "/var/run/netns/${pair.a.ns}"
+let nsid = $pair.a.nsid
+let ifindex = $pair.a.ifindex
+
+guard xdp <- bpfman program load file testdata/bpf/xdp_counter.bpf.o --programs xdp:xdp_stats
+defer bpfman program unload $xdp.programs[0]
+guard tc <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+defer bpfman program unload $tc.programs[0]
+
+# Attach the later execution slot first, then insert a higher-priority member.
+# Every public action name is exercised in detail text, including TC bit zero.
+guard xdpTail <- bpfman link attach xdp $xdp.programs[0] $pair.a.link --netns $netns --priority 75 --proceed-on aborted,drop,pass,tx,redirect,dispatcher_return
+defer bpfman link detach $xdpTail
+guard xdpHead <- bpfman link attach xdp $xdp.programs[0] $pair.a.link --netns $netns --priority 0
+defer bpfman link detach $xdpHead
+foreach hook in [ingress egress] {
+    guard tail <- bpfman link attach tc $tc.programs[0] $pair.a.link $hook --netns $netns --priority 75 --proceed-on unspec,ok,reclassify,shot,pipe,stolen,queued,repeat,redirect,trap,dispatcher_return
+    defer bpfman link detach $tail
+    guard head <- bpfman link attach tc $tc.programs[0] $pair.a.link $hook --netns $netns --priority 0
+    defer bpfman link detach $head
+}
+
+guard all <- bpfman dispatcher list -o json
+assert ($all.dispatchers |> jq length) == 3
+guard implicitJSON <- exec bpfman dispatcher -o json
+let implicitValue = $implicitJSON.stdout |> jq fromjson
+# The shell's typed dispatcher summary omits priority; compare raw CLI JSON.
+guard explicitJSON <- exec bpfman dispatcher list -o json
+let explicitValue = $explicitJSON.stdout |> jq fromjson
+let expected = $explicitValue |> jq ".dispatchers | sort_by(.key.type) | tojson"
+let implicit = $implicitValue |> jq ".dispatchers | sort_by(.key.type) | tojson"
+assert $implicit == $expected
+
+guard implicitText <- exec bpfman dispatcher
+guard explicitText <- exec bpfman dispatcher list -o text
+assert $implicitText.stdout == $explicitText.stdout
+foreach column in [TYPE NSID IFINDEX REVISION "PROGRAM ID" "KERNEL LINK ID" PRIORITY HANDLE MEMBERS NETNS] {
+    assert contains $explicitText.stdout $column
+}
+assert contains $explicitText.stdout $netns
+
+foreach kind in [xdp tc-ingress tc-egress] {
+    guard filtered <- bpfman dispatcher list --type $kind --nsid $nsid --ifindex $ifindex -o json
+    assert ($filtered.dispatchers |> jq length) == 1
+    let summary = $filtered.dispatchers[0]
+    assert $summary.key.type == $kind
+    assert $summary.key.nsid == $nsid
+    assert $summary.key.ifindex == $ifindex
+    assert $summary.member_count == 2
+    assert $summary.runtime.netns_path == $netns
+    guard zero <- bpfman dispatcher list --type $kind --nsid 0 --ifindex 0 -o json
+    assert ($zero.dispatchers |> jq length) == 1
+    guard implicitFilter <- exec bpfman dispatcher --type $kind --nsid $nsid --ifindex $ifindex -o json
+    guard explicitFilter <- exec bpfman dispatcher list --type $kind --nsid $nsid --ifindex $ifindex -o json
+    assert $implicitFilter.stdout == $explicitFilter.stdout
+    guard filteredText <- exec bpfman dispatcher list --type $kind --nsid $nsid --ifindex $ifindex
+    let lines = $filteredText.stdout |> jq 'split("\n") | map(select(length > 0))'
+    assert ($lines |> jq length) == 2
+    let row = $lines[1] |> jq 'split(" ") | map(select(length > 0))'
+    assert $row[0] == $kind
+    assert contains $filteredText.stdout $netns
+
+    guard snapshot <- bpfman dispatcher get $kind $nsid $ifindex -o json
+    assert ($snapshot.members |> jq length) == 2
+    assert $snapshot.members[0].position == 0
+    assert $snapshot.members[0].priority == 0
+    assert $snapshot.members[1].position == 1
+    assert $snapshot.members[1].priority == 75
+    assert $snapshot.revision == $summary.revision
+    assert $snapshot.runtime.program_id == $summary.runtime.program_id
+    assert $snapshot.members[0].kernel_link_id > 0
+    assert $snapshot.members[1].kernel_link_id > 0
+
+    guard text <- exec bpfman dispatcher get $kind $nsid $ifindex
+    guard explicit <- exec bpfman dispatcher get -o text $kind $nsid $ifindex
+    assert $text.stdout == $explicit.stdout
+    assert contains $text.stdout "Dispatcher: ${kind} nsid=${nsid} ifindex=${ifindex}"
+    assert contains $text.stdout "Members (2/10):"
+    assert contains $text.stdout "FUNCTION NAME"
+    assert contains $text.stdout "PROCEED ON"
+    let textRows = $text.stdout |> jq 'split("\n") | map(select(test("^  [0-9]+ +"))) | map(split(" ") | map(select(length > 0)))'
+    assert ($textRows |> jq length) == 2
+    let textIDs = $textRows |> jq "[.[][4] | tonumber] | tojson"
+    let jsonIDs = $snapshot.members |> jq "[.[].link_id] | tojson"
+    assert $textIDs == $jsonIDs
+    if $kind == xdp {
+        assert contains $text.stdout "Kernel Link ID:"
+        assert contains $text.stdout "aborted, drop, pass, tx, redirect, dispatcher_return"
+        assert $snapshot.members[1].proceed_on == 2147483679
+    } else {
+        assert contains $text.stdout "Priority:"
+        assert contains $text.stdout "Filter Handle:"
+        assert contains $text.stdout "unspec, ok, reclassify, shot, pipe, stolen, queued, repeat, redirect, trap, dispatcher_return"
+        assert $snapshot.members[1].proceed_on == 2147484671
+    }
+}
+
+guard missing <- bpfman dispatcher list --nsid 1 -o json
+assert ($missing.dispatchers |> jq length) == 0
+guard empty <- exec bpfman dispatcher list --nsid 1
+assert $empty.stdout == ""
+assert fail bpfman dispatcher get xdp 1 $ifindex
+
+guard wrongInterface <- bpfman dispatcher list --nsid $nsid --ifindex 4294967295 -o json
+assert ($wrongInterface.dispatchers |> jq length) == 0
+guard wrongInterfaceText <- exec bpfman dispatcher --nsid $nsid --ifindex 4294967295
+assert $wrongInterfaceText.stdout == ""

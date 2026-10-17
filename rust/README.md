@@ -1073,9 +1073,16 @@ and `dispatcher_return`; the default is `pass,dispatcher_return`. The command
 supports text and JSON output. `link get`, `link list`, and `program get` expose
 stored XDP details and actual tracing-link observations. `dispatcher get xdp
 NSID IFINDEX -o json` reads the complete stored snapshot without a writer lock.
-`dispatcher list [--type xdp] [--nsid N] [--ifindex N] -o json` lists summaries
-from one validated store snapshot, also without that lock. Zero or omitted
-namespace/interface filters select all; only XDP and JSON output are supported.
+`dispatcher list [--type xdp|tc-ingress|tc-egress] [--nsid N] [--ifindex N]`
+lists stored summaries without that lock. Bare `dispatcher` defaults to listing
+and accepts the same filters. List and get default to text; `-o json` preserves
+the structured summary/snapshot formats. Zero or omitted namespace/interface
+list filters select all. Empty text listings produce no output; empty JSON
+listings contain `{"dispatchers": []}`. Text summaries include namespace paths,
+member counts and the XDP link or TC filter identity. Details show members in
+execution-slot order with named proceed-on actions, including TC's signed action
+encoding. Both formats read committed intent without inspecting the kernel;
+XDP and TC reads observe independent snapshots.
 
 The runtime resolves the interface, validates the managed EXT program, loads a
 one-slot dispatcher, and pins its program, extension link, and outer interface

@@ -73,7 +73,7 @@ impl Command {
                 )
                 .into());
             }
-            Self::Dispatcher { command } => return Ok(PreparedCommand::Dispatcher(command)),
+            Self::Dispatcher(args) => return Ok(PreparedCommand::Dispatcher(args.into_command())),
             Self::Link { command } => {
                 command.validate()?;
                 let mode = match command.xdp_interface() {
@@ -113,10 +113,7 @@ pub(super) enum Command {
         command: crate::ns_helper::Helper,
     },
     /// Inspect dispatcher snapshots.
-    Dispatcher {
-        #[command(subcommand)]
-        command: dispatcher::DispatcherCommand,
-    },
+    Dispatcher(dispatcher::DispatcherArgs),
     /// Manage standalone BPF links.
     Link {
         #[command(subcommand)]

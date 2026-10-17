@@ -449,3 +449,74 @@ fn host_probe_admission_precedes_runtime_creation() -> Result<(), Box<dyn std::e
 
     Ok(())
 }
+
+#[test]
+fn invalid_dispatcher_requests_fail_before_runtime_creation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let parent = tempfile::tempdir()?;
+    let runtime = parent.path().join("absent-runtime");
+    for args in [
+        vec!["--type", "bogus"],
+        vec!["list", "--type", "XDP"],
+        vec!["list", "--nsid", "-1"],
+        vec!["list", "--ifindex", "4294967296"],
+        vec!["list", "--output", "yaml"],
+        vec!["get", "xdp", "0", "9"],
+        vec!["get", "tc-egress", "123", "0"],
+        vec!["get", "tc-ingress", "123", "9", "--output", "yaml"],
+        vec!["get", "bogus", "123", "9"],
+        vec!["--type", "xdp", "get", "xdp", "123", "9"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .arg("--runtime-dir")
+            .arg(&runtime)
+            .arg("dispatcher")
+            .args(&args)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(!runtime.exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn empty_dispatcher_listing_reopens_in_both_formats() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    for args in [
+        vec![],
+        vec!["list"],
+        vec!["--type", "xdp"],
+        vec!["list", "--type", "tc-egress", "-o", "text"],
+        vec!["-o", "json"],
+        vec!["list", "-o", "json"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .arg("--runtime-dir")
+            .arg(directory.path())
+            .arg("dispatcher")
+            .args(&args)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stderr.is_empty());
+        if args.contains(&"json") {
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+                serde_json::json!({"dispatchers": []})
+            );
+        } else {
+            assert!(output.stdout.is_empty());
+        }
+    }
+    assert!(!directory.path().join("fs").exists());
+    Ok(())
+}
