@@ -301,12 +301,24 @@ fn signals_during_signature_reads_reap_the_cli_without_cache_or_runtime_state() 
     }
     let captured = signed_image::registry();
     for signal in ["INT", "TERM"] {
-        for load in [false, true] {
+        for (load, local) in [(false, false), (true, false), (false, true), (true, true)] {
             let temp = tempfile::tempdir()?;
             let config = temp.path().join("config.toml");
+            let root = temp.path().join("trusted_root.json");
+            let trust = if local {
+                std::fs::write(
+                    &root,
+                    include_str!(
+                        "../../../../vendor/github.com/sigstore/sigstore/pkg/tuf/repository/targets/trusted_root.json"
+                    ),
+                )?;
+                format!("trusted_root = '{}'", root.display())
+            } else {
+                "trust_source = 'bundled'".into()
+            };
             std::fs::write(
                 &config,
-                "[signing]\ntrust_source = 'bundled'\nallow_unsigned = false\n",
+                format!("[signing]\n{trust}\nallow_unsigned = false\n"),
             )?;
             let server = publisher::Registry::new();
             let encoded = STANDARD.encode("private-user:private-password:with:colons");

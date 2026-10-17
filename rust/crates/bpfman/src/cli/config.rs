@@ -20,6 +20,7 @@ struct Signing {
     allow_unsigned: bool,
     trusted_identities: Vec<Identity>,
     trust_source: TrustSource,
+    trusted_root: Option<std::path::PathBuf>,
 }
 
 #[derive(Default, Deserialize)]
@@ -47,6 +48,7 @@ impl Default for Signing {
             allow_unsigned: true,
             trusted_identities: Vec::new(),
             trust_source: TrustSource::default(),
+            trusted_root: None,
         }
     }
 }
@@ -72,9 +74,13 @@ impl Config {
         cache: Option<&bpfman_fs::RuntimeLayout>,
         timeout: std::time::Duration,
     ) -> anyhow::Result<bpfman_image_oci::SigningPolicy> {
-        if matches!(self.signing.trust_source, TrustSource::Bundled)
-            || !policy.verification_enabled()
-        {
+        if !policy.verification_enabled() {
+            return Ok(policy);
+        }
+        if let Some(path) = &self.signing.trusted_root {
+            return Ok(policy.with_trusted_root_file(path.clone()));
+        }
+        if matches!(self.signing.trust_source, TrustSource::Bundled) {
             return Ok(policy);
         }
         let layout = match cache {

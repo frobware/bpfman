@@ -32,6 +32,8 @@ mod layout;
 mod link;
 mod observe;
 mod removal;
+mod sigstore;
+pub use sigstore::open_sigstore_trust_root;
 
 /// Default runtime root, shared by front ends rather than duplicated there.
 pub const DEFAULT_RUNTIME_ROOT: &str = "/run/bpfman";

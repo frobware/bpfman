@@ -7,6 +7,7 @@
 //! of caller-supplied logging directives. This adapter installs no subscriber.
 mod credentials;
 mod error;
+mod local_root;
 mod publish;
 mod pull;
 mod reference;

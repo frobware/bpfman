@@ -641,7 +641,17 @@ The architecture and compatibility goals are in
   readers remain lock-free. Never does no network and requires unexpired trust metadata.
   Failed refresh must not fall back to bundled or expired trust. Explicit bundled
   mode and library policies without with_trust_cache retain embedded production roots.
-  Custom trust-root overrides remain unimplemented.
+  Explicit [signing] trusted_root files override either configured trust_source;
+  library with_trusted_root_file/with_trust_cache selectors replace each other.
+  Keep selection deferred and caller cancellation active before/during reads and
+  around validation. Open regular files nonblocking through bpfman-fs, allowing
+  operator symlinks; bound input to 1 MiB. Require the supported Sigstore v0.1
+  trusted-root bundle and Fulcio/Rekor/CT material, validate keys/certificates with
+  the synchronous verifier, and redact malformed input diagnostics. Never fall
+  back after selected-file failure or write operator input. Bind exact captured
+  bytes, not paths, into cache admission; preserve failed-revalidation generations.
+  Disabled verification and inspection never access the file. Custom TUF mirrors,
+  TUF bootstraps and legacy Rekor lookup endpoints are separate work.
   Never persist or log tokens or
   registry credentials. Explicit credentials enter only the OCI adapter; keep
   them out of model/runtime/store requests. Share deferred CLI decoding between

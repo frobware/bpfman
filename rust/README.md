@@ -141,8 +141,8 @@ Verification uses synchronous `sigstore-verify`, checking the signature,
 certificate chain, code-signing usage, SCT,
 authenticated signing time and Rekor evidence. Legacy Cosign `.sig` images and
 their embedded bundles match Go's currently enabled format. Missing bundles use
-bounded, redirect-free lookup at the public Rekor service. Custom trust-root
-overrides and OCI 1.1 signature discovery remain unimplemented.
+bounded, redirect-free lookup at the public Rekor service. OCI 1.1 signature
+discovery remains unimplemented.
 
 The CLI defaults to `[signing] trust_source = "tuf"`. A pinned, self-signed
 Sigstore production TUF bootstrap authenticates sequential root rotations and
@@ -174,9 +174,44 @@ Explicit `[signing] trust_source = "bundled"` selects the dependency's embedded
 production roots and performs no TUF I/O. Offline fixture comparisons select this
 mode explicitly; it has no metadata refresh/expiry protection. Library policies
 constructed with `SigningPolicy::verify` likewise use embedded roots unless the
-caller selects `with_trust_cache`. Disabling signature verification avoids all
-trust-cache access. Synchronous downloads have a 30-second request deadline;
-cancellation is checked between requests, reads, verification and publication.
+caller selects `with_trust_cache` or `with_trusted_root_file`. Disabling signature
+verification avoids all trust-cache access. Synchronous downloads have a 30-second
+request deadline; cancellation is checked between requests, reads, verification
+and publication.
+
+An explicit local root takes precedence over either configured trust source:
+
+```toml
+[signing]
+trusted_root = "/etc/bpfman/trusted_root.json"
+allow_unsigned = false
+```
+
+This selects a Sigstore `trusted_root.json` bundle, with media type
+`application/vnd.dev.sigstore.trustedroot+json;version=0.1`, containing Fulcio,
+Rekor and CT trust material. It is distinct from a TUF bootstrap `root.json`
+or a PEM certificate file. Each verification or image-load admission opens a
+regular file, limits accepted input to 1 MiB and validates its JSON, keys,
+certificates and validity windows before registry I/O. Operator-managed symlinks are allowed;
+relative paths use the process's working directory. Publish updates with an
+atomic file replacement so concurrent operations retain their opened file.
+The file is read-only input; the application never rewrites it or imports it into
+the TUF cache. Missing, malformed and unsupported roots fail without fallback.
+
+Library callers select the same behavior with
+`SigningPolicy::verify(false, identities)?.with_trusted_root_file(path)`.
+The builder performs no I/O; the last file/TUF selector wins. The CLI's explicit
+file overrides `trust_source` and avoids all TUF/cache-directory discovery.
+Disabled image loads and image inspection never open the root; `image verify`
+always enables verification. Custom roots select trust anchors, while the existing
+public Rekor lookup endpoint for legacy signatures without bundles is unchanged.
+
+The exact captured root bytes bind cache admission, independent of file path.
+Changing even their formatting makes `Never` reject the previous admission
+without network access. `IfNotPresent` verifies the recorded image digest under
+the new root before atomically updating admission. Failed revalidation preserves
+the previous cache generation. Local roots have no automatic refresh or TUF
+metadata expiry protection; signature/certificate validity checks still apply.
 
 `program load image`, `image verify`, `image inspect` and `image build` accept
 `--registry-auth BASE64` or `BPFMAN_REGISTRY_AUTH`, containing base64-encoded
@@ -300,8 +335,8 @@ image-build scripts, also included in `rust-check`. The admitted 134 Rust files 
 188 cases pass with `BPFMAN_E2E_BYTECODE_SOURCE=image` using Rust directly for
 publication and loading. Both implementations pass all ten remote-image scripts;
 Go also passes the six image-build scripts. Explicit private authentication,
-ambient credential files, configured helpers and identity-token exchange are implemented;
-custom trust roots and cache eviction remain separate work.
+ambient credential files, configured helpers, identity-token exchange and custom
+local trust roots are implemented; cache eviction remains separate work.
 
 ## Persistence scope
 

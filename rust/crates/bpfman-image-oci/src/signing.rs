@@ -2,6 +2,7 @@ use crate::{Error, registry::hash};
 use regex::Regex;
 use sigstore_verify::trust_root::SIGSTORE_PRODUCTION_TRUSTED_ROOT;
 use std::{
+    path::PathBuf,
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
@@ -79,7 +80,13 @@ impl TrustedIdentity {
 #[derive(Clone, Debug)]
 pub struct SigningPolicy {
     pub(super) verification: Option<Verification>,
-    trust: Option<crate::trust::TrustCache>,
+    trust: Option<Trust>,
+}
+
+#[derive(Clone, Debug)]
+enum Trust {
+    Tuf(crate::trust::TrustCache),
+    File(PathBuf),
 }
 
 #[derive(Clone, Debug)]
@@ -128,18 +135,37 @@ impl SigningPolicy {
     /// Refresh Sigstore production trust through TUF before image admission.
     /// Construction performs no I/O. Operations reuse an authenticated cache for
     /// up to 24 hours, subject to all metadata expiry checks. Never does no network
-    /// I/O and requires a valid cache. Disabled verification never accesses TUF.
+    /// I/O and requires a valid cache. Replaces any previous trust selector.
+    /// Disabled verification never accesses TUF.
     pub fn with_trust_cache(mut self, layout: bpfman_fs::RuntimeLayout, timeout: Duration) -> Self {
         if self.verification.is_some() {
-            self.trust = Some(crate::trust::TrustCache { layout, timeout });
+            self.trust = Some(Trust::Tuf(crate::trust::TrustCache { layout, timeout }));
+        }
+        self
+    }
+
+    /// Select an operator-managed Sigstore `trusted_root.json` file, replacing
+    /// any previous trust selector. Construction performs no I/O. Each operation
+    /// reads and validates at most 1 MiB from a regular file (symlinks allowed),
+    /// binding its exact bytes into cache admission. Missing, malformed or
+    /// unsupported roots fail without fallback to TUF or bundled roots.
+    /// Disabled verification never opens the file. Relative paths are resolved
+    /// against the process's working directory when the operation runs.
+    pub fn with_trusted_root_file(mut self, path: PathBuf) -> Self {
+        if self.verification.is_some() {
+            self.trust = Some(Trust::File(path));
         }
         self
     }
 
     pub(super) fn resolve(&self, online: bool, flag: &AtomicBool) -> Result<Self, Error> {
+        crate::registry::check(flag)?;
         let mut policy = self.clone();
-        if let Some(cache) = &self.trust {
-            let root = crate::trust::resolve(cache, online, flag)?;
+        if let Some(trust) = &self.trust {
+            let root = match trust {
+                Trust::Tuf(cache) => crate::trust::resolve(cache, online, flag)?,
+                Trust::File(path) => crate::local_root::resolve(path, flag)?,
+            };
             if let Some(verification) = &mut policy.verification {
                 verification.root = root.into();
             }

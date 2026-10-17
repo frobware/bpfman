@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Custom trust roots, cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; Cosign signature/identity policy, synchronous production TUF trust refresh, explicit local trust roots and trust-bound cache revalidation | Cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2704,7 +2704,8 @@ wrong, change it here before broadening feature coverage.
   explicit private-registry credentials, Cosign signature/identity policy and
   synchronous production TUF trust-root refresh, ambient credential-file
   discovery, configured credential helpers and identity-token exchange are
-  implemented. Custom trust roots and cache eviction remain pending.
+  implemented. Explicit local Sigstore trust roots are implemented; cache eviction
+  remains pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -5685,3 +5686,75 @@ cases, 214 script/case PASS records, no selected skips/failures, and every file
 load forced through native image publication/loading. Selected filenames match
 the admitted manifest exactly. Gate and acceptance lanes ran serially to respect
 the shared script-runner lock.
+
+
+## OCI explicit local trust-root checkpoint (17 October 2026)
+
+The synchronous OCI adapter accepts an operator-selected Sigstore
+`trusted_root.json` through
+`SigningPolicy::with_trusted_root_file(PathBuf)`. Construction remains free of
+I/O. A private payload-bearing selector chooses a deferred local file or the
+existing production TUF cache; the last library builder selector wins. The CLI
+accepts `[signing] trusted_root = "/path/to/trusted_root.json"`, overriding both
+default/explicit TUF and bundled trust without discovering a trust-cache directory.
+The setting applies to image verification and load admission; inspection and
+publication do not use signing trust. Disabled image loads do not access it, while
+`image verify` continues to force verification on.
+
+`bpfman-fs` opens the operator-owned input read-only, nonblocking and CLOEXEC,
+requires a regular opened descriptor and permits ordinary symlinks. Missing files,
+directories and FIFOs fail without fallback. The adapter reads in bounded chunks,
+limits total input to 1 MiB, retries EINTR on the same reader and checks caller
+cancellation before and after reads and around validation. UTF-8 and JSON errors
+are redacted. The selected v0.1 Sigstore bundle must contain Fulcio, Rekor and CT
+material; the existing synchronous verifier validates keys, certificates and
+validity windows before registry access. It is a trust-anchor bundle, not a PEM
+file or TUF bootstrap. Operator input is never rewritten or imported into a managed
+cache. Operator atomic replacement preserves opened descriptors across updates;
+in-place concurrent file mutation is not an atomic input publication protocol.
+
+One operation captures and validates its root bytes, then reuses those bytes
+through verification and cache publication. Exact bytes, not the input path, bind
+the existing policy identity. A formatting-only change therefore rejects `Never`
+reuse without registry I/O. `IfNotPresent` verifies the recorded top-level digest
+under the selected root before the existing generation-checked atomic update.
+Invalid roots and failed signature revalidation preserve previous admission.
+Default production TUF refresh and bundled behavior remain unchanged when no file
+is selected. Local roots have no TUF metadata refresh or expiry protection; crypto
+and historical signing-time checks still apply. Custom TUF mirrors/bootstrap roots,
+OCI 1.1 discovery and alternate legacy Rekor lookup endpoints are separate work.
+
+Five OCI contracts cover deferred selection, both builder orders, redacted invalid
+material, input bounds and cancellation/EINTR, production versus staging trust,
+failed and successful reopened-cache revalidation, equal-byte different-path policy
+identity, and root changes after an operation captures its trust. The filesystem
+contract rejects special/missing files and proves descriptor retention across
+symlink-target replacement. Three CLI contracts use real public signed release
+bytes and the already-vendored production trust bundle to exercise configuration
+precedence, untrusted CA rejection, invalid-file admission, disabled load/inspection,
+forced verification and cache reuse across independent processes. Existing real
+SIGINT/SIGTERM signature-read contracts now cover both bundled and local roots,
+including authenticated requests, child reaping and absence of runtime/cache state.
+No Go source/tests, existing scripts/labels, dependencies, architecture laws,
+runtime/kernel/store contracts or SQLite schema are changed.
+
+Validation: `direnv exec . make rust-fmt-fix rust-check lint-make` passes on the
+final source/test tree, including strict Clippy, unchanged architecture laws,
+44 OCI unit contracts, six CLI trust contracts, four CLI signature contracts,
+14 CLI credential contracts, userspace/store/doc checks and all 74 discovered /
+selected native tests. The native suite took 62.32 s on Linux 6.18.54, retaining
+aya-obj opt-level two, and owned fixture cleanup passed. Make checking and the
+undefined-variable probes pass. Focused `rust-test-image` and `rust-lint` also pass.
+
+Both binaries pass the ten unchanged remote-image files / ten leaf cases with
+`external=true,image=true`, default signature verification enabled, Go serial and
+Rust parallel, with a fresh Rust production TUF cache. The rebuilt Rust binary
+also passes the exact admitted forced-image manifest: 134 files / 188 leaf cases,
+214 script/case PASS records, no selected skips or failures, and every file load
+forced through native Rust image publication/loading. That lane uses default
+verification and a separate fresh production TUF cache. The full gate and these
+acceptance lanes ran serially to respect the shared runner lock. Validation logs
+are `/tmp/bpfman-local-root-rust-check-final.log`,
+`/tmp/bpfman-local-root-remote-go.log`, `/tmp/bpfman-local-root-remote-rust.log`
+and `/tmp/bpfman-local-root-image-corpus.log`; the orchestrator exited zero after
+checking the selected filenames and leaf counts against the admitted manifest.
