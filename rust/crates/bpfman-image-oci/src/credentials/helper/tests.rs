@@ -14,7 +14,7 @@ fn shell(script: &str) -> Command {
 }
 
 #[test]
-fn protocol_preserves_colons_and_redacts_malformed_and_identity_responses() -> Result {
+fn protocol_preserves_colons_and_identity_tokens_and_redacts_malformed_responses() -> Result {
     let credentials = decode(
         br#"{"ServerURL":"ignored","Username":"helper-user","Secret":"secret:with:colons"}"#,
     )?
@@ -28,7 +28,7 @@ fn protocol_preserves_colons_and_redacts_malformed_and_identity_responses() -> R
     );
     assert!(!format!("{credentials:?}").contains("secret"));
     for response in [
-        br#"{"Username":"<token>","Secret":"identity-secret"}"#.as_slice(),
+        br#"{"Username":"<token>","Secret":""}"#.as_slice(),
         br#"{"Username":{"secret":true},"Secret":"password-secret"}"#,
         br#"{"Username":"user","Secret":42}"#,
         br#"{"Username":"","Secret":"password-secret"}"#,
@@ -44,13 +44,12 @@ fn protocol_preserves_colons_and_redacts_malformed_and_identity_responses() -> R
     }
     assert!(decode(b"{}")?.is_none());
     assert!(decode(br#"{"Username":"","Secret":""}"#)?.is_none());
-    let token = decode(br#"{"Username":"<token>","Secret":"refresh-secret"}"#)
-        .expect_err("refresh tokens are not registry access tokens");
-    assert!(
-        token
-            .to_string()
-            .contains("identity-token exchange is unsupported")
-    );
+    let token = decode(br#"{"Username":"<token>","Secret":"refresh-secret"}"#)?
+        .ok_or("identity credentials")?;
+    assert_eq!(token.refresh(), Some("refresh-secret"));
+    assert!(token.bearer().is_none());
+    assert!(token.basic().is_err());
+    assert!(!format!("{token:?}").contains("refresh-secret"));
     Ok(())
 }
 
@@ -255,10 +254,14 @@ fn resolved_helper_credentials_survive_failed_abort_and_explicit_retry() -> Resu
     use crate::{Bytecode, Publication, Reference, publish};
     use std::collections::BTreeMap;
 
-    for bearer in [false, true] {
+    for (bearer, identity) in [(false, false), (true, false), (true, true)] {
         let server = registry::Registry::new();
         let reference = Reference::parse(&server.reference)?;
-        let mut command = shell(r#"printf '{"Username":"helper-user","Secret":"retry-secret"}'"#);
+        let mut command = shell(if identity {
+            r#"printf '{"Username":"<token>","Secret":"retry-secret"}'"#
+        } else {
+            r#"printf '{"Username":"helper-user","Secret":"retry-secret"}'"#
+        });
         command.env_clear();
         let credentials = decode(&execute(
             command,
@@ -268,10 +271,14 @@ fn resolved_helper_credentials_survive_failed_abort_and_explicit_retry() -> Resu
         )?)?
         .ok_or("credentials")?;
         let mut state = server.state.lock().expect("state");
-        state.required_auth = Some(format!(
-            "Basic {}",
-            STANDARD.encode("helper-user:retry-secret")
-        ));
+        if identity {
+            state.refresh_form = Some("grant_type=refresh_token&refresh_token=retry-secret&service=fixture&client_id=bpfman&scope=repository%3Atest%3Apull%2Cpush".into());
+        } else {
+            state.required_auth = Some(format!(
+                "Basic {}",
+                STANDARD.encode("helper-user:retry-secret")
+            ));
+        }
         state.bearer = bearer;
         state.cancel_on = Some("POST /v2/test/blobs/uploads/".into());
         state

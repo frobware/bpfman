@@ -110,11 +110,6 @@ impl Config {
                 source: Source::Bearer(format!("Bearer {}", auth.token)),
             }));
         }
-        if !auth.identity_token.is_empty() {
-            return Err(Error::invalid(
-                "registry identity-token exchange is unsupported; use BPFMAN_REGISTRY_AUTH",
-            ));
-        }
         let (username, password) = if auth.auth.is_empty() {
             (auth.username, auth.password)
         } else {
@@ -133,6 +128,19 @@ impl Config {
             })?;
             (username.to_owned(), password.to_owned())
         };
+        if !auth.identity_token.is_empty() {
+            // Go retains both fields. Bearer challenges use the refresh grant;
+            // a Basic challenge may use supplied username/password, without
+            // falling back to them after a failed refresh exchange.
+            // A username without a password is common beside identitytoken.
+            // It cannot answer Basic, but must not block a refresh grant.
+            let header = if username.is_empty() || password.is_empty() {
+                None
+            } else {
+                Some(Credentials::new(&username, &password)?.basic()?.to_owned())
+            };
+            return Credentials::identity(auth.identity_token, header).map(Some);
+        }
         if username.is_empty() && password.is_empty() {
             return Ok(None);
         }

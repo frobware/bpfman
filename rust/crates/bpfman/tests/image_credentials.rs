@@ -16,6 +16,8 @@ use std::{
 
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
 const SECRET: &str = "file-password:with:colons";
+const IDENTITY: &str = "refresh-secret+/: &=?";
+const REFRESH_FORM: &str = "grant_type=refresh_token&refresh_token=refresh-secret%2B%2F%3A+%26%3D%3F&service=fixture&client_id=bpfman&scope=repository%3Atest%3A";
 
 fn encoded() -> String {
     STANDARD.encode(format!("file-user:{SECRET}"))
@@ -75,6 +77,41 @@ fn configure(server: &registry::Registry, bearer: bool) {
     let mut state = server.state.lock().expect("state");
     state.required_auth = Some(format!("Basic {}", encoded()));
     state.bearer = bearer;
+}
+
+fn configure_identity(server: &registry::Registry, actions: &str) {
+    let mut state = server.state.lock().expect("state");
+    state.bearer = true;
+    state.required_auth = None;
+    state.refresh_form = Some(format!("{REFRESH_FORM}{actions}"));
+}
+
+fn identity_command(root: &Path, helper: bool) -> Command {
+    let mut process = if helper {
+        helper_command(root)
+    } else {
+        command(root)
+    };
+    process.env("REGISTRY_AUTH_FILE", root.join("auth.json"));
+    if helper {
+        process.env(
+            "HELPER_RESPONSE",
+            json!({"Username":"<token>", "Secret":IDENTITY}).to_string(),
+        );
+    }
+    process
+}
+
+fn identity_config(root: &Path, host: &str, helper: bool) -> std::io::Result<()> {
+    if helper {
+        install_helper(root, "selected")?;
+        helper_config(root, host, true)
+    } else {
+        std::fs::write(
+            root.join("auth.json"),
+            json!({"auths":{host:{"identitytoken":IDENTITY, "auth":encoded()}}}).to_string(),
+        )
+    }
 }
 
 #[test]
@@ -222,7 +259,14 @@ fn explicit_auth_wins_and_wrong_explicit_auth_never_falls_back() -> Result {
 
 #[test]
 fn file_and_helper_credentials_verify_real_signatures_before_load_admission() -> Result {
-    for (bearer, helper) in [(false, false), (true, false), (false, true), (true, true)] {
+    for (bearer, helper, identity) in [
+        (false, false, false),
+        (true, false, false),
+        (false, true, false),
+        (true, true, false),
+        (true, false, true),
+        (true, true, true),
+    ] {
         let temp = setup()?;
         let root = temp.path();
         let captured = signed_image::registry();
@@ -239,8 +283,14 @@ fn file_and_helper_credentials_verify_real_signatures_before_load_admission() ->
             install_helper(root, "selected")?;
             helper_config(root, host, true)?;
         }
+        if identity {
+            identity_config(root, host, helper)?;
+            configure_identity(&server, "pull");
+        }
         let process = || {
-            if helper {
+            if identity {
+                identity_command(root, helper)
+            } else if helper {
                 helper_command(root)
             } else {
                 command(root)
@@ -498,7 +548,7 @@ fn configured_helpers_authenticate_every_image_command_and_preserve_precedence()
 }
 
 #[test]
-fn helper_failures_empty_results_and_identity_tokens_never_fall_back_or_leak() -> Result {
+fn helper_failures_empty_results_and_identity_tokens_on_basic_never_fall_back_or_leak() -> Result {
     let temp = setup()?;
     let root = temp.path();
     install_helper(root, "selected")?;
@@ -532,7 +582,7 @@ fn helper_failures_empty_results_and_identity_tokens_never_fall_back_or_leak() -
             if helper == "selected" {
                 assert_helper_reaped(root)?;
                 if mode == "token" {
-                    assert!(stderr.contains("identity-token exchange is unsupported"));
+                    assert!(stderr.contains("Basic authentication requires username and password"));
                 }
                 if mode == "malformed" {
                     assert!(stderr.contains("invalid registry credential helper response"));
@@ -708,12 +758,15 @@ fn sigint_and_sigterm_during_helper_lookup_reap_the_helper_before_cli_exit() -> 
 fn upload_abort_retains_helper_credentials_after_config_and_executable_change() -> Result {
     let object =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
-    for bearer in [false, true] {
+    for (bearer, identity) in [(false, false), (true, false), (true, true)] {
         let temp = setup()?;
         let root = temp.path();
         install_helper(root, "selected")?;
         let server = registry::Registry::new();
         configure(&server, bearer);
+        if identity {
+            configure_identity(&server, "pull%2Cpush");
+        }
         server
             .state
             .lock()
@@ -722,7 +775,12 @@ fn upload_abort_retains_helper_credentials_after_config_and_executable_change() 
             .insert("PUT /v2/test/blobs/uploads/*".into(), 503);
         let host = server.reference.split('/').next().ok_or("host")?;
         helper_config(root, host, true)?;
-        let output = helper_command(root)
+        let mut process = if identity {
+            identity_command(root, true)
+        } else {
+            helper_command(root)
+        };
+        let output = process
             .env("HELPER_MODE", "poison")
             .args(["image", "build", &server.reference])
             .arg(&object)
@@ -810,6 +868,313 @@ fn admitted_cache_hits_do_not_execute_a_subsequently_broken_helper() -> Result {
         assert!(!stderr.contains("credential helper"), "{stderr}");
         assert_eq!(std::fs::read(root.join("helper.calls"))?, before);
         assert_eq!(server.state.lock().expect("state").requests.len(), requests);
+    }
+    Ok(())
+}
+
+#[test]
+fn identity_files_and_helpers_authenticate_all_commands_without_leaking_or_modifying_secrets()
+-> Result {
+    let object =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
+    for helper in [false, true] {
+        let temp = setup()?;
+        let root = temp.path();
+        let server = registry::Registry::new();
+        let host = server.reference.split('/').next().ok_or("host")?;
+        identity_config(root, host, helper)?;
+        let before = std::fs::read(root.join("auth.json"))?;
+        configure_identity(&server, "pull%2Cpush");
+        let trace = root.join("identity.trace");
+        let output = identity_command(root, helper)
+            .env("RUST_LOG", "trace,ureq=trace,ureq_proto=trace")
+            .arg("--trace-file")
+            .arg(&trace)
+            .args(["image", "build", &server.reference])
+            .arg(&object)
+            .output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+        success(output);
+        let trace = std::fs::read_to_string(&trace)?;
+        for secret in [
+            IDENTITY,
+            "refresh-secret%2B",
+            "publish-token",
+            "helper-stderr-secret",
+        ] {
+            assert!(!trace.contains(secret), "trace leaked credentials");
+            assert!(!stderr.contains(secret), "stderr leaked credentials");
+        }
+        configure_identity(&server, "pull");
+        success(
+            identity_command(root, helper)
+                .args(["image", "inspect", &server.reference])
+                .output()?,
+        );
+        assert!(
+            String::from_utf8(success(
+                identity_command(root, helper)
+                    .args(["image", "verify", &server.reference])
+                    .output()?
+            ))?
+            .contains("unsigned image accepted")
+        );
+        let output = identity_command(root, helper)
+            .args([
+                "program",
+                "load",
+                "image",
+                &server.reference,
+                "--programs",
+                "xdp:missing_program",
+            ])
+            .output()?;
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("missing_program"));
+        assert_eq!(std::fs::read(root.join("auth.json"))?, before);
+        assert!(!root.join("runtime").exists());
+        assert!(!root.join("cache").exists());
+        if helper {
+            assert_helper_reaped(root)?;
+        }
+        let state = server.state.lock().expect("state");
+        assert_eq!(state.token_forms.len(), 4);
+        assert!(state.requests.iter().all(|r| !r.contains("refresh-secret")));
+        assert!(state.authorizations.iter().all(|(_, auth)| {
+            auth.as_deref()
+                .is_none_or(|value| value == "Bearer publish-token")
+        }));
+        drop(state);
+        // Valid explicit auth bypasses even a selected identity-token source;
+        // wrong explicit auth never falls back to a refresh grant.
+        configure(&server, false);
+        for via_env in [false, true] {
+            for correct in [false, true] {
+                let mut process = identity_command(root, helper);
+                process.args(["image", "inspect", &server.reference]);
+                let auth = if correct {
+                    encoded()
+                } else {
+                    STANDARD.encode("wrong:credentials")
+                };
+                if via_env {
+                    process.env("BPFMAN_REGISTRY_AUTH", auth);
+                } else {
+                    process.args(["--registry-auth", &auth]);
+                }
+                assert_eq!(process.output()?.status.success(), correct);
+            }
+        }
+        assert_eq!(server.state.lock().expect("state").token_forms.len(), 4);
+        if !helper {
+            // Files can retain username/password alongside an identity token,
+            // as Go does, for a registry that issues a Basic challenge.
+            success(
+                identity_command(root, false)
+                    .args(["image", "inspect", &server.reference])
+                    .output()?,
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn failed_identity_grants_do_not_use_inline_credentials_or_later_files() -> Result {
+    for helper in [false, true] {
+        let temp = setup()?;
+        let root = temp.path();
+        let server = registry::Registry::new();
+        let host = server.reference.split('/').next().ok_or("host")?;
+        identity_config(root, host, helper)?;
+        auth_file(root, host, "home/.config/containers/auth.json")?;
+        configure_identity(&server, "pull");
+        server
+            .state
+            .lock()
+            .expect("state")
+            .faults
+            .insert("POST /token".into(), 401);
+        let output = identity_command(root, helper)
+            .args(["image", "inspect", &server.reference])
+            .output()?;
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(stderr.contains("registry token request failed"), "{stderr}");
+        assert!(!stderr.contains("secret"), "{stderr}");
+        let state = server.state.lock().expect("state");
+        assert_eq!(state.token_forms.len(), 1);
+        assert!(state.authorizations.iter().all(|(_, auth)| auth.is_none()));
+        assert!(state.uploads.is_empty());
+        assert!(!root.join("runtime").exists());
+        assert!(!root.join("cache").exists());
+        if helper {
+            assert_helper_reaped(root)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn identity_cache_hits_skip_token_exchange_and_changed_credentials() -> Result {
+    for helper in [false, true] {
+        let temp = setup()?;
+        let root = temp.path();
+        let server = registry::Registry::new();
+        let host = server.reference.split('/').next().ok_or("host")?;
+        identity_config(root, host, helper)?;
+        configure_identity(&server, "pull%2Cpush");
+        let object =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
+        success(
+            identity_command(root, helper)
+                .args(["image", "build", &server.reference])
+                .arg(object)
+                .output()?,
+        );
+        configure_identity(&server, "pull");
+        std::fs::write(root.join("runtime"), "blocked runtime")?;
+        let load = |policy: &str| {
+            identity_command(root, helper)
+                .args([
+                    "program",
+                    "load",
+                    "image",
+                    &server.reference,
+                    "--programs",
+                    "xdp:pass",
+                    "--pull-policy",
+                    policy,
+                ])
+                .output()
+        };
+        assert!(!load("Always")?.status.success());
+        assert!(root.join("cache/images-v1").is_dir());
+        let calls = if helper {
+            Some(std::fs::read(root.join("helper.calls"))?)
+        } else {
+            None
+        };
+        let requests = server.state.lock().expect("state").requests.len();
+        std::fs::write(root.join("auth.json"), "broken-identity-file-secret")?;
+        if helper {
+            std::fs::write(
+                root.join("helpers/docker-credential-selected"),
+                "#!/bin/sh\nexit 99\n",
+            )?;
+        }
+        for policy in ["Never", "IfNotPresent"] {
+            assert!(!load(policy)?.status.success());
+            assert_eq!(server.state.lock().expect("state").requests.len(), requests);
+            if let Some(calls) = &calls {
+                assert_eq!(&std::fs::read(root.join("helper.calls"))?, calls);
+            }
+        }
+        for file in std::fs::read_dir(root.join("cache/images-v1"))? {
+            let bytes = std::fs::read(file?.path())?;
+            let text = String::from_utf8_lossy(&bytes);
+            for secret in [IDENTITY, "publish-token", "refresh-secret%2B"] {
+                assert!(!text.contains(secret));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn sigint_and_sigterm_during_refresh_exchange_stop_before_registry_mutation() -> Result {
+    use std::{
+        io::{BufRead, BufReader},
+        process::{Child, Stdio},
+        sync::mpsc::sync_channel,
+        time::{Duration, Instant},
+    };
+    struct Process(Child);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    for helper in [false, true] {
+        for signal in ["INT", "TERM"] {
+            let temp = setup()?;
+            let root = temp.path();
+            let server = registry::Registry::new();
+            let host = server.reference.split('/').next().ok_or("host")?;
+            identity_config(root, host, helper)?;
+            configure_identity(&server, "pull%2Cpush");
+            let (waiting, paused) = sync_channel(0);
+            let (resume, continued) = sync_channel(0);
+            server.state.lock().expect("state").pause =
+                Some(("POST /token".into(), waiting, continued));
+            let object = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
+            let mut process = Process(
+                identity_command(root, helper)
+                    .env("RUST_LOG", "debug")
+                    .args(["image", "build", &server.reference])
+                    .arg(object)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::piped())
+                    .spawn()?,
+            );
+            let (notified, notification) = sync_channel(1);
+            let stderr = process.0.stderr.take().ok_or("stderr")?;
+            let reader = std::thread::spawn(move || {
+                let mut output = String::new();
+                for line in BufReader::new(stderr).lines() {
+                    let line = line.expect("stderr line");
+                    if line.contains("shutdown requested") {
+                        let _ = notified.send(());
+                    }
+                    output.push_str(&line);
+                    output.push('\n');
+                }
+                output
+            });
+            paused.recv_timeout(Duration::from_secs(5))?;
+            assert!(
+                Command::new("kill")
+                    .arg(format!("-{signal}"))
+                    .arg(process.0.id().to_string())
+                    .status()?
+                    .success()
+            );
+            // Synchronize with the CLI signal thread before releasing the read.
+            notification.recv_timeout(Duration::from_secs(5))?;
+            resume.send(())?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let status = loop {
+                if let Some(status) = process.0.try_wait()? {
+                    break status;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "refresh cancellation did not finish"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            assert_eq!(status.code(), Some(if signal == "INT" { 130 } else { 143 }));
+            let stderr = reader.join().expect("stderr reader");
+            assert!(stderr.contains("cancelled"), "{stderr}");
+            assert!(!stderr.contains("secret"), "{stderr}");
+            if helper {
+                assert_helper_reaped(root)?;
+            }
+            let state = server.state.lock().expect("state");
+            assert!(state.uploads.is_empty());
+            assert!(state.manifests.is_empty());
+            assert_eq!(state.token_forms.len(), 1);
+            assert!(
+                state
+                    .requests
+                    .iter()
+                    .all(|r| r.starts_with("HEAD ") || r == "POST /token")
+            );
+            assert!(!root.join("runtime").exists());
+            assert!(!root.join("cache").exists());
+        }
     }
     Ok(())
 }

@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files and configured helpers; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Identity-token exchange, custom trust roots, cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Custom trust roots, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2703,8 +2703,8 @@ wrong, change it here before broadening feature coverage.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
   explicit private-registry credentials, Cosign signature/identity policy and
   synchronous production TUF trust-root refresh, ambient credential-file
-  discovery and configured credential helpers are implemented. Identity-token
-  exchange, custom trust roots and cache eviction remain pending.
+  discovery, configured credential helpers and identity-token exchange are
+  implemented. Custom trust roots and cache eviction remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -5625,3 +5625,63 @@ cases, 214 script/case PASS records, no selected skips/failures, and every file
 load forced through native Rust image publication/loading. Filenames match the
 admitted manifest exactly. These acceptance lanes ran serially after the full
 gate to respect the shared test-runner lock.
+
+## OCI identity-token checkpoint (17 October 2026)
+
+Docker/Podman file `identitytoken` and helper `Username = "<token>"` responses
+now supply OAuth refresh credentials. A bearer challenge from the original
+registry triggers the same refresh grant used by Go/ORAS: a form-encoded POST
+to the validated realm with `grant_type=refresh_token`, `refresh_token`, service,
+client ID `bpfman` and the requested repository/action scope. Opaque spaces and
+reserved characters are encoded in the body, never interpolated into a URL or
+authorization header. Refresh tokens are nonempty, bounded to 64 KiB of printable
+ASCII, and redacted in diagnostics. Successful refresh responses require a usable
+`access_token`; a distribution-only `token` is insufficient. Returned refresh
+tokens are ignored, matching Go, without rewriting operator inputs.
+
+Explicit flag/environment credentials still override discovery. Helpers keep
+their existing precedence, and the first file remains the only selected store.
+A direct `registrytoken` still bypasses the token service. File Basic fields can
+coexist with an identity token: Basic challenges use complete username/password
+credentials, while bearer challenges use the refresh grant. Incomplete Basic
+fields do not prevent a refresh grant. Identity-only helper credentials cannot
+answer Basic challenges. Failed exchanges never fall back to Basic, an inline
+entry or another file. Token endpoints refuse redirects, unsafe realms fail
+before credential transmission, and foreign response challenges fail before
+discovery. Existing synchronous transport deadlines and caller cancellation apply.
+
+Resolved refresh credentials stay with upload receipts. Compensation and explicit
+cleanup retries exchange them for a new access token without rereading a removed
+or changed credential file or rerunning a changed helper. Failed aborts and failed
+cleanup exchanges retain their receipts for the next explicit pass. Tokens never
+enter model/runtime/store requests, cache envelopes or program records. No new
+dependencies, public credential constructors, architecture-law exceptions,
+persistence/schema changes, Go changes or acceptance-script/label changes.
+
+Five new OCI unit contracts cover token bounds and types, on-wire form encoding,
+publication/inspection/cache policies, malformed/failed/oversized responses,
+cancellation, unsafe realms/redirects and repeated cleanup after file removal.
+Existing file/helper contracts now cover refresh decoding, credential precedence,
+optional Basic fields and helper-token cleanup retries. Four new CLI contracts
+exercise file/helper tokens across all image paths, explicit overrides, failed
+grants without fallback, admitted cache hits after credentials change, redacted
+trace output and synchronized SIGINT/SIGTERM during the exchange. Existing real
+signature verification and poisoned-helper upload-abort contracts also exercise
+identity credentials.
+
+Validation: `direnv exec . make rust-check lint-make` passes formatting, strict
+Clippy, unchanged architecture laws, all userspace/store/doc contracts, 39 OCI
+unit tests, 14 CLI credential contracts, 42 fake-kernel cases and all 74
+discovered/selected native tests. The final native suite took 63.44 seconds on
+Linux 6.18.54 with the retained optimized aya-obj profile; owned fixture cleanup
+passed. The gate remains independent of external services.
+
+All ten unchanged remote-image scripts pass against both Go (serial) and Rust
+(32 slots), selecting `external=true,image=true` with default signature
+verification enabled and a fresh Rust production TUF cache. After the final
+credential edge-case changes, the rebuilt Rust binary also passes that lane and
+the exact forced-image corpus with another fresh TUF cache: 134 files / 188 leaf
+cases, 214 script/case PASS records, no selected skips/failures, and every file
+load forced through native image publication/loading. Selected filenames match
+the admitted manifest exactly. Gate and acceptance lanes ran serially to respect
+the shared script-runner lock.

@@ -13,6 +13,10 @@ pub struct Credentials {
 enum Source {
     Basic(String),
     Bearer(String),
+    Refresh {
+        token: String,
+        basic: Option<String>,
+    },
     Files {
         registry: String,
         paths: Vec<std::path::PathBuf>,
@@ -45,8 +49,8 @@ impl Credentials {
     /// Capture credential-file locations from the current process environment.
     /// No file is opened until the selected registry challenges authentication.
     /// Explicit callers can keep passing `None` for anonymous-only operation.
-    /// The first existing file wins. Configured helpers run only when selected;
-    /// identity-token exchange remains unsupported and fails explicitly.
+    /// The first existing file wins. Configured helpers run only when selected.
+    /// Identity tokens are exchanged at the challenged bearer-token service.
     pub fn from_environment(reference: &crate::Reference) -> Self {
         Self {
             source: Source::Files {
@@ -78,6 +82,9 @@ impl Credentials {
     pub(super) fn basic(&self) -> Result<&str, Error> {
         match &self.source {
             Source::Basic(value) => Ok(value),
+            Source::Refresh {
+                basic: Some(value), ..
+            } => Ok(value),
             _ => Err(Error::invalid(
                 "registry Basic authentication requires username and password",
             )),
@@ -87,6 +94,27 @@ impl Credentials {
     pub(super) fn bearer(&self) -> Option<&str> {
         match &self.source {
             Source::Bearer(value) => Some(value),
+            _ => None,
+        }
+    }
+
+    fn identity(token: String, basic: Option<String>) -> Result<Self, Error> {
+        // OAuth refresh tokens are opaque printable ASCII. Form encoding, rather
+        // than string interpolation, preserves spaces and reserved characters.
+        if token.is_empty()
+            || token.len() > 64 * 1024
+            || !token.bytes().all(|b| b.is_ascii_graphic() || b == b' ')
+        {
+            return Err(Error::invalid("invalid registry identity token"));
+        }
+        Ok(Self {
+            source: Source::Refresh { token, basic },
+        })
+    }
+
+    pub(super) fn refresh(&self) -> Option<&str> {
+        match &self.source {
+            Source::Refresh { token, .. } => Some(token),
             _ => None,
         }
     }
@@ -100,6 +128,9 @@ impl std::fmt::Debug for Credentials {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod identity_tests;
 
 #[cfg(test)]
 #[path = "../../../tests/support/publish_registry.rs"]

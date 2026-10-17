@@ -180,17 +180,28 @@ impl<'a> Registry<'a> {
         validate_realm(&realm, self.reference)?;
         // Token endpoints never follow redirects, even for public pulls. Registry
         // redirects strip Authorization independently of the destination origin.
-        let mut request = self.token_agent.get(&realm).query(
-            "scope",
-            format!("repository:{}:{actions}", self.reference.repository),
-        );
-        if let Some(service) = service {
-            request = request.query("service", service);
-        }
-        if let Some(credentials) = self.credentials.as_deref() {
-            request = request.header("Authorization", secret_header(credentials.basic()?)?);
-        }
-        let token_response = request.call();
+        let scope = format!("repository:{}:{actions}", self.reference.repository);
+        let refresh = self.credentials.as_deref().and_then(Credentials::refresh);
+        let token_response = if let Some(refresh) = refresh {
+            // Match Go/ORAS's refresh-token grant. The opaque secret belongs only
+            // in the form body, never a URL or Basic/registry authorization.
+            self.token_agent.post(&realm).send_form([
+                ("grant_type", "refresh_token"),
+                ("refresh_token", refresh),
+                ("service", service.as_deref().unwrap_or_default()),
+                ("client_id", "bpfman"),
+                ("scope", scope.as_str()),
+            ])
+        } else {
+            let mut request = self.token_agent.get(&realm).query("scope", scope);
+            if let Some(service) = service {
+                request = request.query("service", service);
+            }
+            if let Some(credentials) = self.credentials.as_deref() {
+                request = request.header("Authorization", secret_header(credentials.basic()?)?);
+            }
+            request.call()
+        };
         check(self.flag)?;
         // A token endpoint URL may itself contain secrets. Do not retain transport
         // errors that can embed that URL in their diagnostic source chain.
@@ -199,19 +210,29 @@ impl<'a> Registry<'a> {
         if token_response.status() != 200 {
             return Err(Error::invalid("registry token request failed"));
         }
-        let bytes = read_body(token_response, 1024 * 1024, self.flag)?;
+        let bytes = read_body(token_response, 1024 * 1024, self.flag).map_err(|error| {
+            if error.is_cancelled() {
+                error
+            } else {
+                Error::invalid("read registry token failed")
+            }
+        })?;
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|_| Error::invalid("decode registry token failed"))?;
-        let token = value
-            .get("token")
-            .or_else(|| value.get("access_token"))
-            .and_then(Value::as_str)
-            .filter(|token| {
-                !token.is_empty()
-                    && token.len() <= 64 * 1024
-                    && token.bytes().all(|b| b.is_ascii_graphic())
-            })
-            .ok_or_else(|| Error::invalid("registry returned no usable token"))?;
+        // OAuth returns access_token; a distribution-only `token` is not a
+        // successful refresh grant. Returned refresh tokens are never persisted.
+        let token = (if refresh.is_some() {
+            value.get("access_token")
+        } else {
+            value.get("token").or_else(|| value.get("access_token"))
+        })
+        .and_then(Value::as_str)
+        .filter(|token| {
+            !token.is_empty()
+                && token.len() <= 64 * 1024
+                && token.bytes().all(|b| b.is_ascii_graphic())
+        })
+        .ok_or_else(|| Error::invalid("registry returned no usable token"))?;
         self.authorization = Some(secret_header(&format!("Bearer {token}"))?);
         Ok(())
     }

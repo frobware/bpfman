@@ -223,8 +223,17 @@ Missing, failed or malformed helpers fail without falling back. The standard
 nonzero-exit "credentials not found in native keychain" response and empty
 credentials mean no credentials, also without fallback. Resolved credentials
 stay with upload cleanup receipts so retries do not rerun the helper.
-Identity-token exchange, including helpers returning `Username = "<token>"`,
-still fails explicitly and remains separate work.
+File `identitytoken` and helper `Username = "<token>"` responses supply OAuth
+refresh tokens. A bearer challenge exchanges them with a form-encoded POST to
+the validated token service, using the `refresh_token` grant, the challenged
+service, client ID `bpfman` and repository/action scope. Refresh tokens are bounded
+to 64 KiB of printable ASCII and stay in request bodies and process memory.
+Successful exchanges require `access_token`; returned refresh tokens are ignored,
+and credential files remain read-only. Optional file username/password fields
+remain available for Basic challenges. Failed exchanges never fall back to Basic,
+inline credentials or another file. Upload cleanup retries retain resolved
+refresh credentials and obtain a fresh access token without rereading the file
+or rerunning the helper.
 Library callers opt into deferred discovery through
 `Credentials::from_environment`; passing `None` retains anonymous-only behavior.
 
@@ -291,8 +300,8 @@ image-build scripts, also included in `rust-check`. The admitted 134 Rust files 
 188 cases pass with `BPFMAN_E2E_BYTECODE_SOURCE=image` using Rust directly for
 publication and loading. Both implementations pass all ten remote-image scripts;
 Go also passes the six image-build scripts. Explicit private authentication,
-ambient credential files and configured credential helpers are implemented;
-identity-token exchange, custom trust roots and cache eviction remain separate work.
+ambient credential files, configured helpers and identity-token exchange are implemented;
+custom trust roots and cache eviction remain separate work.
 
 ## Persistence scope
 

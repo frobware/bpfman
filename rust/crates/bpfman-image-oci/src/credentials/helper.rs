@@ -50,9 +50,7 @@ fn decode(output: &[u8]) -> Result<Option<Credentials>, Error> {
     let response: Response = serde_json::from_value(serde_json::Value::Object(object))
         .map_err(|_| Error::invalid("invalid registry credential helper response"))?;
     if response.username == "<token>" {
-        return Err(Error::invalid(
-            "registry identity-token exchange is unsupported; use BPFMAN_REGISTRY_AUTH",
-        ));
+        return Credentials::identity(response.secret, None).map(Some);
     }
     if response.username.is_empty() && response.secret.is_empty() {
         return Ok(None);

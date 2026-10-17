@@ -16,7 +16,7 @@ fn file_credentials(reference: &Reference, file: &std::path::Path) -> Credential
     }
 }
 
-fn publication() -> Publication {
+pub(super) fn publication() -> Publication {
     let mut bytes = vec![0; 64];
     bytes[..7].copy_from_slice(b"\x7fELF\x02\x01\x01");
     let word = |v: u16| {

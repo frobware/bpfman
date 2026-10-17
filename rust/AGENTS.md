@@ -662,8 +662,15 @@ The architecture and compatibility goals are in
   each output stream, drain stderr without logging/retaining it, enforce the
   30-second deadline and caller cancellation, and kill/reap direct children on
   failure. Use safe nonblocking standard-I/O channels, without detached reader
-  threads, unsafe code or new syscall dependencies. Identity-token exchange,
-  including helper Username <token>, fails explicitly until implemented. Keep
+  threads, unsafe code or new syscall dependencies. File identitytoken and helper
+  Username <token> mean OAuth refresh tokens, never direct registry access tokens.
+  Exchange them with a form-encoded POST (refresh_token grant, service, client_id
+  and repository/action scope) at the validated bearer realm. Preserve optional
+  file Basic fields for Basic challenges; failed grants never fall back to Basic,
+  inline entries or another store. Require access_token in successful grant responses;
+  bound/redact tokens and response errors. Keep refresh tokens out of URLs,
+  authorization headers and persisted records; returned refresh tokens do not
+  replace operator input. Keep
   library ambient discovery opt-in. Retain resolved credentials with upload
   cleanup so explicit retries do not reread changed/deleted files or rerun helpers.
   Token requests refuse redirects; registry read redirects strip authorization.

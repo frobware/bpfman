@@ -123,7 +123,7 @@ fn entry_precedence_helpers_tokens_and_redacted_failures() -> Result {
     for value in [
         json!({"credHelpers":{"quay.io":"helper-secret"}, "auths":{"quay.io":basic()}}),
         json!({"credsStore":"helper-secret", "auths":{"quay.io":basic()}}),
-        json!({"auths":{"quay.io":{"identitytoken":"identity-secret"}}}),
+        json!({"auths":{"quay.io":{"identitytoken":"identity-secret\n"}}}),
         json!({"auths":{"quay.io":{"auth":"encoding-secret!"}}}),
         json!({"auths":{"quay.io":{"auth":STANDARD.encode("decoded-secret")}}}),
         json!({"auths":{"quay.io":{"password":42}}}),
@@ -148,6 +148,34 @@ fn entry_precedence_helpers_tokens_and_redacted_failures() -> Result {
     assert_eq!(credentials.bearer(), Some("Bearer registry-secret"));
     assert!(credentials.basic().is_err());
     assert!(!format!("{credentials:?}").contains("registry-secret"));
+    // A direct access token wins; otherwise identity tokens win over Basic.
+    for (fields, bearer, refresh) in [
+        (
+            json!({"identitytoken":"refresh-secret", "auth":STANDARD.encode("user:password")}),
+            None,
+            Some("refresh-secret"),
+        ),
+        (
+            json!({"identitytoken":"refresh-secret", "username":"user"}),
+            None,
+            Some("refresh-secret"),
+        ),
+        (
+            json!({"identitytoken":"refresh-secret", "auth":STANDARD.encode("user:")}),
+            None,
+            Some("refresh-secret"),
+        ),
+        (
+            json!({"registrytoken":"access-secret", "identitytoken":"refresh-secret"}),
+            Some("Bearer access-secret"),
+            None,
+        ),
+    ] {
+        let credentials =
+            parse(json!({"auths":{"quay.io":fields}}), "quay.io")?.ok_or("credentials")?;
+        assert_eq!(credentials.bearer(), bearer);
+        assert_eq!(credentials.refresh(), refresh);
+    }
     Ok(())
 }
 

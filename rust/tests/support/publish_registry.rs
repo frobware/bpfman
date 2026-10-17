@@ -23,6 +23,9 @@ pub(super) struct State {
     pub(super) location: Option<String>,
     pub(super) bearer: bool,
     pub(super) required_auth: Option<String>,
+    pub(super) refresh_form: Option<String>,
+    pub(super) token_response: Option<Vec<u8>>,
+    pub(super) token_forms: Vec<(String, Option<String>, Vec<u8>)>,
     pub(super) authorizations: Vec<(String, Option<String>)>,
     pub(super) realm: Option<String>,
     pub(super) redirects: BTreeMap<String, String>,
@@ -108,7 +111,20 @@ impl Registry {
                     .authorizations
                     .push((key.clone(), authorization.clone()));
                 let (status, output) = if path == "/token" {
-                    if state
+                    let content_type = header
+                        .lines()
+                        .filter_map(|line| line.split_once(':'))
+                        .find(|(key, _)| key.eq_ignore_ascii_case("content-type"))
+                        .map(|(_, value)| value.trim().to_owned());
+                    state
+                        .token_forms
+                        .push((url.into(), content_type.clone(), body.clone()));
+                    if state.refresh_form.as_ref().is_some_and(|expected| {
+                        method != "POST"
+                            || body != expected.as_bytes()
+                            || content_type.as_deref() != Some("application/x-www-form-urlencoded")
+                            || authorization.is_some()
+                    }) || state
                         .required_auth
                         .as_ref()
                         .is_some_and(|expected| authorization.as_ref() != Some(expected))
@@ -120,7 +136,16 @@ impl Registry {
                     } else if let Some(status) = state.faults.get(&key) {
                         (*status, Vec::new())
                     } else {
-                        (200, b"{\"token\":\"publish-token\"}".to_vec())
+                        (
+                            200,
+                            state.token_response.clone().unwrap_or_else(|| {
+                                if state.refresh_form.is_some() {
+                                    b"{\"access_token\":\"publish-token\"}".to_vec()
+                                } else {
+                                    b"{\"token\":\"publish-token\"}".to_vec()
+                                }
+                            }),
+                        )
                     }
                 } else if state.bearer && authorization.as_deref() != Some("Bearer publish-token") {
                     let realm = state
