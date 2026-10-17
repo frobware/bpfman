@@ -121,19 +121,36 @@ tags and SHA256 digest references, selects the host's Linux platform, and uses t
 existing load/attach/unload lifecycle. Stored provenance retains the original
 reference and resolved platform-manifest digest.
 
-Image loads currently require an explicit configuration with
-`[signing] verify_enabled = false`; the default verification requirement is
-rejected before pulling. Signature verification remains pending. The unchanged
-verification-disabled acceptance configuration is
-`e2e/config/no-signature-verification.toml`.
+Image loads honor `[signing] verify_enabled` and `allow_unsigned`, both true by
+default: signed images must verify, while unsigned images are accepted by default.
+Setting `allow_unsigned = false` requires a valid signature. Explicitly disabling
+verification accepts images without checking their signatures. Invalid signatures,
+registry errors and malformed evidence never count as unsigned images.
 
-`program load image`, `image inspect` and `image build` accept
+`[[signing.trusted_identities]]` accepts `certificate_identity` and
+`certificate_oidc_issuer`, or their `_regexp` forms. Each rule requires both
+fields; exact and regexp forms are mutually exclusive, regexps match the whole
+value, and rules are ORed. An empty list accepts any valid Sigstore signer.
+`image verify IMAGE` checks signatures without creating runtime/cache state and
+always enables verification. Its `--allow-unsigned`, `--certificate-identity`,
+`--certificate-identity-regexp`, `--certificate-oidc-issuer` and
+`--certificate-oidc-issuer-regexp` flags override configuration.
+
+Verification uses synchronous `sigstore-verify` with bundled Sigstore production
+trust roots, checking the signature, certificate chain, code-signing usage, SCT,
+authenticated signing time and Rekor evidence. Legacy Cosign `.sig` images and
+their embedded bundles match Go's currently enabled format. Missing bundles use
+bounded, redirect-free lookup at the public Rekor service. Automatic TUF trust-root
+refresh, custom trust-root overrides and OCI 1.1 signature discovery remain
+unimplemented; bundled roots change through reviewed dependency updates.
+
+`program load image`, `image verify`, `image inspect` and `image build` accept
 `--registry-auth BASE64` or `BPFMAN_REGISTRY_AUTH`, containing base64-encoded
 `username:password`. Passwords may contain colons; an explicit flag overrides the
 environment. Basic challenges and authenticated bearer-token exchange are
 supported. Credentials stay in memory, including retained upload-abort receipts;
-cache entries and program records contain no credentials. Cache policies do not
-reauthenticate cached content. Token requests refuse redirects, registry read
+cache entries and program records contain no credentials. Cache hits admitted
+under the same signing policy need no authentication. Token requests refuse redirects, registry read
 redirects strip authorization, and redirected hosts cannot supply authentication
 challenges. The CLI caps HTTP dependency logging below trace, even under explicit
 `RUST_LOG` overrides, because their raw wire dumps bypass header redaction;
@@ -147,16 +164,26 @@ and `Never` requires the cache without network access. Corrupt entries fail clos
 for cached policies; `Always` can refresh them. Go cache entries use a separate
 format. Cache eviction and abandoned-stage recovery are not implemented.
 
+Cache admission records the signing policy and original top-level digest, including
+the index digest for a multi-platform image. Policy identity includes the bundled
+trust roots and verifier version. A policy change makes `Never` fail without
+network access; `IfNotPresent` reverifies the recorded digest and atomically
+updates admission without resolving a mutable tag again. Entries predating digest
+tracking require a fresh pull. Failed verification and concurrent replacement
+preserve the previous or newer complete generation respectively.
+
 `direnv exec . make rust-test-image` runs local-registry cache and native lifecycle
-contracts. The normal `rust-check` includes these contracts without network
-access. Two unchanged published-XDP/reference scripts have also passed separately
-against Go and Rust with SQLite and explicit verification-disabled configuration.
-All ten remote-image scripts selected by `external=true,image=true` pass against
-both implementations after correcting three legacy `probe` expectations to
+contracts, fixed signed-release verification, offline Go/Rust public/private auth
+comparison, cache revalidation races and real signal cancellation. The normal
+`rust-check` includes these contracts without external network access. All ten
+remote-image scripts selected by `external=true,image=true` and six image-build
+scripts pass against both implementations with verification enabled. Go's external
+comparison runs serially to avoid its existing TUF cache contention; Rust also
+passes the remote-image lane with 32 slots. Earlier acceptance corrected three legacy `probe` expectations to
 bpfman's distinct `kprobe`, `uprobe` and `uretprobe` metadata names. The label
 vocabulary is [documented independently of loading libraries](../docs/developer-guide/image-build.md#bytecode-program-labels).
-Brokered image mode passes all 134 admitted Rust files / 188 cases using Go solely
-to publish local fixtures. The shared Go run passes 100 files / 107 cases, with
+Image mode passes all 134 admitted Rust files / 188 cases using Rust directly,
+with verification enabled. The earlier shared Go run passes 100 files / 107 cases, with
 one existing clsact-policy skip. A shared shell null-comparison bug exposed by
 image provenance has been fixed in the evaluator and static checker without
 changing the lifecycle script or disabling checking. Native image building now
@@ -459,7 +486,7 @@ exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, 
 with private or shared maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads use the same lifecycle after
-registry/cache admission and require explicit signing-verification disablement.
+registry/cache admission, including the configured signing policy.
 Explicit map owners and ordinary PinByName maps are supported. PinByName
 map-of-maps definitions and section/type mismatches are rejected
 before runtime setup. Credentials are not echoed in auth diagnostics or help.

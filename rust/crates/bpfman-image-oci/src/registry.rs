@@ -11,6 +11,7 @@ use std::{
 use ureq::ResponseExt;
 
 type Labels = BTreeMap<String, String>;
+type Content = (Vec<u8>, Option<String>);
 
 const ACCEPT: &str = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json";
 pub(super) const MANIFEST_LIMIT: usize = 4 * 1024 * 1024;
@@ -67,7 +68,7 @@ pub(super) fn verify(bytes: &[u8], digest: &str) -> Result<(), Error> {
     Ok(())
 }
 
-fn agent_config(redirects: u32) -> ureq::config::Config {
+pub(super) fn agent_config(redirects: u32) -> ureq::config::Config {
     ureq::Agent::config_builder()
         .http_status_as_error(false)
         .max_redirects(redirects)
@@ -205,10 +206,35 @@ impl<'a> Registry<'a> {
     }
 
     fn get(&mut self, path: &str, limit: usize) -> Result<(Vec<u8>, Option<String>), Error> {
+        self.get_optional(path, limit)?
+            .ok_or_else(|| Error::invalid("OCI manifest not found"))
+    }
+
+    fn get_optional(&mut self, path: &str, limit: usize) -> Result<Option<Content>, Error> {
         let mut response = self.request(path)?;
         if response.status() == 401 && self.authorization.is_none() {
             self.authenticate(&response, "pull")?;
             response = self.request(path)?;
+        }
+        if response.status() == 404 {
+            let bytes = read_body(response, MANIFEST_LIMIT, self.flag)?;
+            let body: Value = serde_json::from_slice(&bytes)
+                .map_err(|e| Error::caused("decode OCI not-found response", e))?;
+            let missing = body["errors"].as_array().is_some_and(|errors| {
+                !errors.is_empty()
+                    && errors.iter().all(|error| {
+                        matches!(
+                            error["code"].as_str(),
+                            Some("MANIFEST_UNKNOWN" | "NAME_UNKNOWN")
+                        )
+                    })
+            });
+            if missing {
+                return Ok(None);
+            }
+            return Err(Error::invalid(
+                "OCI registry returned an unrecognized HTTP 404",
+            ));
         }
         if response.status() != 200 {
             return Err(Error::invalid(format!(
@@ -225,7 +251,16 @@ impl<'a> Registry<'a> {
         if let Some(digest) = &digest {
             verify(&bytes, digest)?;
         }
-        Ok((bytes, digest))
+        Ok(Some((bytes, digest)))
+    }
+
+    pub(super) fn signature_manifest(&mut self, selector: &str) -> Result<Option<Manifest>, Error> {
+        let Some((bytes, _)) =
+            self.get_optional(&format!("/manifests/{selector}"), MANIFEST_LIMIT)?
+        else {
+            return Ok(None);
+        };
+        Self::decode_manifest(&bytes).map(Some)
     }
 
     pub(super) fn manifest(&mut self, selector: &str) -> Result<Manifest, Error> {
@@ -233,8 +268,12 @@ impl<'a> Registry<'a> {
         if selector.starts_with("sha256:") {
             verify(&bytes, selector)?;
         }
+        Self::decode_manifest(&bytes)
+    }
+
+    fn decode_manifest(bytes: &[u8]) -> Result<Manifest, Error> {
         let value: Value =
-            serde_json::from_slice(&bytes).map_err(|e| Error::caused("decode OCI manifest", e))?;
+            serde_json::from_slice(bytes).map_err(|e| Error::caused("decode OCI manifest", e))?;
         if value["schemaVersion"] != 2 {
             return Err(Error::invalid("unsupported OCI manifest schema"));
         }
@@ -243,7 +282,7 @@ impl<'a> Registry<'a> {
             .ok_or_else(|| Error::invalid("OCI manifest has no mediaType"))?
             .to_owned();
         Ok(Manifest {
-            digest: hash(&bytes),
+            digest: hash(bytes),
             value,
             media_type,
         })
@@ -299,7 +338,7 @@ impl<'a> Registry<'a> {
     }
 }
 
-fn read_body(
+pub(super) fn read_body(
     mut response: ureq::http::Response<ureq::Body>,
     limit: usize,
     flag: &AtomicBool,

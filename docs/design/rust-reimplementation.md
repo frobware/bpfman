@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials | Ambient credentials, signature verification, cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials; Cosign signature/identity policy and cache revalidation with bundled trust roots | Ambient credentials, automatic trust-root refresh, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2701,8 +2701,9 @@ wrong, change it here before broadening feature coverage.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
-  explicit private-registry credentials are implemented. Ambient credential stores
-  and signature verification remain pending.
+  explicit private-registry credentials and Cosign signature/identity policy with
+  bundled trust roots are implemented. Ambient credential stores and automatic
+  trust-root refresh remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -5328,3 +5329,86 @@ fixture cleanup passed. The exact previous admitted image-mode manifest also
 passed using Rust directly: 134 files / 188 leaf cases, no failures or skips,
 with `BPFMAN_E2E_BYTECODE_SOURCE=image`. Acceptance scripts, dependency versions
 and the lockfile remain unchanged.
+
+## OCI signature verification checkpoint (17 October 2026)
+
+Image loading now honors the default signing configuration: verification enabled,
+unsigned images allowed. Signed images must pass verification even when unsigned
+images are allowed. Disabling unsigned admission requires a valid signature;
+explicitly disabling verification bypasses signature checks. Only a structured
+missing-signature manifest response or an empty signature set counts as unsigned.
+Authentication failures, service errors, malformed evidence, invalid signatures
+and identity mismatches fail without creating runtime state or publishing cache
+content.
+
+The synchronous OCI adapter uses `sigstore-verify` 0.14.0 with default features
+disabled and its embedded Sigstore production trust root. Legacy Cosign `.sig`
+manifests and their v0.1 evidence are checked for signature/claim binding,
+certificate chain and code-signing usage, SCT, authenticated historical signing
+time, Rekor SET and log-entry consistency. When an embedded bundle is absent,
+bounded redirect-free lookup at the public Rekor service supplies the entry,
+inclusion proof and signed checkpoint. Registry credentials never enter that
+request. The normal dependency graph contains no Tokio, reqwest or async runtime,
+and declared dependency MSRVs remain within Rust 1.87. Existing locked package
+versions are retained; the lockfile adds the verification dependency closure.
+
+`[[signing.trusted_identities]]` matches Go's paired certificate identity / OIDC
+issuer rules, exact or anchored regexp forms, ORed alternatives, empty-list
+any-signer behavior and mixed-wildcard rejection. `image verify IMAGE` is rootless,
+creates no cache/store, forces verification on, supports explicit registry auth
+and accepts Go's unsigned/identity/issuer overrides. Image inspection and
+publication retain their existing behavior. The runtime, kernel and store
+contracts acquire no signing or cryptographic implementation details.
+
+Verification binds the resolved top-level digest before platform selection.
+Program provenance still records the selected platform-manifest digest. Atomic
+cache envelopes record the original verification digest and a canonical signing
+policy identity including verifier/trust-root material. Matching-policy reads
+remain lock-free and network-free. A policy change makes `Never` fail without
+network access; `IfNotPresent` reverifies the recorded digest outside the cache
+writer lock, then compares the captured generation before publishing its new
+admission. A concurrent replacement is preserved. Older disabled-verification
+entries remain readable under that policy; enabling verification without recorded
+digest evidence requires a fresh pull. Cache version 1 is extended compatibly;
+SQLite remains at Go schema 2.
+
+Fixed public v0.5.6 release bytes and signing evidence exercise real verification
+without external services, including all four published Linux platforms. Local
+contracts cover policy tightening, old-cache admission, concurrent replacement,
+invalid signature/certificate/SET/time/log ID/body, signed-index substitution,
+later-valid signature candidates, unsigned/error classification, real inclusion
+proof/checkpoint tampering, private Basic/bearer auth and cancellation. Rootless
+Go/Rust comparison uses the real production trust anchors to avoid Go TUF network
+refresh in the normal gate. Real SIGINT/SIGTERM cases interrupt authenticated
+signature reads for both load and verify, require 130/143, reap children and leave
+no cache/runtime state. Native contracts load/unload the signed image under all
+three pull policies through the existing lifecycle.
+
+Enabled-verification acceptance exposed a Go digest-operand bug: initial and
+cached-policy verification appended a second `@digest`. Both paths now replace
+the selector, with an explicit-auth/policy-change regression. Go lint also found
+an existing import-grouping defect in an unload test; that formatting is corrected.
+The ten unchanged remote-image files selected by `external=true,image=true` pass
+with default verification enabled on both binaries. Go runs serially because its
+existing TUF cache contends across concurrent CLI processes; Rust passes with 32
+runner slots. The exact previous admitted Rust image-mode corpus also passes
+with default verification enabled: 134 files / 188 leaf cases, no failures or
+skips. A separate live check removes the fixed release's embedded bundles and
+successfully verifies through public Rekor lookup.
+
+Automatic TUF trust-root refresh, custom trust-root overrides, ambient registry
+credentials, cache eviction and OCI 1.1 signature discovery remain separate work.
+Bundled trust roots change through reviewed dependency updates, invalidating
+cached policy admission. Go's currently enabled verifier also uses the legacy
+Cosign signature discovery path. Acceptance script contents and labels remain
+unchanged.
+
+Final validation: `direnv exec . make rust-check lint-make` passed format, strict
+Clippy, all userspace/CLI/store and 42 fake-kernel lifecycle cases, all 74 discovered
+native tests, rustdoc and Make checks. Native stages took 66.05 seconds on Linux
+6.18.54 with the retained `aya-obj` optimized profile; owned fixture cleanup passed.
+`direnv exec . make test EXTRA_GOFLAGS=-ldflags=-linkmode=external` passed the full
+Go unit suite, and `direnv exec . make lint-go` reported zero issues. The external
+linker is required by this Nix development shell. All six unchanged image-build
+scripts also pass on both binaries with verification enabled, in addition to the
+ten remote-image files and exact 134-file / 188-case Rust image-mode corpus above.

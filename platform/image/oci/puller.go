@@ -188,8 +188,8 @@ func (p *puller) Pull(ctx context.Context, ref platform.ImageRef) (platform.Pull
 		// Use the resolved digest for verification to ensure we verify what we pull
 		verifyRef := ref.URL
 		if desc.Digest != "" {
-			// Append digest to ensure we verify the exact image
-			verifyRef = ref.URL + "@" + desc.Digest.String()
+			// Pin verification to the exact resolved image.
+			verifyRef = referenceWithDigest(ref.URL, desc.Digest.String())
 		}
 		verification, err := p.verifier.Verify(ctx, platform.SignatureVerificationRequest{
 			ImageRef: verifyRef,
@@ -436,7 +436,7 @@ func (p *puller) cachedEntryAdmitted(ctx context.Context, cacheKey string, ref p
 		"cached_policy", meta.Policy, "current_policy", policy)
 
 	if _, err := p.verifier.Verify(ctx, platform.SignatureVerificationRequest{
-		ImageRef: ref.URL + "@" + meta.VerifiedDigest,
+		ImageRef: referenceWithDigest(ref.URL, meta.VerifiedDigest),
 		Auth:     ref.Auth,
 	}); err != nil {
 		logger.Error("cached image rejected by current signing policy", "error", err)
@@ -452,6 +452,14 @@ func (p *puller) cachedEntryAdmitted(ctx context.Context, cacheKey string, ref p
 	}
 
 	return true, nil
+}
+
+// referenceWithDigest replaces an existing digest instead of appending another
+// selector. Both fresh pulls and cache-policy revalidation verify the resolved
+// top-level image, including when the caller already supplied a digest.
+func referenceWithDigest(reference, digest string) string {
+	name, _, _ := strings.Cut(reference, "@")
+	return name + "@" + digest
 }
 
 // configureAuth sets up authentication for the repository.

@@ -133,6 +133,13 @@ fn missing_sources_and_image_requests_fail_without_creating_runtime() -> Result 
                     "-o",
                     format,
                 ])
+                .args(if source == "image" {
+                    vec!["--pull-policy", "Never"]
+                } else {
+                    vec![]
+                })
+                .arg("--image-cache-dir")
+                .arg(temporary.path().join("cache"))
                 .output()?;
             assert_failure(
                 output,
@@ -140,7 +147,7 @@ fn missing_sources_and_image_requests_fail_without_creating_runtime() -> Result 
                 if source == "file" {
                     "read local ELF"
                 } else {
-                    "OCI signature verification is not implemented"
+                    "image not in cache"
                 },
             )?;
 
@@ -172,7 +179,17 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
         for via_environment in [false, true] {
             let mut process = command(&runtime);
             process.arg("--config").arg(&config);
-            process.args(["image", "example.invalid/test", "--programs", "xdp:p"]);
+            process.args([
+                "image",
+                "example.invalid/test",
+                "--programs",
+                "xdp:p",
+                "--pull-policy",
+                "Never",
+            ]);
+            process
+                .arg("--image-cache-dir")
+                .arg(temporary.path().join("cache"));
 
             if via_environment {
                 process.env("BPFMAN_REGISTRY_AUTH", secret);
@@ -187,7 +204,7 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
                 2
             };
             let diagnostic = if code == 1 {
-                "signature verification"
+                "image not in cache"
             } else {
                 "registry auth"
             };

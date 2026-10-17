@@ -80,6 +80,7 @@ fn basic_and_bearer_publication_inspection_and_cache_policies() -> Result {
                 pull(
                     &reference,
                     auth,
+                    &bpfman_image_oci::SigningPolicy::disabled(),
                     Always,
                     &cache,
                     Duration::ZERO,
@@ -93,6 +94,7 @@ fn basic_and_bearer_publication_inspection_and_cache_policies() -> Result {
         let image = pull(
             &reference,
             Some(&credentials),
+            &bpfman_image_oci::SigningPolicy::disabled(),
             Always,
             &cache,
             Duration::ZERO,
@@ -105,6 +107,7 @@ fn basic_and_bearer_publication_inspection_and_cache_policies() -> Result {
                 let cached = pull(
                     &reference,
                     auth,
+                    &bpfman_image_oci::SigningPolicy::disabled(),
                     policy,
                     &cache,
                     Duration::ZERO,
@@ -119,6 +122,7 @@ fn basic_and_bearer_publication_inspection_and_cache_policies() -> Result {
             pull(
                 &reference,
                 Some(&wrong),
+                &bpfman_image_oci::SigningPolicy::disabled(),
                 Always,
                 &cache,
                 Duration::ZERO,
@@ -131,6 +135,7 @@ fn basic_and_bearer_publication_inspection_and_cache_policies() -> Result {
             pull(
                 &reference,
                 None,
+                &bpfman_image_oci::SigningPolicy::disabled(),
                 Never,
                 &cache,
                 Duration::ZERO,

@@ -122,11 +122,12 @@ impl LoadRequest {
                 pull_policy,
                 auth,
             } => {
-                super::super::config::Config::load(config)?.admit_image()?;
+                let signing = super::super::config::Config::load(config)?.signing()?;
                 let parsed = bpfman_image_oci::Reference::parse(&reference)?;
                 let image = bpfman_image_oci::pull(
                     &parsed,
                     auth.as_ref(),
+                    &signing,
                     pull_policy.into(),
                     cache,
                     lock_timeout,

@@ -288,6 +288,21 @@ func TestPullerPassesExplicitAuthToVerifier(t *testing.T) {
 	if verifier.request.Auth.Password != auth.Password {
 		t.Fatalf("verifier auth password = %q, want %q", verifier.request.Auth.Password, auth.Password)
 	}
+
+	// Digest operands must remain valid references on the initial pull and on
+	// revalidation after a policy change. A second @digest is never valid.
+	pinned := strings.TrimSuffix(ref, ":latest") + "@" + pulled.Digest
+	for _, policy := range []bpfman.ImagePullPolicy{bpfman.PullAlways, bpfman.PullIfNotPresent} {
+		verifier.policy = policy.String()
+		if _, err := puller.Pull(context.Background(), platform.ImageRef{
+			URL: pinned, PullPolicy: policy, Auth: auth,
+		}); err != nil {
+			t.Fatalf("pinned Pull (%s) returned error: %v", policy, err)
+		}
+		if verifier.request.ImageRef != pinned {
+			t.Fatalf("verifier image ref = %q, want %q", verifier.request.ImageRef, pinned)
+		}
+	}
 }
 
 // TestPullerVerifiesCachedImageAgainstCurrentPolicy pulls an image

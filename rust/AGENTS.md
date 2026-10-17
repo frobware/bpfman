@@ -621,8 +621,15 @@ The architecture and compatibility goals are in
   in-memory extraction and cache admission. Supply full ELF/selection/global
   validation from the kernel adapter before cache publication and on cache hits,
   keeping ELF interpretation outside the transport adapter.
-- Require explicit signing verification disablement until verification exists.
-  Reject unsupported policies before pulling. Never persist or log tokens or
+- Honor signing policy before cache publication or runtime creation. Verify the
+  resolved top-level digest before platform selection. Missing signatures alone
+  may be accepted by allow_unsigned; malformed evidence, authentication/network
+  failures and invalid signatures must fail. Validate paired, anchored identity
+  rules before registry I/O. Keep crypto in synchronous sigstore-verify with its
+  default features disabled; no async runtime or blocking wrapper around async.
+  Bundled production trust roots are updated through reviewed dependency changes;
+  automatic TUF refresh and custom trust-root overrides are not implemented.
+  Never persist or log tokens or
   registry credentials. Explicit credentials enter only the OCI adapter; keep
   them out of model/runtime/store requests. Share deferred CLI decoding between
   image load, inspect and build so Clap diagnostics never echo secret values.
@@ -639,10 +646,22 @@ The architecture and compatibility goals are in
   Preserve one atomic envelope, descriptor confinement, lock-free reads, consuming
   stage receipts and failed cleanup retries. Cache artifacts survive program-load
   failures. Do not adopt Go multi-file entries or abandoned stages implicitly.
+  Bind admission to the original top-level digest and a canonical policy identity
+  including trust-root/verifier versions. Never refuses policy changes without
+  network access; IfNotPresent reverifies the recorded digest outside the cache
+  writer lock. Compare the captured generation under the writer before recording
+  revalidation, preserving a concurrent replacement. Older disabled-policy entries
+  remain readable as disabled; enabling verification requires recorded digest
+  evidence or a fresh pull. Keep atomic publication and consuming cleanup receipts.
 - `rust-test-image` selects local anonymous-registry cache/native contracts. Keep
   them in the normal network-independent gate. Published-image scripts remain
   unchanged external contracts, explicitly selected against Rust and Go with
   SQLite and `e2e/config/no-signature-verification.toml`.
+  Include signed release fixtures, offline Go/Rust public/private verification,
+  cache policy changes/races and real SIGINT/SIGTERM signature-read cancellation.
+  Run the remote-image selector additionally with verification enabled. Go's TUF
+  cache contends across CLI processes, so use serial Go comparison for that lane;
+  keep Rust parallel. Do not weaken scripts or disable verification to claim it.
 - Image building retains fully validated input bytes before registry effects.
   Keep ELF interpretation and canonical labels in the kernel adapter, CLI source
   selection/output in the front end, and OCI packaging/upload in the transport

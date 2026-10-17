@@ -6,12 +6,13 @@ import (
 	"os"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/bpfman/bpfman"
 	"github.com/bpfman/bpfman/dispatcher"
 	"github.com/bpfman/bpfman/manager"
 	"github.com/bpfman/bpfman/platform"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // Successful operations delegate unchanged to the real SQLite store. A failed

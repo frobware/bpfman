@@ -1,11 +1,16 @@
 //! OCI inputs feed the same native lifecycle, stored observations and teardown.
 #[path = "../../../../tests/support/oci.rs"]
-mod registry;
+mod fixture;
+#[path = "../../../../tests/support/signed_image.rs"]
+mod signed_image;
+
+use fixture as registry;
 
 use super::support::*;
 use std::{fs, sync::atomic::Ordering};
 
 pub(super) fn exercise() {
+    signed_lifecycle();
     let c = Context::new();
     let parent = c.layout.root().parent().expect("parent");
     let cache = parent.join("image-cache");
@@ -131,6 +136,61 @@ pub(super) fn exercise() {
                 .to_string_lossy()
                 .starts_with('.'))
     );
+}
+
+fn signed_lifecycle() {
+    let c = Context::new();
+    let server = signed_image::registry();
+    let parent = c.layout.root().parent().expect("parent");
+    let cache = parent.join("signed-cache");
+    let config = parent.join("signed.toml");
+    fs::write(&config, format!("[signing]\nallow_unsigned = false\n[[signing.trusted_identities]]\ncertificate_identity = '{}'\ncertificate_oidc_issuer = '{}'\n", signed_image::SUBJECT, signed_image::ISSUER)).expect("config");
+    for policy in ["Always", "Never", "IfNotPresent"] {
+        let before = server.requests.load(Ordering::Relaxed);
+        let output = c
+            .command(
+                &rust(),
+                &[
+                    "program",
+                    "load",
+                    "image",
+                    &server.reference,
+                    "--pull-policy",
+                    policy,
+                    "--programs",
+                    "xdp:pass",
+                    "-o",
+                    "json",
+                ],
+            )
+            .arg("--image-cache-dir")
+            .arg(&cache)
+            .arg("--config")
+            .arg(&config)
+            .env_remove("BPFMAN_REGISTRY_AUTH")
+            .output()
+            .expect("signed load");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let loaded: serde_json::Value = serde_json::from_slice(&output.stdout).expect("loaded");
+        let program = &loaded["programs"][0];
+        assert_eq!(
+            program["record"]["load"]["image_source"]["digest"],
+            server.digest
+        );
+        let id = program["record"]["program_id"]
+            .as_u64()
+            .expect("ID")
+            .to_string();
+        c.run(&rust(), &["program", "unload", &id], true);
+        c.no_artifacts();
+        if policy != "Always" {
+            assert_eq!(server.requests.load(Ordering::Relaxed), before);
+        }
+    }
 }
 
 pub(super) fn failures() {

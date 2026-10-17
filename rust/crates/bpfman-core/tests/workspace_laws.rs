@@ -276,6 +276,28 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
 }
 
 #[test]
+fn image_verification_normal_closure_stays_synchronous() {
+    let meta = metadata();
+    let start = array(&meta["workspace_members"])
+        .iter()
+        .find(|id| package(meta, id)["name"] == "bpfman-image-oci")
+        .expect("OCI adapter");
+    let mut pending = vec![start];
+    let mut seen = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(string(id)) {
+            continue;
+        }
+        let dependency = string(&package(meta, id)["name"]);
+        assert!(
+            !matches!(dependency, "tokio" | "async-std" | "smol" | "reqwest"),
+            "OCI transport and verification must not introduce an async runtime: {dependency}"
+        );
+        pending.extend(normal_dependencies(meta, id));
+    }
+}
+
+#[test]
 fn pure_closures_have_only_reviewed_dependencies_and_features() {
     let meta = metadata();
 

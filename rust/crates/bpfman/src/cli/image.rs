@@ -2,9 +2,12 @@ use clap::Subcommand;
 use std::io::Write;
 
 mod build;
+mod verify;
 
 #[derive(Subcommand)]
 pub(crate) enum ImageCommand {
+    /// Verify an image signature without creating runtime or cache state.
+    Verify(verify::Verify),
     /// Build and push an OCI bytecode image without a container runtime.
     Build {
         /// Registry reference to publish.
@@ -47,8 +50,10 @@ impl ImageCommand {
     pub(crate) fn execute(
         self,
         cancellation: &bpfman_runtime::Cancellation,
+        config: Option<&std::path::Path>,
     ) -> Result<(), crate::error::Error> {
         match self {
+            Self::Verify(command) => command.execute(cancellation, config)?,
             Self::Inspect {
                 reference,
                 registry_auth,

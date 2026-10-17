@@ -1,5 +1,5 @@
 use crate::{
-    Credentials, Error, Reference,
+    Credentials, Error, Reference, SigningPolicy,
     registry::{self, BYTECODE_LIMIT, Registry, check, hash},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -35,11 +35,33 @@ struct Envelope {
     digest: String,
     bytecode_digest: String,
     bytecode: String,
-    // Admission evidence must never imply signature verification.
+    // Exact policy and top-level digest admitted before platform selection.
     policy: String,
+    #[serde(default)]
+    verified_digest: String,
 }
 
-const POLICY: &str = "verification-disabled-v1";
+struct Cached {
+    image: Image,
+    envelope: Envelope,
+    encoded: Vec<u8>,
+}
+
+struct CacheAdmission<'a> {
+    reference: &'a Reference,
+    signing: &'a SigningPolicy,
+    policy: ImagePullPolicy,
+    cache_layout: &'a RuntimeLayout,
+    lock_timeout: Duration,
+    cancelled: &'a AtomicBool,
+}
+
+impl Cached {
+    fn admitted(&self, signing: &SigningPolicy) -> bool {
+        self.envelope.policy == signing.id()
+            && (signing.verification.is_none() || !self.envelope.verified_digest.is_empty())
+    }
+}
 
 fn platform() -> String {
     format!("linux/{}", registry::host_arch())
@@ -53,14 +75,14 @@ fn cached<E: std::error::Error + Send + Sync + 'static>(
     cache: &RuntimeDirectory,
     reference: &Reference,
     validate: &impl Fn(&[u8]) -> Result<(), E>,
-) -> Result<Option<Image>, Error> {
-    let Some(bytes) = cache
+) -> Result<Option<Cached>, Error> {
+    let Some(encoded) = cache
         .read_image_cache(key(reference))
         .map_err(|e| Error::caused("read image cache", e))?
     else {
         return Ok(None);
     };
-    let entry: Envelope = serde_json::from_slice(&bytes).map_err(|e| {
+    let entry: Envelope = serde_json::from_slice(&encoded).map_err(|e| {
         Error::caused(
             "decode image cache; use Always to refresh corrupt content",
             e,
@@ -69,15 +91,23 @@ fn cached<E: std::error::Error + Send + Sync + 'static>(
     if entry.version != 1
         || entry.reference != reference.normalized()
         || entry.platform != platform()
-        || entry.policy != POLICY
     {
         return Err(Error::invalid(
             "image cache admission metadata mismatch; use Always to refresh",
         ));
     }
     crate::reference::validate_digest(&entry.digest)?;
+    if !entry.verified_digest.is_empty() {
+        crate::reference::validate_digest(&entry.verified_digest)?;
+        if reference.selector.starts_with("sha256:") && reference.selector != entry.verified_digest
+        {
+            return Err(Error::invalid(
+                "cached verification digest does not match requested digest",
+            ));
+        }
+    }
     let bytes = STANDARD
-        .decode(entry.bytecode)
+        .decode(&entry.bytecode)
         .map_err(|e| Error::caused("decode cached bytecode", e))?;
     registry::verify(&bytes, &entry.bytecode_digest)?;
     if reference.selector.starts_with("sha256:") {
@@ -87,9 +117,13 @@ fn cached<E: std::error::Error + Send + Sync + 'static>(
     }
     validate_elf(&bytes)?;
     validate(&bytes).map_err(|e| Error::caused("validate cached bytecode", e))?;
-    Ok(Some(Image {
-        bytes,
-        digest: entry.digest,
+    Ok(Some(Cached {
+        image: Image {
+            bytes,
+            digest: entry.digest.clone(),
+        },
+        envelope: entry,
+        encoded,
     }))
 }
 
@@ -100,9 +134,11 @@ fn cached<E: std::error::Error + Send + Sync + 'static>(
 /// The caller's side-effect-free validator performs full ELF/selection admission
 /// before publication and on cache hits. It may run again when a concurrent
 /// IfNotPresent writer wins publication.
+#[allow(clippy::too_many_arguments)]
 pub fn pull<E: std::error::Error + Send + Sync + 'static>(
     reference: &Reference,
     credentials: Option<&Credentials>,
+    signing: &SigningPolicy,
     policy: ImagePullPolicy,
     cache_layout: &RuntimeLayout,
     lock_timeout: Duration,
@@ -110,13 +146,44 @@ pub fn pull<E: std::error::Error + Send + Sync + 'static>(
     validate: impl Fn(&[u8]) -> Result<(), E>,
 ) -> Result<Image, Error> {
     check(cancelled)?;
+    let admission = CacheAdmission {
+        reference,
+        signing,
+        policy,
+        cache_layout,
+        lock_timeout,
+        cancelled,
+    };
     if policy != ImagePullPolicy::Always {
         if let Some(cache) = RuntimeDirectory::open_existing(cache_layout.clone())
             .map_err(|e| Error::caused("open image cache", e))?
         {
-            if let Some(image) = cached(&cache, reference, &validate)? {
+            if let Some(mut entry) = cached(&cache, reference, &validate)? {
                 check(cancelled)?;
-                return Ok(image);
+                if entry.admitted(signing) {
+                    return Ok(entry.image);
+                }
+                if policy == ImagePullPolicy::Never {
+                    return Err(Error::invalid(
+                        "image cached under a different signing policy and pull policy is Never",
+                    ));
+                }
+                if !entry.envelope.verified_digest.is_empty() {
+                    let mut registry = Registry::new(reference, credentials, cancelled);
+                    crate::verification::admit(
+                        &mut registry,
+                        &entry.envelope.verified_digest,
+                        signing,
+                    )?;
+                    entry.envelope.policy = signing.id().into();
+                    return store(
+                        &admission,
+                        &validate,
+                        entry.envelope,
+                        entry.image,
+                        Some(entry.encoded),
+                    );
+                }
             }
         }
         if policy == ImagePullPolicy::Never {
@@ -127,6 +194,8 @@ pub fn pull<E: std::error::Error + Send + Sync + 'static>(
     }
     let mut registry = Registry::new(reference, credentials, cancelled);
     let mut manifest = registry.manifest(&reference.selector)?;
+    let verified_digest = manifest.digest.clone();
+    crate::verification::admit(&mut registry, &verified_digest, signing)?;
     if registry::is_index(&manifest) {
         manifest = registry.child(&registry::select(&manifest)?)?;
     }
@@ -159,8 +228,32 @@ pub fn pull<E: std::error::Error + Send + Sync + 'static>(
         digest: manifest.digest.clone(),
         bytecode_digest: hash(&bytes),
         bytecode: STANDARD.encode(&bytes),
-        policy: POLICY.into(),
+        policy: signing.id().into(),
+        verified_digest,
     };
+    let image = Image {
+        bytes,
+        digest: manifest.digest,
+    };
+    store(&admission, &validate, envelope, image, None)
+}
+
+fn store<E: std::error::Error + Send + Sync + 'static>(
+    admission: &CacheAdmission<'_>,
+    validate: &impl Fn(&[u8]) -> Result<(), E>,
+    envelope: Envelope,
+    image: Image,
+    expected: Option<Vec<u8>>,
+) -> Result<Image, Error> {
+    let CacheAdmission {
+        reference,
+        signing,
+        policy,
+        cache_layout,
+        lock_timeout,
+        cancelled,
+    } = *admission;
+    check(cancelled)?;
     let envelope =
         serde_json::to_vec(&envelope).map_err(|e| Error::caused("encode image cache", e))?;
     let cache = RuntimeDirectory::open_or_create(cache_layout.clone())
@@ -176,17 +269,21 @@ pub fn pull<E: std::error::Error + Send + Sync + 'static>(
                 // A concurrent pull may have populated the cache. Preserve that entry
                 // for IfNotPresent after rechecking under the cache lock.
                 if policy == ImagePullPolicy::IfNotPresent {
-                    if let Some(image) = cached(writer.directory(), reference, &validate)? {
-                        return Ok(image);
+                    if let Some(current) = cached(writer.directory(), reference, validate)? {
+                        if current.admitted(signing) {
+                            return Ok(current.image);
+                        }
+                        if expected.as_ref().is_some_and(|bytes| *bytes != current.encoded) {
+                            return Err(Error::invalid("image cache changed during signature verification; retry the operation"));
+                        }
+                    } else if expected.is_some() {
+                        return Err(Error::invalid("image cache disappeared during signature verification"));
                     }
                 }
                 publish_cache(&writer, key(reference), &envelope, || {
                     cancelled.load(std::sync::atomic::Ordering::Relaxed)
                 })?;
-                Ok(Image {
-                    bytes,
-                    digest: manifest.digest,
-                })
+                Ok(image)
             },
         )
         .map_err(|e| {

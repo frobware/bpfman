@@ -17,12 +17,26 @@ pub(super) struct Config {
 #[serde(default)]
 struct Signing {
     verify_enabled: bool,
+    allow_unsigned: bool,
+    trusted_identities: Vec<Identity>,
+}
+
+#[derive(Deserialize)]
+#[serde(default)]
+#[derive(Default)]
+struct Identity {
+    certificate_identity: String,
+    certificate_identity_regexp: String,
+    certificate_oidc_issuer: String,
+    certificate_oidc_issuer_regexp: String,
 }
 
 impl Default for Signing {
     fn default() -> Self {
         Self {
             verify_enabled: true,
+            allow_unsigned: true,
+            trusted_identities: Vec::new(),
         }
     }
 }
@@ -42,13 +56,45 @@ impl Default for InterfaceConfig {
 }
 
 impl Config {
-    pub(super) fn admit_image(&self) -> anyhow::Result<()> {
-        if self.signing.verify_enabled {
-            anyhow::bail!(
-                "OCI signature verification is not implemented; image loading requires explicit [signing] verify_enabled = false"
-            );
+    pub(super) fn signing(&self) -> anyhow::Result<bpfman_image_oci::SigningPolicy> {
+        let policy = self.verification(None, None)?;
+        Ok(if self.signing.verify_enabled {
+            policy
+        } else {
+            bpfman_image_oci::SigningPolicy::disabled()
+        })
+    }
+
+    pub(super) fn verification(
+        &self,
+        allow_unsigned: Option<bool>,
+        override_identity: Option<bpfman_image_oci::TrustedIdentity>,
+    ) -> anyhow::Result<bpfman_image_oci::SigningPolicy> {
+        let identities = self
+            .signing
+            .trusted_identities
+            .iter()
+            .map(|identity| {
+                bpfman_image_oci::TrustedIdentity::new(
+                    &identity.certificate_identity,
+                    &identity.certificate_identity_regexp,
+                    &identity.certificate_oidc_issuer,
+                    &identity.certificate_oidc_issuer_regexp,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // Validate the configured policy even when flags replace its identities.
+        let configured = bpfman_image_oci::SigningPolicy::verify(
+            self.signing.allow_unsigned,
+            identities.clone(),
+        )?;
+        if allow_unsigned.is_none() && override_identity.is_none() {
+            return Ok(configured);
         }
-        Ok(())
+        Ok(bpfman_image_oci::SigningPolicy::verify(
+            allow_unsigned.unwrap_or(self.signing.allow_unsigned),
+            override_identity.map_or(identities, |identity| vec![identity]),
+        )?)
     }
 
     pub(super) fn load(path: Option<&Path>) -> anyhow::Result<Self> {

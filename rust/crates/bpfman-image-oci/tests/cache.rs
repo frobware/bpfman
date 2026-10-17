@@ -18,9 +18,16 @@ fn pull(
     timeout: Duration,
     flag: &AtomicBool,
 ) -> std::result::Result<bpfman_image_oci::Image, bpfman_image_oci::Error> {
-    resolve(reference, None, policy, layout, timeout, flag, |_| {
-        Ok::<(), std::convert::Infallible>(())
-    })
+    resolve(
+        reference,
+        None,
+        &bpfman_image_oci::SigningPolicy::disabled(),
+        policy,
+        layout,
+        timeout,
+        flag,
+        |_| Ok::<(), std::convert::Infallible>(()),
+    )
 }
 
 fn elf() -> Vec<u8> {
@@ -188,6 +195,7 @@ fn full_validator_rejection_precedes_cache_publication() -> Result {
         resolve(
             &reference,
             None,
+            &bpfman_image_oci::SigningPolicy::disabled(),
             Always,
             &layout,
             Duration::ZERO,
@@ -203,6 +211,7 @@ fn full_validator_rejection_precedes_cache_publication() -> Result {
         resolve(
             &reference,
             None,
+            &bpfman_image_oci::SigningPolicy::disabled(),
             Never,
             &layout,
             Duration::ZERO,

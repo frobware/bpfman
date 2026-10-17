@@ -71,6 +71,7 @@ fn images_indexes_reproducibility_and_consumption() -> Result {
         let image = pull(
             &reference,
             None,
+            &bpfman_image_oci::SigningPolicy::disabled(),
             bpfman_model::ImagePullPolicy::Always,
             &cache,
             Duration::ZERO,

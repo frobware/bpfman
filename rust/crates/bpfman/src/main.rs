@@ -81,7 +81,9 @@ where
         cli.lock_timeout,
     )?;
     let command = match command {
-        cli::PreparedCommand::Image(command) => return command.execute(cancellation),
+        cli::PreparedCommand::Image(command) => {
+            return command.execute(cancellation, cli.config.as_deref());
+        }
         other => other,
     };
     let store = bpfman_runtime::ActiveStore::open_with_cancellation(
@@ -132,7 +134,9 @@ where
             }
         }
 
-        cli::PreparedCommand::Image(command) => command.execute(cancellation)?,
+        cli::PreparedCommand::Image(command) => {
+            command.execute(cancellation, cli.config.as_deref())?
+        }
         cli::PreparedCommand::Load(request) => request.execute(&bpfman, cancellation)?,
         cli::PreparedCommand::Dispatcher(command) => command.execute(&bpfman)?,
         cli::PreparedCommand::Link(command, mode) => {
