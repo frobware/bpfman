@@ -12,7 +12,7 @@ fn parse(
 ) -> std::result::Result<Option<Credentials>, Error> {
     serde_json::from_value::<Config>(value)
         .expect("config")
-        .credentials(registry)
+        .credentials(registry, &AtomicBool::new(false))
 }
 
 fn basic() -> serde_json::Value {
@@ -148,6 +148,52 @@ fn entry_precedence_helpers_tokens_and_redacted_failures() -> Result {
     assert_eq!(credentials.bearer(), Some("Bearer registry-secret"));
     assert!(credentials.basic().is_err());
     assert!(!format!("{credentials:?}").contains("registry-secret"));
+    Ok(())
+}
+
+#[test]
+fn helper_selection_precedes_global_store_and_inline_entries() -> Result {
+    for (config, registry, expected) in [
+        (
+            json!({"credHelpers":{"quay.io":"specific"}, "credsStore":"global"}),
+            "quay.io",
+            Some("specific"),
+        ),
+        (
+            json!({"credHelpers":{"quay.io":""}, "credsStore":"global"}),
+            "quay.io",
+            Some("global"),
+        ),
+        (
+            json!({"credHelpers":{"other.test":"specific"}, "credsStore":"global"}),
+            "quay.io",
+            Some("global"),
+        ),
+        (
+            json!({"credHelpers":{"https://index.docker.io/v1/":"hub"}}),
+            "index.docker.io",
+            Some("hub"),
+        ),
+        (
+            json!({"credHelpers":{"quay.io":"specific", "https://quay.io/":"alias"}}),
+            "quay.io",
+            Some("specific"),
+        ),
+        (
+            json!({"credHelpers":{"quay.io:5000":"specific"}}),
+            "quay.io",
+            None,
+        ),
+        (json!({"auths":{"quay.io":basic()}}), "quay.io", None),
+    ] {
+        let config: Config = serde_json::from_value(config)?;
+        assert_eq!(config.helper(registry)?, expected);
+    }
+    let ambiguous: Config = serde_json::from_value(json!({
+        "credHelpers":{"https://quay.io/":"first", "http://quay.io/":"second"},
+        "credsStore":"global"
+    }))?;
+    assert!(ambiguous.helper("quay.io").is_err());
     Ok(())
 }
 

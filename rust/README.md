@@ -210,8 +210,22 @@ Docker Hub aliases are supported. Exact keys win; ambiguous aliases fail.
 Files are read-only, bounded to 4 MiB, and opened nonblocking with regular-file
 validation; ordinary operator-managed symlinks are allowed. Malformed selected
 files fail without falling through, and content/decoder diagnostics are redacted.
-Configured credential helpers and identity-token exchange fail explicitly and
-remain separate work. Library callers opt into deferred discovery through
+Configured registry-specific `credHelpers` take precedence over global
+`credsStore`, then inline credentials. A selected helper runs
+`docker-credential-<suffix> get` through the current process's PATH, receives the
+registry authority on stdin, and returns Docker's `Username`/`Secret` JSON.
+Suffixes are limited to 128 ASCII letters, digits, dots, underscores and hyphens;
+paths and shell commands are refused. Invocation remains lazy and synchronous,
+with a 30-second deadline, caller cancellation and 64 KiB limits on each output
+stream. Stderr is drained without logging or retaining its contents. Every
+direct child is reaped; cancellation and failures kill a still-running child.
+Missing, failed or malformed helpers fail without falling back. The standard
+nonzero-exit "credentials not found in native keychain" response and empty
+credentials mean no credentials, also without fallback. Resolved credentials
+stay with upload cleanup receipts so retries do not rerun the helper.
+Identity-token exchange, including helpers returning `Username = "<token>"`,
+still fails explicitly and remains separate work.
+Library callers opt into deferred discovery through
 `Credentials::from_environment`; passing `None` retains anonymous-only behavior.
 
 `--image-cache-dir` defaults to `/var/cache/bpfman`. Its independent writer lock
@@ -276,8 +290,9 @@ cancellation; a lost response can leave the publication outcome unknown.
 image-build scripts, also included in `rust-check`. The admitted 134 Rust files /
 188 cases pass with `BPFMAN_E2E_BYTECODE_SOURCE=image` using Rust directly for
 publication and loading. Both implementations pass all ten remote-image scripts;
-Go also passes the six image-build scripts. Explicit private authentication is
-implemented; ambient credentials and cache eviction remain separate work.
+Go also passes the six image-build scripts. Explicit private authentication,
+ambient credential files and configured credential helpers are implemented;
+identity-token exchange, custom trust roots and cache eviction remain separate work.
 
 ## Persistence scope
 

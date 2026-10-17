@@ -1,4 +1,4 @@
-//! Read-only Docker/Podman credential files. No helper processes or file writes.
+//! Read-only Docker/Podman credential files and configured helper selection.
 use super::{Credentials, Source};
 use crate::{Error, registry::check};
 use base64::{Engine, engine::general_purpose::STANDARD};
@@ -69,7 +69,7 @@ pub(super) fn resolve(
             .map_err(|_| Error::invalid("invalid registry credential file JSON"))?;
         let config: Config = serde_json::from_value(serde_json::Value::Object(object))
             .map_err(|_| Error::invalid("invalid registry credential file JSON"))?;
-        let result = config.credentials(registry)?;
+        let result = config.credentials(registry, flag)?;
         check(flag)?;
         // Go selects one store, rather than merging/falling through when the
         // chosen store has no credentials for this registry.
@@ -90,12 +90,9 @@ struct Config {
 }
 
 impl Config {
-    fn credentials(&self, registry: &str) -> Result<Option<Credentials>, Error> {
-        if !self.store.is_empty() || select(&self.helpers, registry)?.is_some_and(|s| !s.is_empty())
-        {
-            return Err(Error::invalid(
-                "registry credential helpers are unsupported; use a credential file with inline auth or BPFMAN_REGISTRY_AUTH",
-            ));
+    fn credentials(&self, registry: &str, flag: &AtomicBool) -> Result<Option<Credentials>, Error> {
+        if let Some(helper) = self.helper(registry)? {
+            return super::helper::get(helper, registry, flag);
         }
         let Some(value) = select(&self.auths, registry)? else {
             return Ok(None);
@@ -140,6 +137,13 @@ impl Config {
             return Ok(None);
         }
         Credentials::new(&username, &password).map(Some)
+    }
+
+    fn helper(&self, registry: &str) -> Result<Option<&str>, Error> {
+        Ok(select(&self.helpers, registry)?
+            .filter(|helper| !helper.is_empty())
+            .map(String::as_str)
+            .or_else(|| (!self.store.is_empty()).then_some(self.store.as_str())))
     }
 }
 

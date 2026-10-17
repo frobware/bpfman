@@ -1,6 +1,5 @@
 #![allow(clippy::expect_used)]
-#[path = "../../../../tests/support/publish_registry.rs"]
-mod registry;
+use super::test_registry as registry;
 
 use super::*;
 use crate::{Bytecode, Publication, Reference, SigningPolicy, inspect, publish, pull};

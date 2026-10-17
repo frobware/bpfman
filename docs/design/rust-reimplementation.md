@@ -113,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials and ambient credential files; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Credential helpers, identity-token exchange, custom trust roots, cache eviction |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files and configured helpers; Cosign signature/identity policy, synchronous production TUF trust refresh and trust-bound cache revalidation | Identity-token exchange, custom trust roots, cache eviction |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2702,9 +2702,9 @@ wrong, change it here before broadening feature coverage.
   LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
   explicit private-registry credentials, Cosign signature/identity policy and
-  synchronous production TUF trust-root refresh and ambient credential-file
-  discovery are implemented. Credential helpers, identity-token exchange, custom
-  trust roots and cache eviction remain pending.
+  synchronous production TUF trust-root refresh, ambient credential-file
+  discovery and configured credential helpers are implemented. Identity-token
+  exchange, custom trust roots and cache eviction remain pending.
 - The uprobe mount-namespace helper is implemented; CSI integration is pending.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
@@ -5561,3 +5561,67 @@ leaf cases, 214 script/case PASS records, no selected skips or failures, forcing
 every file load through Rust image publication/loading with default verification
 enabled and another fresh production TUF cache. These acceptance lanes ran
 serially to respect the shared test-runner lock.
+
+## OCI credential-helper checkpoint (17 October 2026)
+
+The selected Docker/Podman credential file now supports configured credential
+helpers. Registry-specific `credHelpers` precede global `credsStore`, then inline
+credentials, preserving the existing registry/port/legacy-URL/Docker-Hub matching
+and ambiguity rules. Empty registry-specific helper names defer to the global
+store. Explicit CLI credentials still bypass discovery. Only a challenge from
+the original registry can trigger discovery or helper execution; unchallenged
+requests, admitted cache hits and Never misses do not execute helpers. Library
+discovery remains opt-in. No helper is automatically detected.
+
+The OCI adapter invokes `docker-credential-<suffix> get` through the current
+process's PATH, without a shell, sending the registry authority on stdin until
+EOF. Suffixes are limited to 128 ASCII letters, digits, dots, underscores and
+hyphens; executable paths and shell commands are refused. Input is bounded to
+2048 bytes. The synchronous runner uses safe standard-library Unix-stream pairs
+as standard-I/O channels: the parent endpoints are nonblocking and the child
+endpoints remain blocking. It services stdin/stdout/stderr fairly without reader
+threads, unsafe code, new dependencies or architecture-law exceptions. Each
+output stream is bounded to 64 KiB, a 30-second deadline bounds execution, and
+caller cancellation is checked on every pass. Every direct child is reaped;
+failures/cancellation kill a still-running child. Descendant-held output cannot
+extend the deadline or leave blocked reader threads behind.
+
+Docker `Username`/`Secret` responses become existing in-memory Basic credentials,
+including passwords containing colons. Both Basic registry challenges and bearer
+token exchange use them. Responses with neither username nor secret mean no
+credentials. Docker's exact standard "credentials not found in native keychain"
+stdout message on nonzero exit also means no credentials; surrounding ASCII
+whitespace is accepted.
+Selected helpers never fall back to inline credentials or another file, even on
+not-found results. Missing executables, invalid suffixes, malformed/oversized
+responses and other failures return redacted errors. Helper stderr is bounded
+and drained without retention or logging. JSON errors never retain offending
+values in their source chain. `Username = "<token>"` still fails explicitly:
+identity-token exchange remains a separate slice, not a registry access token.
+
+Resolved credentials stay with registry upload receipts. Failed aborts retain
+them for explicit cleanup retries, without rerunning a helper or rereading its
+configuration. CLI contracts replace both the helper and its file after the
+first invocation and prove authenticated abort still completes. Other contracts
+cover precedence, all image command paths, signed verification, no-fallback
+results, foreign challenges, admitted cache hits, synchronized real SIGINT/SIGTERM
+cancellation, deadlines, child reaping and isolated repeated descriptor accounting.
+No model, runtime, kernel, persistence schema, dependency manifests, lockfile,
+Go source/test, existing acceptance script or script label changes.
+
+Validation: `direnv exec . make rust-check lint-make` passes formatting, strict
+Clippy, unchanged architecture laws, all userspace/CLI/store contracts, 34 OCI
+unit tests, ten CLI credential contracts, 42 fake-kernel cases, all 74
+discovered/selected native tests, rustdoc and Make checks. The native suite took
+66.03 seconds on Linux 6.18.54 with the retained optimized aya-obj profile;
+owned fixture cleanup passed. The normal gate remains independent of external
+services.
+
+All ten unchanged remote-image scripts pass against both Go (serial) and Rust
+(32 slots), selecting `external=true,image=true` with default signature
+verification enabled and a fresh Rust production TUF cache. The exact admitted
+Rust image-mode corpus passes with another fresh TUF cache: 134 files / 188 leaf
+cases, 214 script/case PASS records, no selected skips/failures, and every file
+load forced through native Rust image publication/loading. Filenames match the
+admitted manifest exactly. These acceptance lanes ran serially after the full
+gate to respect the shared test-runner lock.

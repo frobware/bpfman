@@ -20,6 +20,7 @@ enum Source {
 }
 
 mod files;
+mod helper;
 
 impl Credentials {
     /// Capture a nonempty username and password. Passwords may contain colons.
@@ -44,8 +45,8 @@ impl Credentials {
     /// Capture credential-file locations from the current process environment.
     /// No file is opened until the selected registry challenges authentication.
     /// Explicit callers can keep passing `None` for anonymous-only operation.
-    /// The first existing file wins; helper execution and identity-token exchange
-    /// are unsupported and fail explicitly when selected.
+    /// The first existing file wins. Configured helpers run only when selected;
+    /// identity-token exchange remains unsupported and fails explicitly.
     pub fn from_environment(reference: &crate::Reference) -> Self {
         Self {
             source: Source::Files {
@@ -99,3 +100,7 @@ impl std::fmt::Debug for Credentials {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../../../tests/support/publish_registry.rs"]
+mod test_registry;

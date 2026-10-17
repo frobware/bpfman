@@ -654,10 +654,18 @@ The architecture and compatibility goals are in
   registry, keeping unchallenged requests and admitted cache hits independent of file
   errors. Bound regular-file reads and redact parser errors. Match exact registry
   authorities/ports, legacy URL keys and Docker Hub aliases; reject ambiguous
-  aliases. Registry tokens go directly to the registry; configured helpers and
-  identity-token exchange fail explicitly until implemented. Keep library ambient
-  discovery opt-in. Retain resolved credentials with upload cleanup so explicit
-  retries do not reread changed/deleted files.
+  aliases. Registry tokens go directly to the registry. Registry-specific helpers
+  precede global credsStore, then inline entries. Execute only configured bounded
+  suffixes through PATH with the Docker get protocol, without a shell; never
+  autodetect a helper or fall back after a selected helper's result/failure.
+  Preserve the standard not-found response as no credentials. Bound stdin and
+  each output stream, drain stderr without logging/retaining it, enforce the
+  30-second deadline and caller cancellation, and kill/reap direct children on
+  failure. Use safe nonblocking standard-I/O channels, without detached reader
+  threads, unsafe code or new syscall dependencies. Identity-token exchange,
+  including helper Username <token>, fails explicitly until implemented. Keep
+  library ambient discovery opt-in. Retain resolved credentials with upload
+  cleanup so explicit retries do not reread changed/deleted files or rerun helpers.
   Token requests refuse redirects; registry read redirects strip authorization.
   Reject foreign response challenges before credential-bearing token requests.
   Retain in-memory credentials with upload-abort receipts for explicit retries.

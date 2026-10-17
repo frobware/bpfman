@@ -221,8 +221,8 @@ fn explicit_auth_wins_and_wrong_explicit_auth_never_falls_back() -> Result {
 }
 
 #[test]
-fn file_credentials_verify_real_signatures_before_load_admission() -> Result {
-    for bearer in [false, true] {
+fn file_and_helper_credentials_verify_real_signatures_before_load_admission() -> Result {
+    for (bearer, helper) in [(false, false), (true, false), (false, true), (true, true)] {
         let temp = setup()?;
         let root = temp.path();
         let captured = signed_image::registry();
@@ -235,6 +235,17 @@ fn file_credentials_verify_real_signatures_before_load_admission() -> Result {
         configure(&server, bearer);
         let host = server.reference.split('/').next().ok_or("host")?;
         let file = auth_file(root, host, "home/.config/containers/auth.json")?;
+        if helper {
+            install_helper(root, "selected")?;
+            helper_config(root, host, true)?;
+        }
+        let process = || {
+            if helper {
+                helper_command(root)
+            } else {
+                command(root)
+            }
+        };
         let mut state = server.state.lock().expect("state");
         for (path, (_, body)) in captured.responses.lock().expect("routes").iter() {
             if let Some(selector) = path.strip_prefix("/v2/test/manifests/") {
@@ -246,7 +257,7 @@ fn file_credentials_verify_real_signatures_before_load_admission() -> Result {
         }
         drop(state);
         let output = success(
-            command(root)
+            process()
                 .args([
                     "image",
                     "verify",
@@ -260,7 +271,7 @@ fn file_credentials_verify_real_signatures_before_load_admission() -> Result {
                 .output()?,
         );
         assert!(String::from_utf8(output)?.contains("signature verified"));
-        let output = command(root)
+        let output = process()
             .args([
                 "program",
                 "load",
@@ -278,6 +289,9 @@ fn file_credentials_verify_real_signatures_before_load_admission() -> Result {
         );
         assert!(!root.join("runtime").exists());
         assert!(!root.join("cache").exists());
+        if helper {
+            assert_helper_reaped(root)?;
+        }
     }
     Ok(())
 }
@@ -337,5 +351,465 @@ fn malformed_or_foreign_files_do_not_affect_anonymous_requests_or_never_cache_mi
     );
     assert!(!root.join("runtime").exists());
     assert!(!root.join("cache").exists());
+    Ok(())
+}
+
+const HELPER: &str = r#"#!/bin/sh
+[ "$#" = 1 ] && [ "$1" = get ] || exit 11
+IFS= read -r registry || :
+printf '%s %s %s\n' "${0##*/}" "$1" "$registry" >> "$HELPER_CALLS"
+printf '%s' "$$" > "$HELPER_PID"
+printf 'helper-stderr-secret' >&2
+case "$HELPER_MODE" in
+    hang) while :; do :; done ;;
+    fail) printf 'helper-failure-secret'; exit 1 ;;
+    malformed) printf '{"Username":{"helper-parser-secret":true}}'; exit 0 ;;
+    token) printf '{"Username":"<token>","Secret":"helper-identity-secret"}'; exit 0 ;;
+    absent) printf 'credentials not found in native keychain'; exit 1 ;;
+    empty) printf '{}'; exit 0 ;;
+    poison)
+        printf 'changed-credential-file-secret' > "$REGISTRY_AUTH_FILE"
+        printf '#!/bin/sh\nexit 99\n' > "$0"
+        ;;
+esac
+printf '%s' "$HELPER_RESPONSE"
+"#;
+
+fn install_helper(root: &Path, name: &str) -> std::io::Result<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = root.join("helpers");
+    std::fs::create_dir_all(&directory)?;
+    let file = directory.join(format!("docker-credential-{name}"));
+    std::fs::write(&file, HELPER)?;
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700))?;
+    Ok(file)
+}
+
+fn helper_command(root: &Path) -> Command {
+    let mut process = command(root);
+    process
+        .env("REGISTRY_AUTH_FILE", root.join("auth.json"))
+        .env("PATH", root.join("helpers"))
+        .env("HELPER_CALLS", root.join("helper.calls"))
+        .env("HELPER_PID", root.join("helper.pid"))
+        .env("HELPER_MODE", "")
+        .env(
+            "HELPER_RESPONSE",
+            json!({"Username":"file-user", "Secret":SECRET}).to_string(),
+        );
+    process
+}
+
+fn helper_config(root: &Path, host: &str, specific: bool) -> std::io::Result<()> {
+    std::fs::write(root.join("auth.json"), if specific {
+        // The registry-specific helper must override this missing global helper
+        // and a malformed inline entry, without interpreting either one.
+        json!({"credHelpers":{host:"selected"}, "credsStore":"missing-global", "auths":{host:false}})
+    } else {
+        json!({"credsStore":"selected", "auths":{host:false}})
+    }.to_string())
+}
+
+fn assert_helper_reaped(root: &Path) -> Result {
+    let pid: u32 = std::fs::read_to_string(root.join("helper.pid"))?.parse()?;
+    assert!(
+        !Path::new(&format!("/proc/{pid}")).exists(),
+        "helper must be reaped before CLI returns"
+    );
+    Ok(())
+}
+
+#[test]
+fn configured_helpers_authenticate_every_image_command_and_preserve_precedence() -> Result {
+    let object =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
+    for bearer in [false, true] {
+        for specific in [false, true] {
+            let temp = setup()?;
+            let root = temp.path();
+            install_helper(root, "selected")?;
+            let server = registry::Registry::new();
+            configure(&server, bearer);
+            let host = server.reference.split('/').next().ok_or("host")?;
+            helper_config(root, host, specific)?;
+            let before = std::fs::read(root.join("auth.json"))?;
+            let trace = root.join("helper.trace");
+            let output = helper_command(root)
+                .arg("--trace-file")
+                .arg(&trace)
+                .env("RUST_LOG", "trace,ureq=trace,ureq_proto=trace")
+                .args(["image", "build", &server.reference])
+                .arg(&object)
+                .output()?;
+            assert!(!String::from_utf8_lossy(&output.stderr).contains("helper-stderr-secret"));
+            success(output);
+            assert_helper_reaped(root)?;
+            let inspected: serde_json::Value = serde_json::from_slice(&success(
+                helper_command(root)
+                    .args(["image", "inspect", &server.reference])
+                    .output()?,
+            ))?;
+            assert_eq!(inspected["programs"]["pass"], "xdp");
+            assert_helper_reaped(root)?;
+            assert!(
+                String::from_utf8(success(
+                    helper_command(root)
+                        .args(["image", "verify", &server.reference])
+                        .output()?
+                ))?
+                .contains("unsigned image accepted")
+            );
+            assert_helper_reaped(root)?;
+            let output = helper_command(root)
+                .args([
+                    "program",
+                    "load",
+                    "image",
+                    &server.reference,
+                    "--programs",
+                    "xdp:missing_program",
+                ])
+                .output()?;
+            assert!(!output.status.success());
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("missing_program"),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_helper_reaped(root)?;
+            let calls = std::fs::read_to_string(root.join("helper.calls"))?;
+            assert!(calls.lines().count() >= 4);
+            assert!(
+                calls
+                    .lines()
+                    .all(|line| line == format!("docker-credential-selected get {host}"))
+            );
+            let trace = std::fs::read_to_string(trace)?;
+            for secret in [SECRET, &encoded(), "publish-token", "helper-stderr-secret"] {
+                assert!(!trace.contains(secret));
+                assert!(!String::from_utf8_lossy(&output.stderr).contains(secret));
+            }
+            assert_eq!(std::fs::read(root.join("auth.json"))?, before);
+            assert!(!root.join("runtime").exists());
+            assert!(!root.join("cache").exists());
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn helper_failures_empty_results_and_identity_tokens_never_fall_back_or_leak() -> Result {
+    let temp = setup()?;
+    let root = temp.path();
+    install_helper(root, "selected")?;
+    let server = registry::Registry::new();
+    configure(&server, false);
+    let host = server.reference.split('/').next().ok_or("host")?;
+    let file = root.join("auth.json");
+    // Valid inline credentials and a later file must never rescue a helper.
+    auth_file(root, host, "home/.config/containers/auth.json")?;
+    for helper in ["missing", "selected"] {
+        std::fs::write(
+            &file,
+            json!({"credHelpers":{host:helper}, "auths":{host:{"auth":encoded()}}}).to_string(),
+        )?;
+        for mode in ["fail", "malformed", "token", "absent", "empty"] {
+            let output = helper_command(root)
+                .env("HELPER_MODE", mode)
+                .args(["image", "inspect", &server.reference])
+                .output()?;
+            assert!(!output.status.success());
+            let stderr = String::from_utf8(output.stderr)?;
+            for secret in [
+                SECRET,
+                "helper-stderr-secret",
+                "helper-failure-secret",
+                "helper-parser-secret",
+                "helper-identity-secret",
+            ] {
+                assert!(!stderr.contains(secret), "{stderr}");
+            }
+            if helper == "selected" {
+                assert_helper_reaped(root)?;
+                if mode == "token" {
+                    assert!(stderr.contains("identity-token exchange is unsupported"));
+                }
+                if mode == "malformed" {
+                    assert!(stderr.contains("invalid registry credential helper response"));
+                }
+            }
+        }
+    }
+    assert!(
+        server
+            .state
+            .lock()
+            .expect("state")
+            .authorizations
+            .iter()
+            .all(|(_, auth)| auth.is_none())
+    );
+    assert!(!root.join("runtime").exists());
+    assert!(!root.join("cache").exists());
+    Ok(())
+}
+
+#[test]
+fn explicit_credentials_unchallenged_requests_never_and_foreign_challenges_do_not_run_helpers()
+-> Result {
+    let temp = setup()?;
+    let root = temp.path();
+    install_helper(root, "selected")?;
+    let server = registry::Registry::new();
+    let host = server.reference.split('/').next().ok_or("host")?;
+    helper_config(root, host, true)?;
+    let output = helper_command(root)
+        .args(["image", "inspect", &server.reference])
+        .output()?;
+    assert!(String::from_utf8_lossy(&output.stderr).contains("manifest not found"));
+    let output = helper_command(root)
+        .args([
+            "program",
+            "load",
+            "image",
+            &server.reference,
+            "--programs",
+            "xdp:pass",
+            "--pull-policy",
+            "Never",
+        ])
+        .output()?;
+    assert!(String::from_utf8_lossy(&output.stderr).contains("pull policy is Never"));
+    configure(&server, false);
+    let object =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
+    success(
+        helper_command(root)
+            .env("BPFMAN_REGISTRY_AUTH", encoded())
+            .args(["image", "build", &server.reference])
+            .arg(object)
+            .output()?,
+    );
+    success(
+        helper_command(root)
+            .args([
+                "image",
+                "inspect",
+                &server.reference,
+                "--registry-auth",
+                &encoded(),
+            ])
+            .output()?,
+    );
+    assert!(
+        !helper_command(root)
+            .env("BPFMAN_REGISTRY_AUTH", STANDARD.encode("wrong:credentials"))
+            .args(["image", "inspect", &server.reference])
+            .output()?
+            .status
+            .success()
+    );
+    assert!(!root.join("helper.calls").exists());
+    let receiver = registry::Registry::new();
+    configure(&receiver, false);
+    let receiver_host = receiver.reference.split('/').next().ok_or("host")?;
+    let mut state = server.state.lock().expect("state");
+    state.required_auth = None;
+    state.redirects.insert(
+        "GET /v2/test/manifests/latest".into(),
+        format!("http://{receiver_host}/sink"),
+    );
+    drop(state);
+    let output = helper_command(root)
+        .args(["image", "inspect", &server.reference])
+        .output()?;
+    assert!(String::from_utf8_lossy(&output.stderr).contains("redirected registry response"));
+    assert!(!root.join("helper.calls").exists());
+    assert!(
+        receiver
+            .state
+            .lock()
+            .expect("state")
+            .authorizations
+            .iter()
+            .all(|(_, auth)| auth.is_none())
+    );
+    Ok(())
+}
+
+#[test]
+fn sigint_and_sigterm_during_helper_lookup_reap_the_helper_before_cli_exit() -> Result {
+    use std::{
+        process::{Child, Stdio},
+        time::{Duration, Instant},
+    };
+    struct Process(Child);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    for signal in ["INT", "TERM"] {
+        let temp = setup()?;
+        let root = temp.path();
+        install_helper(root, "selected")?;
+        let server = registry::Registry::new();
+        configure(&server, false);
+        let host = server.reference.split('/').next().ok_or("host")?;
+        helper_config(root, host, true)?;
+        let mut process = Process(
+            helper_command(root)
+                .env("HELPER_MODE", "hang")
+                .args(["image", "inspect", &server.reference])
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::fs::read_to_string(root.join("helper.pid"))
+            .unwrap_or_default()
+            .is_empty()
+        {
+            assert!(Instant::now() < deadline, "helper did not start");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            Command::new("kill")
+                .arg(format!("-{signal}"))
+                .arg(process.0.id().to_string())
+                .status()?
+                .success()
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = process.0.try_wait()? {
+                break status;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "helper cancellation did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        assert_eq!(status.code(), Some(if signal == "INT" { 130 } else { 143 }));
+        let mut stderr = String::new();
+        std::io::Read::read_to_string(&mut process.0.stderr.take().ok_or("stderr")?, &mut stderr)?;
+        assert!(stderr.contains("cancelled"), "{stderr}");
+        assert!(!stderr.contains("helper-stderr-secret"));
+        assert_helper_reaped(root)?;
+        assert!(!root.join("runtime").exists());
+        assert!(!root.join("cache").exists());
+    }
+    Ok(())
+}
+
+#[test]
+fn upload_abort_retains_helper_credentials_after_config_and_executable_change() -> Result {
+    let object =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
+    for bearer in [false, true] {
+        let temp = setup()?;
+        let root = temp.path();
+        install_helper(root, "selected")?;
+        let server = registry::Registry::new();
+        configure(&server, bearer);
+        server
+            .state
+            .lock()
+            .expect("state")
+            .faults
+            .insert("PUT /v2/test/blobs/uploads/*".into(), 503);
+        let host = server.reference.split('/').next().ok_or("host")?;
+        helper_config(root, host, true)?;
+        let output = helper_command(root)
+            .env("HELPER_MODE", "poison")
+            .args(["image", "build", &server.reference])
+            .arg(&object)
+            .output()?;
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains("complete OCI upload returned HTTP 503"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("cleanup failed"), "{stderr}");
+        assert!(!stderr.contains("secret"), "{stderr}");
+        assert_helper_reaped(root)?;
+        assert_eq!(
+            std::fs::read_to_string(root.join("helper.calls"))?
+                .lines()
+                .count(),
+            1
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("auth.json"))?,
+            "changed-credential-file-secret"
+        );
+        let state = server.state.lock().expect("state");
+        assert!(state.uploads.is_empty());
+        assert!(state.manifests.is_empty());
+        assert!(
+            state
+                .requests
+                .iter()
+                .any(|request| request.starts_with("DELETE "))
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn admitted_cache_hits_do_not_execute_a_subsequently_broken_helper() -> Result {
+    let temp = setup()?;
+    let root = temp.path();
+    let executable = install_helper(root, "selected")?;
+    let server = registry::Registry::new();
+    configure(&server, false);
+    let host = server.reference.split('/').next().ok_or("host")?;
+    helper_config(root, host, true)?;
+    let object =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../e2e/testdata/bpf/xdp_pass.bpf.o");
+    success(
+        helper_command(root)
+            .args(["image", "build", &server.reference])
+            .arg(object)
+            .output()?,
+    );
+    // A regular-file runtime root rejects mutation after image/cache admission,
+    // keeping this a rootless contract while proving a real admitted cache hit.
+    std::fs::write(root.join("runtime"), "blocked runtime")?;
+    let load = |policy: &str| {
+        helper_command(root)
+            .args([
+                "program",
+                "load",
+                "image",
+                &server.reference,
+                "--programs",
+                "xdp:pass",
+                "--pull-policy",
+                policy,
+            ])
+            .output()
+    };
+    let output = load("Always")?;
+    assert!(!output.status.success());
+    assert!(
+        root.join("cache/images-v1").is_dir(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let before = std::fs::read(root.join("helper.calls"))?;
+    let requests = server.state.lock().expect("state").requests.len();
+    std::fs::write(executable, "#!/bin/sh\nexit 99\n")?;
+    for policy in ["Never", "IfNotPresent"] {
+        let output = load(policy)?;
+        assert!(!output.status.success());
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(!stderr.contains("credential helper"), "{stderr}");
+        assert_eq!(std::fs::read(root.join("helper.calls"))?, before);
+        assert_eq!(server.state.lock().expect("state").requests.len(), requests);
+    }
     Ok(())
 }
