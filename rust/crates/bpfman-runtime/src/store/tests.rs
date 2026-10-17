@@ -119,6 +119,7 @@ fn runtime_reads_the_real_store<S: TestStore>(backend: S) {
     let filter = bpfman_core::ProgramFilter {
         types: vec![],
         application: Some("absent".into()),
+        ..Default::default()
     };
 
     assert!(bpfman.list_entries(&filter).expect("list").is_empty());

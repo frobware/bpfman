@@ -42,6 +42,7 @@ fn managed_identity_precedes_filtering_and_missing_kernel_records_survive() {
         &ProgramFilter {
             types: vec![ProgramType::Tc],
             application: None,
+            ..Default::default()
         },
     );
     assert_eq!(selected, [ProgramListEntry::KernelOnly(stray.clone())]);
@@ -57,6 +58,7 @@ fn managed_identity_precedes_filtering_and_missing_kernel_records_survive() {
             &ProgramFilter {
                 types: Vec::new(),
                 application: application.clone(),
+                ..Default::default()
             },
         );
         match application.as_deref() {
@@ -87,6 +89,7 @@ fn fine_types_project_to_kernel_taxonomy_and_unknown_types_remain_visible() {
         let filter = ProgramFilter {
             types: vec![kind],
             application: None,
+            ..Default::default()
         };
         assert_eq!(
             list_program_entries(Vec::new(), vec![unknown.clone(), kernel.clone()], &filter),
@@ -95,6 +98,93 @@ fn fine_types_project_to_kernel_taxonomy_and_unknown_types_remain_visible() {
         assert_eq!(
             list_program_entries(Vec::new(), vec![unknown], &Default::default()).len(),
             1
+        );
+    }
+}
+
+#[test]
+fn metadata_selection_is_identical_for_summaries_records_and_inventory() {
+    use bpfman_core::{list_programs, select_records};
+    use bpfman_model::StoredProgramSummary;
+    use std::collections::BTreeMap;
+
+    let mut record = sample::record();
+    record.metadata = BTreeMap::from([
+        ("bpfman.io/application".into(), "demo".into()),
+        ("owner".into(), "acme".into()),
+        ("arbitrary key".into(), "value=with spaces".into()),
+        ("empty".into(), String::new()),
+    ]);
+    let summary = StoredProgramSummary::new(
+        record.id,
+        record.spec.name().as_str().into(),
+        record.spec.kind(),
+        record.metadata.clone(),
+        Vec::new(),
+    );
+    let mut stray = sample::kernel();
+    stray.id = NonZeroU32::new(43).expect("unmanaged id");
+    let pairs = |key: &str, value: &str| BTreeMap::from([(key.into(), value.into())]);
+    for (metadata, application, raw, expected) in [
+        (pairs("owner", "acme"), None, "owner in (acme,other)", true),
+        (pairs("owner", "other"), None, "owner=acme", false),
+        (pairs("arbitrary key", "value=with spaces"), None, "", true),
+        (pairs("empty", ""), None, "empty=", true),
+        (pairs("absent", ""), None, "!absent", false),
+        (BTreeMap::new(), None, "!absent", true),
+        (BTreeMap::new(), None, "owner!=acme", false),
+        (
+            pairs("bpfman.io/application", "other"),
+            Some("demo"),
+            "",
+            true,
+        ),
+        (
+            pairs("bpfman.io/application", "other"),
+            Some("demo"),
+            "bpfman.io/application=other",
+            false,
+        ),
+        (pairs("bpfman.io/application", "other"), Some(""), "", false),
+    ] {
+        let filter = ProgramFilter {
+            metadata,
+            application: application.map(Into::into),
+            selector: raw.parse().expect("selector"),
+            ..Default::default()
+        };
+        assert_eq!(
+            list_programs(vec![summary.clone()], &filter).len(),
+            usize::from(expected)
+        );
+        assert_eq!(
+            select_records(vec![record.clone()], &filter).len(),
+            usize::from(expected)
+        );
+        let rows = list_program_entries(vec![record.clone()], vec![stray.clone()], &filter);
+        assert_eq!(rows.len(), usize::from(expected));
+        assert!(
+            rows.iter()
+                .all(|row| matches!(row, ProgramListEntry::Managed(_)))
+        );
+    }
+
+    // An empty selector remains unrestricted, but negative/existence requirements
+    // never match unmanaged programs, even if they would match an empty map.
+    for raw in [
+        "",
+        "  ",
+        "!missing",
+        "missing!=value",
+        "missing notin (value)",
+    ] {
+        let filter = ProgramFilter {
+            selector: raw.parse().expect("selector"),
+            ..Default::default()
+        };
+        assert_eq!(
+            list_program_entries(Vec::new(), vec![stray.clone()], &filter).len(),
+            usize::from(raw.trim().is_empty())
         );
     }
 }

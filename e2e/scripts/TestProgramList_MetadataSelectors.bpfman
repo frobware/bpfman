@@ -1,0 +1,99 @@
+# -*- mode: bpfman -*-
+#
+# Exact metadata pairs and Kubernetes selectors compose with existing listing
+# filters and output modes. Shared Go/Rust contract, with unmanaged exclusion.
+
+guard loaded <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder --application selector-demo -m owner=acme -m tier=edge -m empty= -m version=010 -m "arbitrary key=value=with spaces" -m example.com/My_Name=Value.1
+let prog = $loaded.programs[0]
+let pid = $prog.record.program_id
+defer bpfman program unload $pid
+
+guard other <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass --application selector-other -m owner=acme -m tier=core -m version=2
+let otherID = $other.programs[0].record.program_id
+defer bpfman program unload $otherID
+
+guard bare <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let bareID = $bare.programs[0].record.program_id
+defer bpfman program unload $bareID
+
+let strayPin = "/sys/fs/bpf/bpfman_e2e_metadata_${pid}"
+guard _ <- exec bpftool prog load testdata/bpf/xdp_pass.bpf.o $strayPin type xdp
+defer exec rm -f $strayPin
+guard strayShow <- proginfo pinned $strayPin
+let strayID = $strayShow.id
+
+# Exact pairs use last-key-wins, trim keys, preserve raw values and allow empty.
+guard exact <- bpfman program list -m owner=wrong --metadata-selector " owner =acme" -m tier=edge -o json
+assert ($exact.programs |> jq "length") == 1
+assert $exact.programs[0].program_id == $pid
+guard raw <- bpfman program list -m "arbitrary key=value=with spaces" -m empty= -o json
+assert ($raw.programs |> jq "length") == 1
+assert $raw.programs[0].program_id == $pid
+guard missingEmpty <- bpfman program list -m absent= -o json
+assert ($missingEmpty.programs |> jq "length") == 0
+
+# A nonempty --application overrides the corresponding exact pair, while the
+# independent label selector is still ANDed with that effective metadata map.
+guard overridden <- bpfman program list -m bpfman.io/application=wrong --application selector-demo -o json
+assert ($overridden.programs |> jq "length") == 1
+assert $overridden.programs[0].program_id == $pid
+guard contradictory <- bpfman program list -m bpfman.io/application=wrong --application selector-demo -l bpfman.io/application=wrong -o json
+assert ($contradictory.programs |> jq "length") == 0
+guard emptyApp <- bpfman program list --application "" -m bpfman.io/application=selector-other -o json
+assert ($emptyApp.programs |> jq "length") == 1
+assert $emptyApp.programs[0].program_id == $otherID
+
+# Exercise the complete selector operator family, whitespace, empty set entries,
+# absent-key semantics, qualified names, numeric comparisons and conjunctions.
+foreach selector in ["owner=acme" "owner==acme" "owner!=other" "absent!=value" "owner" "!absent" "owner in (other, acme)" "owner notin (other)" "absent notin (value)" "empty=" "empty in ()" "empty in (,other,)" "empty in (other,,value)" "version>9,version<11" "example.com/My_Name=Value.1" " owner in (acme), !absent, empty == "] {
+    guard matching <- bpfman program list --application selector-demo --selector $selector -o json
+    assert ($matching.programs |> jq "length") == 1
+    assert $matching.programs[0].program_id == $pid
+}
+foreach selector in ["owner=other" "owner!=acme" "absent=" "absent" "!owner" "owner in (other)" "owner notin (acme)" "absent in (value)" "empty!=" "version>10" "version<10" "owner>1" "absent>1" "owner=acme,tier=core"] {
+    guard excluded <- bpfman program list --application selector-demo -l $selector -o json
+    assert ($excluded.programs |> jq "length") == 0
+}
+
+# All metadata requirements exclude kernel-only rows, even negative selectors
+# which would match an empty map. No metadata filter means --all stays inclusive.
+guard absentOwner <- bpfman program list --all -l "!owner" -o json
+assert ($absentOwner.programs |> jq "length") == 1
+assert $absentOwner.programs[0].program_id == $bareID
+guard negative <- bpfman program list --all -l "absent!=value" -o json
+let negativeIDs = $negative |> jq "[.programs[].program_id] | sort | tojson"
+let managedIDs = [$pid $otherID $bareID] |> jq "sort | tojson"
+assert $negativeIDs == $managedIDs
+guard unrestricted <- bpfman program list --all --selector "  " -o json
+assert ($unrestricted |> jq "[.programs[] | select(.program_id == ${strayID})] | length") == 1
+
+# Exact managed type selection and output modes share the same metadata policy.
+guard typed <- bpfman program list -m owner=acme --type xdp -l "tier in (core,edge)" -o json
+assert ($typed.programs |> jq "length") == 1
+assert $typed.programs[0].program_id == $otherID
+guard quiet <- exec bpfman program list -m owner=acme -l tier=edge -q -o json
+let quietIDs = $quiet.stdout |> jq 'split("\n") | map(select(length > 0) | tonumber)'
+assert ($quietIDs |> jq "length") == 1
+assert $quietIDs[0] == $pid
+guard table <- exec bpfman program list -m owner=acme -l tier=edge
+assert contains $table.stdout "tracepoint_kill_recorder"
+guard emptyTable <- exec bpfman program list -l owner=nope
+assert $emptyTable.stdout == ""
+
+# Metadata selection composes with active-link observations and --all.
+guard before <- bpfman program list --unattached -m owner=acme -l tier=edge -o json
+assert ($before.programs |> jq "length") == 1
+guard link <- bpfman link attach tracepoint $prog syscalls/sys_enter_kill
+defer bpfman link detach $link
+guard active <- bpfman program list --all --attached -m owner=acme -l tier=edge -o json
+assert ($active.programs |> jq "length") == 1
+assert $active.programs[0].program_id == $pid
+guard inactive <- bpfman program list --all --unattached -m owner=acme -l tier=core -o json
+assert ($inactive.programs |> jq "length") == 1
+assert $inactive.programs[0].program_id == $otherID
+
+foreach selector in ["!owner=acme" "owner in (acme" "owner===acme" "owner=bad/value" "Owner.COM/key=value" "owner,,tier" "version>9223372036854775808"] {
+    assert fail bpfman program list --selector $selector
+}
+assert fail bpfman program list -m owner
+assert fail bpfman program list --metadata-selector "=value"

@@ -148,6 +148,31 @@ fn conflicting_attachment_filters_do_not_create_runtime() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn malformed_metadata_selectors_do_not_create_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let runtime = directory.path().join("absent");
+    for (flag, value) in [
+        ("-m", "owner"),
+        ("--metadata-selector", "=value"),
+        ("-m", "  =value"),
+        ("-l", "app in (demo"),
+        ("--selector", "app=bad/value"),
+        ("-l", "app,,debug"),
+        ("-l", "app>9223372036854775808"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .arg("--runtime-dir")
+            .arg(&runtime)
+            .args(["program", "list", flag, value])
+            .output()?;
+        assert_eq!(output.status.code(), Some(2), "{flag} {value}");
+        assert!(output.stdout.is_empty());
+        assert!(!runtime.exists());
+    }
+    Ok(())
+}
+
+#[test]
 fn invalid_runtime_roots_fail_at_the_input_boundary() -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
 

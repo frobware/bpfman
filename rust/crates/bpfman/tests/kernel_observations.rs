@@ -330,6 +330,7 @@ where
     let attached = bpfman_core::AttachmentFilter::Attached;
     let unattached = bpfman_core::AttachmentFilter::Unattached;
     let record = sample::record();
+    let metadata = BTreeMap::from([("owner".into(), "acme".into())]);
     let id = record.id;
     let link = KernelLink {
         id: NonZeroU32::new(123).expect("link id"),
@@ -355,7 +356,7 @@ where
                             source: &bpfman_model::ProgramSource::File(Some("original.o".into())),
                             license: "GPL",
                             created_at: &record.created_at,
-                            metadata: &BTreeMap::new(),
+                            metadata: &metadata,
                             globals: &BTreeMap::new(),
                         },
                     )
@@ -441,6 +442,63 @@ where
     assert!(
         !layout.root().join("fs").exists(),
         "fake reads must never mount or inspect real bpffs"
+    );
+
+    // Selection uses real persisted metadata, before individual kernel reads.
+    // Summary selection remains independent of the kernel, even while locked.
+    let matching = bpfman_core::ProgramFilter {
+        metadata: metadata.clone(),
+        selector: "owner in (acme,other),!debug".parse().expect("selector"),
+        ..Default::default()
+    };
+    let excluded = bpfman_core::ProgramFilter {
+        selector: "owner!=acme".parse().expect("selector"),
+        ..Default::default()
+    };
+    {
+        let mut state = fake.state.lock().expect("kernel");
+        state.calls.clear();
+        state.fault = Some(("program", ErrorKind::Unavailable));
+    }
+    runtime
+        .with_writer(
+            bpfman_lock::AcquireOptions {
+                timeout: BUDGET,
+                cancelled: None,
+            },
+            |_| {
+                assert_eq!(app.list(&matching).expect("store-only selection").len(), 1);
+                assert!(
+                    app.list(&excluded)
+                        .expect("store-only exclusion")
+                        .is_empty()
+                );
+                assert!(
+                    app.list_entries(&excluded)
+                        .expect("exclude before kernel")
+                        .is_empty()
+                );
+                assert!(
+                    app.list_entries_by_attachment(&excluded, attached)
+                        .expect("exclude before link observation")
+                        .is_empty()
+                );
+            },
+        )
+        .expect("writer");
+    assert!(fake.state.lock().expect("kernel").calls.is_empty());
+    assert_eq!(
+        app.list_entries(&matching)
+            .expect_err("selected observation failure")
+            .kind(),
+        ObservationErrorKind::Unavailable
+    );
+    fake.state.lock().expect("kernel").fault = None;
+    assert_eq!(
+        app.list_entries_by_attachment(&matching, attached)
+            .expect("combined selection")
+            .len(),
+        1
     );
 
     // Pending intent with a pin but no recorded kernel identity is inactive.

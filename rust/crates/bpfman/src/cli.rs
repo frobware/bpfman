@@ -181,6 +181,12 @@ pub(super) struct ListArgs {
     /// Filter by exact bpfman.io/application metadata value.
     #[arg(long)]
     pub(super) application: Option<String>,
+    /// Filter by KEY=VALUE metadata; repeat to require several pairs.
+    #[arg(short = 'm', long = "metadata-selector", value_name = "KEY=VALUE", value_parser = list_metadata)]
+    pub(super) metadata: Vec<(String, String)>,
+    /// Kubernetes label selector over program metadata.
+    #[arg(short = 'l', long, default_value = "")]
+    pub(super) selector: bpfman_core::MetadataSelector,
 }
 
 impl ListArgs {
@@ -193,6 +199,15 @@ impl ListArgs {
             None
         }
     }
+}
+
+fn list_metadata(raw: &str) -> Result<(String, String), String> {
+    let (key, value) = raw.split_once('=').ok_or("expected KEY=VALUE")?;
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("metadata key must not be empty".into());
+    }
+    Ok((key.into(), value.into()))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -326,6 +341,50 @@ mod tests {
                     clap::Error::raw(clap::error::ErrorKind::InvalidValue, "expected conflict")
                 })?;
         assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_inputs_keep_raw_pairs_and_parse_label_requirements() -> Result<(), clap::Error> {
+        let cli = Cli::try_parse_from([
+            "bpfman",
+            "program",
+            "list",
+            "-m",
+            " owner =old",
+            "--metadata-selector",
+            "owner=acme",
+            "-m",
+            "arbitrary key=value=with spaces",
+            "--selector",
+            "owner in (acme,other),!debug",
+        ])?;
+        let Command::Program {
+            command: ProgramCommand::List(args),
+        } = cli.command
+        else {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::InvalidSubcommand,
+                "expected list",
+            ));
+        };
+        assert_eq!(
+            args.metadata
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            std::collections::BTreeMap::from([
+                ("owner".into(), "acme".into()),
+                ("arbitrary key".into(), "value=with spaces".into()),
+            ])
+        );
+        assert_eq!(
+            args.selector,
+            "owner in (acme,other),!debug".parse().map_err(|error| {
+                clap::Error::raw(clap::error::ErrorKind::InvalidValue, error)
+            })?
+        );
+        // The short alias shares the same typed parser, including an empty selector.
+        Cli::try_parse_from(["bpfman", "program", "list", "-l", ""])?;
         Ok(())
     }
 }

@@ -124,7 +124,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
 | Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
-| Program inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact managed/coarse kernel type filtering, text/quiet/JSON output, cancellation and lock-free reads | Metadata-selector CLI compatibility |
+| Program inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact metadata pairs and Kubernetes label selectors, exact managed/coarse kernel type filtering, text/quiet/JSON output, cancellation and lock-free reads | Link-list metadata and owning-program filtering |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2717,8 +2717,9 @@ wrong, change it here before broadening feature coverage.
 ### Phase 5: public surfaces and cutover
 
 - Complete gRPC and CLI compatibility. Program inventory (`program list --all`)
-  and active-link `--attached`/`--unattached` filtering are implemented;
-  metadata-selector CLI compatibility remains.
+  and active-link `--attached`/`--unattached` filtering, exact metadata pairs and
+  Kubernetes label selectors are implemented. Link-list metadata and
+  owning-program filtering remain.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -5866,3 +5867,53 @@ canonical formatter. The native suite takes 65.03 seconds on Linux 6.18.54:
 parallel SQLite contracts and 0.38 seconds Go comparison. These timings retain the
 workspace's existing `aya-obj` dependency optimization at level two. The full gate
 log is `/tmp/bpfman-attachment-rust-check-final.log`.
+
+## Program metadata selection checkpoint (17 October 2026)
+
+`program list -m/--metadata-selector KEY=VALUE` and `-l/--selector` now select
+stored program metadata with Go's rules. Exact pairs trim keys, preserve arbitrary
+values (including empty strings and embedded equals signs), and use the last
+value for repeated keys. A nonempty `--application` replaces the corresponding
+exact metadata pair; an independent label selector remains conjunctive. An empty
+application does not replace an explicit pair.
+
+The pure core parses Kubernetes selector syntax and validates qualified label
+keys, values and signed 64-bit numeric operands without new dependencies or I/O.
+Equality, inequality, set membership, existence, absence and integer comparisons
+follow the vendored Go Kubernetes implementation. Negative comparisons match
+missing keys; equality with an empty value requires a present key. Set syntax
+preserves empty entries, including `()`. Requirements combine with AND. Exact
+metadata pairs deliberately do not impose Kubernetes label validation on arbitrary
+stored metadata. Clap rejects malformed inputs before runtime/store creation.
+
+Summary and full-record selection use the same pure metadata policy. A read-only
+summary metadata accessor preserves unprivileged text/quiet listing and the
+generic store contracts. All filters combine with managed program type and active
+attachment selection. Any nonempty metadata selection excludes kernel-only rows
+under `--all`, including negative conditions that would match an empty metadata
+map. Empty/whitespace-only label selectors remain unrestricted. Results retain
+ID ordering and existing text/quiet/JSON output. No writer lock, store schema,
+kernel observation contract, external dependency or architecture law changes.
+
+Pure tests cover syntax, validation boundaries, matching and identical selection
+across summary, record and inventory views. Process contracts prove malformed
+inputs create no runtime. The stateful kernel fake with real SQLite checks
+persisted metadata while the writer is held, store-only selection despite kernel
+failure, exclusion before kernel/link observation and selected observation errors.
+The new shared `TestProgramList_MetadataSelectors.bpfman` joins the existing
+inventory/attachment comparison batch, exercising exact pairs, application
+precedence, selector operators, unmanaged exclusion, output modes and attachment
+combinations against both Go and Rust. Existing Go source/tests and acceptance
+scripts/labels remain unchanged. Link-list metadata and owning-program filtering
+remain a subsequent slice; cache eviction stays deferred to separate design work.
+
+Validation: `direnv exec . make rust-fmt-fix rust-check` exits zero. Formatting,
+strict Clippy, unchanged architecture laws, userspace/store/fake/CLI contracts,
+doctests, all 75 discovered native tests, owned-fixture cleanup and warnings-denied
+Rustdoc pass. All five inventory/attachment/metadata scripts pass identical
+assertions against Go and Rust with SQLite. The new script passes the shell
+checker and canonical formatter. The native suite takes 67.81 seconds on Linux
+6.18.54: 39.90 seconds corpus, 5.34 seconds serial SQLite lifetime tests, 22.17
+seconds parallel SQLite contracts and 0.37 seconds Go comparison, retaining the
+existing `aya-obj` dependency optimization at level two. Full gate log:
+`/tmp/bpfman-selector-rust-check-complete.log`.

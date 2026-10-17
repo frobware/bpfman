@@ -58,6 +58,11 @@ impl StoredProgramSummary {
             .map_or("", String::as_str)
     }
 
+    /// Stored user metadata, used for program-list selection without kernel I/O.
+    pub fn metadata(&self) -> &BTreeMap<String, String> {
+        &self.metadata
+    }
+
     /// Sorted bpfman-managed link identities; these do not prove active attachment.
     pub fn links(&self) -> &[NonZeroU64] {
         &self.links

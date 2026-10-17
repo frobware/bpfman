@@ -28,6 +28,7 @@ pub use xdp_replace::{
 mod link;
 mod list;
 mod load;
+mod metadata_selector;
 mod rollback;
 mod store;
 mod unload;
@@ -42,6 +43,7 @@ pub use list::{
     AttachmentFilter, ProgramFilter, list_program_entries, list_programs,
     select_program_attachments, select_records,
 };
+pub use metadata_selector::{InvalidMetadataSelector, MetadataSelector};
 pub use store::plan_store_open;
 
 use alloc::{collections::VecDeque, vec::Vec};

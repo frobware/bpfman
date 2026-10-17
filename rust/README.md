@@ -606,10 +606,22 @@ at least one stored link is observed in the kernel. Pending intent, a stale
 kernel link ID or a pin alone does not establish attachment; a live kernel link
 still counts when its pin is missing. Both flags require kernel observation
 privileges in every output format, are mutually exclusive, and exclude unmanaged
-rows even with `--all`. They combine with the existing type/application filters.
+rows even with `--all`. They combine with type, application and metadata filters.
 Link observation failures remain errors, reads remain cancellable and never take
-the writer lock, and quiet IDs still take precedence over JSON. Metadata and
-Kubernetes-style selectors remain pending.
+the writer lock, and quiet IDs still take precedence over JSON.
+
+`program list -m/--metadata-selector KEY=VALUE` requires exact stored metadata
+pairs. Repeated keys use the last value; keys are trimmed, while values are kept
+verbatim and may be empty. A nonempty `--application` overrides the corresponding
+`bpfman.io/application` pair. `-l/--selector` adds Kubernetes label requirements
+using `=`, `==`, `!=`, `in`, `notin`, existence (`key`), absence (`!key`) and
+integer comparisons (`>`/`<`). Requirements combine with AND; negative comparisons
+also match missing keys. Selector keys/values follow Kubernetes validation, while
+exact metadata pairs allow arbitrary metadata. Malformed input fails before
+runtime creation. Any nonempty metadata filter excludes unmanaged rows under
+`--all`, including negative selectors. Text/quiet selection remains store-only
+and unprivileged unless `--all` or an attachment filter is supplied. Link-list
+metadata and owning-program filtering remain separate work.
 
 `program get ID [-o text|json]` observes one managed program,
 including its maps, statistics, and links. Link observations use the same

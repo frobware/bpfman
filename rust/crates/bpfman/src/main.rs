@@ -130,6 +130,8 @@ where
             let filter = bpfman_core::ProgramFilter {
                 types: args.types,
                 application: args.application,
+                metadata: args.metadata.into_iter().collect(),
+                selector: args.selector,
             };
 
             if let Some(attachment) = attachment {

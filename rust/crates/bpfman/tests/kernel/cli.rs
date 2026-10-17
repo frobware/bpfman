@@ -247,6 +247,7 @@ pub(super) fn program_inventory_scripts() {
         "TestProgramList_AllTypeFilterKernelOnly",
         "TestProgramList_AttachmentState",
         "TestProgramList_AttachmentStateNetwork",
+        "TestProgramList_MetadataSelectors",
     ];
     let go = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)

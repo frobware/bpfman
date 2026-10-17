@@ -9,6 +9,28 @@ pub struct ProgramFilter {
     pub types: Vec<ProgramType>,
     /// Exact application label match, if supplied.
     pub application: Option<String>,
+    /// Exact metadata pairs. A nonempty application overrides its pair here.
+    pub metadata: BTreeMap<String, String>,
+    /// Validated label requirements, combined with exact pairs using AND.
+    pub selector: crate::MetadataSelector,
+}
+
+impl ProgramFilter {
+    fn matches_metadata(&self, metadata: &BTreeMap<String, String>) -> bool {
+        let application = self.application.as_ref().filter(|value| !value.is_empty());
+        application.is_none_or(|app| metadata.get("bpfman.io/application") == Some(app))
+            && self.metadata.iter().all(|(key, value)| {
+                (key == "bpfman.io/application" && application.is_some())
+                    || metadata.get(key) == Some(value)
+            })
+            && self.selector.matches(metadata)
+    }
+
+    fn selects_unmanaged(&self) -> bool {
+        self.application.as_ref().is_none_or(String::is_empty)
+            && self.metadata.is_empty()
+            && self.selector.is_empty()
+    }
 }
 
 /// Selection requiring live link observations rather than stored intent alone.
@@ -53,10 +75,7 @@ pub fn list_programs(
         .into_iter()
         .filter(|p| {
             (filter.types.is_empty() || filter.types.contains(&p.kind()))
-                && filter
-                    .application
-                    .as_ref()
-                    .is_none_or(|app| app.is_empty() || p.application() == app)
+                && filter.matches_metadata(p.metadata())
         })
         .collect();
     selected.sort_by_key(StoredProgramSummary::id);
@@ -72,9 +91,7 @@ pub fn select_records(
         .into_iter()
         .filter(|p| {
             (filter.types.is_empty() || filter.types.contains(&p.spec.kind()))
-                && filter.application.as_ref().is_none_or(|app| {
-                    app.is_empty() || p.metadata.get("bpfman.io/application") == Some(app)
-                })
+                && filter.matches_metadata(&p.metadata)
         })
         .collect();
     selected.sort_by_key(|p| p.id);
@@ -111,7 +128,7 @@ pub fn list_program_entries(
         })
         .collect();
 
-    if filter.application.as_ref().is_none_or(String::is_empty) {
+    if filter.selects_unmanaged() {
         entries.extend(
             kernel
                 .into_values()
