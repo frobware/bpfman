@@ -24,8 +24,10 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
     for signal in ["INT", "TERM"] {
         for operands in [
             None,
-            Some(&["42"][..]),
-            Some(&["42", "43", "--ignore-missing"][..]),
+            Some(&["program", "unload", "42"][..]),
+            Some(&["program", "unload", "42", "43", "--ignore-missing"][..]),
+            Some(&["link", "detach", "42"][..]),
+            Some(&["link", "detach", "42", "43", "--ignore-missing"][..]),
         ] {
             let existing = operands.is_some();
             let temp = tempfile::tempdir().expect("runtime");
@@ -65,7 +67,7 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
                             .stdout(Stdio::piped())
                             .stderr(Stdio::piped());
                         if let Some(operands) = operands {
-                            command.args(["program", "unload"]).args(operands);
+                            command.args(operands);
                         } else {
                             command.args(["program", "list", "-q"]);
                         }

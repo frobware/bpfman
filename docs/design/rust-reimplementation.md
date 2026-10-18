@@ -2718,8 +2718,10 @@ wrong, change it here before broadening feature coverage.
 
 - Complete gRPC and CLI compatibility. Program unload accepts multiple IDs and
   `--ignore-missing`, with ordered attempts under one writer scope and per-ID
-  failures reported after release. Bare `program` lists with the same filters
-  and output flags as `program list`; program detail attachment summaries and
+  failures reported after release. Link detach likewise accepts multiple IDs and
+  `--ignore-missing`, selecting each attachment family and observing the latest
+  dispatcher revision under the batch writer. Bare `program` lists with the same
+  filters and output flags as `program list`; program detail attachment summaries and
   sorted, blank-line-separated batch-load text follow Go's presentation.
   Program inventory (`program list --all`)
   and active-link `--attached`/`--unattached` filtering, exact metadata pairs and
@@ -6348,3 +6350,62 @@ kernel stages take 69.12 seconds. Gate log:
 `/tmp/bpfman-batch-unload-check.log`; focused Go/Rust comparison log:
 `/tmp/bpfman-batch-unload-inventory.log`. Remote-image and forced-image lanes were
 not rerun for this CLI slice.
+
+
+## Link batch-detach checkpoint (18 October 2026)
+
+`link detach` accepts one or more IDs and `--ignore-missing`, following Go's
+ordered batch mutation policy. Clap parses every operand before runtime setup.
+The generic runtime holds one writer scope for all operands, including duplicates,
+and selects each attachment family inside that scope. Standalone, XDP and legacy
+TC teardown reuse their existing interpreters. Each operand observes the latest
+stored intent, including dispatcher revisions published by earlier operands.
+A per-ID failure does not prevent later attempts; programs remain loaded.
+
+The CLI renders per-link failures and `N of M link(s) failed to detach` only after
+releasing the writer. It completes all teardown before attempting diagnostics,
+so a failed stderr destination cannot skip later operands. Idempotent mode
+suppresses only an absent managed link at initial selection. The typed missing
+link cause is separate from generic missing-program/link observations: read
+failures, missing dispatcher evidence, changed pin identity and failed cleanup
+remain errors. Successful commands have empty stdout and stderr.
+
+`DetachOutcome` retains typed `DetachReport` or `DetachError` variants for the
+original family. Failure variants retain consuming standalone, XDP or TC retry
+ownership without flattening receipts into strings. Lock admission errors start
+no operand. Cancellation during selection or preflight preserves state; admitted
+destructive teardown retains its existing completion/compensation boundaries.
+Later operands receive cancellation without starting. Batch summaries retain the
+CLI's signal exit classification. No store interface, schema or kernel teardown
+policy changes.
+
+New shared `TestDetach_Batch.bpfman` covers malformed trailing operands before
+mutation, missing IDs around tracepoint/XDP/TC links, shared dispatcher survivor
+and last-member removal, preservation of loaded programs, duplicate operands,
+error counts and silent repeated idempotent cleanup. It and unchanged
+`TestDetach_IgnoreMissingIsIdempotent.bpfman` join the inventory comparison against
+both Go and Rust. Existing Go code, tests, script assertions and labels remain
+unchanged.
+
+Generic real-store/stateful-kernel contracts cover read failures that must not be
+suppressed, independent progress after standalone and dispatcher failures,
+consuming cleanup retries through a reopened application, cancellation before and
+after destructive admission, and contended/cancelled writer admission. CLI
+contracts cover operand parsing, ordered diagnostics, one writer acquisition,
+real SIGINT/SIGTERM lock waits, invalid pin refusal with `--ignore-missing`, and
+all cleanup completing before a diagnostic destination fails.
+
+Validation: `direnv exec . make rust-check` exits zero. Formatting, strict Clippy,
+unchanged architecture laws, all userspace/store/stateful-kernel/CLI contracts,
+doctests, all 75 discovered native kernel cases, owned-fixture cleanup and
+warnings-denied Rustdoc pass. Every native case runs once in a distinct process.
+The inventory selection checks all 18 shared scripts against both Go and Rust
+(36 script passes), including unchanged idempotent detach/unload, link filters,
+metadata and presentation scripts. The new batch script passes the shell checker
+and canonical formatter.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the complete
+kernel stages take 69.88 seconds. Gate log:
+`/tmp/bpfman-batch-detach-final-check.log`. Remote-image and forced-image lanes
+were not rerun for this CLI slice. No existing acceptance assertion, script label,
+architecture law or scheduling isolation was weakened.

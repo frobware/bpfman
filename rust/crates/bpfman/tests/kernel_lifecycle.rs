@@ -28,6 +28,9 @@ mod tcx;
 #[path = "lifecycle/batch_unload.rs"]
 mod batch_unload;
 
+#[path = "lifecycle/batch_detach.rs"]
+mod batch_detach;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -1054,4 +1057,29 @@ fn sqlite_function_tracing_lifecycle() {
 #[test]
 fn sqlite_function_tracing_failure_recovery() {
     function_tracing::recovery(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_batch_detach_recovery() {
+    batch_detach::recovery(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_batch_detach_cancellation() {
+    batch_detach::cancellation(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_batch_detach_observation_failure() {
+    batch_detach::observation_failure(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_batch_detach_admission() {
+    batch_detach::admission(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_batch_detach_dispatcher_recovery() {
+    batch_detach::dispatcher_recovery(bpfman_store_sqlite::Backend);
 }

@@ -498,9 +498,18 @@ where
                     timeout: self.lock_timeout,
                     cancelled: Some(c.flag()),
                 },
-                |w| replacement::detach(self, &w, id, c),
+                |w| self.detach_xdp_cancellable_locked(&w, id, c),
             )
             .map_err(|e| XdpError::from(LinkCause::from(e)))?
+    }
+
+    pub(super) fn detach_xdp_cancellable_locked(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+        c: &Cancellation,
+    ) -> Result<XdpReport<S, K>, XdpError<S, K>> {
+        replacement::detach(self, w, id, c)
     }
 
     pub(crate) fn detach_xdp_locked(

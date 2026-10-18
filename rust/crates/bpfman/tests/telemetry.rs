@@ -250,7 +250,7 @@ fn list_reuses_the_store_handle_opened_at_startup() {
 }
 
 #[test]
-fn batch_unload_holds_one_writer_scope_for_all_operands() {
+fn batch_mutations_hold_one_writer_scope_for_all_operands() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().join("runtime");
     assert!(
@@ -264,9 +264,14 @@ fn batch_unload_holds_one_writer_scope_for_all_operands() {
         .success()
     );
 
-    for ignore in [false, true] {
-        let trace = temp.path().join(format!("batch-{ignore}.json"));
-        let mut args = vec!["program", "unload", "43", "42", "43"];
+    for (family, verb, ignore) in [
+        ("program", "unload", false),
+        ("program", "unload", true),
+        ("link", "detach", false),
+        ("link", "detach", true),
+    ] {
+        let trace = temp.path().join(format!("batch-{verb}-{ignore}.json"));
+        let mut args = vec![family, verb, "43", "42", "43"];
         if ignore {
             args.push("--ignore-missing");
         }

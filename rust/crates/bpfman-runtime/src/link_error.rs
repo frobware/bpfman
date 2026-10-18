@@ -8,6 +8,8 @@ pub(super) enum Cause {
     Cancelled,
     #[error("managed program or link not found")]
     NotFound,
+    #[error("managed link {0} does not exist")]
+    LinkNotFound(std::num::NonZeroU64),
     #[error("attachment is outside the supported slice")]
     Unsupported,
     #[error("program already attached to TCX hook as link {0}; detach it first")]
@@ -70,7 +72,7 @@ impl LinkCause {
     pub fn kind(&self) -> LinkErrorKind {
         match &self.cause {
             Cause::Cancelled => LinkErrorKind::Cancelled,
-            Cause::NotFound => LinkErrorKind::NotFound,
+            Cause::NotFound | Cause::LinkNotFound(_) => LinkErrorKind::NotFound,
             Cause::Unsupported => LinkErrorKind::Unsupported,
             Cause::AlreadyAttached(_) | Cause::Invalid(_) | Cause::XdpPlan(_) => {
                 LinkErrorKind::InvalidState

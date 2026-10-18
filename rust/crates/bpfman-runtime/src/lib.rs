@@ -32,6 +32,7 @@ pub use xdp::{XdpAttach, XdpError, XdpReport};
 mod application;
 mod cancellation;
 mod compensation;
+mod detach;
 mod error;
 mod kernel;
 mod link;
@@ -190,6 +191,47 @@ pub struct LinkReport<S: bpfman_store::LinkStore, K: bpfman_kernel::TracepointLi
 /// Failed link operation, retaining all progress and unresolved cleanup receipts.
 pub struct LinkError<S: bpfman_store::LinkStore, K: bpfman_kernel::TracepointLinks> {
     failure: link_error::Failure<S, K>,
+}
+
+/// One ordered detach result, retaining the attachment family's cleanup ownership.
+#[must_use = "inspect each result and retain unresolved cleanup"]
+pub struct DetachOutcome<
+    S: bpfman_store::LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
+    K: bpfman_kernel::TracepointLinks + bpfman_kernel::XdpReplacement + bpfman_kernel::TcLifecycle,
+> {
+    /// Requested managed link ID; duplicates have separate outcomes.
+    pub id: std::num::NonZeroU64,
+    /// Completed progress or a failure retaining unresolved cleanup.
+    pub outcome: Result<DetachReport<S, K>, DetachError<S, K>>,
+}
+
+/// Completed detach progress, preserving the original family's report.
+#[must_use = "inspect progress and retain unresolved cleanup"]
+pub enum DetachReport<
+    S: bpfman_store::LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
+    K: bpfman_kernel::TracepointLinks + bpfman_kernel::XdpReplacement + bpfman_kernel::TcLifecycle,
+> {
+    /// Standalone attachment cleanup.
+    Standalone(LinkReport<S, K>),
+    /// XDP dispatcher member cleanup.
+    Xdp(XdpReport<S, K>),
+    /// Legacy TC dispatcher member cleanup.
+    Tc(TcReport<S, K>),
+}
+
+/// Detach failure with the original family's consuming retry ownership.
+pub enum DetachError<
+    S: bpfman_store::LinkStore + bpfman_store::XdpStore + bpfman_store::TcStore,
+    K: bpfman_kernel::TracepointLinks + bpfman_kernel::XdpReplacement + bpfman_kernel::TcLifecycle,
+> {
+    /// Failure while selecting stored intent, before teardown starts.
+    Observation(LinkCause),
+    /// Standalone attachment failure.
+    Standalone(LinkError<S, K>),
+    /// XDP dispatcher member failure.
+    Xdp(XdpError<S, K>),
+    /// Legacy TC dispatcher member failure.
+    Tc(TcError<S, K>),
 }
 
 /// Narrow filesystem-effects boundary for failed-load cleanup.

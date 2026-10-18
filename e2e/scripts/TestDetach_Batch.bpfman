@@ -1,0 +1,78 @@
+# -*- mode: bpfman -*-
+# Batch detach continues after missing IDs, rebuilds shared dispatchers, keeps
+# programs loaded, and preserves duplicate operands and idempotent cleanup.
+
+guard pair <- net veth-pair
+defer net release $pair
+guard tp <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder
+let traceID = $tp.programs[0].record.program_id
+defer bpfman program unload $traceID --ignore-missing
+guard trace <- bpfman link attach tracepoint $traceID syscalls/sys_enter_kill
+let traceLink = $trace.record.id
+defer bpfman link detach $traceLink --ignore-missing
+guard xp <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let xdpID = $xp.programs[0].record.program_id
+defer bpfman program unload $xdpID --ignore-missing
+guard x <- bpfman link attach xdp $xdpID $pair.host_link --priority 50
+let xID = $x.record.id
+defer bpfman link detach $xID --ignore-missing
+guard y <- bpfman link attach xdp $xdpID $pair.host_link --priority 60
+let yID = $y.record.id
+defer bpfman link detach $yID --ignore-missing
+guard tc <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+let tcID = $tc.programs[0].record.program_id
+defer bpfman program unload $tcID --ignore-missing
+guard a <- bpfman link attach tc $tcID $pair.host_link ingress --priority 50
+let aID = $a.record.id
+defer bpfman link detach $aID --ignore-missing
+guard b <- bpfman link attach tc $tcID $pair.host_link ingress --priority 60
+let bID = $b.record.id
+defer bpfman link detach $bID --ignore-missing
+
+# Use an ID above the final link so later allocations cannot reuse the missing ID.
+let missing = $bID + 1000
+let invalid <- exec bpfman link detach $traceLink $xID bad-id
+assert not $invalid.ok
+guard _ <- bpfman link get $traceLink
+guard _ <- bpfman link get $xID
+
+# Each dispatcher is rebuilt for its survivor before its last member is removed.
+let mixed <- exec bpfman link detach $missing $traceLink $xID $aID $yID $bID $missing
+assert not $mixed.ok
+assert $mixed.stdout == ""
+assert contains $mixed.stderr "2 of 7 link(s) failed to detach"
+let errors = $mixed.stderr |> jq 'split("\n") | map(select(startswith("link ")))'
+assert ($errors |> jq length) == 2
+foreach error in $errors {
+    assert contains $error "link ${missing}:"
+    assert contains $error "does not exist"
+}
+foreach id in [$traceLink $xID $yID $aID $bID] {
+    assert fail bpfman link get $id
+}
+foreach id in [$traceID $xdpID $tcID] {
+    guard program <- bpfman program get $id
+    assert ($program.status.links |> jq length) == 0
+}
+guard dispatchers <- bpfman dispatcher list -o json
+assert ($dispatchers.dispatchers |> jq length) == 0
+
+# Duplicates are attempted after success; idempotent mode suppresses only absence.
+guard duplicate <- bpfman link attach xdp $xdpID $pair.host_link --priority 50
+let duplicateID = $duplicate.record.id
+defer bpfman link detach $duplicateID --ignore-missing
+let repeated <- exec bpfman link detach $duplicateID $duplicateID
+assert not $repeated.ok
+assert $repeated.stdout == ""
+assert contains $repeated.stderr "link ${duplicateID}:"
+assert contains $repeated.stderr "1 of 2 link(s) failed to detach"
+guard cleanup <- bpfman link attach xdp $xdpID $pair.host_link --priority 50
+let cleanupID = $cleanup.record.id
+defer bpfman link detach $cleanupID --ignore-missing
+guard ignored <- exec bpfman link detach --ignore-missing $missing $cleanupID $cleanupID $missing
+assert $ignored.stdout == ""
+assert $ignored.stderr == ""
+guard again <- exec bpfman link detach $cleanupID $missing --ignore-missing
+assert $again.stdout == ""
+assert $again.stderr == ""
+assert fail bpfman link get $cleanupID

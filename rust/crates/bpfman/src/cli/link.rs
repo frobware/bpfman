@@ -28,10 +28,13 @@ pub(crate) enum LinkCommand {
         #[command(subcommand)]
         target: AttachCommand,
     },
-    /// Detach one managed link, keeping its program loaded.
+    /// Detach managed links, keeping their programs loaded.
     Detach {
-        #[arg(value_name = "LINK_ID")]
-        id: NonZeroU64,
+        #[arg(value_name = "LINK_ID", required = true, num_args = 1..)]
+        ids: Vec<NonZeroU64>,
+        /// Treat a missing managed link as success for idempotent cleanup.
+        #[arg(long)]
+        ignore_missing: bool,
     },
     /// Get stored intent and current kernel/pin observations.
     Get {
@@ -527,21 +530,35 @@ impl LinkCommand {
                 })?;
                 crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
-            Self::Detach { id } => {
-                let record = app
-                    .list_link_records_with_cancellation(cancellation)?
-                    .into_iter()
-                    .find(|r| r.id == id);
-                match record.map(|r| r.details) {
-                    Some(bpfman_model::LinkDetails::Xdp(_)) => {
-                        let _report = app.detach_xdp_with_cancellation(id, cancellation)?;
+            Self::Detach {
+                ids,
+                ignore_missing,
+            } => {
+                use std::io::Write;
+                let results = app.detach_many_with_cancellation(&ids, cancellation)?;
+                let mut failed = 0;
+                let mut cancelled = false;
+                for result in &results {
+                    if let Err(error) = &result.outcome {
+                        if ignore_missing && error.is_link_missing() {
+                            continue;
+                        }
+                        failed += 1;
+                        cancelled |= error.kind() == bpfman_runtime::LinkErrorKind::Cancelled;
+                        writeln!(
+                            std::io::stderr().lock(),
+                            "link {}: {}",
+                            result.id,
+                            crate::format_chain(error)
+                        )?;
                     }
-                    Some(bpfman_model::LinkDetails::Tc(_)) => {
-                        let _report = app.detach_tc_with_cancellation(id, cancellation)?;
-                    }
-                    _ => {
-                        let _report = app.detach_with_cancellation(id, cancellation)?;
-                    }
+                }
+                if failed != 0 {
+                    return Err(crate::error::Error::batch_detach(
+                        failed,
+                        results.len(),
+                        cancelled,
+                    ));
                 }
             }
             Self::Get { id, output } => {

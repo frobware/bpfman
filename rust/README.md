@@ -948,14 +948,39 @@ finalisation compensation, blocked unpinning, explicit retries with preserved
 history, and cancellation at store boundaries. Private interpreter tests cover
 individual forward and cleanup failures, including live-descriptor release.
 The CLI exposes `link attach tracepoint PROGRAM_ID GROUP/NAME [-m KEY=VALUE]`,
-`link get LINK_ID`, `link list`, and `link detach LINK_ID`. Attach/get/list accept
-`-o json`; JSON follows Go's record/status shapes. XDP, legacy TC, TCX and kernel probes are also implemented in the slices below;
-list filters and batch detachment remain unsupported. `get_link` observes recorded
+`link get LINK_ID`, `link list`, and `link detach LINK_ID... [--ignore-missing]`.
+Attach/get/list accept `-o json`; JSON follows Go's record/status shapes. XDP,
+legacy TC, TCX and kernel probes are also implemented in the slices below.
+Bare `link` lists with the same filters as `link list`. `get_link` observes recorded
 kernel identity and a descriptor-confined pin without the writer lock; missing
 kernel state is reported as absence, while denied or inconsistent observation
 fails. Output failure after finalisation leaves the committed link manageable.
 Program unload cleans pending and finalised standalone links before touching
 program resources.
+
+`Bpfman::detach_many` and `detach_many_with_cancellation` select each attachment
+family and run its existing teardown interpreter under one writer scope for the
+whole batch. Operands run in input order, including duplicates. Every operand
+observes fresh stored intent, so members of a shared dispatcher use its latest
+revision after earlier detachments. A failure does not stop later operands.
+`DetachOutcome` retains the typed standalone, XDP or TC report/error; callers can
+consume an error through the existing family-specific cleanup retry method,
+including after reopening the application.
+
+The CLI reports per-link errors and `N of M link(s) failed to detach` only after
+releasing the writer. Successful output is empty. `--ignore-missing` suppresses
+only an absent managed link during initial selection; store failures, missing
+dispatcher evidence, invalid pin identities and failed cleanup remain errors.
+Cancellation during admission or observation leaves the operand unchanged;
+once destructive teardown starts, its existing interpreter finishes that pass.
+Later operands receive cancellation without starting. Programs remain loaded.
+
+The unchanged `TestDetach_IgnoreMissingIsIdempotent` and new shared
+`TestDetach_Batch` run against Go and Rust with identical assertions. Stateful
+contracts use a real store and inject observation, standalone cleanup and XDP/TC
+cleanup failures, retain receipts across reopen, and cover cancellation and lock
+contention. Process tests verify parsing before initialization, ordered errors,
+one writer acquisition, SIGINT/SIGTERM and cleanup before diagnostic delivery.
 
 
 ## Program unload
@@ -969,8 +994,8 @@ This slice accepts a managed tracepoint with pending or finalised standalone
 links, an XDP extension with or without dispatcher links, or a native DEVMAP
 egress program. Each must have its
 own map set, no other map-set users, and no shared-map-pin registrations.
-Other program types, shared state, multiple operands, and `--ignore-missing` are
-explicitly unsupported. A missing managed record returns an error without
+Additional program types and shared state are covered in later sections.
+A missing managed record returns an error without
 inspecting or adopting a kernel-only program or creating a database. It does not
 yet make Go's additional not-managed versus not-found distinction.
 

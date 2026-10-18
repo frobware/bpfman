@@ -226,6 +226,46 @@ pub(super) fn effect_boundaries() {
     assert!(text.contains("syscalls/sys_enter_kill"));
     assert!(!text.contains("Links: None"));
 
+    // A refused owned-pin identity remains an error with --ignore-missing.
+    let link_pin = c.layout.link_pin_path(link_id.parse().expect("link ID"));
+    let saved_link = root.join("fs/saved_link");
+    fs::rename(&link_pin, &saved_link).expect("save link");
+    let foreign_pin = c.layout.program_pin_path(unrelated);
+    fs::rename(&foreign_pin, &link_pin).expect("replace link with a program pin");
+    let output = c.run(
+        &rust(),
+        &["link", "detach", &link_id, "--ignore-missing"],
+        false,
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("1 of 1 link(s) failed to detach"));
+    fs::rename(&link_pin, &foreign_pin).expect("restore program pin");
+    fs::rename(&saved_link, &link_pin).expect("restore link");
+    assert_eq!(
+        c.json(&rust(), &["link", "get", &link_id, "-o", "json"])["status"]["pin_present"],
+        true
+    );
+
+    // All teardown completes before diagnostics: a failed stderr destination
+    // must not prevent a later valid operand from detaching.
+    let missing_link = (link_id.parse::<u64>().expect("link ID") + 1).to_string();
+    let output = c
+        .command(&rust(), &["link", "detach", &missing_link, &link_id])
+        .stderr(Stdio::from(
+            fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/full")
+                .expect("full sink"),
+        ))
+        .output()
+        .expect("detach CLI");
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        c.json(&rust(), &["link", "list", "-o", "json"])["links"],
+        serde_json::json!([])
+    );
+    c.present(pid);
+
     for id in [pid, unrelated] {
         c.run(&rust(), &["program", "unload", &id.to_string()], true);
         c.absent(id);
@@ -295,6 +335,8 @@ pub(super) fn program_inventory_scripts() {
     let scripts = [
         "TestUnload_IgnoreMissingIsIdempotent",
         "TestUnload_Batch",
+        "TestDetach_IgnoreMissingIsIdempotent",
+        "TestDetach_Batch",
         "TestProgram_Presentation",
         "TestProgramList_All",
         "TestProgramList_AllTypeFilterKernelOnly",

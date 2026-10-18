@@ -328,21 +328,28 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Bpfman<S, K> {
                     timeout: self.lock_timeout,
                     cancelled: Some(cancellation.flag()),
                 },
-                |writer| {
-                    let cleanup = detach(
-                        &writer,
-                        &mut real::Adapter(&self.store, &self.kernel),
-                        id,
-                        cancellation,
-                    )?;
-                    finish(LinkReport {
-                        id,
-                        primary: None,
-                        cleanup,
-                    })
-                },
+                |writer| self.detach_standalone_locked(&writer, id, cancellation),
             )
             .map_err(LinkCause::from)?
+    }
+
+    pub(super) fn detach_standalone_locked(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+        cancellation: &Cancellation,
+    ) -> Result<LinkReport<S, K>, LinkError<S, K>> {
+        let cleanup = detach(
+            writer,
+            &mut real::Adapter(&self.store, &self.kernel),
+            id,
+            cancellation,
+        )?;
+        finish(LinkReport {
+            id,
+            primary: None,
+            cleanup,
+        })
     }
 
     /// Attempt only unresolved cleanup once. A preflight error has no owned work.

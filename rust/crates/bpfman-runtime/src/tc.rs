@@ -449,14 +449,21 @@ impl<S: TcStore, K: TcLifecycle> Bpfman<S, K> {
                     timeout: self.lock_timeout,
                     cancelled: Some(c.flag()),
                 },
-                |w| {
-                    check(c).map_err(TcError::from)?;
-                    let (_, teardown) = self.observe_tc_locked(&w, id).map_err(TcError::from)?;
-                    check(c).map_err(TcError::from)?;
-                    teardown.run(self, &w)
-                },
+                |w| self.detach_tc_locked(&w, id, c),
             )
             .map_err(|e| TcError::from(LinkCause::from(e)))?
+    }
+
+    pub(super) fn detach_tc_locked(
+        &self,
+        w: &RuntimeWriter<'_>,
+        id: NonZeroU64,
+        c: &Cancellation,
+    ) -> Result<TcReport<S, K>, TcError<S, K>> {
+        check(c).map_err(TcError::from)?;
+        let (_, teardown) = self.observe_tc_locked(w, id).map_err(TcError::from)?;
+        check(c).map_err(TcError::from)?;
+        teardown.run(self, w)
     }
 
     /// Retry only unresolved cleanup once; admission failure returns the original receipts.

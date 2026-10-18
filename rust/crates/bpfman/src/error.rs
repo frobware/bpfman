@@ -16,6 +16,13 @@ impl Error {
         }
     }
 
+    pub(crate) fn batch_detach(failed: usize, total: usize, cancelled: bool) -> Self {
+        Self {
+            cause: anyhow::anyhow!("{failed} of {total} link(s) failed to detach"),
+            cancelled,
+        }
+    }
+
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled
     }
