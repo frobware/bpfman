@@ -1,0 +1,163 @@
+# -*- mode: bpfman -*-
+# Program default listing, text detail sections and ordered batch-load output.
+
+import ../lib.bpfman
+
+def details(id) {
+    guard text <- exec bpfman program get $id
+    guard explicit <- exec bpfman program get $id -o text
+    assert $text.stdout == $explicit.stdout
+    assert contains $text.stdout "Program ID: ${id}\n  Spec:\n"
+    assert contains $text.stdout "  Status:\n"
+    assert contains $text.stdout "  Stats:\n"
+    guard raw <- exec bpfman program get $id -o json
+    let got = $raw.stdout |> jq fromjson
+    let spec = $text.stdout |> jq 'split("  Spec:\n")[1] | split("  Status:\n")[0]'
+    let status = $text.stdout |> jq 'split("  Status:\n")[1] | split("  Stats:\n")[0]'
+    let specFields = $spec |> jq 'split("\n") | map(select(test("^    [^ ]")) | capture("^    (?<key>[^:]+): *(?<value>.*)$")) | from_entries'
+    let statusFields = $status |> jq 'split("\n") | map(select(test("^    [^ ]")) | capture("^    (?<key>[^:]+): *(?<value>.*)$")) | from_entries'
+    let labels = $spec |> jq 'split("\n") | map(select(length > 0) | capture("^    (?<key>[^:]+):").key)'
+    assert ($labels |> jq tojson) == ($labels |> jq "sort | tojson")
+    let statusLabels = $status |> jq 'split("\n") | map(select(test("^    [^ ]")) | capture("^    (?<key>[^:]+):").key) | map(select(. != "Links" and . != "Maps"))'
+    assert ($statusLabels |> jq tojson) == ($statusLabels |> jq "sort | tojson")
+    assert ($specFields |> jq ".Name") == $got.record.meta.name
+    assert ($specFields |> jq ".Type") == $got.record.load.program_type
+    assert ($specFields |> jq ".Path") == $got.record.load.source_path
+    assert ($specFields |> jq '."GPL Compatible"') == "${got.record.gpl_compatible}"
+    assert ($specFields |> jq ".License") == $got.record.license
+    assert ($specFields |> jq '."Map Pin Path"') == $got.record.handles.map_pin_path
+    let metadata = $got.record.meta.metadata |> jq 'if length == 0 then "None" else to_entries | sort_by(.key) | map("\(.key)=\(.value)") | join(", ") end'
+    assert ($specFields |> jq ".Metadata") == $metadata
+    assert ($statusFields |> jq ".Bytecode") == $got.record.load.object_path
+    assert ($statusFields |> jq '."Prog Pin"') == $got.record.handles.pin_path
+    assert ($statusFields |> jq '."Map Dir"') == $got.record.handles.map_pin_path
+    assert ($statusFields |> jq '."Kernel Type"') == $got.status.kernel.program_type
+    assert ($statusFields |> jq ".Tag") == $got.status.kernel.tag
+    assert ($statusFields |> jq '."Loaded At"') == $got.status.kernel.loaded_at
+    assert ($statusFields |> jq '."Size JITted"') == "${got.status.kernel.jited_size} bytes"
+    if $got.status.kernel.restricted {
+        assert ($statusFields |> jq '."Size Translated"') == "(restricted)"
+    } else {
+        assert ($statusFields |> jq '."Size Translated"') == "${got.status.kernel.xlated_size} bytes"
+    }
+    if $got.status.stats == null {
+        assert contains $text.stdout "(not enabled, see sysctl kernel.bpf_stats_enabled)"
+    } else {
+        assert contains $text.stdout "Run Count:"
+        assert contains $text.stdout "Runtime:"
+    }
+    foreach map in $got.status.maps {
+        assert contains $status "      ${map.id}:"
+        assert contains $status $map.name
+        assert contains $status "${map.key_size}B"
+        assert contains $status "${map.value_size}B"
+    }
+    return $specFields
+}
+
+def attachment(link summary) {
+    guard text <- exec bpfman program get $link.record.program_id
+    let attach = $text.stdout |> jq 'split("\n") | map(select(test("^        Attach:")) | sub("^        Attach: *"; ""))'
+    assert ($attach |> jq "index(\"${summary}\") != null") == true
+}
+
+guard loaded <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder -m zeta=last -m alpha=first
+let prog = $loaded.programs[0]
+let pid = $prog.record.program_id
+defer bpfman program unload $pid
+guard fields <- details $pid
+assert ($fields |> jq ".Metadata") == "alpha=first, zeta=last"
+assert ($fields |> jq ".Global") == None
+assert ($fields |> jq '."Map Owner ID"') == None
+guard plain <- exec bpfman program
+assert not contains $plain.stdout APPLICATION
+assert contains $plain.stdout "FUNCTION NAME"
+assert contains $plain.stdout "LINK IDS"
+assert contains $plain.stdout "tracepoint_kill_recorder"
+assert contains $plain.stdout "<none>"
+
+guard first <- bpfman link attach tracepoint $prog syscalls/sys_enter_kill
+defer bpfman link detach $first
+guard second <- bpfman link attach tracepoint $prog syscalls/sys_enter_openat
+defer bpfman link detach $second
+guard _ <- attachment $first syscalls/sys_enter_kill
+guard table <- exec bpfman program --attached --type tracepoint
+let cells = $table.stdout |> jq "split(\"\\n\") | map(select(test(\"^${pid} +\"))) | .[0] | [splits(\" {2,}\")]"
+assert $cells[0] == "${pid}"
+assert $cells[1] == tracepoint
+assert $cells[2] == tracepoint_kill_recorder
+assert $cells[3] == "${first.record.id} ${second.record.id}"
+
+# Application columns and every existing list filter work without the verb.
+guard other <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass --application program-demo -m owner=acme
+let otherID = $other.programs[0].record.program_id
+defer bpfman program unload $otherID
+guard all <- exec bpfman program
+assert contains $all.stdout APPLICATION
+assert contains $all.stdout program-demo
+guard filtered <- exec bpfman program --type tracepoint
+assert not contains $filtered.stdout APPLICATION
+foreach format in [text json] {
+    guard implicit <- exec bpfman program --all --unattached --type XDP --application program-demo -m owner=acme -l owner=acme -o $format
+    guard explicit <- exec bpfman program list --all --unattached --type XDP --application program-demo -m owner=acme -l owner=acme -o $format
+    assert $implicit.stdout == $explicit.stdout
+}
+guard quiet <- exec bpfman program --application program-demo -q -o json
+assert $quiet.stdout == "${otherID}\n"
+guard empty <- exec bpfman program --application absent
+assert $empty.stdout == ""
+guard emptyJSON <- exec bpfman program --application absent -o json
+assert ($emptyJSON.stdout |> jq "fromjson | .programs | length") == 0
+
+# Text batch results sort by ID, separate blocks with one blank line, and
+# preserve Spec and scalar Status across reopening. Maps are observed afresh:
+# Go load reports live maps, while get also correlates stored pin declarations.
+guard batch <- exec bpfman program load file testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o --programs tracepoint:tp_c,tracepoint:tp_a,tracepoint:tp_b -g weight_b=0x0200000000000000 -g weight_a=0x0100000000000000
+let ids = $batch.stdout |> jq '[scan("Program ID: ([0-9]+)") | .[0] | tonumber]'
+defer bpfman program unload $ids[0]
+defer bpfman program unload $ids[1]
+defer bpfman program unload $ids[2]
+assert ($ids |> jq length) == 3
+assert ($ids |> jq tojson) == ($ids |> jq "sort | tojson")
+assert ($batch.stdout |> jq 'split("\n\nProgram ID:") | length') == 3
+let blocks = $batch.stdout |> jq 'split("\n\n")'
+foreach id in $ids {
+    guard got <- exec bpfman program get $id
+    let body = $got.stdout |> jq 'split("    Maps:")[0]'
+    let block = $blocks |> jq " .[] | select(startswith(\"Program ID: ${id}\\n\")) | split(\"    Maps:\")[0]"
+    assert $block == $body
+    guard batchFields <- details $id
+    assert ($batchFields |> jq ".Global") == "weight_a=0100000000000000, weight_b=0200000000000000"
+}
+
+# Program detail uses its own summaries, distinct from link-list summaries.
+guard fn <- kfunc acquire
+defer kfunc release $fn
+guard kp <- bpfman program load file testdata/bpf/kprobe_counter.bpf.o --programs kretprobe:kprobe_counter
+defer bpfman program unload $kp.programs[0]
+guard k <- bpfman link attach kprobe $kp.programs[0] $fn.name
+defer bpfman link detach $k
+guard _ <- attachment $k "kretprobe:${fn.name}"
+guard target <- uprobe target
+guard up <- bpfman program load file testdata/bpf/uprobe_exact.bpf.o --programs uretprobe:uprobe_counter
+defer bpfman program unload $up.programs[0]
+guard u <- bpfman link attach uprobe $up.programs[0] $target.path --fn-name $target.symbol --pid $target.pid
+defer bpfman link detach $u
+guard _ <- attachment $u "uretprobe:${target.path}:${target.symbol}"
+
+guard pair <- net netns-veth-pair
+defer net release $pair
+let netns = "/var/run/netns/${pair.a.ns}"
+guard x <- bpfman link attach xdp $otherID $pair.a.link --netns $netns --priority 50
+defer bpfman link detach $x
+guard _ <- attachment $x "${pair.a.link} (ifindex=${x.record.details.ifindex}, pos=0)"
+guard tc <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+defer bpfman program unload $tc.programs[0]
+guard c <- bpfman link attach tc $tc.programs[0] $pair.a.link ingress --netns $netns --priority 50
+defer bpfman link detach $c
+guard _ <- attachment $c "${pair.a.link}/ingress (ifindex=${c.record.details.ifindex}, pos=0)"
+guard tcx <- bpfman program load file testdata/bpf/tcx_counter.bpf.o --programs tcx:tcx_stats
+defer bpfman program unload $tcx.programs[0]
+guard cx <- bpfman link attach tcx $tcx.programs[0] $pair.a.link egress --netns $netns --priority 50
+defer bpfman link detach $cx
+guard _ <- attachment $cx "${pair.a.link}/egress (ifindex=${cx.record.details.ifindex}, pos=0)"

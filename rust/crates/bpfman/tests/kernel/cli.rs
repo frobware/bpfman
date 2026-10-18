@@ -182,6 +182,7 @@ pub(super) fn effect_boundaries() {
                 vec!["link"],
                 vec!["link", "list"],
                 vec!["link", "get", &link_id],
+                vec!["program", "get", &pid_text],
             ] {
                 let mut flags = vec!["--lock-timeout=1ms"];
                 flags.extend(args);
@@ -193,6 +194,30 @@ pub(super) fn effect_boundaries() {
         },
     )
     .expect("hold writer during link presentation");
+    bpfman_lock::with_write_lock(
+        &c.layout.lock_path(),
+        bpfman_lock::AcquireOptions {
+            timeout: std::time::Duration::from_secs(1),
+            cancelled: None,
+        },
+        |_| {
+            for args in [
+                vec!["program"],
+                vec!["program", "list"],
+                vec!["program", "-q", "-o", "json"],
+            ] {
+                let mut flags = vec!["--lock-timeout=1ms"];
+                flags.extend(args);
+                let text = c.run(&rust(), &flags, true);
+                assert!(
+                    String::from_utf8(text.stdout)
+                        .expect("program text")
+                        .contains(&pid_text)
+                );
+            }
+        },
+    )
+    .expect("hold writer during program presentation");
 
     let program = c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]);
     assert_eq!(program["status"]["links"], serde_json::json!([observed]));
@@ -268,6 +293,7 @@ pub(super) fn corpus() {
 
 pub(super) fn program_inventory_scripts() {
     let scripts = [
+        "TestProgram_Presentation",
         "TestProgramList_All",
         "TestProgramList_AllTypeFilterKernelOnly",
         "TestProgramList_AttachmentState",

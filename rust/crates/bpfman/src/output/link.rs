@@ -334,32 +334,42 @@ pub(super) fn observed(link: &ObservedLink) -> Value {
 }
 
 pub(super) fn attachment(details: &LinkDetails) -> (&'static str, String) {
-    match details {
-        LinkDetails::Tcx(d) => (
-            "tcx",
-            format!("{}:{}", d.interface.as_str(), d.key.direction),
+    let target = match details {
+        LinkDetails::Tcx(d) => format!(
+            "{}/{} (ifindex={}, pos={})",
+            d.interface.as_str(),
+            d.key.direction,
+            d.key.ifindex,
+            d.position
         ),
-        LinkDetails::Tc(d) => (
-            "tc",
-            format!("{}:{}", d.interface.as_str(), d.key.direction),
+        LinkDetails::Tc(d) => format!(
+            "{}/{} (ifindex={}, pos={})",
+            d.interface.as_str(),
+            d.key.direction,
+            d.key.ifindex,
+            d.slot.index()
         ),
-        LinkDetails::Uprobe(d) => (
-            if d.retprobe() { "uretprobe" } else { "uprobe" },
-            format!(
-                "{}:{}+{}",
-                d.target(),
-                d.function().unwrap_or_default(),
-                d.offset()
-            ),
+        LinkDetails::Uprobe(d) => format!(
+            "{}{}:{}",
+            if d.retprobe() { "uretprobe:" } else { "" },
+            d.target(),
+            d.function().unwrap_or_default()
         ),
-        LinkDetails::Tracing(d) => (d.kind.program_type().as_str(), d.function.as_str().into()),
-        LinkDetails::Kprobe(d) => (
-            if d.retprobe { "kretprobe" } else { "kprobe" },
-            format!("{}+{}", d.function.as_str(), d.offset),
+        LinkDetails::Tracing(d) => d.function.as_str().into(),
+        LinkDetails::Kprobe(d) => format!(
+            "{}{}",
+            if d.retprobe { "kretprobe:" } else { "" },
+            d.function.as_str()
         ),
-        LinkDetails::Tracepoint(t) => ("tracepoint", t.to_string()),
-        LinkDetails::Xdp(d) => ("xdp", format!("{}:xdp", d.interface.as_str())),
-    }
+        LinkDetails::Tracepoint(t) => t.to_string(),
+        LinkDetails::Xdp(d) => format!(
+            "{} (ifindex={}, pos={})",
+            d.interface.as_str(),
+            d.key.ifindex,
+            d.slot.index()
+        ),
+    };
+    (details.kind().as_str(), target)
 }
 
 #[cfg(test)]

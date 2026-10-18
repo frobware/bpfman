@@ -587,6 +587,7 @@ the uprobe mount-namespace subprocess helper inherits its writer descriptor.
 No privileges are needed for text/quiet listing in a writable temporary runtime.
 Loading requires BPF and mount privileges; `/run/bpfman` will normally require sudo.
 
+`program` defaults to `program list`, with the same filters and output flags.
 Listing supports table, quiet-ID and JSON output. Default text and quiet output
 use stored summaries without kernel privileges; JSON adds full records and live
 kernel observations. `program list --all` (or `-a`) also includes unmanaged kernel
@@ -644,7 +645,11 @@ JSON and quiet output need no presentation join. Text get fails if its stored
 owner is missing. Attach shares the detail layout without the owner name.
 
 `program get ID [-o text|json]` observes one managed program,
-including its maps, statistics, and links. Link observations use the same
+including its maps, statistics, and links. Text get and load use ordered Spec,
+Status and Stats sections; batch-load text sorts programs by ID and separates
+blocks with one blank line. Program-detail attachment summaries include probe
+return prefixes or network interface indices/positions, following Go's format.
+JSON retains its existing shapes and batch order. Link observations use the same
 record/status shape as `link get` and do not take the writer lock. Link `--all` and
 kernel link state filters remain unsupported. Unload supports the implemented program
 families with private or shared maps and pending or finalised links. Dispatcher

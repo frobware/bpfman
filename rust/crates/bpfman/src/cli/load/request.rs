@@ -220,10 +220,11 @@ mod tests {
                 .chain(args.iter().copied()),
         )?;
 
-        match cli.command {
-            Command::Program {
-                command: ProgramCommand::Load { source },
-            } => source.into_request(),
+        let Command::Program(program) = cli.command else {
+            return Err(invalid("expected program"));
+        };
+        match program.into_command() {
+            ProgramCommand::Load { source } => source.into_request(),
             _ => Err(invalid("expected load")),
         }
     }

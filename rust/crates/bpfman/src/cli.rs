@@ -65,7 +65,7 @@ impl Command {
         trust_cache: Option<&RuntimeLayout>,
     ) -> Result<PreparedCommand, crate::error::Error> {
         let command = match self {
-            Self::Program { command } => command,
+            Self::Program(args) => args.into_command(),
             Self::Image { command } => return Ok(PreparedCommand::Image(command)),
             Self::NsHelper { .. } => {
                 return Err(anyhow::anyhow!(
@@ -118,10 +118,22 @@ pub(super) enum Command {
     /// Manage standalone BPF links.
     Link(link::LinkArgs),
     /// Manage BPF programs.
-    Program {
-        #[command(subcommand)]
-        command: ProgramCommand,
-    },
+    Program(ProgramArgs),
+}
+
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(super) struct ProgramArgs {
+    #[command(subcommand)]
+    command: Option<ProgramCommand>,
+    #[command(flatten)]
+    list: ListArgs,
+}
+
+impl ProgramArgs {
+    fn into_command(self) -> ProgramCommand {
+        self.command.unwrap_or(ProgramCommand::List(self.list))
+    }
 }
 
 #[derive(Subcommand)]
@@ -280,10 +292,13 @@ mod tests {
             "-p",
             "tcx",
         ])?;
-        let Command::Program {
-            command: ProgramCommand::List(args),
-        } = cli.command
-        else {
+        let Command::Program(program) = cli.command else {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::InvalidSubcommand,
+                "expected program",
+            ));
+        };
+        let ProgramCommand::List(args) = program.into_command() else {
             return Err(clap::Error::raw(
                 clap::error::ErrorKind::InvalidSubcommand,
                 "expected list",
@@ -309,9 +324,10 @@ mod tests {
             let cli = Cli::try_parse_from(["bpfman", "program", "list", flag])?;
             assert!(matches!(
                 cli.command,
-                Command::Program {
-                    command: ProgramCommand::List(ListArgs { all: true, .. })
-                }
+                Command::Program(ProgramArgs {
+                    command: Some(ProgramCommand::List(ListArgs { all: true, .. })),
+                    ..
+                })
             ));
         }
         Ok(())
@@ -325,8 +341,7 @@ mod tests {
         ] {
             let cli = Cli::try_parse_from(["bpfman", "program", "list", "--all", flag])?;
             assert!(matches!(cli.command,
-                Command::Program { command: ProgramCommand::List(args) }
-                    if args.attachment() == Some(expected)
+                Command::Program(ProgramArgs { command: Some(ProgramCommand::List(args)), .. }) if args.attachment() == Some(expected)
             ));
         }
         let error =
@@ -354,10 +369,13 @@ mod tests {
             "--selector",
             "owner in (acme,other),!debug",
         ])?;
-        let Command::Program {
-            command: ProgramCommand::List(args),
-        } = cli.command
-        else {
+        let Command::Program(program) = cli.command else {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::InvalidSubcommand,
+                "expected program",
+            ));
+        };
+        let ProgramCommand::List(args) = program.into_command() else {
             return Err(clap::Error::raw(
                 clap::error::ErrorKind::InvalidSubcommand,
                 "expected list",

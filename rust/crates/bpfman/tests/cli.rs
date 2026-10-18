@@ -584,3 +584,111 @@ fn default_link_listing_reopens_without_the_writer_lock() -> Result<(), Box<dyn 
     assert!(!directory.path().join("fs").exists());
     Ok(())
 }
+
+#[test]
+fn default_program_listing_reopens_without_the_writer_lock()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let initial = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .arg("--runtime-dir")
+        .arg(directory.path())
+        .args(["program", "-o", "json"])
+        .output()?;
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    bpfman_lock::with_write_lock(
+        &directory.path().join(".lock"),
+        bpfman_lock::AcquireOptions {
+            timeout: std::time::Duration::from_secs(1),
+            cancelled: None,
+        },
+        |_| -> Result<(), Box<dyn std::error::Error>> {
+            for args in [
+                vec![],
+                vec!["list"],
+                vec!["--type", "XDP,TC"],
+                vec![
+                    "-p",
+                    "tracepoint",
+                    "--application",
+                    "absent",
+                    "-m",
+                    "owner=acme",
+                    "-l",
+                    "owner in (acme)",
+                ],
+                vec!["-o", "json"],
+                vec!["list", "-o", "json"],
+                vec!["--quiet", "-o", "json"],
+            ] {
+                let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                    .arg("--runtime-dir")
+                    .arg(directory.path())
+                    .arg("--lock-timeout=1ms")
+                    .arg("program")
+                    .args(&args)
+                    .output()?;
+                assert!(
+                    output.status.success(),
+                    "{args:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(output.stderr.is_empty());
+                if args.contains(&"json") && !args.contains(&"--quiet") {
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+                        serde_json::json!({"programs": []})
+                    );
+                } else {
+                    assert!(output.stdout.is_empty());
+                }
+            }
+            Ok(())
+        },
+    )??;
+    assert!(!directory.path().join("fs").exists());
+    Ok(())
+}
+
+#[test]
+fn malformed_default_program_listing_does_not_create_runtime()
+-> Result<(), Box<dyn std::error::Error>> {
+    let directory = tempfile::tempdir()?;
+    let runtime = directory.path().join("absent");
+    for args in [
+        vec!["--attached", "--unattached"],
+        vec!["--type", "bogus"],
+        vec!["-o", "yaml"],
+        vec!["-m", "owner"],
+        vec!["-l", "app in (demo"],
+        vec!["--all", "get", "1"],
+        vec![
+            "--quiet",
+            "load",
+            "file",
+            "missing.o",
+            "--programs",
+            "xdp:pass",
+        ],
+        vec!["bogus"],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .arg("--runtime-dir")
+            .arg(&runtime)
+            .arg("program")
+            .args(&args)
+            .output()?;
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty());
+        assert!(!runtime.exists());
+    }
+    Ok(())
+}

@@ -2716,7 +2716,10 @@ wrong, change it here before broadening feature coverage.
 
 ### Phase 5: public surfaces and cutover
 
-- Complete gRPC and CLI compatibility. Program inventory (`program list --all`)
+- Complete gRPC and CLI compatibility. Bare `program` lists with the same filters
+  and output flags as `program list`; program detail attachment summaries and
+  sorted, blank-line-separated batch-load text follow Go's presentation.
+  Program inventory (`program list --all`)
   and active-link `--attached`/`--unattached` filtering, exact metadata pairs and
   Kubernetes label selectors are implemented. Link-list identity/kind and
   owning-program type, application and exact metadata filtering are implemented,
@@ -6233,3 +6236,57 @@ previous restored gate took 67.24 seconds with threaded/serial lifetime stages;
 these are local samples, not a controlled benchmark. Gate log:
 `/tmp/bpfman-process-isolation-check.log`. Remote-image and forced-image lanes
 were not rerun for this runner-only change.
+
+
+## Program CLI presentation checkpoint (18 October 2026)
+
+Bare `program` now defaults to listing with the same type, application, metadata,
+label selector, attachment-state, all-program and output flags as `program list`.
+Both forms dispatch through the existing generic application read methods.
+Malformed flags and combinations with explicit subcommands fail during Clap
+parsing before runtime creation. Existing text/quiet inventory reads remain
+unprivileged and lock-free; JSON, all-program and attachment-state observations
+retain their existing kernel requirements. Quiet output retains precedence over
+JSON. Runtime/store interfaces, SQLite schema 2 and lifecycle policy are unchanged.
+
+The program text audit corrected attachment summaries inside Status/Links: return
+probes use Go's return-probe prefixes, user probes use target/function syntax,
+and XDP/TC/TCX include interface indices and positions. These summaries are separate
+from the link-list presentation. Offsets remain available in link detail and JSON;
+Go's program-detail summary does not include them. Text batch loads sort by
+program ID and separate full detail blocks with one blank line. JSON retains its
+existing batch order and wire shapes. Load times already come from the kernel
+adapter at RFC3339 second precision; no timestamp conversion was needed.
+
+New shared `TestProgram_Presentation.bpfman` checks default/explicit listing,
+conditional application columns, complete managed link IDs, combined filters,
+quiet-over-JSON and empty output. Program get text is checked against independent
+JSON observations for source, metadata, kernel attributes, map fields and stats
+availability, including ordered Spec/Status labels. A reverse-name batch checks
+ID order, blank-line separation, sorted global bytes and reopened get equality
+for Spec and scalar Status. Load and get observe maps at different times: Go get
+also correlates stored map declarations, so their map subsections are not assumed
+to be identical. Get map fields are checked against its independent JSON output.
+Probe and namespaced XDP/TC/TCX fixtures check program-detail attachment summaries. The script is explicitly selected alongside the unchanged
+inventory, link-filter/metadata and dispatcher scripts against both Go and Rust.
+
+Process contracts cover unprivileged empty reopening while a writer holds the
+lock, malformed default-list admission and conflicting subcommand flags. The
+native CLI effect contract also exercises nonempty default/explicit/quiet program
+lists and program get text under writer contention. Existing Go source, tests,
+acceptance scripts and labels are unchanged.
+
+Validation: `direnv exec . make rust-check` exits zero. Formatting, strict Clippy,
+unchanged architecture laws, all userspace/store/fake/CLI contracts and doctests,
+all 75 discovered native cases, owned-fixture cleanup and warnings-denied Rustdoc
+pass. The inventory batch passes 14 shared scripts against each implementation
+(28 script passes), including the new presentation script and unchanged inventory,
+link-filter/metadata and dispatcher contracts. The new script passes the shell
+checker and canonical formatter. No existing Go tests or acceptance assertions
+were modified.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the native
+suite takes 67.05 seconds. Every case runs once in its own process and reports
+success. Gate log: `/tmp/bpfman-program-check.log`; focused Go/Rust inventory
+log: `/tmp/bpfman-program-inventory.log`. Remote-image and forced-image lanes
+were not rerun for this presentation slice.

@@ -194,7 +194,12 @@ pub(super) fn loaded_programs(
 ) -> io::Result<()> {
     match format {
         OutputFormat::Text => {
-            for program in programs {
+            let mut sorted: Vec<_> = programs.iter().collect();
+            sorted.sort_by_key(|program| program.record.id);
+            for (index, program) in sorted.into_iter().enumerate() {
+                if index > 0 {
+                    writeln!(out)?;
+                }
                 detail::program(out, program)?;
             }
             Ok(())
