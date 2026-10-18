@@ -3,21 +3,21 @@
 use bpfman_model::{ObservedProgram, ProgramSource};
 use std::io::{self, Write};
 
-enum Row {
+pub(super) enum Row {
     Field(&'static str, String),
     Section(String, Vec<Row>),
     Note(&'static str),
 }
 
-fn field(label: &'static str, value: impl ToString) -> Row {
+pub(super) fn field(label: &'static str, value: impl ToString) -> Row {
     Row::Field(label, value.to_string())
 }
 
-fn section(label: impl Into<String>, rows: Vec<Row>) -> Row {
+pub(super) fn section(label: impl Into<String>, rows: Vec<Row>) -> Row {
     Row::Section(label.into(), rows)
 }
 
-fn render(out: &mut impl Write, rows: &[Row], depth: usize) -> io::Result<()> {
+pub(super) fn render(out: &mut impl Write, rows: &[Row], depth: usize) -> io::Result<()> {
     let width = rows
         .iter()
         .filter_map(|r| {
@@ -50,7 +50,7 @@ fn render(out: &mut impl Write, rows: &[Row], depth: usize) -> io::Result<()> {
     Ok(())
 }
 
-fn sort(rows: &mut [Row]) {
+pub(super) fn sort(rows: &mut [Row]) {
     rows.sort_by(|a, b| match (a, b) {
         (Row::Field(a, _), Row::Field(b, _)) => a.cmp(b),
         _ => std::cmp::Ordering::Equal,

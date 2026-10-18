@@ -274,6 +274,11 @@ fn invalid_link_requests_fail_before_runtime_creation() -> Result<(), Box<dyn st
         vec!["attach", "tracepoint", "42", "a/b/c"],
         vec!["attach", "tracepoint", "42", "a/b", "-m", "=value"],
         vec!["attach", "xdp", "42", "lo"],
+        vec!["--program-id", "0"],
+        vec!["--kind", "bogus"],
+        vec!["--output", "yaml"],
+        vec!["-m", "owner"],
+        vec!["--quiet", "get", "42"],
         vec!["list", "--all"],
         vec!["list", "--program-id", "0"],
         vec!["list", "--program-id", "4294967296"],
@@ -517,6 +522,65 @@ fn empty_dispatcher_listing_reopens_in_both_formats() -> Result<(), Box<dyn std:
             assert!(output.stdout.is_empty());
         }
     }
+    assert!(!directory.path().join("fs").exists());
+    Ok(())
+}
+
+#[test]
+fn default_link_listing_reopens_without_the_writer_lock() -> Result<(), Box<dyn std::error::Error>>
+{
+    let directory = tempfile::tempdir()?;
+    let initial = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .arg("--runtime-dir")
+        .arg(directory.path())
+        .args(["link", "-o", "json"])
+        .output()?;
+    assert!(
+        initial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&initial.stderr)
+    );
+    bpfman_lock::with_write_lock(
+        &directory.path().join(".lock"),
+        bpfman_lock::AcquireOptions {
+            timeout: std::time::Duration::from_secs(1),
+            cancelled: None,
+        },
+        |_| -> Result<(), Box<dyn std::error::Error>> {
+            for args in [
+                vec![],
+                vec!["list"],
+                vec!["--kind", "tracepoint"],
+                vec!["--application", "absent"],
+                vec!["-o", "json"],
+                vec!["list", "-o", "json"],
+                vec!["--quiet", "-o", "json"],
+            ] {
+                let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                    .arg("--runtime-dir")
+                    .arg(directory.path())
+                    .arg("--lock-timeout=1ms")
+                    .arg("link")
+                    .args(&args)
+                    .output()?;
+                assert!(
+                    output.status.success(),
+                    "{args:?}: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                assert!(output.stderr.is_empty());
+                if args.contains(&"json") && !args.contains(&"--quiet") {
+                    assert_eq!(
+                        serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+                        serde_json::json!({"links": []})
+                    );
+                } else {
+                    assert!(output.stdout.is_empty());
+                }
+            }
+            Ok(())
+        },
+    )??;
     assert!(!directory.path().join("fs").exists());
     Ok(())
 }

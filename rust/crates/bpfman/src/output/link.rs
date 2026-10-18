@@ -1,5 +1,5 @@
 use crate::cli::OutputFormat;
-use bpfman_model::{LinkDetails, LinkState, ObservedLink, StoredLink};
+use bpfman_model::{LinkDetails, LinkState, ObservedLink, StoredLink, StoredProgramSummary};
 use serde_json::{Value, json};
 use std::io::{self, Write};
 
@@ -70,31 +70,135 @@ fn record(link: &StoredLink) -> Value {
 pub(crate) fn link(
     out: &mut impl Write,
     link: &ObservedLink,
+    program_name: &str,
     format: OutputFormat,
 ) -> io::Result<()> {
     if format == OutputFormat::Json {
         return super::write_json(out, &observed(link));
     }
 
-    let (kind, target) = attachment(&link.record.details);
-    let kernel = match link.record.state {
-        LinkState::Pending => "<none>".into(),
-        LinkState::Attached { kernel_id } => kernel_id.to_string(),
-    };
-    writeln!(
+    use super::detail::{field, render, section, sort};
+    let r = &link.record;
+    let mut spec = vec![
+        field(
+            "Kernel Link ID",
+            match r.state {
+                LinkState::Pending => "None".into(),
+                LinkState::Attached { kernel_id } => kernel_id.to_string(),
+            },
+        ),
+        field(
+            "Metadata",
+            if r.metadata.is_empty() {
+                "None".into()
+            } else {
+                r.metadata
+                    .iter()
+                    .map(|(k, v)| format!("{k}={v}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        ),
+        field("Pin Path", or_none(&r.pin_path)),
+        field("Program ID", r.program_id),
+        field("Type", r.details.kind()),
+    ];
+    if !program_name.is_empty() {
+        spec.push(field("BPF Function", program_name));
+    }
+    if !r.created_at.is_empty() && r.created_at != "0001-01-01T00:00:00Z" {
+        // Stored timestamps are validated RFC3339Nano; Go text uses RFC3339.
+        let created = if let Some((seconds, fraction)) = r.created_at.split_once('.') {
+            let zone = fraction.trim_start_matches(|c: char| c.is_ascii_digit());
+            format!("{seconds}{zone}")
+        } else {
+            r.created_at.clone()
+        };
+        spec.push(field("Created At", created));
+    }
+    match &r.details {
+        LinkDetails::Tracing(d) => spec.push(field(
+            if d.kind == bpfman_model::TracingKind::Lsm {
+                "LSM Hook"
+            } else {
+                "Target Function"
+            },
+            d.function.as_str(),
+        )),
+        LinkDetails::Kprobe(d) => {
+            spec.push(field("Attach Type", r.details.kind()));
+            spec.push(field("Target Function", d.function.as_str()));
+            if d.offset != 0 {
+                spec.push(field("Target Offset", d.offset));
+            }
+        }
+        LinkDetails::Uprobe(d) => {
+            spec.push(field("Attach Type", r.details.kind()));
+            if let Some(pid) = d.pid() {
+                spec.push(field("PID", pid));
+            }
+            spec.push(field("Target", d.target()));
+            spec.push(field("Target Function", d.function().unwrap_or_default()));
+            if d.offset() != 0 {
+                spec.push(field("Target Offset", d.offset()));
+            }
+        }
+        LinkDetails::Tracepoint(t) => spec.push(field("Tracepoint", t)),
+        LinkDetails::Xdp(d) => spec.extend([
+            field("Interface", d.interface.as_str()),
+            field("Network Namespace", or_none(d.netns.as_str())),
+            field("Position", d.slot.index()),
+            field("Priority", d.priority),
+            field(
+                "Proceed On",
+                super::dispatcher::proceed_on(d.proceed_on.mask(), true),
+            ),
+        ]),
+        LinkDetails::Tc(d) => spec.extend([
+            field("Direction", d.key.direction),
+            field("Interface", d.interface.as_str()),
+            field("Network Namespace", or_none(d.netns.as_str())),
+            field("Position", d.slot.index()),
+            field("Priority", d.priority),
+            field(
+                "Proceed On",
+                super::dispatcher::proceed_on(d.proceed_on.mask(), false),
+            ),
+        ]),
+        LinkDetails::Tcx(d) => spec.extend([
+            field("Direction", d.key.direction),
+            field("Interface", d.interface.as_str()),
+            field("Network Namespace", or_none(d.netns.as_str())),
+            field("Position", d.position),
+            field("Priority", d.priority),
+        ]),
+    }
+    sort(&mut spec);
+    writeln!(out, "Link ID: {}", r.id)?;
+    render(
         out,
-        "Link ID: {}\nKernel Link ID: {kernel}\nKind: {kind}\nProgram ID: {}\nAttachment: {target}\nPin Path: {}\nKernel Seen: {}\nPin Present: {}",
-        link.record.id,
-        link.record.program_id,
-        link.record.pin_path,
-        link.kernel.is_some(),
-        link.pin_present
+        &[
+            section("Spec", spec),
+            section(
+                "Status",
+                vec![
+                    field("Kernel Seen", link.kernel.is_some()),
+                    field("Pin Present", link.pin_present),
+                ],
+            ),
+        ],
+        1,
     )
+}
+
+fn or_none(value: &str) -> &str {
+    if value.is_empty() { "None" } else { value }
 }
 
 pub(crate) fn links(
     out: &mut impl Write,
     links: &[StoredLink],
+    programs: &[StoredProgramSummary],
     format: OutputFormat,
     quiet: bool,
 ) -> io::Result<()> {
@@ -114,21 +218,86 @@ pub(crate) fn links(
         return Ok(());
     }
 
-    writeln!(out, "LINK ID  KERNEL LINK ID  KIND  PROGRAM ID  ATTACHMENT")?;
-    for link in links {
-        let (kind, target) = attachment(&link.details);
-        let kernel = match link.state {
-            LinkState::Pending => "<none>".into(),
-            LinkState::Attached { kernel_id } => kernel_id.to_string(),
-        };
-        writeln!(
-            out,
-            "{}  {kernel}  {kind}  {}  {target}",
-            link.id, link.program_id
-        )?;
+    let programs = programs
+        .iter()
+        .map(|p| (p.id(), p))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let with_application = links.iter().any(|l| {
+        programs
+            .get(&l.program_id)
+            .is_some_and(|p| !p.application().is_empty())
+    });
+    let mut headers = vec!["LINK ID", "KERNEL LINK ID", "KIND", "PROGRAM ID"];
+    if with_application {
+        headers.push("APPLICATION");
     }
+    headers.extend(["FUNCTION NAME", "ATTACHMENT"]);
+    let rows = links
+        .iter()
+        .map(|link| {
+            let kernel = match link.state {
+                LinkState::Pending => "<none>".into(),
+                LinkState::Attached { kernel_id } => kernel_id.to_string(),
+            };
+            let program = programs.get(&link.program_id);
+            let mut row = vec![
+                link.id.to_string(),
+                kernel,
+                link.details.kind().to_string(),
+                link.program_id.to_string(),
+            ];
+            if with_application {
+                row.push(program.map_or("", |p| p.application()).into());
+            }
+            row.extend([
+                program
+                    .map_or("<none>", |p| {
+                        if p.name().is_empty() {
+                            "<none>"
+                        } else {
+                            p.name()
+                        }
+                    })
+                    .into(),
+                summary(&link.details),
+            ]);
+            row
+        })
+        .collect::<Vec<_>>();
+    super::dispatcher::table(out, "", &headers, &rows)
+}
 
-    Ok(())
+fn summary(details: &LinkDetails) -> String {
+    let network = |interface: &str, direction: &str, position, netns: &str| {
+        let mut value = format!("{interface}{direction} pos-{position}");
+        if !netns.is_empty() {
+            value.push_str(&format!(" netns={netns}"));
+        }
+        value
+    };
+    match details {
+        LinkDetails::Xdp(d) => network(d.interface.as_str(), "", d.slot.index(), d.netns.as_str()),
+        LinkDetails::Tc(d) => network(
+            d.interface.as_str(),
+            &format!(" {}", d.key.direction),
+            d.slot.index(),
+            d.netns.as_str(),
+        ),
+        LinkDetails::Tcx(d) => network(
+            d.interface.as_str(),
+            &format!(" {}", d.key.direction),
+            d.position,
+            d.netns.as_str(),
+        ),
+        LinkDetails::Kprobe(d) if d.offset == 0 => d.function.as_str().to_owned(),
+        LinkDetails::Kprobe(d) => format!("{}+{}", d.function.as_str(), d.offset),
+        LinkDetails::Uprobe(d) => match d.function() {
+            Some(function) => format!("{} {function}", d.target()),
+            None => format!("{} +{}", d.target(), d.offset()),
+        },
+        LinkDetails::Tracepoint(t) => t.to_string(),
+        LinkDetails::Tracing(d) => d.function.as_str().to_owned(),
+    }
 }
 
 pub(super) fn observed(link: &ObservedLink) -> Value {
@@ -190,5 +359,81 @@ pub(super) fn attachment(details: &LinkDetails) -> (&'static str, String) {
         ),
         LinkDetails::Tracepoint(t) => ("tracepoint", t.to_string()),
         LinkDetails::Xdp(d) => ("xdp", format!("{}:xdp", d.interface.as_str())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU32, NonZeroU64},
+    };
+
+    #[test]
+    fn pending_orphan_text_keeps_intent_and_missing_observations()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let record = StoredLink {
+            id: NonZeroU64::new(7).ok_or("id")?,
+            program_id: NonZeroU32::new(42).ok_or("program")?,
+            details: LinkDetails::Tracepoint("syscalls/sys_enter_kill".parse()?),
+            state: LinkState::Pending,
+            pin_path: String::new(),
+            metadata: BTreeMap::new(),
+            created_at: "2026-10-18T12:34:56.123456789+01:00".into(),
+        };
+        let mut out = Vec::new();
+        links(
+            &mut out,
+            std::slice::from_ref(&record),
+            &[],
+            OutputFormat::Text,
+            false,
+        )?;
+        let text = String::from_utf8(out)?;
+        assert!(text.contains("FUNCTION NAME"));
+        assert!(!text.contains("APPLICATION"));
+        assert_eq!(
+            text.lines()
+                .nth(1)
+                .ok_or("row")?
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            [
+                "7",
+                "<none>",
+                "tracepoint",
+                "42",
+                "<none>",
+                "syscalls/sys_enter_kill"
+            ]
+        );
+        let observed = ObservedLink {
+            record,
+            kernel: None,
+            pin_present: false,
+        };
+        let mut out = Vec::new();
+        link(&mut out, &observed, "", OutputFormat::Text)?;
+        let text = String::from_utf8(out)?;
+        for field in [
+            "Created At: 2026-10-18T12:34:56+01:00",
+            "Kernel Link ID: None",
+            "Metadata: None",
+            "Pin Path: None",
+            "Kernel Seen: false",
+            "Pin Present: false",
+        ] {
+            let normalized = text
+                .lines()
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>();
+            assert!(normalized.iter().any(|line| line == field), "{text}");
+        }
+        assert!(!text.contains("BPF Function"));
+        let mut out = Vec::new();
+        links(&mut out, &[observed.record], &[], OutputFormat::Json, true)?;
+        assert_eq!(out, b"7\n");
+        Ok(())
     }
 }

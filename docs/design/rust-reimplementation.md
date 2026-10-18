@@ -2720,7 +2720,9 @@ wrong, change it here before broadening feature coverage.
   and active-link `--attached`/`--unattached` filtering, exact metadata pairs and
   Kubernetes label selectors are implemented. Link-list identity/kind and
   owning-program type, application and exact metadata filtering are implemented,
-  including quiet output. Dispatcher get/list supports text and JSON output,
+  including quiet output. Bare `link` lists with the same filters; link text
+  lists join owner names/application labels and get/attach expose typed
+  Spec/Status sections. Dispatcher get/list supports text and JSON output,
   defaults to text, and bare `dispatcher` lists with the same key filters.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
@@ -6024,4 +6026,71 @@ On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the full
 native suite takes 69.37 seconds: 41.83 seconds corpus, 5.16 seconds serial
 SQLite lifetime contracts, 22.00 seconds parallel SQLite contracts and 0.35
 seconds Go comparison. Gate log: `/tmp/bpfman-dispatcher-check-complete.log`.
+Remote-image and forced-image lanes were not rerun for this presentation slice.
+
+
+## Link CLI presentation checkpoint (18 October 2026)
+
+Bare `link` now defaults to listing, accepting the same identity, kind,
+owner-program, metadata, output and quiet flags as `link list`. Text listings
+show managed and kernel link IDs, attachment kind, program ID, BPF function name
+and a typed attachment summary. An application column appears only when a
+visible link's owner has a nonempty application label. Missing owners retain
+unscoped link intent and render `<none>` for the function; pending kernel IDs
+also render `<none>`. Empty text and quiet listings remain empty.
+
+Link get text now follows Go's Spec/Status layout, with fields ordered by label,
+creation time at RFC3339 second precision, sorted metadata and typed family
+fields. Network attachments expose namespace, interface, position, priority and
+family-specific proceed-on actions; probes expose their entry/return selection,
+target, optional PID and nonzero offsets; BTF tracing and LSM expose their
+function or hook. Attach shares this renderer without the get-only owner name.
+Existing program-detail attachment strings remain unchanged.
+
+The CLI joins generic stored program summaries only for nonempty text listings
+and text get. JSON and quiet output retain their existing shapes, precedence and
+read paths. Owner-read failures propagate; text get fails when its owner is
+absent, matching Go. Store reads bypass the writer lock and perform no added
+kernel inspection. Link and owner snapshots remain independent and do not promise
+an atomic join. Runtime/store contracts, SQLite schema 2, dependencies and
+architecture laws are unchanged. Hidden link deletion remains separate work.
+
+New shared `TestLink_Presentation.bpfman` exercises default/explicit list and get,
+application-column visibility, function names, namespace and attachment summaries,
+ordered detail labels, metadata, creation time, quiet-over-JSON, and empty output.
+Its fixtures cover tracepoints, return kernel probes, named and offset-only user
+probes, XDP, TC, TCX, fentry/fexit and LSM. It joins the explicitly selected Go/Rust
+inventory batch alongside the unchanged link-filter and metadata scripts.
+Process coverage checks malformed default-list admission and unprivileged
+reopening while another writer holds the lock. The native CLI effect contract
+also proves nonempty list/get text joins under writer contention; an output unit contract covers
+pending orphan intent, absent observations and timestamp precision.
+
+The shell's XDP/TC attach decoder omits creation timestamps, so the presentation
+script compares creation text against raw get JSON rather than the normalised
+attach value. The same assertions pass against both implementations without
+changing the shell decoder or any existing acceptance contract.
+
+The expanded process coverage exposed an existing immediate program-lifetime
+assertion running concurrently with fork/exec fixtures. The unchanged
+`sqlite_attached_unload_failures_and_cancellation` contract now runs in the
+existing serial global lifetime stage: forked children can temporarily inherit
+another thread's CLOEXEC BPF descriptors before exec. Its immediate absence,
+partial-failure, cancellation and retry assertions are preserved; no polling,
+sleeps or retries are added. Every discovered native test remains selected.
+
+Validation: `direnv exec . make rust-fmt-fix rust-check` exits zero. Formatting,
+strict Clippy, unchanged architecture laws, all userspace/store/fake/CLI contracts,
+doctests, all 75 discovered native functions, owned-fixture cleanup and
+warnings-denied Rustdoc pass. The inventory batch passes 13 shared scripts against
+each implementation (26 script passes), including the new presentation script
+and unchanged link-filter/metadata scripts. The new script also passes the shell
+checker and canonical formatter; `rust/test-kernel.sh` passes ShellCheck after
+quoting its existing exported thread count and naming unused uptime fields.
+No existing Go source, tests, acceptance scripts or labels changed.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the full
+native suite takes 69.66 seconds: 41.05 seconds corpus, 5.68 seconds serial
+SQLite lifetime contracts, 22.54 seconds parallel SQLite contracts and 0.35
+seconds Go comparison. Gate log: `/tmp/bpfman-link-check-complete.log`.
 Remote-image and forced-image lanes were not rerun for this presentation slice.

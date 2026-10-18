@@ -169,6 +169,31 @@ pub(super) fn effect_boundaries() {
     let observed = c.json(&rust(), &["link", "get", &link_id, "-o", "json"]);
     assert_eq!(observed["status"]["kernel_seen"], true);
     assert_eq!(observed["status"]["pin_present"], true);
+    // Both presentation joins must read existing state while a writer holds
+    // the runtime lock, including get's independent kernel/pin observations.
+    bpfman_lock::with_write_lock(
+        &c.layout.lock_path(),
+        bpfman_lock::AcquireOptions {
+            timeout: std::time::Duration::from_secs(1),
+            cancelled: None,
+        },
+        |_| {
+            for args in [
+                vec!["link"],
+                vec!["link", "list"],
+                vec!["link", "get", &link_id],
+            ] {
+                let mut flags = vec!["--lock-timeout=1ms"];
+                flags.extend(args);
+                let text = c.run(&rust(), &flags, true);
+                let text = String::from_utf8(text.stdout).expect("link text");
+                assert!(text.contains("tracepoint_kill_recorder"));
+                assert!(text.contains("syscalls/sys_enter_kill"));
+            }
+        },
+    )
+    .expect("hold writer during link presentation");
+
     let program = c.json(&rust(), &["program", "get", &pid_text, "-o", "json"]);
     assert_eq!(program["status"]["links"], serde_json::json!([observed]));
     let text = c.run(&rust(), &["program", "get", &pid_text], true);
@@ -250,6 +275,7 @@ pub(super) fn program_inventory_scripts() {
         "TestProgramList_MetadataSelectors",
         "TestLinkMetadata_PersistAndFilter",
         "TestLinkList_Filters",
+        "TestLink_Presentation",
         "TestDispatcher_OutputAndFilters",
         "TestDispatcher_ZeroPriorityDefaultOrderingXDP",
         "TestDispatcher_ZeroPriorityDefaultOrderingTC",

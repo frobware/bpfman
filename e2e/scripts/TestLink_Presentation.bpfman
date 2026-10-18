@@ -1,0 +1,158 @@
+# -*- mode: bpfman -*-
+#pragma labels={"requires-bpf-lsm":"true"}
+# Link text views, default listing and unchanged structured/quiet output.
+
+import ../lib.bpfman
+
+def details(link name summary) {
+    let id = $link.record.id
+    let pid = $link.record.program_id
+    guard text <- exec bpfman link get $id
+    guard explicit <- exec bpfman link get -o text $id
+    assert $text.stdout == $explicit.stdout
+    assert contains $text.stdout "Link ID: ${id}"
+    assert contains $text.stdout "  Spec:"
+    assert contains $text.stdout "  Status:"
+    let fields = $text.stdout |> jq 'split("\n") | map(select(startswith("    "))) | map(capture("^    (?<key>[^:]+): *(?<value>.*)$")) | from_entries'
+    assert ($fields |> jq '."BPF Function"') == $name
+    assert ($fields |> jq '."Program ID"') == "${pid}"
+    assert ($fields |> jq '."Type"') == $link.record.kind
+    assert ($fields |> jq '."Kernel Link ID"') == "${link.record.kernel_link_id}"
+    assert ($fields |> jq '."Pin Path"') == $link.record.pin_path
+    assert ($fields |> jq '."Kernel Seen"') == "true"
+    assert ($fields |> jq '."Pin Present"') == "true"
+    let metadata = $link.record.metadata |> jq 'if length == 0 then "None" else to_entries | sort_by(.key) | map("\(.key)=\(.value)") | join(", ") end'
+    assert ($fields |> jq '."Metadata"') == $metadata
+    # The shell's XDP/TC attach decoder omits creation time; use raw get JSON.
+    guard raw <- exec bpfman link get $id -o json
+    let got = $raw.stdout |> jq fromjson
+    let created = $got.record.created_at |> jq 'sub("\\.[0-9]+"; "")'
+    if $created == "0001-01-01T00:00:00Z" {
+        assert ($fields |> jq 'has("Created At")') == false
+    } else {
+        assert ($fields |> jq '."Created At"') == $created
+    }
+    let labels = $text.stdout |> jq 'split("  Spec:\n")[1] | split("  Status:\n")[0] | split("\n") | map(select(length > 0) | capture("^    (?<key>[^:]+):").key)'
+    assert ($labels |> jq tojson) == ($labels |> jq "sort | tojson")
+    guard table <- exec bpfman link list --program-id $pid --kind $link.record.kind
+    assert contains $table.stdout "FUNCTION NAME"
+    assert contains $table.stdout $name
+    let cells = $table.stdout |> jq "split(\"\\n\") | map(select(test(\"^${id} +\"))) | .[0] | [splits(\" {2,}\")]"
+    assert $cells[0] == "${id}"
+    assert $cells[1] == "${link.record.kernel_link_id}"
+    assert $cells[2] == $link.record.kind
+    assert $cells[3] == "${pid}"
+    assert ($cells |> jq ".[-2]") == $name
+    assert ($cells |> jq ".[-1]") == $summary
+    assert not contains $table.stdout "Pin Path"
+    return $fields
+}
+
+guard fn <- kfunc acquire
+defer kfunc release $fn
+guard target <- uprobe target
+guard pair <- net netns-veth-pair
+defer net release $pair
+let netns = "/var/run/netns/${pair.a.ns}"
+
+guard tp <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder
+defer bpfman program unload $tp.programs[0]
+guard t <- bpfman link attach tracepoint $tp.programs[0] syscalls/sys_enter_kill -m zeta=last -m alpha=first
+defer bpfman link detach $t
+guard tfields <- details $t tracepoint_kill_recorder syscalls/sys_enter_kill
+assert ($tfields |> jq '."Tracepoint"') == syscalls/sys_enter_kill
+assert ($tfields |> jq '."Metadata"') == "alpha=first, zeta=last"
+guard plain <- exec bpfman link list
+assert not contains $plain.stdout APPLICATION
+
+# A visible owner's application adds the column; filtering it out removes it.
+guard kp <- bpfman program load file testdata/bpf/kprobe_counter.bpf.o --programs kretprobe:kprobe_counter --application link-demo -m owner=acme
+defer bpfman program unload $kp.programs[0]
+guard k <- bpfman link attach kprobe $kp.programs[0] $fn.name
+defer bpfman link detach $k
+guard kfields <- details $k kprobe_counter $fn.name
+assert ($kfields |> jq '."Attach Type"') == kretprobe
+assert ($kfields |> jq '."Target Function"') == $fn.name
+assert ($kfields |> jq 'has("Target Offset")') == false
+guard all <- exec bpfman link
+assert contains $all.stdout APPLICATION
+assert contains $all.stdout link-demo
+guard onlyPlain <- exec bpfman link --kind tracepoint
+assert not contains $onlyPlain.stdout APPLICATION
+
+guard implicit <- exec bpfman link --kind tracepoint,kretprobe -p tracepoint,kretprobe -m owner=acme --application link-demo --program-id $kp.programs[0].record.program_id
+guard explicit <- exec bpfman link list --kind tracepoint,kretprobe -p tracepoint,kretprobe -m owner=acme --application link-demo --program-id $kp.programs[0].record.program_id
+assert $implicit.stdout == $explicit.stdout
+guard implicitJSON <- exec bpfman link -o json
+guard explicitJSON <- exec bpfman link list -o json
+assert $implicitJSON.stdout == $explicitJSON.stdout
+guard quiet <- exec bpfman link --application link-demo -q -o json
+assert $quiet.stdout == "${k.record.id}\n"
+guard empty <- exec bpfman link --application absent
+assert $empty.stdout == ""
+
+guard up <- bpfman program load file testdata/bpf/uprobe_exact.bpf.o --programs uprobe:uprobe_counter
+defer bpfman program unload $up.programs[0]
+guard u <- bpfman link attach uprobe $up.programs[0] $target.path --fn-name $target.symbol --pid $target.pid
+defer bpfman link detach $u
+guard ufields <- details $u uprobe_counter "${target.path} ${target.symbol}"
+assert ($ufields |> jq '."Attach Type"') == uprobe
+assert ($ufields |> jq '."Target"') == $target.path
+assert ($ufields |> jq '."Target Function"') == $target.symbol
+assert ($ufields |> jq '."PID"') == "${target.pid}"
+guard offset <- bpfman link attach uprobe $up.programs[0] $target.path --offset $target.symbol_offset
+defer bpfman link detach $offset
+guard ofields <- details $offset uprobe_counter "${target.path} +${target.symbol_offset}"
+assert ($ofields |> jq '."Target Offset"') == "${target.symbol_offset}"
+assert ($ofields |> jq '."Target Function"') == ""
+assert ($ofields |> jq 'has("PID")') == false
+
+guard xdp <- bpfman program load file testdata/bpf/xdp_counter.bpf.o --programs xdp:xdp_stats
+defer bpfman program unload $xdp.programs[0]
+guard x <- bpfman link attach xdp $xdp.programs[0] $pair.a.link --netns $netns --priority 75 --proceed-on aborted,drop,pass,tx,redirect,dispatcher_return
+defer bpfman link detach $x
+guard xfields <- details $x xdp_stats "${pair.a.link} pos-0 netns=${netns}"
+assert ($xfields |> jq '."Interface"') == $pair.a.link
+assert ($xfields |> jq '."Network Namespace"') == $netns
+assert ($xfields |> jq '."Position"') == "0"
+assert ($xfields |> jq '."Priority"') == "75"
+assert ($xfields |> jq '."Proceed On"') == "aborted, drop, pass, tx, redirect, dispatcher_return"
+
+guard tc <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+defer bpfman program unload $tc.programs[0]
+guard c <- bpfman link attach tc $tc.programs[0] $pair.a.link ingress --netns $netns --priority 50 --proceed-on unspec,ok,reclassify,shot,pipe,stolen,queued,repeat,redirect,trap,dispatcher_return
+defer bpfman link detach $c
+guard cfields <- details $c stats "${pair.a.link} ingress pos-0 netns=${netns}"
+assert ($cfields |> jq '."Direction"') == ingress
+assert ($cfields |> jq '."Network Namespace"') == $netns
+assert ($cfields |> jq '."Priority"') == "50"
+assert ($cfields |> jq '."Proceed On"') == "unspec, ok, reclassify, shot, pipe, stolen, queued, repeat, redirect, trap, dispatcher_return"
+
+guard tcx <- bpfman program load file testdata/bpf/tcx_counter.bpf.o --programs tcx:tcx_stats
+defer bpfman program unload $tcx.programs[0]
+guard cx <- bpfman link attach tcx $tcx.programs[0] $pair.a.link egress --netns $netns --priority 25
+defer bpfman link detach $cx
+guard cxfields <- details $cx tcx_stats "${pair.a.link} egress pos-0 netns=${netns}"
+assert ($cxfields |> jq '."Direction"') == egress
+assert ($cxfields |> jq '."Priority"') == "25"
+assert ($cxfields |> jq 'has("Proceed On")') == false
+
+guard entry <- bpfman program load file testdata/bpf/fentry_kmod_exact.bpf.o --programs "fentry:test_fentry:${fn.name}"
+defer bpfman program unload $entry.programs[0]
+guard en <- bpfman link attach fentry $entry.programs[0]
+defer bpfman link detach $en
+guard enfields <- details $en test_fentry $fn.name
+assert ($enfields |> jq '."Target Function"') == $fn.name
+guard exit <- bpfman program load file testdata/bpf/fexit_kmod_exact.bpf.o --programs "fexit:test_fexit:${fn.name}"
+defer bpfman program unload $exit.programs[0]
+guard ex <- bpfman link attach fexit $exit.programs[0]
+defer bpfman link detach $ex
+guard exfields <- details $ex test_fexit $fn.name
+assert ($exfields |> jq '."Target Function"') == $fn.name
+
+guard lsm <- bpfman program load file testdata/bpf/lsm_exact.bpf.o --programs lsm:test_lsm:file_open
+defer bpfman program unload $lsm.programs[0]
+guard l <- bpfman link attach lsm $lsm.programs[0]
+defer bpfman link detach $l
+guard lfields <- details $l test_lsm file_open
+assert ($lfields |> jq '."LSM Hook"') == file_open

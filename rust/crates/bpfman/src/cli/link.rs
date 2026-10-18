@@ -6,6 +6,21 @@ use clap::{
 };
 use std::num::{NonZeroU32, NonZeroU64};
 
+#[derive(Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub(crate) struct LinkArgs {
+    #[command(subcommand)]
+    command: Option<LinkCommand>,
+    #[command(flatten)]
+    list: ListArgs,
+}
+
+impl LinkArgs {
+    pub(super) fn into_command(self) -> LinkCommand {
+        self.command.unwrap_or(LinkCommand::List(self.list))
+    }
+}
+
 #[derive(Subcommand)]
 pub(crate) enum LinkCommand {
     /// Attach an already loaded program.
@@ -281,7 +296,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -305,7 +320,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -329,7 +344,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -353,7 +368,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -380,7 +395,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -411,7 +426,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -447,7 +462,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -483,7 +498,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
                 target:
@@ -510,7 +525,7 @@ impl LinkCommand {
                         record.id
                     ))
                 })?;
-                crate::output::link(&mut std::io::stdout().lock(), &observed, output)?;
+                crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Detach { id } => {
                 let record = app
@@ -531,13 +546,40 @@ impl LinkCommand {
             }
             Self::Get { id, output } => {
                 let link = app.get_link_with_cancellation(id, cancellation)?;
-                crate::output::link(&mut std::io::stdout().lock(), &link, output)?;
+                let programs = if output == OutputFormat::Text {
+                    app.list_with_cancellation(&Default::default(), cancellation)?
+                } else {
+                    Vec::new()
+                };
+                let name = if output == OutputFormat::Text {
+                    programs
+                        .iter()
+                        .find(|p| p.id() == link.record.program_id)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("program {} not found", link.record.program_id)
+                        })?
+                        .name()
+                } else {
+                    ""
+                };
+                crate::output::link(&mut std::io::stdout().lock(), &link, name, output)?;
             }
             Self::List(args) => {
                 let output = args.output;
                 let quiet = args.quiet;
                 let links = app.list_links_with_cancellation(&args.filter(), cancellation)?;
-                crate::output::links(&mut std::io::stdout().lock(), &links, output, quiet)?;
+                let programs = if output == OutputFormat::Text && !quiet && !links.is_empty() {
+                    app.list_with_cancellation(&Default::default(), cancellation)?
+                } else {
+                    Vec::new()
+                };
+                crate::output::links(
+                    &mut std::io::stdout().lock(),
+                    &links,
+                    &programs,
+                    output,
+                    quiet,
+                )?;
             }
         }
 
@@ -616,11 +658,11 @@ mod tests {
             "-m",
             "arbitrary key=raw=value with spaces",
         ])?;
-        let crate::cli::Command::Link {
-            command: LinkCommand::List(args),
-        } = cli.command
-        else {
+        let crate::cli::Command::Link(args) = cli.command else {
             unreachable!("link list");
+        };
+        let LinkCommand::List(args) = args.into_command() else {
+            unreachable!("link list")
         };
         assert!(args.quiet);
         assert!(matches!(args.output, OutputFormat::Json));
@@ -652,11 +694,11 @@ mod tests {
                 argv.extend(["--application", app]);
             }
             let cli = crate::cli::Cli::try_parse_from(argv)?;
-            let crate::cli::Command::Link {
-                command: LinkCommand::List(args),
-            } = cli.command
-            else {
+            let crate::cli::Command::Link(args) = cli.command else {
                 unreachable!("link list");
+            };
+            let LinkCommand::List(args) = args.into_command() else {
+                unreachable!("link list")
             };
             assert!(args.filter().program.is_none());
         }

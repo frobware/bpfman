@@ -622,7 +622,7 @@ runtime creation. Any nonempty metadata filter excludes unmanaged rows under
 `--all`, including negative selectors. Text/quiet selection remains store-only
 and unprivileged unless `--all` or an attachment filter is supplied.
 
-`link list` accepts `--program-id`, comma-separated or repeated `--kind`, and
+`link` defaults to `link list`. Both accept `--program-id`, comma-separated or repeated `--kind`, and
 owning-program filters `-p/--program-type`, `--application`, and repeatable
 `-m/--metadata-selector KEY=VALUE`. Kinds and program types each form a union;
 all supplied filters combine with AND. Metadata matches the owning program's
@@ -634,6 +634,14 @@ Pending and stale intent remains visible. All output modes use stored records,
 require no kernel inspection and bypass the writer lock. Program and link reads
 are independent committed snapshots. `-q/--quiet` prints IDs in ascending order
 and takes precedence over JSON. Malformed filters fail before runtime creation.
+
+Text link lists show function names and typed attachment summaries, with an
+application column only when a displayed owner has an application label. Missing
+owners display `<none>` for the function. Text `link get` uses ordered Spec and
+Status sections, including metadata and family-specific attachment details.
+Owner names come from generic stored summaries without additional kernel calls;
+JSON and quiet output need no presentation join. Text get fails if its stored
+owner is missing. Attach shares the detail layout without the owner name.
 
 `program get ID [-o text|json]` observes one managed program,
 including its maps, statistics, and links. Link observations use the same

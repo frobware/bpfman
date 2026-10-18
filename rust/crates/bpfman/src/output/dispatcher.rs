@@ -335,7 +335,7 @@ fn render(out: &mut impl Write, snapshot: &Snapshot<'_>, format: OutputFormat) -
     table(out, "  ", &headers, &rows)
 }
 
-fn table(
+pub(super) fn table(
     out: &mut impl Write,
     indent: &str,
     headers: &[&str],
@@ -365,7 +365,7 @@ fn table(
     Ok(())
 }
 
-fn proceed_on(mask: u32, xdp: bool) -> String {
+pub(super) fn proceed_on(mask: u32, xdp: bool) -> String {
     let actions: &[(u32, &str)] = if xdp {
         &[
             (0, "aborted"),

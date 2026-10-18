@@ -74,7 +74,8 @@ impl Command {
                 .into());
             }
             Self::Dispatcher(args) => return Ok(PreparedCommand::Dispatcher(args.into_command())),
-            Self::Link { command } => {
+            Self::Link(args) => {
+                let command = args.into_command();
                 command.validate()?;
                 let mode = match command.xdp_interface() {
                     Some(interface) => config::Config::load(config)?.xdp_mode(interface)?,
@@ -115,10 +116,7 @@ pub(super) enum Command {
     /// Inspect dispatcher snapshots.
     Dispatcher(dispatcher::DispatcherArgs),
     /// Manage standalone BPF links.
-    Link {
-        #[command(subcommand)]
-        command: link::LinkCommand,
-    },
+    Link(link::LinkArgs),
     /// Manage BPF programs.
     Program {
         #[command(subcommand)]
