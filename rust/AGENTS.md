@@ -422,9 +422,11 @@ The architecture and compatibility goals are in
   forwarding and broadcast contracts opt into two synchronous scoped fixture
   workers in focused/one-thread runs. Complete suites use `test-kernel.sh`: discover
   every case, run corpus/Go/global-inventory stages serially, and run independent
-  contracts on eight threads within each backend (four, two and one are supported
-  through `BPFMAN_KERNEL_TEST_THREADS`). Backend stages remain sequential;
-  unclassified names fail admission. Forwarding uses one fixture worker when top-level tests
+  contracts in fresh processes on eight workers within each backend (four, two
+  and one are supported through the existing `BPFMAN_KERNEL_TEST_THREADS` knob).
+  Each exact case must report one real pass; empty or ignored selections fail.
+  The controller and worker shells must never own BPF descriptors. Backend stages
+  remain sequential; unclassified names fail admission. Forwarding uses one fixture worker when top-level tests
   are concurrent, keeping the fixture limit at eight instead of multiplying it.
   Construct each fixture's runtime, namespace, fault state and descriptors inside
   its worker.
@@ -486,11 +488,13 @@ The architecture and compatibility goals are in
   existing TCX scripts with SQLite. Keep them in the full gate without changing
   script labels or assertions.
 
-- Run TCX immediate lifetime controls in the existing serial global stage,
-  separately from concurrently spawning contracts. CLOEXEC does not prevent a
-  forked child retaining a copied BPF FD before exec; the deterministic control
-  is recorded under `/tmp/bpfman-tcx/`. Preserve every immediate assertion and
-  select every discovered test; do not add polling to cover inherited holders.
+- Run TCX immediate lifetime controls in fresh case processes, alongside other
+  independent contracts in the bounded worker pool. A controller without BPF
+  descriptors prevents children of unrelated fixtures from inheriting them.
+  Keep global program-enumeration cases serial: an observer can open a foreign
+  program FD even across process boundaries. Preserve every immediate assertion
+  and select every discovered test; do not add polling to cover inherited holders.
+  The original fork control remains recorded under `/tmp/bpfman-tcx/`.
 
 ## Native kernel probes
 
@@ -504,7 +508,7 @@ The architecture and compatibility goals are in
   to probes as well as tracepoints. Retain every failed receipt and attempt history.
 - `rust-test-kprobe` runs seven unchanged existing scripts plus native recovery
   contracts with SQLite. Keep script labels and assertions unchanged. Probe
-  lifetime contracts belong in the existing serial global stage, with immediate
+  lifetime contracts run in isolated case processes, with immediate
   link/program absence assertions and explicit external program-holder controls.
 
 
@@ -530,7 +534,7 @@ The architecture and compatibility goals are in
 - SQLite keeps schema 2.
   `rust-test-map-sharing` selects the three unchanged sharing scripts and native
   recovery contracts with SQLite. Native immediate program-lifetime assertions
-  belong in the serial global stages; keep them free of sleeps and polling.
+  run in isolated case processes; keep them free of sleeps and polling.
 
 
 ## Host user-space probes
@@ -549,8 +553,8 @@ The architecture and compatibility goals are in
 - Keep SQLite schema 2 and existing user-probe details.
 - Reuse standalone receipts, cancellation and independent cleanup/retry rules.
   `rust-test-uprobe` selects nine unchanged scripts and native recovery with
-  SQLite; include them in the full gate. Immediate lifetime contracts run in the
-  serial global stages with retained external-descriptor controls.
+  SQLite; include them in the full gate. Immediate lifetime contracts run in
+  isolated case processes with retained external-descriptor controls.
 
 - SQLite retains schema 2 and the existing container_pid field.
   Three unchanged container traffic/persistence/PID-namespace scripts join the
@@ -591,7 +595,7 @@ The architecture and compatibility goals are in
   link function names against stored load targets.
 - `rust-test-function-tracing` runs six unchanged acceptance files plus native
   vmlinux/module traffic and recovery contracts with SQLite. Keep immediate
-  lifetime tests in the serial global stages. Retain generic real-store and
+  lifetime tests in isolated case processes. Retain generic real-store and
   stateful-fake failure/cancellation/consuming retry coverage.
 
 
@@ -610,7 +614,7 @@ The architecture and compatibility goals are in
 - `rust-test-lsm` selects the two unchanged LSM scripts and native execution,
   cancellation, compensation and reopened-retry contracts. Require active `bpf`
   in `/sys/kernel/security/lsm` for native coverage. Immediate lifetime controls
-  belong in the serial global stage; fake-kernel coverage still uses real SQLite.
+  run in isolated case processes; fake-kernel coverage still uses real SQLite.
   Preserve script labels/assertions and verify Go comparison separately.
 
 

@@ -6094,3 +6094,142 @@ native suite takes 69.66 seconds: 41.05 seconds corpus, 5.68 seconds serial
 SQLite lifetime contracts, 22.54 seconds parallel SQLite contracts and 0.35
 seconds Go comparison. Gate log: `/tmp/bpfman-link-check-complete.log`.
 Remote-image and forced-image lanes were not rerun for this presentation slice.
+
+
+## Attached-unload serial-test reassessment (18 October 2026)
+
+Moving `sqlite_attached_unload_failures_and_cancellation` into the serial stage
+preserved its assertions, but moved the entire failure/cancellation contract out
+of concurrent execution to protect its final immediate program-ID assertion. A
+serial pass alone did not establish the cause. The follow-up investigation ran
+the unchanged lifetime test five times alone (five passes), alongside
+`sqlite_cli_effect_boundaries` in one process (four passes, one failure), and
+concurrently in separate processes (five passing pairs). These bounded runs
+established a reproducer, rather than proving absence of other lifecycle bugs.
+
+Temporary test-only diagnostics and syscall tracing then captured the actual
+retaining process on Linux 6.18.54. In
+`/tmp/bpfman-lifetime-holder-stack/attempt-21/`, the lifetime fixture owned program
+1714826 and managed link 2 (kernel link 799793). Its thread 3698481 opened a live
+link descriptor, FD 12, at timestamp 1792337591.047061. The concurrent CLI thread
+3698482 cloned child 3698507 at .047224 while that descriptor was live. The
+lifetime thread unlinked the pin and closed FD 12 at .047462; close returned in
+four microseconds because the child still held a copy. Its program-ID query at
+.056932 succeeded, triggering the unchanged immediate-absence assertion.
+
+At that failure, child 3698507 was executing `timeout` for the other fixture's
+program 1714831. Its captured kernel stack was:
+
+```text
+__wait_rcu_gp
+synchronize_rcu_tasks_generic
+perf_event_detach_bpf_prog
+bpf_perf_link_release
+bpf_link_free
+bpf_link_release
+__fput
+task_work_run
+ptrace_notify
+bprm_execve
+```
+
+The child's successful execve began at .047502 and took 65.308 milliseconds.
+CLOEXEC removed the inherited descriptor during exec, but its final release was
+still waiting for the tracepoint grace period. This explains why an initial
+`/proc/*/fdinfo` scan found no open holder: a descriptor can already be absent
+from the table while its kernel file release is still running. The child's
+captured stack, descriptor-copy interval and successful program query identify
+the specific interference, rather than merely a possible fork mechanism.
+The kernel removes the link ID before invoking the release callback, so link
+ENOENT does not establish completion of that callback or program reclamation;
+see Linux 6.18.54's
+[`bpf_link_free`](https://github.com/gregkh/linux/blob/v6.18.54/kernel/bpf/syscall.c).
+
+Go does not establish the same immediate-reclamation contract in the compared
+checks. Its native tracepoint lifecycle checks managed inventory and Get failure
+at the end of `e2e/e2e_test.go`. The unchanged shared
+`TestTracepoint_UnloadAttached.bpfman` explicitly polls program and map absence
+for up to two seconds at 50-millisecond intervals after unloading. Its shell
+runner also starts a separate `bpfman-shell` process for each script. These are
+observable test-contract and process-layout differences, not evidence of a
+language-specific exemption from descriptor inheritance. No Go sources, scripts
+or assertions were changed during the investigation.
+
+The reproduced failure is explained by another fixture's inherited reference,
+not an owned descriptor left in the unloading thread. A strict immediate-lifetime
+control needs the no-external-holder premise. Serial execution supplies that
+premise, but serializing the whole failure/cancellation contract is coarse. The
+preferred follow-up is to retain concurrent lifecycle coverage with separate
+fixture processes, or isolate only the strict lifetime control. This investigation
+does not implement that harness redesign or weaken an absence assertion.
+Temporary diagnostics are removed; raw traces, focused Make recipes and logs
+remain under `/tmp/bpfman-lifetime-holder*` and
+`/tmp/bpfman-link-lifetime-reassess*` for local review. The reproduced stack run
+completed owned-fixture cleanup successfully.
+
+After restoring the uninstrumented test source, `direnv exec . make rust-check`
+exited zero: formatting, strict Clippy, architecture laws, all userspace/store/
+fake/CLI contracts, doctests, all 75 discovered kernel functions, owned-fixture
+cleanup and warnings-denied Rustdoc passed. The complete kernel stages took
+67.24 seconds with the existing optimized `aya-obj` profile. Gate log:
+`/tmp/bpfman-lifetime-investigation-check.log`. The only retained change from
+this investigation is this documentation record; the committed scheduling
+change remains in place pending a separately scoped harness correction.
+
+
+## Native kernel process isolation (18 October 2026)
+
+The complete native runner now executes every exact libtest case in a fresh
+process. Its controller and fixed worker shells own only scheduling/logging
+resources and never acquire BPF descriptors. Independent lifecycle tests,
+including attached-unload failure/cancellation and the previously serial native
+probe/TCX/tracing/LSM lifetime controls, return to the parallel pool. This removes
+unrelated fixture descriptor inheritance while retaining concurrent execution.
+The existing `BPFMAN_KERNEL_TEST_THREADS` environment knob bounds the process
+pool to one, two, four or eight workers. Round-robin queues give each worker a
+bounded sequence of independent case processes; nested forwarding concurrency
+keeps its existing bound.
+
+Only the XDP load/global program-inventory case remains in the serial native
+stage: its enumeration opens foreign programs by ID, an interaction that process
+isolation cannot prevent. Acceptance batches and the Go comparison also retain
+their existing suite-lock serialization. Backend/stage order is unchanged.
+Every discovered case must execute exactly once. A successful child must report
+one passing test; empty and ignored selections fail, as do ordinary failures,
+crashes and missing worker results. All workers in a stage are joined before
+failure propagates or the next stage begins. Per-case logs are printed with
+actual case PIDs and statuses. Signal handling terminates worker process groups,
+reaps their case processes and joins workers before deleting runner-owned files.
+
+This changes test isolation, not lifecycle expectations. No native test bodies,
+immediate absence checks, fault/cancellation/retry sequences, explicit external
+holder controls, capture windows, or production teardown code are changed. No
+Go source, tests, acceptance scripts or labels change. Within-fixture threads and
+explicit real-store concurrency contracts remain in place. The no-external-holder
+premise of immediate lifetime checks is established by process boundaries rather
+than depending on scheduling between unrelated fixture threads.
+
+The rootless runner contracts cover complete exact selection and unique case
+PIDs at every worker limit, actual concurrent execution through a handshake,
+separate handle ownership, failure/crash/empty/ignored-result propagation,
+completion of the current stage before failure, admission errors, and signal
+termination/reaping. They run in the normal userspace gate before kernel tests.
+
+Validation: the previously failing lifetime/CLI pair passed ten repetitions
+through the new runner with two workers, using the unchanged real native test
+functions. Each pair reports two distinct case PIDs, exactly two passes and
+successful owned-fixture cleanup; logs are in `/tmp/bpfman-isolation-pair/`.
+`direnv exec . make rust-check` exits zero. Formatting, strict Clippy, unchanged
+architecture laws, all userspace/store/fake/CLI contracts and doctests, complete
+native acceptance and warnings-denied Rustdoc pass. The complete runner reports
+75 discovered and selected cases, 75 distinct case PIDs, no duplicate case names
+and no failed statuses. All native lifecycle source files and existing acceptance
+scripts remain unchanged. The scheduling contracts and ShellCheck also pass.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the complete
+kernel stages take 66.37 seconds: corpus 39.44 seconds, global inventory 0.28,
+63 isolated native cases on eight workers 26.26, and Go comparison 0.36. The
+previous restored gate took 67.24 seconds with threaded/serial lifetime stages;
+these are local samples, not a controlled benchmark. Gate log:
+`/tmp/bpfman-process-isolation-check.log`. Remote-image and forced-image lanes
+were not rerun for this runner-only change.

@@ -17,7 +17,7 @@ run `make rust-fmt-fix`. `make rust-lock` refreshes the new lockfile.
 Development conventions live in [AGENTS.md](AGENTS.md).
 
 `rust-test` runs all userspace unit, integration, and documentation tests before
-the serial real-kernel binary. `make rust-test-userspace` selects that first stage,
+the process-isolated real-kernel suite. `make rust-test-userspace` selects that first stage,
 including the shared fake-kernel lifecycle tests. CLI integration targets are
 discovered automatically, so newly added contracts join the normal gate.
 
@@ -445,8 +445,8 @@ CLI and unchanged DSL tests inspect returned JSON and runtime artifacts, with no
 database queries. `make rust-test` and `make rust-check` build the fixtures and
 run all kernel and unchanged DSL tests as part of the normal gate. Cargo's runner
 uses passwordless `sudo -n` to execute the kernel test binary in a private mount
-namespace. Complete gates run independent contracts on eight workers within each
-backend; global inventory, corpus and Go stages remain serial. Other test binaries
+namespace. Complete gates run independent contracts in fresh processes on eight
+workers within each backend; global inventory, corpus and Go stages remain serial. Other test binaries
 run as the invoking user. Missing privileges fail the gate. The focused kernel
 and observation targets select
 subsets of the same suite. The harness and executable-selection tests are Rust
@@ -1763,15 +1763,15 @@ Opt-in TSV records contain `kernel-timing`, test name, elapsed seconds and
 not control concurrency. `kernel-test-start` adds process ID, test name and
 monotonic seconds since that process's timing origin; `kernel-test-end` adds
 the same fields and outcome. Pair by process ID and test name to reconstruct
-worker occupancy and the elapsed interval, including teardown. Each backend
-invocation has its own clock origin. Missing end records indicate an incomplete
+worker occupancy and the elapsed interval, including teardown. Each case
+process has its own clock origin; controller stage timings supply shared wall time. Missing end records indicate an incomplete
 run; completion telemetry does not replace the runner's exit status.
 Retained TX/direct REDIRECT, DEVMAP unicast and
 broadcast contracts run independent fixtures on two synchronous scoped workers.
 Complete suites discover all kernel cases and run script acceptance separately
 from retained contracts. Corpus, legacy Go and global dispatcher-inventory checks
-remain serial. Independent retained contracts run on eight threads within each
-backend; `BPFMAN_KERNEL_TEST_THREADS=4`, `2` or `1` selects a lower limit. Backend
+remain serial. Independent retained contracts run in fresh processes on eight
+workers within each backend; `BPFMAN_KERNEL_TEST_THREADS=4`, `2` or `1` selects a lower limit. Backend
 stages remain sequential. Forwarding uses one fixture worker when top-level tests
 are concurrent, so nesting does not multiply the eight-fixture limit. Focused
 Make targets retain their serial outer runner and two forwarding fixture workers.
@@ -1826,8 +1826,21 @@ fixture teardown. Worker and fixture phase totals can exceed whole-test wall
 time. Whole-test durations also overlap within concurrent backend stages.
 Use each libtest stage's reported elapsed time for wall-time comparisons; do not
 sum whole-test or nested worker/fixture records as elapsed time. `kernel-stage`
-reports each stage's thread limit and selected case count, and
+reports each stage's process limit and selected case count, and
 `kernel-suite-counts` verifies complete discovery/selection.
+
+Each exact native case executes in a fresh process. `BPFMAN_KERNEL_TEST_THREADS`
+retains its name and now bounds the case-process pool (default eight; one, two
+and four are also supported). Every result includes its actual process ID and
+must report exactly one passing test: zero-match, ignored, failed and crashed
+cases fail the gate. All workers in the current stage finish before failure
+propagates; later stages do not start after failure. Signals terminate worker
+process groups and join the workers before runner-file cleanup. Acceptance
+batches and the global XDP program-inventory case remain serial. Lifecycle
+failure/cancellation and strict lifetime controls run concurrently with separate
+descriptor tables. Existing within-fixture concurrency and intentional external
+holders are unchanged. See the
+[process-isolation checkpoint](../docs/design/rust-reimplementation.md#native-kernel-process-isolation-18-october-2026).
 
 The contention/isolation checkpoint's complete timed `rust-check lint-make`
 gate passed all 96 kernel tests in 540.19 s (9m00s), versus 782.36 s (13m02s)
@@ -2305,12 +2318,14 @@ another fixture's program FD. The contract now requires immediate absence of its
 own ID, preserving independent fixture lifetimes. Go passes the same eight TCX
 scripts with SQLite; Go sources remain unchanged.
 
-Immediate native lifetime controls run in the existing serial stage, separately
-from concurrently spawning contracts. A pipe-synchronized fork/exec experiment
-confirmed that CLOEXEC descriptors still keep programs alive in a child before
-exec; the Rust trace shows subprocesses copying the descriptor table. Isolation
-establishes the absence of unrelated inherited holders while retaining every
-immediate assertion and parallelizing ordinary contracts. Production teardown
+Immediate native lifetime controls run in fresh case processes in the bounded
+parallel pool. The controller and worker shells own no BPF descriptors, so a child
+of one fixture cannot inherit another fixture's handles. A pipe-synchronized
+fork/exec experiment and a captured failing child kernel stack established that
+shared-process spawning can retain an unrelated link through its CLOEXEC close.
+All immediate assertions remain unchanged; deliberate external-holder controls
+still run. Global program-enumeration checks remain serial because those observers
+can acquire foreign references across process boundaries. Production teardown
 releases owned references; it cannot revoke an external child's descriptor.
 
 The TCX checkpoint passes `direnv exec . make rust-check lint-make`: all 112
@@ -2564,7 +2579,7 @@ files with SQLite, plus native vmlinux/module traffic and recovery contracts.
 The native tests verify requested-target override, missing-target and publication
 failure cleanup, cancellation, pin identity refusal, duplicate compensation,
 reopened record-only retries and external descriptor lifetime controls. Immediate
-lifetime contracts run in the serial global stages of the full gate.
+lifetime contracts run in isolated case processes in the full gate.
 
 
 ## Native LSM hooks
@@ -2612,6 +2627,6 @@ cover atomic detail publication and malformed/mismatched hook records.
 
 BPF LSM must be active in `/sys/kernel/security/lsm`; merely compiling the kernel
 with BPF LSM support is insufficient. The native test requires it and joins the
-serial global stage of `rust-check`, keeping immediate lifetime controls separate
+isolated case processes of `rust-check`, keeping their descriptor tables separate
 from concurrently spawning fixtures. Existing script assertions and labels remain
 unchanged. OCI loading and other attachment families remain separate work.

@@ -1,9 +1,8 @@
 #!/bin/sh
-# Complete suites discover every libtest case before running backend stages.
+# Discover every case and run exact cases in independent, bounded processes.
 # Focused Cargo invocations continue to use the ordinary runner directly.
 set -eu
 
-# Linux uptime is monotonic and avoids clock-adjustment errors in stage totals.
 elapsed() {
     read -r ended _ignored < /proc/uptime
     awk -v begin="$1" -v end="$ended" 'BEGIN { printf "%.2f", end - begin }'
@@ -13,27 +12,53 @@ read -r suite_started _ignored < /proc/uptime
 binary=${1:?Kernel test binary required}
 shift
 [ "$#" -eq 0 ] || { echo 'kernel suites do not accept additional filters' >&2; exit 1; }
-# Independent contracts own private runtimes and fixture identities. Global
-# inventories and immediate lifetime controls run separately: concurrent subprocess
-# fork/exec can temporarily inherit another thread's CLOEXEC BPF descriptors.
-# Backend boundaries remain serial at every thread limit.
-threads=${BPFMAN_KERNEL_TEST_THREADS:-8}
-case "$threads" in 1|2|4|8) ;; *) echo 'kernel test threads must be 1, 2, 4 or 8' >&2; exit 1 ;; esac
-export BPFMAN_KERNEL_TEST_THREADS="$threads"
+# Keep the existing environment knob: it now bounds processes, rather than
+# libtest threads. Nested forwarding workers use this same limit as before.
+workers=${BPFMAN_KERNEL_TEST_THREADS:-8}
+case "$workers" in 1|2|4|8) ;; *) echo 'kernel test workers must be 1, 2, 4 or 8' >&2; exit 1 ;; esac
+export BPFMAN_KERNEL_TEST_THREADS="$workers"
 mode=${BPFMAN_KERNEL_SUITE:-all}
 case "$mode" in all|contracts) ;; *) echo 'unknown kernel suite' >&2; exit 1 ;; esac
 
-listing=$(mktemp)
-trap 'rm -f "$listing"' EXIT HUP INT TERM
+scratch=$(mktemp -d)
+pids=
+# Workers are direct children in separate process groups. Always join all of
+# them, including after a failed case or a signal, before removing runner logs.
+# shellcheck disable=SC2329
+finish() {
+    status=$?
+    trap - EXIT
+    trap '' HUP INT TERM
+    if [ -n "$pids" ]; then
+        for pid in $pids; do
+            kill -s TERM "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        done
+        for pid in $pids; do wait "$pid" || true; done
+    fi
+    rm -rf "$scratch"
+    exit "$status"
+}
+trap finish EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+listing="$scratch/list"
 "$binary" --list --format terse > "$listing"
 discovered=0
 while IFS= read -r line; do
     case "$line" in
-        sqlite_*': test'|go_*': test') discovered=$((discovered + 1)) ;;
+        sqlite_*': test'|go_*': test') ;;
         *) echo "unclassified kernel test: $line" >&2; exit 1 ;;
     esac
+    name=${line%': test'}
+    case "$name" in *[!a-zA-Z0-9_:]*) echo "invalid kernel test name: $name" >&2; exit 1 ;; esac
+    discovered=$((discovered + 1))
 done < "$listing"
 [ "$discovered" -gt 0 ] || { echo 'empty kernel test suite' >&2; exit 1; }
+if [ -n "$(sort "$listing" | uniq -d)" ]; then
+    echo 'duplicate kernel test name' >&2
+    exit 1
+fi
 
 selected=0
 for stage in corpus sqlite-global sqlite go; do
@@ -44,20 +69,52 @@ for stage in corpus sqlite-global sqlite go; do
         case "$stage:$name" in
             corpus:*_script_corpus) set -- "$@" "$name" ;;
             *:*_script_corpus) ;;
-            sqlite-global:sqlite_attached_unload_failures_and_cancellation|sqlite-global:sqlite_lsm_native_link_recovery|sqlite-global:sqlite_function_tracing_native_link_recovery|sqlite-global:sqlite_uprobe_native_link_recovery|sqlite-global:sqlite_map_sharing_native_recovery|sqlite-global:sqlite_kprobe_native_link_recovery|sqlite-global:sqlite_xdp_load_lifecycle|sqlite-global:sqlite_tcx_native_link_recovery) set -- "$@" "$name" ;;
-            *:sqlite_attached_unload_failures_and_cancellation|*:sqlite_lsm_native_link_recovery|*:sqlite_function_tracing_native_link_recovery|*:sqlite_uprobe_native_link_recovery|*:sqlite_map_sharing_native_recovery|*:sqlite_kprobe_native_link_recovery|*:sqlite_xdp_load_lifecycle|*:sqlite_tcx_native_link_recovery) ;;
+            # This case enumerates all programs, temporarily opening foreign
+            # program FDs even across process boundaries. Keep it serial.
+            sqlite-global:sqlite_xdp_load_lifecycle) set -- "$@" "$name" ;;
+            *:sqlite_xdp_load_lifecycle) ;;
             sqlite:sqlite_*|go:go_*) set -- "$@" "$name" ;;
         esac
     done < "$listing"
     [ "$#" -gt 0 ] || continue
     selected=$((selected + $#))
-    stage_threads=$threads
-    case "$stage" in corpus|go|*-global) stage_threads=1 ;; esac
-    printf 'kernel-stage\t%s\tthreads=%s\ttests=%s\n' "$stage" "$stage_threads" "$#"
-    # Exact filters avoid accidental substring overlap, and each stage is joined
-    # before the next begins. The Go script runners require exclusive suite locks.
+    stage_workers=$workers
+    case "$stage" in corpus|go|*-global) stage_workers=1 ;; esac
+    if [ "$stage_workers" -gt "$#" ]; then stage_workers=$#; fi
+    printf 'kernel-stage\t%s\tprocesses=%s\ttests=%s\n' "$stage" "$stage_workers" "$#"
     read -r stage_started _ignored < /proc/uptime
-    "$binary" --exact --test-threads="$stage_threads" "$@"
+
+    # Round-robin queues bound concurrency without a controller that ever owns
+    # BPF resources. Workers wait for one case to exit before starting the next.
+    for worker in $(seq 1 "$stage_workers"); do : > "$scratch/queue-$worker"; done
+    worker=1
+    for name do
+        printf '%s\n' "$name" >> "$scratch/queue-$worker"
+        worker=$((worker % stage_workers + 1))
+    done
+    for worker in $(seq 1 "$stage_workers"); do
+        setsid sh "${0%/*}/test-kernel-worker.sh" "$binary" "$scratch" "$scratch/queue-$worker" &
+        pids="${pids:+$pids }$!"
+    done
+    failed=0
+    for pid in $pids; do
+        if ! wait "$pid"; then failed=1; fi
+        pids=${pids#"$pid"}
+        pids=${pids# }
+    done
+    pids=
+    for name do
+        if [ -f "$scratch/$name.result" ]; then
+            read -r status pid < "$scratch/$name.result"
+            printf 'kernel-case\t%s\tpid=%s\tstatus=%s\n' "$name" "$pid" "$status"
+            if [ "$status" -ne 0 ]; then failed=1; fi
+        else
+            printf 'kernel case produced no result: %s\n' "$name" >&2
+            failed=1
+        fi
+        if [ -f "$scratch/$name.log" ]; then cat "$scratch/$name.log"; fi
+    done
+    [ "$failed" -eq 0 ] || exit 1
     printf 'kernel-stage-timing\t%s\t%s\n' "$stage" "$(elapsed "$stage_started")"
 done
 if [ "$mode" = all ] && [ "$selected" -ne "$discovered" ]; then
