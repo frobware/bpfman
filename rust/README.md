@@ -488,7 +488,13 @@ Concurrent first starts recheck absence under the writer lock. SQLite uses WAL.
 
 Effectful crates emit `tracing` spans; the CLI owns collection. Set `RUST_LOG` to
 enable structured JSON events on stderr. Command output remains on stdout.
-Telemetry is disabled by default. Filters can select a crate or individual module:
+Ordinary CLI logging defaults to warning level. `--log` / `BPFMAN_LOG` accepts
+Go's base/component specifications, including `warning` and `err` aliases;
+`manager`, `store`, `kernel`, `fs`, `setup`, `lock` and `image` select the
+corresponding Rust targets. The explicit CLI setting overrides the environment,
+and either takes precedence over the Rust-specific `RUST_LOG` extension.
+Configuration selects text or JSON logging. `RUST_LOG` retains structured JSON
+output and can select a crate or individual module:
 
 ```sh
 RUST_LOG=bpfman_runtime=debug,bpfman_store_sqlite=debug,bpfman_fs=trace,bpfman_lock=trace \
@@ -526,6 +532,31 @@ managed records without kernel observation (with access to the runtime files):
 rust/target/debug/bpfman --runtime-dir /run/bpfman program list
 rust/target/debug/bpfman program list -q --type xdp,tcx --application demo
 ```
+
+Every non-server Go command and its documented flags have Rust entry points.
+The hidden `get program ID` and `get link ID` aliases dispatch through the same
+operations as `program get` and `link get`. Bare program/link/dispatcher commands
+list; `program load PATH` defaults to file loading. `version` prints build
+metadata without opening runtime state, caches or BPF objects, and reports the
+Rust compiler truthfully. Make stamps the same version, commit, branch, state,
+date and optional image-attestation inputs used for Go; direct Cargo builds
+without these inputs print `(devel)` and leave unstamped fields empty.
+
+Configuration is read and validated for all tool commands, including `version`
+and image tools. An absent implicit default is optional; an explicitly selected
+missing, unreadable or invalid file fails before runtime creation. Process tests
+select an empty configuration fixture rather than depending on host settings.
+`serve` and the operator `--csi-support` startup form are deferred until gRPC is
+implemented, as explicitly agreed for this CLI pass.
+
+`tests/cli_compatibility.rs` discovers Go's visible command leaves and compares
+every command's long/short flags and aliases, with an explicit inventory of
+hidden commands. The shared `TestCLI_Compatibility` script covers actual
+dispatch, load/default/alias behavior, option normalization, repeated scalar and
+boolean values, maximum usable priorities, reopened TCX ranking, and teardown
+against both binaries. This command-surface coverage does not claim identical
+Clap/Kong help or malformed-input diagnostics, or complete kernel capability
+parity: the map-of-maps and other capability boundaries below still apply.
 
 The runtime defaults to `/run/bpfman` and accepts `BPFMAN_RUNTIME_DIR`.
 Clap constructs a validated `RuntimeLayout` from the native OS path. The layout
@@ -658,7 +689,7 @@ remains; shared-name pins survive while any recorded user remains.
 
 `program load file PATH` and `program load image IMAGE` parse typed requests,
 including repeated/comma-separated `--programs`, metadata, globals, application,
-nonzero map-owner IDs, text/JSON output requests, and image-specific pull/auth
+map-owner IDs, text/JSON output requests, and image-specific pull/auth
 options. Fentry/fexit/LSM variants carry required load-time targets. Invalid input
 exits with status 2. Local tracepoint, XDP, TC, TCX, kprobe, kretprobe, uprobe, uretprobe, fentry, fexit and LSM batches
 with private or shared maps and
@@ -668,8 +699,25 @@ registry/cache admission, including the configured signing policy.
 Explicit map owners and ordinary PinByName maps are supported. PinByName
 map-of-maps definitions and section/type mismatches are rejected
 before runtime setup. Credentials are not echoed in auth diagnostics or help.
-Unlike Go, this parser requires the explicit file/image verb and rejects duplicate
-ELF selections, extraneous load-time targets, and zero map-owner IDs.
+File is also the implicit source. Repeated ELF selections load independent
+instances, including different compatible types of the same ELF entry. A zero
+map-owner ID selects private maps. An unused third program-spec component is
+ignored for non-tracing families, following Go. Managed IDs remain decimal;
+numeric options such as priorities, offsets and namespace/interface keys accept
+Go's radix prefixes and separators. Enum/action/pull-policy options preserve
+Go's case and whitespace normalization, and network attachment accepts `-n`.
+Unload/detach treat zero operands as missing IDs, including with
+`--ignore-missing`; mixed and all-zero batches retain one cancellable writer
+scope while domain identities remain nonzero. Scalar options use their last occurrence. Go boolean spellings
+(`TRUE`, `False`, `yes`, `NO`, `1`, `0`) are accepted. Lock timeouts use Go duration
+units and fractional/sign syntax, including both microsecond symbols; nonpositive
+values wait indefinitely. Boolean flags accept explicit
+`=true`/`=false`; value-based conflicts are checked before configuration or I/O.
+Go's persisted usable member-priority range ends at `2147483647`; larger values
+pass its CLI validation but overflow its SQLite readers and break cleanup.
+Rust retains the working range and rejects larger values before effects.
+TCX attach output preserves Go's initial zero position; subsequent get/list
+derive the final managed rank without changing stored intent.
 
 The unchanged `e2e/scripts/TestTracepoint_LoadAndGet.bpfman`,
 `TestTracepoint_LinkRoundTrip.bpfman`, `TestTracepoint_UnloadAttached.bpfman`,

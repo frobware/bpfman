@@ -282,25 +282,27 @@ pub(super) fn validate_selection(object: &Object, spec: &ProgramSpec) -> Result<
             ProgramSection::KProbe | ProgramSection::KRetProbe,
         ) => Ok(()),
         (ProgramSpec::Kprobe(_) | ProgramSpec::Kretprobe(_), _) => Err(LoadCause::Invalid(
-            "kernel probe selection requires a kprobe or kretprobe section".into(),
+            "program type mismatch: kernel probe selection requires a kprobe or kretprobe section"
+                .into(),
         )),
         (
             ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_),
             ProgramSection::UProbe { .. } | ProgramSection::URetProbe { .. },
         ) => Ok(()),
         (ProgramSpec::Uprobe(_) | ProgramSpec::Uretprobe(_), _) => Err(LoadCause::Invalid(
-            "user probe selection requires a uprobe or uretprobe section".into(),
+            "program type mismatch: user probe selection requires a uprobe or uretprobe section"
+                .into(),
         )),
         (ProgramSpec::Tracepoint(_), ProgramSection::TracePoint) => Ok(()),
         (ProgramSpec::Xdp(_), section @ ProgramSection::Xdp { .. }) => {
             XdpRole::from_section(section).map(|_| ())
         }
         (ProgramSpec::Tracepoint(_), _) => Err(LoadCause::Invalid(
-            "selected ELF program is not a tracepoint".into(),
+            "program type mismatch: selected ELF program is not a tracepoint".into(),
         )),
-        (ProgramSpec::Xdp(_), _) => {
-            Err(LoadCause::Invalid("selected ELF program is not XDP".into()))
-        }
+        (ProgramSpec::Xdp(_), _) => Err(LoadCause::Invalid(
+            "program type mismatch: selected ELF program is not XDP".into(),
+        )),
     }
 }
 
@@ -393,7 +395,9 @@ impl XdpRole {
                 attach_type: XdpAttachType::CpuMap,
                 ..
             } => Err(LoadCause::Unsupported("CPUMAP XDP")),
-            _ => Err(LoadCause::Invalid("selected ELF program is not XDP".into())),
+            _ => Err(LoadCause::Invalid(
+                "program type mismatch: selected ELF program is not XDP".into(),
+            )),
         }
     }
 }

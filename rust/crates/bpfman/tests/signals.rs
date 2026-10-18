@@ -25,12 +25,14 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
         for operands in [
             None,
             Some(&["program", "unload", "42"][..]),
+            Some(&["program", "unload", "0", "--ignore-missing"][..]),
             Some(&["program", "unload", "42", "43", "--ignore-missing"][..]),
             Some(&["program", "delete", "42", "43", "-r"][..]),
             Some(&["program", "delete", "--all"][..]),
             Some(&["dispatcher", "delete", "xdp", "1", "7"][..]),
             Some(&["link", "delete", "42", "43", "-r"][..]),
             Some(&["link", "detach", "42"][..]),
+            Some(&["link", "detach", "0", "--ignore-missing"][..]),
             Some(&["link", "detach", "42", "43", "--ignore-missing"][..]),
         ] {
             let existing = operands.is_some();
@@ -39,6 +41,10 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
             let trace = temp.path().join("trace.json");
             if existing {
                 let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                    .env(
+                        "BPFMAN_CONFIG",
+                        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                    )
                     .arg("--runtime-dir")
                     .arg(layout.root())
                     .args(["program", "list", "-q"])
@@ -61,6 +67,10 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
                     },
                     |_| {
                         let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+                        command.env(
+                            "BPFMAN_CONFIG",
+                            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                        );
                         command
                             .arg("--runtime-dir")
                             .arg(layout.root())
@@ -72,6 +82,9 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
                             .stderr(Stdio::piped());
                         if let Some(operands) = operands {
                             command.args(operands);
+                            if operands.contains(&"0") {
+                                command.arg("--lock-timeout=-1s");
+                            }
                         } else {
                             command.args(["program", "list", "-q"]);
                         }

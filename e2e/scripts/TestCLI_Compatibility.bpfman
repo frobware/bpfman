@@ -1,0 +1,104 @@
+# -*- mode: bpfman -*-
+# Public entry points, default file loading and Go's accepted option vocabulary.
+
+import ../lib.bpfman
+
+guard version <- exec bpfman version --log warn
+foreach field in ["Version:" "Git commit:" "Git branch:" "Git state:" "Build date:" "Platform:"] {
+    assert contains $version.stdout $field
+}
+assert $version.stderr == ""
+
+guard missingProgram <- exec bpfman program unload 0 4294967295 --ignore-missing --log warn
+assert $missingProgram.stdout == ""
+assert $missingProgram.stderr == ""
+guard missingLink <- exec bpfman link detach 0 2147483647 --ignore-missing --log warn
+assert $missingLink.stdout == ""
+assert $missingLink.stderr == ""
+
+# Each occurrence is a distinct load, even when its ELF selection repeats.
+# Zero map-owner selects private maps; an unused target component is ignored.
+guard raw <- exec bpfman program load " testdata/bpf/tracepoint_counter.bpf.o " --programs tracepoint:tracepoint_kill_recorder:ignored --programs tracepoint:tracepoint_kill_recorder --map-owner-id 0 -m owner=old -m owner=acme -m bpfman.io/application=old -a cli-parity -o json
+let batch = $raw.stdout |> jq fromjson
+assert ($batch.programs |> jq length) == 2
+let first = $batch.programs[0].record.program_id
+let second = $batch.programs[1].record.program_id
+assert $first != $second
+defer bpfman program unload $first $second --ignore-missing=1
+foreach prog in $batch.programs {
+    let pid = $prog.record.program_id
+    assert ($prog.record.meta.metadata |> jq ".owner") == acme
+    assert ($prog.record.meta.metadata |> jq '."bpfman.io/application"') == cli-parity
+    assert $prog.record.handles.map_owner_id == null
+    guard canonical <- exec bpfman program get $pid -o json
+    guard alias <- exec bpfman get program " ${pid} " --output text --output json
+    assert ($canonical.stdout |> jq "fromjson | .record | tojson") == ($alias.stdout |> jq "fromjson | .record | tojson")
+    guard canonicalText <- exec bpfman program get $pid
+    guard aliasText <- exec bpfman get program $pid -o text
+    assert $canonicalText.stdout == $aliasText.stdout
+}
+
+guard link <- bpfman link attach tracepoint $first syscalls/sys_enter_kill
+defer bpfman link detach $link --ignore-missing
+guard canonical <- exec bpfman link get $link.record.id -o json
+guard alias <- exec bpfman get link $link.record.id --output json
+assert $canonical.stdout == $alias.stdout
+guard canonicalText <- exec bpfman link get $link.record.id
+guard aliasText <- exec bpfman get link $link.record.id -o text
+assert $canonicalText.stdout == $aliasText.stdout
+
+guard kinds <- bpfman link list --quiet=0 --kind " TRACEPOINT " --program-type " TRACEPOINT " --application cli-parity -m owner=acme
+assert ($kinds.links |> jq length) == 1
+guard absentOwner <- bpfman link list --program-id 0
+assert ($absentOwner.links |> jq length) == 0
+
+guard filtered <- bpfman program list --quiet=0 --all=FALSE --attached=no --unattached=No --application cli-parity
+assert ($filtered.programs |> jq length) == 2
+
+# Short namespace flags and normalized enum/action names are public Go inputs.
+guard pair <- net netns-veth-pair
+defer net release $pair
+let netns = "/var/run/netns/${pair.a.ns}"
+guard loaded <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+defer bpfman program unload $loaded.programs[0]
+guard xdp <- bpfman link attach xdp $loaded.programs[0] $pair.a.link -n $netns -p 0 --proceed-on " PASS , DISPATCHER_RETURN "
+defer bpfman link detach $xdp
+guard xdpHigh <- bpfman link attach xdp $loaded.programs[0] $pair.a.link -n $netns -p 0x7fffffff
+defer bpfman link detach $xdpHigh
+assert $xdpHigh.record.details.priority == 2147483647
+assert $xdpHigh.record.details.position == 1
+guard tcPrograms <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats,tcx:stats,tcx:stats
+defer bpfman program unload $tcPrograms.programs[0] $tcPrograms.programs[1] $tcPrograms.programs[2]
+guard tc <- bpfman link attach tc $tcPrograms.programs[0] $pair.a.link " INGRESS " -n $netns -p 0 --proceed-on " PIPE , DISPATCHER_RETURN "
+defer bpfman link detach $tc
+guard tcHigh <- bpfman link attach tc $tcPrograms.programs[0] $pair.a.link ingress -n $netns -p 0x7fffffff
+defer bpfman link detach $tcHigh
+assert $tcHigh.record.details.priority == 2147483647
+assert $tcHigh.record.details.position == 1
+guard tcx <- bpfman link attach tcx $tcPrograms.programs[1] $pair.a.link " EGRESS " -n $netns -p 0
+defer bpfman link detach $tcx
+guard tcxHigh <- bpfman link attach tcx $tcPrograms.programs[2] $pair.a.link egress -n $netns -p 0x7fffffff
+defer bpfman link detach $tcxHigh
+assert $tcxHigh.record.details.priority == 2147483647
+# Go's attach response has the initial zero position; get derives final rank.
+assert $tcxHigh.record.details.position == 0
+guard refreshed <- bpfman link get $tcxHigh
+assert $refreshed.record.details.position == 1
+guard dispatcherOutput <- exec bpfman dispatcher --type " TC-INGRESS " --nsid $pair.a.nsid --ifindex $pair.a.ifindex -o json
+let dispatchers = $dispatcherOutput.stdout |> jq fromjson
+assert ($dispatchers.dispatchers |> jq length) == 1
+
+guard ping <- exec ip netns exec $pair.b.ns ping -c 3 -W 1 $pair.a.addr
+assert $ping.exit_code == 0
+
+# A false --all flag must permit explicit IDs; false recursion stays local.
+bpfman program delete $second --all=FALSE --recursive=0
+assert fail bpfman get program $second
+
+# Zero sentinels do not prevent later real operands from being torn down.
+guard detached <- exec bpfman link detach 0 $link.record.id --ignore-missing --log warn
+assert $detached.stdout == ""
+assert $detached.stderr == ""
+guard unloaded <- exec bpfman program unload 0 $first --ignore-missing --log warn
+assert $unloaded.stdout == ""
+assert $unloaded.stderr == ""

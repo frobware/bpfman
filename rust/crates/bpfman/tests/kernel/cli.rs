@@ -182,7 +182,9 @@ pub(super) fn effect_boundaries() {
                 vec!["link"],
                 vec!["link", "list"],
                 vec!["link", "get", &link_id],
+                vec!["get", "link", &link_id],
                 vec!["program", "get", &pid_text],
+                vec!["get", "program", &pid_text],
             ] {
                 let mut flags = vec!["--lock-timeout=1ms"];
                 flags.extend(args);
@@ -388,6 +390,21 @@ pub(super) fn corpus() {
 
 pub(super) fn program_inventory_scripts() {
     let scripts = [
+        "TestCLI_Compatibility",
+        "TestAttach_RejectsProgramKindMismatch",
+        "TestAttach_ResolvesIfaceInNetns",
+        "TestDispatcher_AttachExceedsMaxProgramsTC",
+        "TestDispatcher_MultipleInterfacesIndependentTC",
+        "TestLoad_RejectsSectionTypeMismatch",
+        "TestLoad_SurfacesVerifierLog",
+        "TestMultiProgMixed_LoadAttachDetachUnload",
+        "TestTC_DeletedNetnsDetachRemovesDispatcher",
+        "TestTC_MultiPriorityChainDefaultProceedOn",
+        "TestTC_MultiPriorityChainWithOKProceedOn",
+        "TestTC_NetnsDispatcherRebuild",
+        "TestTC_NetnsVethPairDeletedNetnsDetachRemovesDispatcher",
+        "TestTC_NetnsVethPairLinkRoundTrip",
+        "TestTC_ProceedOnUnspecEncoding",
         "TestUnload_IgnoreMissingIsIdempotent",
         "TestUnload_Batch",
         "TestDetach_IgnoreMissingIsIdempotent",

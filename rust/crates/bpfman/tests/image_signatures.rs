@@ -63,6 +63,7 @@ fn go_and_rust_verify_the_same_private_signatures_and_reject_wrong_identities() 
                     .args([
                         "image",
                         "verify",
+                        "--allow-unsigned=FALSE",
                         &server.reference,
                         "--certificate-identity",
                         identity,
@@ -115,6 +116,10 @@ fn go_and_rust_verify_the_same_private_signatures_and_reject_wrong_identities() 
 
 fn command(root: &Path, config: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+    command.env(
+        "BPFMAN_CONFIG",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+    );
     command
         .arg("--config")
         .arg(config)

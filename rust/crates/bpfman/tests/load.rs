@@ -9,6 +9,10 @@ type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn command(runtime: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+    command.env(
+        "BPFMAN_CONFIG",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+    );
     command
         .env("BPFMAN_RUNTIME_DIR", runtime)
         .env_remove("BPFMAN_LOCK_TIMEOUT")
@@ -39,14 +43,11 @@ fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
         "xdp",
         "unknown:p",
         "xdp:",
-        "xdp:p:ignored",
         "fentry:p",
         "fexit:p:",
         "lsm:p",
         "lsm:p:hook:extra",
         "xdp:p,",
-        "xdp:p,xdp:p",
-        "xdp:p,tc:p",
     ] {
         let output = command(&runtime)
             .args(["file", "not-opened.o", "--programs", spec])
@@ -57,7 +58,6 @@ fn invalid_programs_and_options_fail_before_any_runtime_effects() -> Result {
     }
 
     for options in [
-        vec!["--map-owner-id", "0"],
         vec!["--map-owner-id", "4294967296"],
         vec!["-m", "missing-equals"],
         vec!["-m", " =value"],
@@ -171,6 +171,7 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
     // Valid, invalid base64, missing separator, and empty username/password.
     for secret in [
         "dXNlcjpwYXNzOndvcmQ=",
+        "dXNl\r\ncjpwYXNzOndvcmQ=\n",
         "secret-not-base64!",
         "c2VjcmV0",
         "OnNlY3JldA==",
@@ -198,7 +199,7 @@ fn registry_credentials_are_not_echoed_in_errors_or_help() -> Result {
             }
 
             let output = process.output()?;
-            let code = if secret == "dXNlcjpwYXNzOndvcmQ=" {
+            let code = if secret.replace(['\r', '\n'], "") == "dXNlcjpwYXNzOndvcmQ=" {
                 1
             } else {
                 2
@@ -337,7 +338,7 @@ fn local_program_load_validates_source_before_runtime_creation() -> Result {
 }
 
 #[test]
-fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selections() -> Result {
+fn batch_preparation_uses_captured_elf_accepts_repeats_and_rejects_missing_selections() -> Result {
     let temporary = tempfile::tempdir()?;
     let source = temporary.path().join("source.o");
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -352,7 +353,12 @@ fn batch_preparation_uses_captured_elf_and_rejects_duplicate_or_missing_selectio
         )
     };
 
-    for extra in ["tp_a", "missing"] {
+    let _repeated = prepare()?.with_additional_programs(
+        &bpfman_kernel_aya::Kernel::default(),
+        vec![bpfman_model::ProgramSpec::Tracepoint("tp_a".try_into()?)],
+    )?;
+    {
+        let extra = "missing";
         let result = prepare()?.with_additional_programs(
             &bpfman_kernel_aya::Kernel::default(),
             vec![bpfman_model::ProgramSpec::Tracepoint(

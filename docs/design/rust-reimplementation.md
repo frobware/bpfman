@@ -2738,6 +2738,13 @@ wrong, change it here before broadening feature coverage.
   lists join owner names/application labels and get/attach expose typed
   Spec/Status sections. Dispatcher get/list supports text and JSON output,
   defaults to text, and bare `dispatcher` lists with the same key filters.
+  All non-server Go command leaves and documented flags now have Rust entry
+  points, including `version`, hidden verb-noun get aliases, implicit file
+  loads, `-n`, global logging and the accepted numeric/enum/boolean vocabulary.
+  Command/flag discovery and shared behavior are covered independently; see the
+  CLI compatibility checkpoint below for evidence and explicit boundaries.
+  `serve` and operator `--csi-support` startup are explicitly deferred until
+  after gRPC support, rather than being stubbed during this CLI pass.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -6573,3 +6580,145 @@ take 73.50 seconds: corpus 46.91, global inventory 0.23, eight-worker SQLite
 contracts 25.93 and Go compatibility 0.39. Complete gate log:
 `/tmp/bpfman-dispatcher-complete-check.log`; successful Go/Rust comparison log:
 `/tmp/bpfman-dispatcher-comparison.log`.
+
+
+## Non-server CLI compatibility checkpoint (18 October 2026)
+
+The CLI pass covers all 29 current non-server Go command leaves, including hidden
+commands, plus root global options. The user explicitly deferred `serve` and the
+operator `--csi-support` startup form until after gRPC support. These have no
+success-shaped stubs. SQLite remains implicit, generic store/runtime interfaces
+remain intact, and the database stays at schema 2.
+
+| Surface | Compatibility and evidence |
+| --- | --- |
+| Root | Go's config, log, runtime/cache directory and lock-timeout flags and environment bindings; global options accepted at every command depth; help stays Clap-owned |
+| `version` | Rootless build metadata with the same Make stamping inputs, truthful Rust compiler/platform, optional image attestation, no runtime/cache/kernel initialization |
+| `program load [file] PATH` | Implicit file source, repeated independent selections, repeated scalar options, private-map owner zero, ignored unused non-tracing target components, existing metadata/globals/application and batch text/JSON |
+| `program load image IMAGE` | Existing OCI/auth/policy lifecycle; Go's case/whitespace pull-policy vocabulary and shared selection/options |
+| `program get`, `get program` | One implementation, existing typed observations and text/JSON presentation, lock-free reads |
+| `program list`, bare `program` | Existing unmanaged/attachment/type/application/metadata/selector filters, quiet and JSON, explicit false boolean values |
+| `program unload`, hidden `program delete` | Existing ordered batches, ignore-missing/cascading/recursive/all behavior under one writer; boolean-value conflicts validated before configuration or I/O |
+| `link attach` | All nine Go attachment verbs; `-n` namespace option; normalized enum/action values; Go numeric option notation; typed mismatch diagnostics name the actual program kind |
+| `link get`, `get link` | One implementation, preserved text/JSON details and lock-free observations |
+| `link list`, bare `link` | Existing owner/kind/type/application/metadata filters and quiet/JSON behavior; normalized type/kind values |
+| `link detach`, hidden `link delete` | Existing ordered batches, ignore-missing, cascading and recursive behavior; explicit boolean values |
+| Hidden `dispatcher list/get/delete`, bare `dispatcher` | Existing snapshots/filters/text/JSON and record-only deletion; normalized type and namespace/interface numeric notation |
+| Four `image` tools | Existing build, generate-build-args, inspect and verify behavior; all Go options covered by automatic command/flag comparison |
+
+New `cli_compatibility` process contracts discover Go's visible command leaves
+from its help, explicitly inventory hidden leaves, and compare every long/short
+flag and visible alias. They also check version metadata, logging grammar and
+environment precedence, global configuration validation, and global options
+between command groups and children. The validation uses Clap's command metadata
+and value sources: explicit local parent options still conflict with a child,
+while inherited global options do not. Conditional boolean conflicts inspect
+actual values, allowing `--all=false` with explicit delete IDs and both attachment
+filters explicitly false. These argument-scope and boolean checks run before signals, configuration,
+telemetry files or runtime effects.
+
+Global `--log` / `BPFMAN_LOG` accepts Go's base/component grammar and level aliases.
+The CLI flag overrides the environment and either overrides the Rust-specific
+`RUST_LOG` extension. Component names map to Rust targets. Configuration selects
+text/JSON formatting and is validated for every tool command, including version
+and image tools. Ordinary instrumented error returns are rendered once by the
+front end; explicit telemetry retains nested error events. Existing HTTP TRACE
+redaction ceilings remain enforced across stderr and timeline sinks. Nonprivileged
+process contracts select an explicit empty configuration fixture rather than
+relying on the host's protected `/etc/bpfman` settings; Go tests are unchanged.
+
+The new shared `TestCLI_Compatibility` proves actual implicit loading, repeated
+selection identity, zero map-owner behavior, metadata/application precedence,
+get-alias text/JSON equivalence, scalar/boolean parsing, normalized filters and
+network options, maximum usable priority, TCX reopened rank and cleanup against
+both binaries. It remains parallel and uses the normal runner's fixtures.
+TCX attach output matches Go's initial zero position; subsequent get/list derive
+the final managed rank. This is an output projection, not a store mutation.
+
+An audit control established that Go accepts priorities above `2147483647` at
+argument validation but cannot scan them from SQLite's signed-32-bit detail rows;
+subsequent get/detach/unload fails. The attempted 64-bit Rust expansion was removed.
+Rust retains the usable range and refuses larger values before effects. This pass
+also preserves existing typed rejection of zero attachment/get/delete identities
+and unrepresentable kernel inputs, implementation-specific diagnostic chains, and Clap help. Therefore
+command/flag coverage is complete for the agreed non-server surface; it is not a
+claim of byte-identical parser diagnostics or every underlying kernel capability.
+Shared map-of-maps and other capability work remain separately tracked in Phase 4.
+
+The complete shared non-external corpus was selected explicitly with
+`!external,!rust-only`, without changing existing scripts or labels, and run
+through both file and image loading. Remote image acceptance uses the `external`
+selector and enables signature verification. Go's verified remote lane is serial
+because its TUF cache is shared; Rust retains parallel scheduling. An initial Go
+remote run exposed an unrelated host pass/GPG credential-helper failure. Both
+implementations subsequently use the same task-owned empty Docker/auth fixture,
+without changing operator files, remote scripts or verification policy.
+
+
+Validation: the final `direnv exec . make rust-check` exits zero. Formatting,
+strict Clippy, unchanged architecture laws, all userspace/store/fake/CLI
+contracts, doctests, all 76 native cases, owned-fixture cleanup and
+warnings-denied Rustdoc pass. Every native case runs once in a distinct process;
+independent cases remain in the eight-worker pool. The permanent shared CLI
+comparison expands from 23 to 38 scripts: the new compatibility scenario and
+14 previously unselected existing scenarios join it, producing 76 identical
+Go/Rust script passes. The broader gate's admitted and focused selections are
+preserved. The new script passes the shell checker and exact canonical formatter.
+No existing Go source, test, acceptance script, label, architecture assertion or
+parallel isolation rule is changed. `.envrc` is untouched.
+
+The full shared non-external selector passes all 143 selected scripts against
+Rust in both file and forced-image modes, with
+`BPFMAN_E2E_CLSACT_RECLAIM=true` explicitly enabling the existing capability guard.
+Both implementations also pass all ten selected external scripts with signature
+verification enabled and the same task-owned empty credential fixture. Logs:
+`/tmp/bpfman-cli-verified-rust-file.log`, `/tmp/bpfman-cli-verified-rust-image.log`,
+`/tmp/bpfman-cli-verified-remote-go.log` and
+`/tmp/bpfman-cli-verified-remote-rust.log`.
+
+Go's broader file/image runs each report 141 passes, one production-policy skip
+(the existing clsact-reclaim guard), and one residue-check failure:
+`TestTC_RejectsAttachOverForeignIngressQdisc` leaves empty ingress/egress dispatcher
+directories after the expected rejected attaches. Its script assertions complete,
+but the unchanged isolated-runtime harness correctly refuses the leftover
+artifacts. Rust passes that script, including residue checks. This Go defect is
+recorded rather than changing its implementation, weakening cleanup checks,
+relabeling the script, or claiming that the broad Go run is green. The new
+permanent shared comparison admits the other previously uncovered scripts that
+pass both implementations. Go audit logs: `/tmp/bpfman-cli-all-go.log` and
+`/tmp/bpfman-cli-go-image.log`.
+
+Final gate log: `/tmp/bpfman-cli-release-check.log`. On Linux 6.18.54 with the
+existing `aya-obj` opt-level-two override, the complete native stages take
+93.72 seconds. Earlier focused gate and corpus runs remain in
+`/tmp/bpfman-cli-rust-check.log` and `/tmp/bpfman-cli-focused-complete.log`;
+only the final gate log above is the definitive complete-gate result.
+
+
+The final boundary audit also aligns Go's zero-ID cleanup sentinel: unload and
+detach accept zero operands, report them as absent in input order, and suppress
+only those absence failures with `--ignore-missing`. Positive operands still use
+the original generic runtime batch operation under one cancellable writer scope.
+An all-zero batch also takes that scope, so ignore-missing cannot swallow lock
+admission errors or cancellation. A zero `link list --program-id` filter returns an empty result after the
+ordinary snapshot read and validation. Nonzero domain identities and all store/kernel
+interfaces remain unchanged. Shared Go/Rust acceptance covers zero-only/missing
+and zero-before-real teardown; process contracts retain every original missing-ID
+assertion while adding zero operands, and real SIGINT/SIGTERM tests cover all-zero
+lock waits.
+
+
+Scalar parsing also follows Go's decimal resource-ID grammar (no leading signs),
+base-zero numeric options, and complete boolean vocabulary. Lock timeouts use a
+small private parser for Go duration units, fractional precision and signed bounds;
+nonpositive values mean unbounded acquisition, matching Go's lock runner. This
+covers leading fractions, sub-nanosecond truncation and both microsecond symbols.
+Real all-zero lock-wait signal contracts additionally select a negative timeout.
+Differential version-command checks validate the duration grammar against Go;
+shared lifecycle checks use noncanonical boolean spellings. The unused humantime
+dependency is removed via `make rust-lock RUST_LOCK_ARGS='--offline --workspace'`;
+no other locked dependency version changes. File source paths trim surrounding
+whitespace as Go does, while native non-UTF-8 input remains preserved until the
+existing persistence boundary rejects it. Explicit registry-auth decoding accepts
+CR/LF inside base64 as Go's decoder does, without relaxing other whitespace,
+credential bounds or diagnostic redaction.

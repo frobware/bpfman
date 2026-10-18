@@ -8,7 +8,7 @@ use std::{
     process::ExitCode,
 };
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 
 mod cli;
 mod error;
@@ -16,9 +16,18 @@ mod ns_helper;
 mod output;
 mod signals;
 mod telemetry;
+mod version;
 
 fn main() -> ExitCode {
-    let cli = cli::Cli::parse();
+    let definition = cli::Cli::command();
+    let matches = definition.clone().get_matches();
+    if let Err(error) = cli::validate_scopes(&definition, &matches) {
+        error.exit();
+    }
+    let cli = cli::Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if let Err(error) = cli.validate() {
+        error.exit();
+    }
 
     if let cli::Command::NsHelper { command } = cli.command {
         return match command.execute() {
@@ -51,7 +60,15 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: cli::Cli, cancellation: &bpfman_runtime::Cancellation) -> Result<(), error::Error> {
-    let _telemetry = telemetry::init(cli.trace_file.as_deref())?;
+    let _telemetry = telemetry::init(
+        cli.trace_file.as_deref(),
+        cli.log.as_deref(),
+        cli.config.as_deref(),
+    )?;
+    if matches!(cli.command, cli::Command::Version) {
+        version::write(&mut io::stdout().lock())?;
+        return Ok(());
+    }
     let _command =
         tracing::debug_span!("cli.command", runtime = %cli.layout.root().display()).entered();
 
@@ -115,10 +132,32 @@ where
             ids,
             ignore_missing,
         } => {
-            let results = bpfman.unload_many_with_cancellation(&ids, cancellation)?;
+            // Zero is Go's absent-ID sentinel at the CLI boundary. Domain
+            // requests remain nonzero, and even an all-zero batch takes the
+            // ordinary cancellable writer scope before reporting its result.
+            let selected: Vec<_> = ids
+                .iter()
+                .copied()
+                .filter_map(std::num::NonZeroU32::new)
+                .collect();
+            let results = bpfman.unload_many_with_cancellation(&selected, cancellation)?;
+            let mut outcomes = results.iter();
             let mut failed = 0;
             let mut cancelled = false;
-            for result in &results {
+            for &id in &ids {
+                if id == 0 {
+                    if !ignore_missing {
+                        failed += 1;
+                        writeln!(
+                            io::stderr().lock(),
+                            "program 0: managed program 0 does not exist"
+                        )?;
+                    }
+                    continue;
+                }
+                let result = outcomes
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("incomplete program unload outcomes"))?;
                 match &result.outcome {
                     Ok(report) => {
                         for attempt in report.attempts() {
@@ -146,7 +185,7 @@ where
                 }
             }
             if failed != 0 {
-                return Err(error::Error::batch_unload(failed, results.len(), cancelled));
+                return Err(error::Error::batch_unload(failed, ids.len(), cancelled));
             }
         }
 

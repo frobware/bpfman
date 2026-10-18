@@ -6,11 +6,21 @@ use std::{collections::HashMap, path::Path};
 const DEFAULT_CONFIG_PATH: &str = "/etc/bpfman/bpfman.toml";
 
 #[derive(Default, Deserialize)]
-pub(super) struct Config {
+pub(crate) struct Config {
     #[serde(default)]
     interfaces: HashMap<String, InterfaceConfig>,
     #[serde(default)]
     signing: Signing,
+    #[serde(default)]
+    logging: Logging,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct Logging {
+    level: String,
+    format: String,
+    components: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -68,6 +78,10 @@ impl Default for InterfaceConfig {
 }
 
 impl Config {
+    pub(crate) fn json_logs(&self) -> bool {
+        self.logging.format.trim().eq_ignore_ascii_case("json")
+    }
+
     pub(super) fn trust(
         &self,
         policy: bpfman_image_oci::SigningPolicy,
@@ -140,7 +154,8 @@ impl Config {
         )?)
     }
 
-    pub(super) fn load(path: Option<&Path>) -> anyhow::Result<Self> {
+    pub(crate) fn load(path: Option<&Path>) -> anyhow::Result<Self> {
+        let path = path.filter(|path| !path.as_os_str().is_empty());
         let selected = path.unwrap_or(Path::new(DEFAULT_CONFIG_PATH));
         let contents = match std::fs::read_to_string(selected) {
             Ok(contents) => contents,
@@ -152,8 +167,22 @@ impl Config {
                     .with_context(|| format!("read bpfman config {}", selected.display()));
             }
         };
-        toml::from_str(&contents)
-            .with_context(|| format!("parse bpfman config {}", selected.display()))
+        let config: Self = toml::from_str(&contents)
+            .with_context(|| format!("parse bpfman config {}", selected.display()))?;
+        match config.logging.format.trim().to_ascii_lowercase().as_str() {
+            "" | "text" | "json" => {}
+            _ => anyhow::bail!("unknown log format: {:?}", config.logging.format),
+        }
+        let mut spec = config.logging.level.clone();
+        if spec.is_empty() && !config.logging.components.is_empty() {
+            spec = "info".into();
+        }
+        for (component, level) in &config.logging.components {
+            spec.push_str(&format!(",{component}={level}"));
+        }
+        crate::telemetry::validate_spec(&spec)?;
+        config.verification(None, None)?;
+        Ok(config)
     }
 
     pub(super) fn xdp_mode(&self, interface: &InterfaceName) -> anyhow::Result<XdpMode> {

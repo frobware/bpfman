@@ -12,6 +12,10 @@ use std::{
 
 fn run(root: &Path, trace: &Path, filter: &str, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env("RUST_LOG", filter)
         .env_remove("BPFMAN_RUNTIME_DIR")
         .env_remove("BPFMAN_LOCK_TIMEOUT")
@@ -202,6 +206,43 @@ fn existing_trace_destination_is_never_truncated() {
     assert_eq!(output.status.code(), Some(1));
     assert_eq!(std::fs::read(&trace).expect("existing file"), b"preserve");
     assert!(!root.exists());
+}
+
+#[test]
+fn go_log_components_and_configured_json_override_rust_log() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let config = temp.path().join("logging.toml");
+    std::fs::write(&config, "[logging]\nformat = 'json'\n").expect("config");
+    let output = run(
+        &temp.path().join("runtime"),
+        &temp.path().join("trace.json"),
+        "off",
+        &[
+            "--config",
+            config.to_str().expect("path"),
+            "--log=error,store=debug",
+            "program",
+            "list",
+            "-q",
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).expect("stderr");
+    assert!(!stderr.is_empty());
+    for line in stderr.lines() {
+        let event: Value = serde_json::from_str(line).expect("configured JSON logging");
+        assert!(
+            event["target"]
+                .as_str()
+                .expect("target")
+                .starts_with("bpfman_store_sqlite")
+        );
+    }
 }
 
 #[test]

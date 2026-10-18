@@ -10,26 +10,42 @@ use std::{
 #[derive(Args)]
 pub(crate) struct DeletePrograms {
     /// Delete these programs, ordering selected map dependants before owners.
-    #[arg(value_name = "PROGRAM_ID", required_unless_present = "all", conflicts_with = "all", num_args = 1..)]
+    #[arg(value_name = "PROGRAM_ID", num_args = 1.., value_parser = super::number::program_id)]
     ids: Vec<NonZeroU32>,
     /// Delete every managed program.
-    #[arg(long)]
+    #[arg(long, action = clap::ArgAction::Set, value_parser = super::number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     all: bool,
     /// Also delete unnamed programs sharing the target's maps.
-    #[arg(short = 'r', long)]
+    #[arg(short = 'r', long, action = clap::ArgAction::Set, value_parser = super::number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     recursive: bool,
 }
 
 #[derive(Args)]
 pub(crate) struct DeleteLinks {
-    #[arg(value_name = "LINK_ID", required = true, num_args = 1..)]
+    #[arg(value_name = "LINK_ID", required = true, num_args = 1.., value_parser = super::number::link_id)]
     pub(super) ids: Vec<NonZeroU64>,
     /// Delete shared-map dependants of a program orphaned by the detach.
-    #[arg(short = 'r', long)]
+    #[arg(short = 'r', long, action = clap::ArgAction::Set, value_parser = super::number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     pub(super) recursive: bool,
 }
 
 impl DeletePrograms {
+    pub(super) fn validate(&self) -> Result<(), clap::Error> {
+        if self.all && !self.ids.is_empty() {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                "--all and explicit program IDs are mutually exclusive",
+            ));
+        }
+        if !self.all && self.ids.is_empty() {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::MissingRequiredArgument,
+                "provide at least one program ID or use --all",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn execute<S>(
         &self,
         app: &bpfman_runtime::Bpfman<S, bpfman_kernel_aya::Kernel>,

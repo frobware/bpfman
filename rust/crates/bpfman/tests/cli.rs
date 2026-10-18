@@ -4,10 +4,17 @@ use std::process::{Command, Output};
 
 fn run(args: &[&str]) -> std::io::Result<Output> {
     Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env_remove("BPFMAN_RUNTIME_DIR")
         .env_remove("BPFMAN_LOCK_TIMEOUT")
         .env_remove("BPFMAN_STORE")
-        .env_remove("BPFMAN_CONFIG")
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .args(args)
         .output()
 }
@@ -37,14 +44,19 @@ fn invalid_flags_are_rejected_before_opening_the_database() -> Result<(), Box<dy
 fn implicit_sqlite_reopens_and_ignores_the_retired_store_environment()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
+    std::fs::write(directory.path().join("config.toml"), "")?;
     let command = || {
         let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+        command.env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        );
 
         command
             .arg("--runtime-dir")
             .arg(directory.path())
             .arg("--config")
-            .arg(directory.path().join("missing.toml"))
+            .arg(directory.path().join("config.toml"))
             .args(["program", "list", "-o", "json"])
             .env("BPFMAN_STORE", "json");
 
@@ -82,6 +94,10 @@ fn incompatible_store_is_refused_without_replacement() -> Result<(), Box<dyn std
     std::fs::write(&database, original)?;
 
     let refused = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .arg("--runtime-dir")
         .arg(directory.path())
         .args(["program", "list", "-o", "json"])
@@ -95,7 +111,7 @@ fn incompatible_store_is_refused_without_replacement() -> Result<(), Box<dyn std
 }
 
 #[test]
-fn help_describes_the_experimental_scope() -> Result<(), Box<dyn std::error::Error>> {
+fn help_describes_the_command_line_tools() -> Result<(), Box<dyn std::error::Error>> {
     let output = run(&["--help"])?;
 
     assert!(output.status.success());
@@ -103,7 +119,7 @@ fn help_describes_the_experimental_scope() -> Result<(), Box<dyn std::error::Err
     let stdout = String::from_utf8(output.stdout)?;
 
     assert!(stdout.contains("Usage: bpfman"));
-    assert!(stdout.contains("managed program listing"));
+    assert!(stdout.contains("BPF program manager"));
     assert!(stdout.contains("--lock-timeout"));
     assert!(stdout.contains("--version"));
     assert!(!stdout.contains("--store"));
@@ -117,8 +133,12 @@ fn invalid_timeout_does_not_touch_runtime() -> Result<(), Box<dyn std::error::Er
     let directory = tempfile::tempdir()?;
     let runtime = directory.path().join("absent");
 
-    for value in ["-1s", "potato"] {
+    for value in ["-bogus", "potato"] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &runtime)
             .args(["program", "list", &format!("--lock-timeout={value}")])
             .output()?;
@@ -136,6 +156,10 @@ fn conflicting_attachment_filters_do_not_create_runtime() -> Result<(), Box<dyn 
     let directory = tempfile::tempdir()?;
     let runtime = directory.path().join("absent");
     let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .arg("--runtime-dir")
         .arg(&runtime)
         .args(["program", "list", "--attached", "--unattached"])
@@ -161,6 +185,10 @@ fn malformed_metadata_selectors_do_not_create_runtime() -> Result<(), Box<dyn st
         ("-l", "app>9223372036854775808"),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(&runtime)
             .args(["program", "list", flag, value])
@@ -179,6 +207,10 @@ fn invalid_runtime_roots_fail_at_the_input_boundary() -> Result<(), Box<dyn std:
     for root in ["", "relative-runtime", "/", "/tmp/.."] {
         for via_environment in [true, false] {
             let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+            command.env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            );
             command
                 .current_dir(directory.path())
                 .env_remove("BPFMAN_RUNTIME_DIR")
@@ -238,6 +270,10 @@ fn get_rejects_bad_ids_before_runtime_creation() -> Result<(), Box<dyn std::erro
 
     for id in ["0", "-1", "4294967296", "abc"] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &runtime)
             .args(["program", "get", id, "-o", "json"])
             .output()?;
@@ -274,13 +310,11 @@ fn invalid_link_requests_fail_before_runtime_creation() -> Result<(), Box<dyn st
         vec!["attach", "tracepoint", "42", "a/b/c"],
         vec!["attach", "tracepoint", "42", "a/b", "-m", "=value"],
         vec!["attach", "xdp", "42", "lo"],
-        vec!["--program-id", "0"],
         vec!["--kind", "bogus"],
         vec!["--output", "yaml"],
         vec!["-m", "owner"],
         vec!["--quiet", "get", "42"],
         vec!["list", "--all"],
-        vec!["list", "--program-id", "0"],
         vec!["list", "--program-id", "4294967296"],
         vec!["list", "--kind", "tracing"],
         vec!["list", "--kind", "tracepoint,"],
@@ -290,6 +324,10 @@ fn invalid_link_requests_fail_before_runtime_creation() -> Result<(), Box<dyn st
         vec!["list", "--selector", "owner=acme"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &runtime)
             .arg("link")
             .args(args)
@@ -320,6 +358,10 @@ fn invalid_xdp_config_fails_before_runtime_creation() -> Result<(), Box<dyn std:
             std::fs::write(&config, contents)?;
         }
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &runtime)
             .env_remove("BPFMAN_STORE")
             .env_remove("BPFMAN_LOCK_TIMEOUT")
@@ -424,6 +466,10 @@ fn host_probe_admission_precedes_runtime_creation() -> Result<(), Box<dyn std::e
         ],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &runtime)
             .args(&args)
             .output()?;
@@ -438,6 +484,10 @@ fn host_probe_admission_precedes_runtime_creation() -> Result<(), Box<dyn std::e
     // Noncanonical zero spellings bypass Clap's literal conditional but must
     // still fail domain preparation before any store/runtime effects.
     let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env("BPFMAN_RUNTIME_DIR", &runtime)
         .args([
             "link",
@@ -462,7 +512,6 @@ fn invalid_dispatcher_requests_fail_before_runtime_creation()
     let runtime = parent.path().join("absent-runtime");
     for args in [
         vec!["--type", "bogus"],
-        vec!["list", "--type", "XDP"],
         vec!["list", "--nsid", "-1"],
         vec!["list", "--ifindex", "4294967296"],
         vec!["list", "--output", "yaml"],
@@ -473,6 +522,10 @@ fn invalid_dispatcher_requests_fail_before_runtime_creation()
         vec!["--type", "xdp", "get", "xdp", "123", "9"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(&runtime)
             .arg("dispatcher")
@@ -502,6 +555,10 @@ fn empty_dispatcher_listing_reopens_in_both_formats() -> Result<(), Box<dyn std:
         vec!["list", "-o", "json"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(directory.path())
             .arg("dispatcher")
@@ -531,6 +588,10 @@ fn default_link_listing_reopens_without_the_writer_lock() -> Result<(), Box<dyn 
 {
     let directory = tempfile::tempdir()?;
     let initial = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .arg("--runtime-dir")
         .arg(directory.path())
         .args(["link", "-o", "json"])
@@ -557,6 +618,10 @@ fn default_link_listing_reopens_without_the_writer_lock() -> Result<(), Box<dyn 
                 vec!["--quiet", "-o", "json"],
             ] {
                 let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                    .env(
+                        "BPFMAN_CONFIG",
+                        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                    )
                     .arg("--runtime-dir")
                     .arg(directory.path())
                     .arg("--lock-timeout=1ms")
@@ -590,6 +655,10 @@ fn default_program_listing_reopens_without_the_writer_lock()
 -> Result<(), Box<dyn std::error::Error>> {
     let directory = tempfile::tempdir()?;
     let initial = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .arg("--runtime-dir")
         .arg(directory.path())
         .args(["program", "-o", "json"])
@@ -625,6 +694,10 @@ fn default_program_listing_reopens_without_the_writer_lock()
                 vec!["--quiet", "-o", "json"],
             ] {
                 let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                    .env(
+                        "BPFMAN_CONFIG",
+                        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                    )
                     .arg("--runtime-dir")
                     .arg(directory.path())
                     .arg("--lock-timeout=1ms")
@@ -676,6 +749,10 @@ fn malformed_default_program_listing_does_not_create_runtime()
         vec!["bogus"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(&runtime)
             .arg("program")

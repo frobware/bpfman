@@ -52,8 +52,9 @@ impl PreparedProgram {
         self
     }
 
-    /// Add distinct program selections from the same captured ELF. Validate
-    /// every selection before opening runtime state; preserve input order.
+    /// Add program selections from the same captured ELF. Validate
+    /// every selection before opening runtime state; preserve input order. Each
+    /// occurrence loads independently, including repeated selections, as in Go.
     pub fn with_additional_programs<K: bpfman_kernel::ProgramLoad>(
         self,
         kernel: &K,
@@ -66,17 +67,9 @@ impl PreparedProgram {
             });
         }
 
-        let mut seen = std::collections::BTreeSet::from([self.spec.name().clone()]);
         let mut remaining = Vec::new();
 
         for spec in specs {
-            let name = spec.name();
-            if !seen.insert(name.clone()) {
-                return Err(LoadCause::Invalid(
-                    "each ELF program must be selected only once".into(),
-                )
-                .into());
-            }
             kernel
                 .validate_object(&self.object.bytes, &spec)
                 .map_err(LoadCause::from)?;

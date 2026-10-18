@@ -1,0 +1,2 @@
+# An explicit empty configuration keeps process contracts independent of the
+# host's /etc/bpfman configuration while retaining production defaults.

@@ -48,7 +48,12 @@ where
             .find(|p| p.id == request.program_id)
             .ok_or(Cause::NotFound)?;
         if !matches!(program.spec, ProgramSpec::Tcx(_)) {
-            return Err(Cause::Invalid("program is not a tcx program").into());
+            return Err(Cause::ProgramMismatch {
+                id: program.id,
+                actual: program.spec.kind(),
+                requested: bpfman_model::ProgramType::Tcx,
+            }
+            .into());
         }
         if w.layout().program_pin_path(program.id).to_str() != Some(program.pin_path.as_str()) {
             return Err(Cause::Invalid("program pin differs from runtime layout").into());

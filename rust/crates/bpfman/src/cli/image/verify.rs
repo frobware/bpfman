@@ -10,7 +10,7 @@ pub(crate) struct Verify {
     #[command(flatten)]
     registry_auth: super::super::registry_auth::RegistryAuth,
     /// Allow unsigned images, overriding the configuration.
-    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true")]
+    #[arg(long, num_args = 0..=1, require_equals = true, default_missing_value = "true", value_parser = super::super::number::boolean)]
     allow_unsigned: Option<bool>,
     /// Expected signing certificate identity, overriding configuration.
     #[arg(long, conflicts_with = "certificate_identity_regexp")]

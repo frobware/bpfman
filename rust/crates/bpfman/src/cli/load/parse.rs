@@ -1,21 +1,17 @@
 use bpfman_model::ProgramType;
 
-use super::{Global, Metadata, ProgramSpec, Symbol};
+use super::{Global, Metadata, ProgramSpec, PullPolicy, Symbol};
 
 fn symbol(value: &str) -> Result<Symbol, String> {
     Symbol::try_from(value.trim()).map_err(|error| error.to_string())
 }
 
 pub(super) fn program(value: &str) -> Result<ProgramSpec, String> {
-    let mut fields = value.trim().split(':');
+    let mut fields = value.trim().splitn(3, ':');
     let kind = fields.next().unwrap_or_default().trim().parse::<ProgramType>()
         .map_err(|_| "unknown program type; use xdp, tc, tcx, tracepoint, kprobe, kretprobe, uprobe, uretprobe, fentry, fexit, or lsm".to_owned())?;
     let name = symbol(fields.next().ok_or("expected TYPE:NAME[:TARGET]")?)?;
     let target = fields.next();
-
-    if fields.next().is_some() {
-        return Err("expected at most TYPE:NAME:TARGET".into());
-    }
 
     match kind {
         ProgramType::Fentry | ProgramType::Fexit | ProgramType::Lsm => {
@@ -28,10 +24,6 @@ pub(super) fn program(value: &str) -> Result<ProgramSpec, String> {
             })
         }
         _ => {
-            if target.is_some() {
-                return Err("a load-time target is only valid for fentry, fexit, or lsm".into());
-            }
-
             Ok(match kind {
                 ProgramType::Xdp => ProgramSpec::Xdp(name),
                 ProgramType::Tc => ProgramSpec::Tc(name),
@@ -99,4 +91,13 @@ pub(super) fn image_reference(value: &str) -> Result<String, String> {
     bpfman_image_oci::Reference::parse(value).map_err(|e| e.to_string())?;
 
     Ok(value.into())
+}
+
+pub(super) fn pull_policy(raw: &str) -> Result<PullPolicy, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "always" => Ok(PullPolicy::Always),
+        "ifnotpresent" => Ok(PullPolicy::IfNotPresent),
+        "never" => Ok(PullPolicy::Never),
+        _ => Err("expected Always, IfNotPresent or Never".into()),
+    }
 }

@@ -35,7 +35,14 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::UprobeLinks> Effects for Adapte
         let retprobe = match record.spec {
             ProgramSpec::Uprobe(_) => false,
             ProgramSpec::Uretprobe(_) => true,
-            _ => return Err(Cause::Invalid("program is not a user-space probe").into()),
+            _ => {
+                return Err(Cause::ProgramMismatch {
+                    id: record.id,
+                    actual: record.spec.kind(),
+                    requested: bpfman_model::ProgramType::Uprobe,
+                }
+                .into());
+            }
         };
         if writer.layout().program_pin_path(record.id).to_str() != Some(record.pin_path.as_str()) {
             return Err(Cause::Invalid("program pin differs from canonical runtime layout").into());

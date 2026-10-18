@@ -20,6 +20,10 @@ fn lists_seeded_go_state_with_typed_filters() -> Result<(), Box<dyn std::error::
         (vec!["-q", "--application", "absent"], ""),
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &db.runtime)
             .args(["program", "list"])
             .args(options)
@@ -43,6 +47,10 @@ fn table_preserves_the_go_columns_and_link_handles() -> Result<(), Box<dyn std::
     let db = support::database()?;
     support::seed(&db)?;
     let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env("BPFMAN_RUNTIME_DIR", &db.runtime)
         .args(["program", "list", "-o", "text"])
         .output()?;
@@ -87,6 +95,10 @@ fn schema_error_retains_diagnostic_chain() -> Result<(), Box<dyn std::error::Err
         .execute("UPDATE goose_db_version SET version_id = 99", [])?;
     let before = std::fs::read(&db.path)?;
     let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env("BPFMAN_RUNTIME_DIR", &db.runtime)
         .args(["program", "list"])
         .output()?;
@@ -119,6 +131,10 @@ fn existing_reader_rejects_incompatible_schema_without_waiting_for_writer()
         },
         |_| -> Result<(), Box<dyn std::error::Error>> {
             let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                .env(
+                    "BPFMAN_CONFIG",
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                )
                 .env("BPFMAN_RUNTIME_DIR", layout.root())
                 .args(["program", "list", "--lock-timeout", "25ms"])
                 .output()?;
@@ -146,6 +162,10 @@ fn first_run_creates_go_compatible_state_and_lists_nothing()
 
     for _ in 0..2 {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &runtime)
             .args(["program", "list"])
             .output()?;
@@ -197,6 +217,10 @@ fn startup_waits_for_writer_lock_before_creating_database() -> Result<(), Box<dy
         |_| -> Result<(), Box<dyn std::error::Error>> {
             for via_environment in [true, false] {
                 let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+                command.env(
+                    "BPFMAN_CONFIG",
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                );
                 command
                     .env("BPFMAN_RUNTIME_DIR", runtime)
                     .env_remove("BPFMAN_LOCK_TIMEOUT")
@@ -236,6 +260,10 @@ fn concurrent_first_runs_observe_only_a_complete_database() -> Result<(), Box<dy
     for _ in 0..8 {
         children.push(
             Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                .env(
+                    "BPFMAN_CONFIG",
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                )
                 .env("BPFMAN_RUNTIME_DIR", &runtime)
                 .args(["program", "list", "--lock-timeout", "5s"])
                 .stdout(std::process::Stdio::piped())
@@ -275,6 +303,10 @@ fn missing_and_unobservable_gets_fail_without_fabricating_kernel_observations()
 
     for (id, diagnostic) in [("99", "does not exist"), ("42", "kernel")] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .env("BPFMAN_RUNTIME_DIR", &db.runtime)
             .args(["program", "get", id, "-o", "json"])
             .output()?;
@@ -298,6 +330,10 @@ fn json_list_has_an_empty_envelope_and_quiet_takes_precedence()
 -> Result<(), Box<dyn std::error::Error>> {
     let db = support::database()?;
     let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env("BPFMAN_RUNTIME_DIR", &db.runtime)
         .args(["program", "list", "-o", "json"])
         .output()?;
@@ -310,6 +346,10 @@ fn json_list_has_an_empty_envelope_and_quiet_takes_precedence()
     support::seed(&db)?;
 
     let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env("BPFMAN_RUNTIME_DIR", &db.runtime)
         .args(["program", "list", "-o", "json", "-q"])
         .output()?;

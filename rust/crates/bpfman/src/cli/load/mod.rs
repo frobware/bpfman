@@ -22,10 +22,25 @@ pub(crate) enum LoadCommand {
 }
 
 #[derive(Args)]
+#[command(subcommand_negates_reqs = true)]
+pub(crate) struct LoadArgs {
+    #[command(subcommand)]
+    command: Option<LoadCommand>,
+    #[command(flatten)]
+    file: FileArgs,
+}
+
+impl LoadArgs {
+    pub(super) fn into_command(self) -> LoadCommand {
+        self.command.unwrap_or(LoadCommand::File(self.file))
+    }
+}
+
+#[derive(Args)]
 pub(crate) struct FileArgs {
     /// Path to the ELF object. File access happens only during execution.
-    #[arg(value_name = "PATH")]
-    path: PathBuf,
+    #[arg(value_name = "PATH", required = true)]
+    path: Option<PathBuf>,
     #[command(flatten)]
     options: LoadOptions,
 }
@@ -36,7 +51,7 @@ pub(crate) struct ImageArgs {
     #[arg(value_name = "IMAGE", value_parser = parse::image_reference)]
     reference: String,
     /// When to pull the image.
-    #[arg(short = 'p', long, value_enum, ignore_case = true, default_value_t = PullPolicy::IfNotPresent)]
+    #[arg(short = 'p', long, value_parser = parse::pull_policy, default_value = "IfNotPresent")]
     pull_policy: PullPolicy,
     #[command(flatten)]
     registry_auth: super::registry_auth::RegistryAuth,
@@ -58,9 +73,9 @@ struct LoadOptions {
     /// Set bpfman.io/application, overriding that metadata key.
     #[arg(short = 'a', long)]
     application: Option<String>,
-    /// Nonzero map-set owner ID whose maps should be shared.
-    #[arg(long)]
-    map_owner_id: Option<NonZeroU32>,
+    /// Map-set owner ID whose maps should be shared; zero selects private maps.
+    #[arg(long, value_parser = super::number::owner)]
+    map_owner_id: Option<u32>,
     /// Requested result format.
     #[arg(short, long, value_enum, default_value_t = LoadOutput::Text)]
     output: LoadOutput,

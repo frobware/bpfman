@@ -56,9 +56,12 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracingLinks> Effects for Adapt
                 }
             }
             _ => {
-                return Err(
-                    Cause::Invalid("program is not the requested BTF attachment family").into(),
-                );
+                return Err(Cause::ProgramMismatch {
+                    id: record.id,
+                    actual: record.spec.kind(),
+                    requested: request.kind.program_type(),
+                }
+                .into());
             }
         };
         if writer.layout().program_pin_path(record.id).to_str() != Some(record.pin_path.as_str()) {

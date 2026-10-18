@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use bpfman_kernel::ObjectLoader;
 use clap::error::ErrorKind;
 
@@ -29,11 +27,18 @@ impl LoadCommand {
     fn into_request(self) -> Result<LoadRequest, clap::Error> {
         let (source, options) = match self {
             Self::File(args) => {
-                if args.path.as_os_str().is_empty() {
+                let path = args
+                    .path
+                    .ok_or_else(|| invalid("object path is required"))?;
+                let path = match path.into_os_string().into_string() {
+                    Ok(path) => std::path::PathBuf::from(path.trim()),
+                    Err(path) => std::path::PathBuf::from(path),
+                };
+                if path.as_os_str().is_empty() {
                     return Err(invalid("object path must not be empty"));
                 }
 
-                (LoadSource::File(args.path), args.options)
+                (LoadSource::File(path), args.options)
             }
             Self::Image(args) => {
                 let parsed = bpfman_image_oci::Reference::parse(&args.reference)
@@ -59,14 +64,6 @@ fn invalid(message: impl Into<String>) -> clap::Error {
 
 impl LoadOptions {
     fn into_request(self, source: LoadSource) -> Result<LoadRequest, clap::Error> {
-        let mut seen = BTreeSet::new();
-
-        for program in &self.programs {
-            if !seen.insert(program.name()) {
-                return Err(invalid("each ELF program must be selected only once"));
-            }
-        }
-
         let mut programs = self.programs.into_iter();
         let first = programs
             .next()
@@ -91,7 +88,7 @@ impl LoadOptions {
                 .into_iter()
                 .map(|Global(k, v)| (k, v))
                 .collect(),
-            map_owner_id: self.map_owner_id,
+            map_owner_id: self.map_owner_id.and_then(std::num::NonZeroU32::new),
             output: self.output,
         })
     }
@@ -224,7 +221,7 @@ mod tests {
             return Err(invalid("expected program"));
         };
         match program.into_command() {
-            ProgramCommand::Load { source } => source.into_request(),
+            ProgramCommand::Load(source) => source.into_command().into_request(),
             _ => Err(invalid("expected load")),
         }
     }
@@ -278,7 +275,7 @@ mod tests {
             "--programs",
             "lsm:check:file_open",
             "-p",
-            "nEvEr",
+            " nEvEr ",
             "--registry-auth",
             "dXNlcjpwYXNzOndvcmQ=",
         ])?;

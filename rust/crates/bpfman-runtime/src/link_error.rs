@@ -16,6 +16,12 @@ pub(super) enum Cause {
     AlreadyAttached(std::num::NonZeroU64),
     #[error("invalid attachment state: {0}")]
     Invalid(&'static str),
+    #[error("program {id} is a {actual} program; cannot attach as {requested}")]
+    ProgramMismatch {
+        id: std::num::NonZeroU32,
+        actual: bpfman_model::ProgramType,
+        requested: bpfman_model::ProgramType,
+    },
     #[error(transparent)]
     XdpPlan(bpfman_core::XdpPlanError),
     #[error(transparent)]
@@ -74,9 +80,10 @@ impl LinkCause {
             Cause::Cancelled => LinkErrorKind::Cancelled,
             Cause::NotFound | Cause::LinkNotFound(_) => LinkErrorKind::NotFound,
             Cause::Unsupported => LinkErrorKind::Unsupported,
-            Cause::AlreadyAttached(_) | Cause::Invalid(_) | Cause::XdpPlan(_) => {
-                LinkErrorKind::InvalidState
-            }
+            Cause::AlreadyAttached(_)
+            | Cause::Invalid(_)
+            | Cause::XdpPlan(_)
+            | Cause::ProgramMismatch { .. } => LinkErrorKind::InvalidState,
             Cause::Kernel(cause) => match cause.kind() {
                 bpfman_kernel::ErrorKind::Unsupported => LinkErrorKind::Unsupported,
                 bpfman_kernel::ErrorKind::InvalidInput | bpfman_kernel::ErrorKind::InvalidData => {

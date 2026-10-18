@@ -19,6 +19,10 @@ fn invalid_delete_requests_fail_before_runtime_creation() -> Result<(), Box<dyn 
             &["--ignore-missing", "42"][..],
         ] {
             let result = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+                .env(
+                    "BPFMAN_CONFIG",
+                    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+                )
                 .arg("--runtime-dir")
                 .arg(&root)
                 .args([family, "delete"])
@@ -29,6 +33,10 @@ fn invalid_delete_requests_fail_before_runtime_creation() -> Result<(), Box<dyn 
             assert!(!root.exists());
         }
         let help = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .args([family, "--help"])
             .output()?;
         assert!(help.status.success());
@@ -43,6 +51,10 @@ fn missing_delete_targets_report_per_operand_and_empty_all_is_silent()
     let temp = tempfile::tempdir()?;
     for family in ["program", "link"] {
         let result = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(temp.path())
             .args([family, "delete", "43", "42", "43"])
@@ -63,6 +75,10 @@ fn missing_delete_targets_report_per_operand_and_empty_all_is_silent()
     }
     for operands in [&["--all"][..], &["--all", "-r"][..]] {
         let result = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(temp.path())
             .args(["program", "delete"])
@@ -93,6 +109,10 @@ fn dispatcher_delete_validates_keys_and_reports_absence() -> Result<(), Box<dyn 
         &["xdp", "1", "7", "-o", "json"][..],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(&root)
             .args(["dispatcher", "delete"])
@@ -104,6 +124,10 @@ fn dispatcher_delete_validates_keys_and_reports_absence() -> Result<(), Box<dyn 
     }
     for kind in ["xdp", "tc-ingress", "tc-egress"] {
         let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .env(
+                "BPFMAN_CONFIG",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+            )
             .arg("--runtime-dir")
             .arg(&root)
             .args(["dispatcher", "delete", kind, "1", "7"])
@@ -116,6 +140,10 @@ fn dispatcher_delete_validates_keys_and_reports_absence() -> Result<(), Box<dyn 
         );
     }
     let help = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .args(["dispatcher", "--help"])
         .output()?;
     assert!(help.status.success());

@@ -4,7 +4,7 @@ use std::num::{NonZeroU32, NonZeroU64};
 use super::OutputFormat;
 
 #[derive(Args)]
-#[command(args_conflicts_with_subcommands = true)]
+#[command(subcommand_negates_reqs = true)]
 pub(crate) struct DispatcherArgs {
     #[command(subcommand)]
     command: Option<DispatcherCommand>,
@@ -26,21 +26,25 @@ pub(crate) enum DispatcherCommand {
     #[command(hide = true)]
     Delete {
         /// Dispatcher type.
-        #[arg(value_enum)]
+        #[arg(value_parser = dispatcher_kind)]
         kind: DispatcherKind,
         /// Network namespace inode.
+        #[arg(value_parser = super::number::namespace)]
         nsid: NonZeroU64,
         /// Interface index.
+        #[arg(value_parser = super::number::interface)]
         ifindex: NonZeroU32,
     },
     /// Read the committed complete dispatcher snapshot.
     Get {
         /// Dispatcher type.
-        #[arg(value_enum)]
+        #[arg(value_parser = dispatcher_kind)]
         kind: DispatcherKind,
         /// Network namespace inode.
+        #[arg(value_parser = super::number::namespace)]
         nsid: NonZeroU64,
         /// Interface index.
+        #[arg(value_parser = super::number::interface)]
         ifindex: NonZeroU32,
         /// Output format.
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
@@ -51,13 +55,13 @@ pub(crate) enum DispatcherCommand {
 #[derive(Args)]
 pub(crate) struct ListArgs {
     /// Filter by dispatcher type.
-    #[arg(long = "type", value_enum)]
+    #[arg(long = "type", value_parser = dispatcher_kind)]
     kind: Option<DispatcherKind>,
     /// Filter by network namespace ID; zero selects all namespaces.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, value_parser = super::number::uint)]
     nsid: u64,
     /// Filter by interface index; zero selects all interfaces.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, value_parser = super::number::ifindex)]
     ifindex: u32,
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
@@ -69,6 +73,15 @@ pub(crate) enum DispatcherKind {
     Xdp,
     TcIngress,
     TcEgress,
+}
+
+fn dispatcher_kind(raw: &str) -> Result<DispatcherKind, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "xdp" => Ok(DispatcherKind::Xdp),
+        "tc-ingress" => Ok(DispatcherKind::TcIngress),
+        "tc-egress" => Ok(DispatcherKind::TcEgress),
+        _ => Err("expected xdp, tc-ingress, or tc-egress".into()),
+    }
 }
 
 impl DispatcherKind {

@@ -21,6 +21,10 @@ const TRUSTED_ROOT: &str = include_str!(
 
 fn command(root: &Path, config: &Path, trust: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+    command.env(
+        "BPFMAN_CONFIG",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+    );
     command
         .arg("--config")
         .arg(config)

@@ -4,23 +4,34 @@ use bpfman_fs::{DEFAULT_RUNTIME_ROOT, RuntimeLayout};
 use bpfman_model::ProgramType;
 use clap::{
     Args, Parser, Subcommand, ValueEnum,
-    builder::{PathBufValueParser, PossibleValuesParser, TypedValueParser},
+    builder::{PathBufValueParser, StringValueParser, TypedValueParser},
 };
 
-mod config;
+pub(super) mod config;
 mod delete;
 mod dispatcher;
+mod duration;
 mod image;
 mod link;
 mod load;
+mod number;
 mod registry_auth;
 
 #[derive(Parser)]
-#[command(name = "bpfman", version, about, max_term_width = 80)]
+#[command(
+    name = "bpfman",
+    version,
+    about,
+    max_term_width = 80,
+    args_override_self = true
+)]
 pub(super) struct Cli {
     /// bpfman TOML configuration file (defaults to /etc/bpfman/bpfman.toml).
     #[arg(long, global = true, env = "BPFMAN_CONFIG", value_name = "FILE")]
     pub(super) config: Option<std::path::PathBuf>,
+    /// Log specification (for example warn,manager=debug).
+    #[arg(long, global = true, env = "BPFMAN_LOG", value_name = "SPEC")]
+    pub(super) log: Option<String>,
     /// Root directory for runtime files (must be absolute).
     #[arg(long = "runtime-dir", value_name = "RUNTIME_DIR", global = true, env = "BPFMAN_RUNTIME_DIR", default_value = DEFAULT_RUNTIME_ROOT, value_parser = PathBufValueParser::new().try_map(RuntimeLayout::try_from))]
     pub(super) layout: RuntimeLayout,
@@ -31,7 +42,7 @@ pub(super) struct Cli {
     #[arg(long = "sigstore-cache-dir", global = true, env = "BPFMAN_SIGSTORE_CACHE_DIR", value_parser = PathBufValueParser::new().try_map(RuntimeLayout::try_from))]
     pub(super) trust_cache: Option<RuntimeLayout>,
     /// Timeout for acquiring the writer lock (0 waits indefinitely).
-    #[arg(long, global = true, env = "BPFMAN_LOCK_TIMEOUT", default_value = "30s", value_parser = lock_timeout)]
+    #[arg(long, global = true, env = "BPFMAN_LOCK_TIMEOUT", default_value = "30s", allow_hyphen_values = true, value_parser = duration::lock_timeout)]
     pub(super) lock_timeout: Duration,
     /// Write a new Perfetto/Chrome timeline file, filtered by RUST_LOG.
     #[arg(long, global = true, value_name = "PATH")]
@@ -40,13 +51,61 @@ pub(super) struct Cli {
     pub(super) command: Command,
 }
 
+impl Cli {
+    pub(super) fn validate(&self) -> Result<(), clap::Error> {
+        if let Command::Program(args) = &self.command {
+            let list = match &args.command {
+                Some(ProgramCommand::Delete(args)) => return args.validate(),
+                Some(ProgramCommand::List(list)) => Some(list),
+                None => Some(&args.list),
+                _ => None,
+            };
+            if list.is_some_and(|list| list.attached && list.unattached) {
+                return Err(clap::Error::raw(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "--attached and --unattached are mutually exclusive",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn validate_scopes(
+    command: &clap::Command,
+    matches: &clap::ArgMatches,
+) -> Result<(), clap::Error> {
+    if let Some((name, child_matches)) = matches.subcommand() {
+        // Clap's blanket args_conflicts_with_subcommands also rejects inherited
+        // global options. Check only local, explicitly supplied parent args so
+        // defaults and globals can coexist with a selected child, as in Kong.
+        if let Some(argument) = command.get_arguments().find(|argument| {
+            !argument.is_global_set()
+                && matches.value_source(argument.get_id().as_str())
+                    == Some(clap::parser::ValueSource::CommandLine)
+        }) {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ArgumentConflict,
+                format!(
+                    "{} cannot be used before subcommand {name}",
+                    argument.get_id()
+                ),
+            ));
+        }
+        if let Some(child) = command.find_subcommand(name) {
+            validate_scopes(child, child_matches)?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) enum PreparedCommand {
     Get {
         id: std::num::NonZeroU32,
         output: OutputFormat,
     },
     Unload {
-        ids: Vec<std::num::NonZeroU32>,
+        ids: Vec<u32>,
         ignore_missing: bool,
     },
     Delete(delete::DeletePrograms),
@@ -69,6 +128,20 @@ impl Command {
     ) -> Result<PreparedCommand, crate::error::Error> {
         let command = match self {
             Self::Program(args) => args.into_command(),
+            Self::Get { command } => match command {
+                GetCommand::Program { id, output } => ProgramCommand::Get { id, output },
+                GetCommand::Link { id, output } => {
+                    return Ok(PreparedCommand::Link(
+                        link::LinkCommand::Get { id, output },
+                        Default::default(),
+                    ));
+                }
+            },
+            Self::Version => {
+                return Err(
+                    anyhow::anyhow!("version must dispatch before runtime initialization").into(),
+                );
+            }
             Self::Image { command } => return Ok(PreparedCommand::Image(command)),
             Self::NsHelper { .. } => {
                 return Err(anyhow::anyhow!(
@@ -99,7 +172,7 @@ impl Command {
             },
             ProgramCommand::Delete(args) => PreparedCommand::Delete(args),
             ProgramCommand::List(args) => PreparedCommand::List(args),
-            ProgramCommand::Load { source } => PreparedCommand::Load(source.prepare(
+            ProgramCommand::Load(source) => PreparedCommand::Load(source.into_command().prepare(
                 layout,
                 cancellation,
                 config,
@@ -113,6 +186,13 @@ impl Command {
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Print build version information.
+    Version,
+    #[command(hide = true)]
+    Get {
+        #[command(subcommand)]
+        command: GetCommand,
+    },
     /// Inspect public OCI bytecode images.
     Image {
         #[command(subcommand)]
@@ -124,6 +204,7 @@ pub(super) enum Command {
         command: crate::ns_helper::Helper,
     },
     /// Inspect dispatcher snapshots.
+    #[command(hide = true)]
     Dispatcher(dispatcher::DispatcherArgs),
     /// Manage standalone BPF links.
     Link(link::LinkArgs),
@@ -131,8 +212,26 @@ pub(super) enum Command {
     Program(ProgramArgs),
 }
 
+#[derive(Subcommand)]
+pub(super) enum GetCommand {
+    /// Get a managed program.
+    Program {
+        #[arg(value_parser = number::program_id)]
+        id: std::num::NonZeroU32,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
+    /// Get a managed link.
+    Link {
+        #[arg(value_parser = number::link_id)]
+        id: std::num::NonZeroU64,
+        #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
+        output: OutputFormat,
+    },
+}
+
 #[derive(Args)]
-#[command(args_conflicts_with_subcommands = true)]
+#[command(subcommand_negates_reqs = true)]
 pub(super) struct ProgramArgs {
     #[command(subcommand)]
     command: Option<ProgramCommand>,
@@ -153,7 +252,7 @@ pub(super) enum ProgramCommand {
     /// Get a managed program with kernel, map, and link observations.
     Get {
         /// Managed kernel program ID.
-        #[arg(value_name = "PROGRAM_ID")]
+        #[arg(value_name = "PROGRAM_ID", value_parser = number::program_id)]
         id: std::num::NonZeroU32,
         /// Output format.
         #[arg(short,long,value_enum,default_value_t=OutputFormat::Text)]
@@ -162,10 +261,10 @@ pub(super) enum ProgramCommand {
     /// Unload managed programs and clean up their attachments.
     Unload {
         /// Managed kernel program IDs, attempted in order.
-        #[arg(value_name = "PROGRAM_ID", required = true, num_args = 1..)]
-        ids: Vec<std::num::NonZeroU32>,
+        #[arg(value_name = "PROGRAM_ID", required = true, num_args = 1.., value_parser = number::owner)]
+        ids: Vec<u32>,
         /// Treat a missing managed program as success.
-        #[arg(long)]
+        #[arg(long, action = clap::ArgAction::Set, value_parser = number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
         ignore_missing: bool,
     },
     /// List programs; --all includes unmanaged kernel programs.
@@ -173,26 +272,23 @@ pub(super) enum ProgramCommand {
     /// Text/quiet output reads stored summaries without kernel privileges.
     /// --all observes the kernel for every output format.
     List(ListArgs),
-    /// Load a local tracepoint/XDP/TC batch; other requests are explicitly rejected.
-    Load {
-        #[command(subcommand)]
-        source: load::LoadCommand,
-    },
+    /// Load programs from a local file (the default) or OCI image.
+    Load(load::LoadArgs),
 }
 
 #[derive(Args)]
 pub(super) struct ListArgs {
     /// Show only managed programs with active kernel links.
-    #[arg(long, conflicts_with = "unattached")]
+    #[arg(long, action = clap::ArgAction::Set, value_parser = number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     pub(super) attached: bool,
     /// Show only managed programs without active kernel links.
-    #[arg(long, conflicts_with = "attached")]
+    #[arg(long, action = clap::ArgAction::Set, value_parser = number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     pub(super) unattached: bool,
     /// Include unmanaged kernel programs.
-    #[arg(short = 'a', long)]
+    #[arg(short = 'a', long, action = clap::ArgAction::Set, value_parser = number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     pub(super) all: bool,
     /// Print only program IDs, one per line.
-    #[arg(short, long)]
+    #[arg(short = 'q', long, action = clap::ArgAction::Set, value_parser = number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     pub(super) quiet: bool,
     /// Output format.
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
@@ -239,16 +335,8 @@ pub(super) enum OutputFormat {
 }
 
 fn program_type_parser() -> impl TypedValueParser<Value = ProgramType> {
-    PossibleValuesParser::new(ProgramType::ALL.map(ProgramType::as_str))
-        .try_map(|value| value.to_ascii_lowercase().parse::<ProgramType>())
-}
-
-fn lock_timeout(value: &str) -> Result<Duration, String> {
-    if value == "0" {
-        return Ok(Duration::ZERO);
-    }
-
-    humantime::parse_duration(value).map_err(|error| error.to_string())
+    StringValueParser::new()
+        .try_map(|value| value.trim().to_ascii_lowercase().parse::<ProgramType>())
 }
 
 #[cfg(test)]
@@ -361,6 +449,7 @@ mod tests {
         }
         let error =
             Cli::try_parse_from(["bpfman", "program", "list", "--attached", "--unattached"])
+                .and_then(|cli| cli.validate().map(|()| cli))
                 .err()
                 .ok_or_else(|| {
                     clap::Error::raw(clap::error::ErrorKind::InvalidValue, "expected conflict")

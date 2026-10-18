@@ -1065,6 +1065,16 @@ test-e2e-selection: $(RUST_DISPATCHER)
 # Every Cargo entry point names the new manifest. These are opt-in while the
 # Go implementation remains the production build.
 .PHONY: rust-check rust-build rust-test rust-fmt rust-fmt-fix rust-lock rust-lint rust-doc
+# Stamp the independent Rust CLI with the same release inputs as Go. Exporting
+# values avoids interpolating branch names or signing identities into shell code.
+export BPFMAN_BUILD_VERSION = $(GIT_VERSION)
+export BPFMAN_BUILD_GIT_COMMIT = $(GIT_COMMIT)
+export BPFMAN_BUILD_GIT_BRANCH = $(GIT_BRANCH)
+export BPFMAN_BUILD_GIT_STATE = $(GIT_STATE)
+export BPFMAN_BUILD_BUILD_DATE = $(BUILD_DATE)
+export BPFMAN_BUILD_IMAGE_REF = $(IMAGE_REF)
+export BPFMAN_BUILD_SIGNER_IDENTITY = $(SIGNER_IDENTITY)
+export BPFMAN_BUILD_OIDC_ISSUER = $(OIDC_ISSUER)
 rust-check: rust-fmt rust-lint rust-test rust-doc
 
 rust-build: $(RUST_DISPATCHER)

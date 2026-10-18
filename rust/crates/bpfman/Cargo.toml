@@ -1,6 +1,6 @@
 [package]
 name = "bpfman"
-description = "Experimental Rust bpfman CLI: managed program listing"
+description = "BPF program manager: programs, links and bytecode images"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -39,7 +39,6 @@ bpfman-model.workspace = true
 bpfman-core.workspace = true
 bpfman-runtime.workspace = true
 clap.workspace = true
-humantime.workspace = true
 signal-hook.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

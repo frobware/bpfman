@@ -2,12 +2,12 @@ use super::OutputFormat;
 use bpfman_model::Tracepoint;
 use clap::{
     Args, Subcommand,
-    builder::{PossibleValuesParser, TypedValueParser},
+    builder::{StringValueParser, TypedValueParser},
 };
 use std::num::{NonZeroU32, NonZeroU64};
 
 #[derive(Args)]
-#[command(args_conflicts_with_subcommands = true)]
+#[command(subcommand_negates_reqs = true)]
 pub(crate) struct LinkArgs {
     #[command(subcommand)]
     command: Option<LinkCommand>,
@@ -32,15 +32,15 @@ pub(crate) enum LinkCommand {
     },
     /// Detach managed links, keeping their programs loaded.
     Detach {
-        #[arg(value_name = "LINK_ID", required = true, num_args = 1..)]
-        ids: Vec<NonZeroU64>,
+        #[arg(value_name = "LINK_ID", required = true, num_args = 1.., value_parser = super::number::link_operand)]
+        ids: Vec<u64>,
         /// Treat a missing managed link as success for idempotent cleanup.
-        #[arg(long)]
+        #[arg(long, action = clap::ArgAction::Set, value_parser = super::number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
         ignore_missing: bool,
     },
     /// Get stored intent and current kernel/pin observations.
     Get {
-        #[arg(value_name = "LINK_ID")]
+        #[arg(value_name = "LINK_ID", value_parser = super::number::link_id)]
         id: NonZeroU64,
         #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
         output: OutputFormat,
@@ -55,13 +55,13 @@ pub(crate) struct ListArgs {
     #[arg(short, long, value_enum, default_value_t = OutputFormat::Text)]
     output: OutputFormat,
     /// Print only link IDs, one per line.
-    #[arg(short, long)]
+    #[arg(short = 'q', long, action = clap::ArgAction::Set, value_parser = super::number::boolean, num_args = 0..=1, require_equals = true, default_missing_value = "true", default_value_t = false)]
     quiet: bool,
     /// Filter by owning program ID.
-    #[arg(long)]
-    program_id: Option<NonZeroU32>,
+    #[arg(long, value_parser = super::number::owner)]
+    program_id: Option<u32>,
     /// Filter by attachment kind; comma-separated or repeated.
-    #[arg(long, value_delimiter = ',', value_parser = link_kind_parser())]
+    #[arg(long, value_delimiter = ',', ignore_case = true, value_parser = link_kind_parser())]
     kind: Vec<bpfman_model::LinkKind>,
     /// Filter by the owning program's type; comma-separated or repeated.
     #[arg(short = 'p', long = "program-type", value_delimiter = ',', ignore_case = true, value_parser = super::program_type_parser())]
@@ -76,8 +76,7 @@ pub(crate) struct ListArgs {
 
 fn link_kind_parser() -> impl TypedValueParser<Value = bpfman_model::LinkKind> {
     use bpfman_model::LinkKind;
-    PossibleValuesParser::new(LinkKind::ALL.map(LinkKind::as_str))
-        .try_map(|value| value.parse::<LinkKind>())
+    StringValueParser::new().try_map(|value| value.trim().to_ascii_lowercase().parse::<LinkKind>())
 }
 
 impl ListArgs {
@@ -92,7 +91,7 @@ impl ListArgs {
             || program.application.is_some()
             || !program.metadata.is_empty();
         bpfman_core::LinkFilter {
-            program_id: self.program_id,
+            program_id: self.program_id.and_then(NonZeroU32::new),
             kinds: self.kind,
             program: scoped.then_some(program),
         }
@@ -134,17 +133,18 @@ impl LinkCommand {
 pub(crate) enum AttachCommand {
     /// Attach a user-space entry or return probe, as selected when loading.
     Uprobe {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         #[arg(value_parser = user_target)]
         target: String,
         #[arg(long, short = 'f', required_unless_present = "offset", required_if_eq("offset", "0"), value_parser = user_symbol)]
         fn_name: Option<bpfman_model::Symbol>,
-        #[arg(long, value_parser = clap::value_parser!(u64).range(0..=i64::MAX as u64))]
+        #[arg(long, value_parser = super::number::offset)]
         offset: Option<u64>,
-        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        #[arg(long, default_value_t = 0, value_parser = super::number::signed32)]
         pid: u32,
         /// Host PID selecting the target mount namespace (absolute paths or library names).
-        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        #[arg(long, default_value_t = 0, value_parser = super::number::signed32)]
         container_pid: u32,
         #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
         metadata: Vec<(String, String)>,
@@ -153,6 +153,7 @@ pub(crate) enum AttachCommand {
     },
     /// Attach an fentry program to its load-time function.
     Fentry {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
         metadata: Vec<(String, String)>,
@@ -161,6 +162,7 @@ pub(crate) enum AttachCommand {
     },
     /// Attach an fexit program to its load-time function.
     Fexit {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
         metadata: Vec<(String, String)>,
@@ -169,6 +171,7 @@ pub(crate) enum AttachCommand {
     },
     /// Attach an LSM program to its load-time hook.
     Lsm {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
         metadata: Vec<(String, String)>,
@@ -177,9 +180,10 @@ pub(crate) enum AttachCommand {
     },
     /// Attach a kernel entry or return probe, as selected when loading.
     Kprobe {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         function: bpfman_model::KernelFunction,
-        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=i64::MAX as u64))]
+        #[arg(long, default_value_t = 0, value_parser = super::number::offset)]
         offset: u64,
         #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
         metadata: Vec<(String, String)>,
@@ -188,12 +192,14 @@ pub(crate) enum AttachCommand {
     },
     /// Attach a native TCX classifier without a dispatcher.
     Tcx {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         interface: bpfman_model::InterfaceName,
+        #[arg(value_parser = tc_direction)]
         direction: bpfman_model::TcDirection,
-        #[arg(long, default_value = "")]
+        #[arg(short = 'n', long, default_value = "")]
         netns: bpfman_model::NetworkNamespace,
-        #[arg(short = 'p', long, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        #[arg(short = 'p', long, value_parser = super::number::signed32)]
         priority: u32,
         #[arg(short = 'm', long, value_name = "KEY=VALUE", value_parser = metadata)]
         metadata: Vec<(String, String)>,
@@ -202,12 +208,14 @@ pub(crate) enum AttachCommand {
     },
     /// Attach a TC extension through a legacy TC dispatcher.
     Tc {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         interface: bpfman_model::InterfaceName,
+        #[arg(value_parser = tc_direction)]
         direction: bpfman_model::TcDirection,
-        #[arg(long, default_value = "")]
+        #[arg(short = 'n', long, default_value = "")]
         netns: bpfman_model::NetworkNamespace,
-        #[arg(short = 'p', long, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        #[arg(short = 'p', long, value_parser = super::number::signed32)]
         priority: u32,
         #[arg(long, value_delimiter = ',', default_value = "pipe,dispatcher_return", value_parser = tc_action)]
         proceed_on: Vec<i32>,
@@ -218,11 +226,12 @@ pub(crate) enum AttachCommand {
     },
     /// Attach an XDP extension to an interface in a selected network namespace.
     Xdp {
+        #[arg(value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         interface: bpfman_model::InterfaceName,
-        #[arg(long, default_value = "")]
+        #[arg(short = 'n', long, default_value = "")]
         netns: bpfman_model::NetworkNamespace,
-        #[arg(short = 'p', long, value_parser = clap::value_parser!(u32).range(0..=i32::MAX as i64))]
+        #[arg(short = 'p', long, value_parser = super::number::signed32)]
         priority: u32,
         #[arg(long, value_delimiter = ',', default_value = "pass,dispatcher_return", value_parser = action)]
         proceed_on: Vec<u32>,
@@ -233,7 +242,7 @@ pub(crate) enum AttachCommand {
     },
     /// Attach a managed tracepoint program to GROUP/NAME.
     Tracepoint {
-        #[arg(value_name = "PROGRAM_ID")]
+        #[arg(value_name = "PROGRAM_ID", value_parser = super::number::program_id)]
         program_id: NonZeroU32,
         #[arg(value_name = "GROUP/NAME")]
         target: Tracepoint,
@@ -431,12 +440,18 @@ impl LinkCommand {
                     },
                     cancellation,
                 )?;
-                let observed = app.get_link(record.id).map_err(|error| {
+                let mut observed = app.get_link(record.id).map_err(|error| {
                     anyhow::Error::from(error).context(format!(
                         "link {} was committed but could not be observed; it remains attached",
                         record.id
                     ))
                 })?;
+                // Go returns the newly created TCX record with its initial
+                // zero position. Get/list derive its final managed rank. This
+                // response projection changes neither stored intent nor reads.
+                if let bpfman_model::LinkDetails::Tcx(details) = &mut observed.record.details {
+                    details.position = 0;
+                }
                 crate::output::link(&mut std::io::stdout().lock(), &observed, "", output)?;
             }
             Self::Attach {
@@ -543,10 +558,25 @@ impl LinkCommand {
                 ignore_missing,
             } => {
                 use std::io::Write;
-                let results = app.detach_many_with_cancellation(&ids, cancellation)?;
+                let selected: Vec<_> = ids.iter().copied().filter_map(NonZeroU64::new).collect();
+                let results = app.detach_many_with_cancellation(&selected, cancellation)?;
+                let mut outcomes = results.iter();
                 let mut failed = 0;
                 let mut cancelled = false;
-                for result in &results {
+                for &id in &ids {
+                    if id == 0 {
+                        if !ignore_missing {
+                            failed += 1;
+                            writeln!(
+                                std::io::stderr().lock(),
+                                "link 0: managed link 0 does not exist"
+                            )?;
+                        }
+                        continue;
+                    }
+                    let result = outcomes
+                        .next()
+                        .ok_or_else(|| anyhow::anyhow!("incomplete link detach outcomes"))?;
                     if let Err(error) = &result.outcome {
                         if ignore_missing && error.is_link_missing() {
                             continue;
@@ -564,7 +594,7 @@ impl LinkCommand {
                 if failed != 0 {
                     return Err(crate::error::Error::batch_detach(
                         failed,
-                        results.len(),
+                        ids.len(),
                         cancelled,
                     ));
                 }
@@ -592,7 +622,13 @@ impl LinkCommand {
             Self::List(args) => {
                 let output = args.output;
                 let quiet = args.quiet;
-                let links = app.list_links_with_cancellation(&args.filter(), cancellation)?;
+                let absent_owner = args.program_id == Some(0);
+                let mut links = app.list_links_with_cancellation(&args.filter(), cancellation)?;
+                // Read/validate the ordinary snapshot before applying Go's
+                // zero-owner filter; zero cannot own a valid domain record.
+                if absent_owner {
+                    links.clear();
+                }
                 let programs = if output == OutputFormat::Text && !quiet && !links.is_empty() {
                     app.list_with_cancellation(&Default::default(), cancellation)?
                 } else {
@@ -613,7 +649,7 @@ impl LinkCommand {
 }
 
 fn action(raw: &str) -> Result<u32, String> {
-    match raw {
+    match raw.trim().to_ascii_lowercase().as_str() {
         "aborted" => Ok(0),
         "drop" => Ok(1),
         "pass" => Ok(2),
@@ -625,7 +661,7 @@ fn action(raw: &str) -> Result<u32, String> {
 }
 
 fn tc_action(raw: &str) -> Result<i32, String> {
-    match raw {
+    match raw.trim().to_ascii_lowercase().as_str() {
         "unspec" => Ok(-1),
         "ok" => Ok(0),
         "reclassify" => Ok(1),
@@ -648,6 +684,10 @@ fn user_target(raw: &str) -> Result<String, String> {
 
 fn user_symbol(raw: &str) -> Result<bpfman_model::Symbol, bpfman_model::InvalidSymbol> {
     raw.try_into()
+}
+
+fn tc_direction(raw: &str) -> Result<bpfman_model::TcDirection, bpfman_model::InvalidTcDirection> {
+    raw.trim().to_ascii_lowercase().parse()
 }
 
 #[cfg(test)]

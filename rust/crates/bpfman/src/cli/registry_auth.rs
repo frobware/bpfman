@@ -39,6 +39,7 @@ fn parse(value: String) -> Result<Option<Credentials>, &'static str> {
     if value.len() > 64 * 1024 {
         return Err("registry auth exceeds size limit");
     }
+    let value = value.replace(['\r', '\n'], "");
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| "registry auth must be valid base64")?;

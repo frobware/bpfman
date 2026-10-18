@@ -25,6 +25,10 @@ fn encoded() -> String {
 
 fn command(root: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+    command.env(
+        "BPFMAN_CONFIG",
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+    );
     command
         .arg("--runtime-dir")
         .arg(root.join("runtime"))
@@ -32,7 +36,10 @@ fn command(root: &Path) -> Command {
         .arg(root.join("cache"))
         .arg("--config")
         .arg(root.join("config.toml"))
-        .env_remove("BPFMAN_CONFIG")
+        .env(
+            "BPFMAN_CONFIG",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/fixtures/cli.toml"),
+        )
         .env_remove("BPFMAN_REGISTRY_AUTH")
         .env_remove("REGISTRY_AUTH_FILE")
         .env_remove("SOURCE_DATE_EPOCH")
