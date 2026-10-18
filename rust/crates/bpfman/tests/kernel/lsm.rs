@@ -51,8 +51,8 @@ where
         bpfman_kernel_aya::Kernel::default(),
         TIMEOUT,
     );
-    // Use the current test thread's comm. Other processes and kernel workers
-    // cannot perturb this fixture's counter; no global process renaming is needed.
+    // The caller gives this worker a distinct eight-byte comm. The fixture
+    // compares only those eight bytes, so ordinary libtest names are not unique.
     let comm = std::fs::read("/proc/thread-self/comm").expect("thread comm");
     assert!(comm.len() > 8);
     let prepared = |hook: &str| {
@@ -96,6 +96,21 @@ where
     // The fixture's ELF says file_open. Binding file_permission proves that the
     // requested hook overrides it: open alone does not count, read counts once.
     let id = load("file_permission");
+    // A peer with the formerly colliding libtest prefix must not count. Start
+    // it before attachment so thread startup cannot affect the traffic baseline.
+    let (fire_peer, peer_go) = std::sync::mpsc::channel();
+    let (ready_send, ready) = std::sync::mpsc::sync_channel(0);
+    let peer = std::thread::Builder::new()
+        .name("sqlite_lpeer".into())
+        .spawn(move || {
+            ready_send.send(()).expect("peer named and ready");
+            if peer_go.recv().is_ok() {
+                let mut file = std::fs::File::open("/dev/null").expect("peer open");
+                assert_eq!(file.read(&mut [0]).expect("peer read"), 0);
+            }
+        })
+        .expect("peer thread");
+    ready.recv().expect("peer ready before attachment");
     let link = app.attach_tracing(request(id)).expect("override attach");
     let counts = counter(id);
     let before = counts.get(&0, 0).expect("count");
@@ -112,6 +127,9 @@ where
         0
     );
     assert_eq!(counts.get(&0, 0).expect("traffic"), before + 1);
+    fire_peer.send(()).expect("fire peer");
+    peer.join().expect("peer finished");
+    assert_eq!(counts.get(&0, 0).expect("peer excluded"), before + 1);
     assert_eq!(app.detach(link.id).expect("detach").unresolved(), 0);
     // Detach itself reads stored intent while the hook is still active. Take
     // the quiescence baseline after teardown, then fire only the target read.

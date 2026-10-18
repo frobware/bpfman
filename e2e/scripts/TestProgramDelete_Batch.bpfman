@@ -1,0 +1,43 @@
+# -*- mode: bpfman -*-
+# Cascading program deletion detaches links across attachment families, keeps
+# independent attempts after failures, and accepts duplicates removed in-batch.
+
+guard pair <- net veth-pair
+defer net release $pair
+guard tp <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder
+let t = $tp.programs[0].record.program_id
+defer bpfman program unload $t --ignore-missing
+guard tl <- bpfman link attach tracepoint $t syscalls/sys_enter_kill
+let tid = $tl.record.id
+defer bpfman link detach $tid --ignore-missing
+guard xp <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let x = $xp.programs[0].record.program_id
+defer bpfman program unload $x --ignore-missing
+guard xl <- bpfman link attach xdp $x $pair.host_link --priority 50
+let xid = $xl.record.id
+defer bpfman link detach $xid --ignore-missing
+guard tc <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+let c = $tc.programs[0].record.program_id
+defer bpfman program unload $c --ignore-missing
+guard cl <- bpfman link attach tc $c $pair.host_link ingress --priority 50
+let cid = $cl.record.id
+defer bpfman link detach $cid --ignore-missing
+let missing = $c + 1000
+let malformed <- exec bpfman program delete $t bad-id
+assert not $malformed.ok
+guard _ <- bpfman link get $tid
+let conflicting <- exec bpfman program delete $t --all
+assert not $conflicting.ok
+guard _ <- bpfman program get $t
+let result <- exec bpfman program delete $missing $t $x $c $t $missing
+assert not $result.ok
+assert $result.stdout == ""
+assert contains $result.stderr "2 of 6 program(s) failed to delete"
+foreach program in [$t $x $c] {
+    assert fail bpfman program get $program
+}
+foreach link in [$tid $xid $cid] {
+    assert fail bpfman link get $link
+}
+guard dispatchers <- bpfman dispatcher list -o json
+assert ($dispatchers.dispatchers |> jq length) == 0

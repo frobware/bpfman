@@ -149,6 +149,8 @@ where
             }
         }
 
+        cli::PreparedCommand::Delete(args) => args.execute(&bpfman, cancellation)?,
+
         cli::PreparedCommand::List(args) => {
             let attachment = args.attachment();
             let filter = bpfman_core::ProgramFilter {

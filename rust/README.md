@@ -982,6 +982,37 @@ cleanup failures, retain receipts across reopen, and cover cancellation and lock
 contention. Process tests verify parsing before initialization, ordered errors,
 one writer acquisition, SIGINT/SIGTERM and cleanup before diagnostic delivery.
 
+The hidden `program delete PROGRAM_ID... [-r/--recursive]` and
+`program delete --all` commands add cascading shared-map selection. Selected
+dependants run before their owners regardless of argument order. Recursive
+selection also includes unnamed dependants; `--all` selects every managed program.
+A non-recursive owner deletion preserves unnamed dependants and their map set.
+Each program's links are detached before it is unloaded.
+
+The hidden `link delete LINK_ID... [-r/--recursive]` command detaches each link,
+keeps programs with remaining links loaded, and unloads an owner after its last
+link disappears. Recursive mode also deletes that orphan's shared-map dependants
+and their links. IDs successfully removed earlier in the same cascade succeed as
+later operands; IDs absent before this batch remain errors.
+
+`Bpfman::delete_programs` and `delete_links` (and their cancellable variants)
+select relationships and perform the complete batch under one writer scope.
+`DeleteOutcome` retains each completed `DeleteProgress` and its typed `DeleteError`,
+including work on unnamed dependants. These preserve the original detach/unload
+reports and consuming retry methods, including after reopening. Overlapping failed
+resources are blocked for the rest of that batch rather than retried implicitly.
+Independent targets continue; completed destructive effects are not rolled back.
+Cancellation prevents the next underlying teardown from starting and leaves
+completed progress available. Diagnostics and warnings are delivered after writer
+release, with empty successful output. Generic store interfaces and schema 2 are
+unchanged. Dispatcher record deletion remains a separate slice.
+
+The unchanged shared-map ordering/fan-out scripts and new shared program-delete
+batch/link-delete cascade scripts compare identical assertions against Go and Rust.
+Real-store/stateful-kernel contracts cover partial cascades, failed orphan unload,
+retained warnings, reopened retries, cancellation and failed observations. CLI
+contracts cover parse-time admission, one writer scope, real signals and teardown
+finishing before a failed diagnostic destination.
 
 ## Program unload
 
@@ -2675,5 +2706,8 @@ cover atomic detail publication and malformed/mismatched hook records.
 BPF LSM must be active in `/sys/kernel/security/lsm`; merely compiling the kernel
 with BPF LSM support is insufficient. The native test requires it and joins the
 isolated case processes of `rust-check`, keeping their descriptor tables separate
-from concurrently spawning fixtures. Existing script assertions and labels remain
-unchanged. OCI loading and other attachment families remain separate work.
+from concurrently spawning fixtures. Its traffic worker uses an eight-byte marker
+based on the case process ID: ordinary libtest names share the `sqlite_l` prefix
+that the BPF fixture compares. A synchronized peer using that old prefix proves
+its reads cannot affect the exact counter. Existing script assertions and labels
+remain unchanged. OCI loading and other attachment families remain separate work.

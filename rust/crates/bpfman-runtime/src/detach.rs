@@ -53,7 +53,7 @@ where
             .map_err(crate::error::filesystem_error)
     }
 
-    fn detach_under_writer(
+    pub(super) fn detach_under_writer(
         &self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU64,

@@ -8,6 +8,7 @@ use clap::{
 };
 
 mod config;
+mod delete;
 mod dispatcher;
 mod image;
 mod link;
@@ -48,6 +49,7 @@ pub(super) enum PreparedCommand {
         ids: Vec<std::num::NonZeroU32>,
         ignore_missing: bool,
     },
+    Delete(delete::DeletePrograms),
     List(ListArgs),
     Load(load::PreparedLoad),
     Image(image::ImageCommand),
@@ -95,6 +97,7 @@ impl Command {
                 ids,
                 ignore_missing,
             },
+            ProgramCommand::Delete(args) => PreparedCommand::Delete(args),
             ProgramCommand::List(args) => PreparedCommand::List(args),
             ProgramCommand::Load { source } => PreparedCommand::Load(source.prepare(
                 layout,
@@ -145,6 +148,8 @@ impl ProgramArgs {
 
 #[derive(Subcommand)]
 pub(super) enum ProgramCommand {
+    #[command(hide = true)]
+    Delete(delete::DeletePrograms),
     /// Get a managed program with kernel, map, and link observations.
     Get {
         /// Managed kernel program ID.

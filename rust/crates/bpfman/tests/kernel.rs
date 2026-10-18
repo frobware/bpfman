@@ -585,7 +585,16 @@ fn sqlite_function_tracing_script_corpus() {
 mod lsm;
 #[test]
 fn sqlite_lsm_native_link_recovery() {
-    lsm::exercise(bpfman_store_sqlite::Backend);
+    // The ELF filters only eight comm bytes. Libtest names such as
+    // sqlite_lsm_* and sqlite_lifecycle_* share those bytes across processes.
+    // A worker PID supplies a distinct eight-byte marker without changing the
+    // process-wide name, the fixture, or this case's parallel scheduling.
+    std::thread::Builder::new()
+        .name(format!("{:08x}", std::process::id()))
+        .spawn(|| lsm::exercise(bpfman_store_sqlite::Backend))
+        .expect("LSM marker thread")
+        .join()
+        .expect("LSM case");
 }
 #[test]
 fn sqlite_lsm_script_corpus() {

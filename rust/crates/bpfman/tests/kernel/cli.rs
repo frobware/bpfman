@@ -277,6 +277,61 @@ pub(super) fn effect_boundaries() {
     );
     c.no_artifacts();
 
+    // Both cascading commands finish their effects before delivering a batch
+    // error, even when stderr refuses the first missing-target diagnostic.
+    for family in ["program", "link"] {
+        let loaded = c.json(
+            &rust(),
+            &[
+                "program",
+                "load",
+                "file",
+                source.to_str().expect("source"),
+                "--programs",
+                SELECTION,
+                "-o",
+                "json",
+            ],
+        );
+        let program = id(&loaded["programs"][0]);
+        let attached = c.json(
+            &rust(),
+            &[
+                "link",
+                "attach",
+                "tracepoint",
+                &program.to_string(),
+                "syscalls/sys_enter_kill",
+                "-o",
+                "json",
+            ],
+        );
+        let target = if family == "program" {
+            u64::from(program.get())
+        } else {
+            attached["record"]["id"].as_u64().expect("link")
+        };
+        let missing = (target + 1000).to_string();
+        let output = c
+            .command(&rust(), &[family, "delete", &missing, &target.to_string()])
+            .stderr(Stdio::from(
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open("/dev/full")
+                    .expect("full sink"),
+            ))
+            .output()
+            .expect("delete CLI");
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        c.absent(program);
+        assert_eq!(
+            c.json(&rust(), &["link", "list", "-o", "json"])["links"],
+            serde_json::json!([])
+        );
+        c.no_artifacts();
+    }
+
     // Output delivery is after commit, independently of the backend format.
     let output = c
         .command(
@@ -337,6 +392,10 @@ pub(super) fn program_inventory_scripts() {
         "TestUnload_Batch",
         "TestDetach_IgnoreMissingIsIdempotent",
         "TestDetach_Batch",
+        "TestProgramDelete_SharedMapOrdering",
+        "TestProgramDelete_SharedMapFanOut",
+        "TestProgramDelete_Batch",
+        "TestLinkDelete_Cascade",
         "TestProgram_Presentation",
         "TestProgramList_All",
         "TestProgramList_AllTypeFilterKernelOnly",

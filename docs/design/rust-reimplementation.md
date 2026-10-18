@@ -2716,7 +2716,12 @@ wrong, change it here before broadening feature coverage.
 
 ### Phase 5: public surfaces and cutover
 
-- Complete gRPC and CLI compatibility. Program unload accepts multiple IDs and
+- Complete gRPC and CLI compatibility. Hidden program/link cascading delete
+  commands support shared-map dependant ordering, recursive expansion and program
+  `--all` selection under one writer scope. Link delete unloads its owner only
+  after its last link disappears. Outcomes retain original teardown progress and
+  consuming cleanup receipts. Hidden dispatcher record deletion remains pending.
+  Program unload accepts multiple IDs and
   `--ignore-missing`, with ordered attempts under one writer scope and per-ID
   failures reported after release. Link detach likewise accepts multiple IDs and
   `--ignore-missing`, selecting each attachment family and observing the latest
@@ -6409,3 +6414,94 @@ kernel stages take 69.88 seconds. Gate log:
 `/tmp/bpfman-batch-detach-final-check.log`. Remote-image and forced-image lanes
 were not rerun for this CLI slice. No existing acceptance assertion, script label,
 architecture law or scheduling isolation was weakened.
+
+
+## Cascading program/link deletion checkpoint (18 October 2026)
+
+The hidden Go `program delete` and `link delete` commands now have Rust
+counterparts. `program delete ID... [-r/--recursive]` detaches each program's
+links before unloading it. Selected shared-map dependants run before their owners
+regardless of argument order; recursive mode adds unnamed dependants.
+`program delete --all` selects every managed program. Non-recursive deletion of
+an owner alone preserves unnamed dependants and the durable map set they use.
+A pure core function supplies stable explicit-target ordering, including Go's
+relationship-dependent deduplication policy.
+
+`link delete ID... [-r/--recursive]` detaches each link and unloads its owner
+only when no managed links remain. Recursive orphan deletion includes unnamed
+shared-map dependants and their attachments. Successful removals are remembered
+within the batch: an explicitly repeated or recursively removed target succeeds
+as a later operand. A target absent before the batch remains an error. These
+commands intentionally have no `--ignore-missing` flag, matching Go.
+
+Selection, relationship observation, detach, orphan detection and unload share
+one cancellable runtime writer scope through generic store interfaces. Even
+`--all` selection happens after writer admission, rather than capturing targets
+before the lock. There is no store-interface, SQLite schema-2, kernel teardown,
+or cache policy change. Hidden dispatcher record deletion remains separate.
+
+`DeleteOutcome` retains completed typed `DeleteProgress` steps and a typed
+`DeleteError`, including all work on unnamed dependants. Steps retain original
+family-specific detach and unload reports; failures retain their consuming retry
+ownership. Callers can use the existing explicit cleanup methods after reopening.
+An overlapping failed resource is blocked for the rest of the batch rather than
+being retried implicitly while its original receipt remains outstanding. This
+extends the established ownership discipline to cascades; independent targets
+still get their attempt. Successful unload warnings remain retained reports.
+Cancellation prevents the next underlying teardown from starting; an admitted
+interpreter finishes its existing destructive pass. Completed effects are not
+rolled back. The CLI releases the writer before emitting warnings, per-target
+errors and batch summaries, preserving signal exit classification and empty
+successful output.
+
+Unchanged `TestProgramDelete_SharedMapOrdering` and
+`TestProgramDelete_SharedMapFanOut` join the Go/Rust inventory comparison.
+New shared `TestProgramDelete_Batch` covers malformed/conflicting operands before
+mutation, missing IDs around attached tracepoint/XDP/TC programs, duplicate
+operands and complete dispatcher removal. New shared `TestLinkDelete_Cascade`
+covers multi-link owner survival, last-link unload, duplicate and missing
+operands, non-recursive map-set survival and recursive removal of attached
+unnamed dependants. Existing Go source, tests, acceptance assertions and labels
+are unchanged.
+
+Generic real-store/stateful-kernel contracts cover dependency order, unnamed
+selection, partial cascades, failed orphan unload, independent progress,
+overlapping failures, retained warnings and consuming retries after reopen.
+Cancellation tests exercise both commands during observation, detach and program
+teardown. Store observation failure and cancelled selection perform no kernel
+effects. CLI contracts cover parsing before initialization, hidden help, ordered
+missing-target diagnostics, silent empty `--all`, one continuous writer scope
+and real SIGINT/SIGTERM waits. Native CLI contracts check that failed stderr
+delivery cannot skip a later valid deletion in either command.
+
+The full gate also exposed an existing native LSM fixture collision. Its BPF
+program compares only eight comm bytes, while libtest's
+`sqlite_lsm_native_link_recovery` and `sqlite_lifecycle_store_failures` threads
+share the `sqlite_l` prefix even in different case processes. A parallel peer's
+file-permission event could therefore violate the exact `before + 1` assertion.
+The LSM case now runs on a standard Rust thread named with its worker PID as
+eight hex digits. A synchronized peer using the old colliding prefix is created
+before hook attachment and fires a read during the measurement; the counter must
+remain unchanged by that peer. A temporary old-prefix control fails at this new
+peer-exclusion assertion with exactly one extra count, proving the isolation
+boundary. The unique-marker case passes. Original traffic/quiescence assertions,
+Go fixtures and scripts, and parallel case scheduling remain unchanged. Control
+log: `/tmp/bpfman-delete-lsm-collision-control.log`; focused passing log:
+`/tmp/bpfman-delete-lsm-focused.log`.
+
+Validation: `direnv exec . make rust-check` exits zero. Formatting, strict
+Clippy, unchanged architecture laws, all userspace/store/stateful-kernel/CLI
+contracts, doctests, all 75 native kernel cases, owned-fixture cleanup and
+warnings-denied Rustdoc pass. Each native case runs once in a distinct process;
+the LSM regression remains in the eight-worker stage. The 22-script inventory
+selection passes identical assertions against Go and Rust (44 script passes),
+including both unchanged shared-map delete scripts and both new deletion scripts.
+The new scripts pass the shell checker and canonical formatter. No existing
+acceptance assertion, script label, architecture law or scheduling isolation was
+weakened.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the complete
+native stages take 71.64 seconds. Final gate log:
+`/tmp/bpfman-delete-complete-check.log`; focused Go/Rust comparison log:
+`/tmp/bpfman-delete-comparison.log`. Remote-image and forced-image lanes were not
+rerun for this CLI slice.

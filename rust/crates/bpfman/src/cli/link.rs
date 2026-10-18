@@ -23,6 +23,8 @@ impl LinkArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum LinkCommand {
+    #[command(hide = true)]
+    Delete(super::delete::DeleteLinks),
     /// Attach an already loaded program.
     Attach {
         #[command(subcommand)]
@@ -264,10 +266,16 @@ impl LinkCommand {
             + bpfman_store::LinkStore
             + bpfman_store::XdpReplacementStore
             + bpfman_store::TcStore
+            + bpfman_store::UnloadStore
             + 'static,
         S::Reader: bpfman_store::LinkReader,
     {
         match self {
+            Self::Delete(args) => {
+                let results =
+                    app.delete_links_with_cancellation(&args.ids, args.recursive, cancellation)?;
+                super::delete::report("link", &results)?;
+            }
             Self::Attach {
                 target:
                     AttachCommand::Uprobe {

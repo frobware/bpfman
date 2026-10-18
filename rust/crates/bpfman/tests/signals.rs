@@ -26,6 +26,9 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
             None,
             Some(&["program", "unload", "42"][..]),
             Some(&["program", "unload", "42", "43", "--ignore-missing"][..]),
+            Some(&["program", "delete", "42", "43", "-r"][..]),
+            Some(&["program", "delete", "--all"][..]),
+            Some(&["link", "delete", "42", "43", "-r"][..]),
             Some(&["link", "detach", "42"][..]),
             Some(&["link", "detach", "42", "43", "--ignore-missing"][..]),
         ] {

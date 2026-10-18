@@ -1,0 +1,78 @@
+# -*- mode: bpfman -*-
+# Link deletion keeps an owner with remaining links, unloads its last-link owner,
+# and optionally deletes shared-map dependants, including their attachments.
+
+guard pair <- net veth-pair
+defer net release $pair
+guard program <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let id = $program.programs[0].record.program_id
+defer bpfman program unload $id --ignore-missing
+guard first <- bpfman link attach xdp $id $pair.host_link --priority 50
+let a = $first.record.id
+defer bpfman link detach $a --ignore-missing
+guard second <- bpfman link attach xdp $id $pair.host_link --priority 60
+let b = $second.record.id
+defer bpfman link detach $b --ignore-missing
+let missing = $b + 1000
+let malformed <- exec bpfman link delete $a bad-id
+assert not $malformed.ok
+guard _ <- bpfman link get $a
+
+guard kept <- exec bpfman link delete $a $a
+assert $kept.stdout == ""
+assert $kept.stderr == ""
+assert fail bpfman link get $a
+guard alive <- bpfman program get $id
+assert ($alive.status.links |> jq length) == 1
+let deleted <- exec bpfman link delete $missing $b $b $missing
+assert not $deleted.ok
+assert $deleted.stdout == ""
+assert contains $deleted.stderr "2 of 4 link(s) failed to delete"
+assert fail bpfman program get $id
+assert fail bpfman link get $b
+
+# Non-recursive deletion leaves an unnamed shared-map dependant usable.
+guard owner <- bpfman program load file testdata/bpf/tcx_counter.bpf.o --programs tcx:tcx_stats
+let o = $owner.programs[0].record.program_id
+defer bpfman program unload $o --ignore-missing
+guard dep <- bpfman program load file testdata/bpf/tcx_counter.bpf.o --programs tcx:tcx_stats --map-owner-id $o
+let d = $dep.programs[0].record.program_id
+defer bpfman program unload $d --ignore-missing
+guard attached <- bpfman link attach tcx $o $pair.host_link ingress --priority 50
+let l = $attached.record.id
+defer bpfman link detach $l --ignore-missing
+bpfman link delete $l
+assert fail bpfman program get $o
+guard survivor <- bpfman program get $d
+assert $survivor.record.handles.map_owner_id == $o
+assert $survivor matches {
+    status.map_used_by: [$d]
+}
+bpfman program delete $d
+
+# Recursive deletion from a last link includes the unnamed dependant and its
+# link. An explicit later operand for that cascaded link succeeds in this batch.
+guard ownerR <- bpfman program load file testdata/bpf/tcx_counter.bpf.o --programs tcx:tcx_stats
+let ro = $ownerR.programs[0].record.program_id
+defer bpfman program unload $ro --ignore-missing
+guard depR <- bpfman program load file testdata/bpf/tcx_counter.bpf.o --programs tcx:tcx_stats --map-owner-id $ro
+let rd = $depR.programs[0].record.program_id
+defer bpfman program unload $rd --ignore-missing
+guard ownerLink <- bpfman link attach tcx $ro $pair.host_link ingress --priority 50
+let rl = $ownerLink.record.id
+defer bpfman link detach $rl --ignore-missing
+guard depLink <- bpfman link attach tcx $rd $pair.host_link egress --priority 50
+let dl = $depLink.record.id
+defer bpfman link detach $dl --ignore-missing
+guard recursive <- exec bpfman link delete $rl $dl $rl -r
+assert $recursive.stdout == ""
+assert $recursive.stderr == ""
+foreach program in [$ro $rd] {
+    assert fail bpfman program get $program
+}
+foreach link in [$rl $dl] {
+    assert fail bpfman link get $link
+}
+let absent <- exec bpfman link delete $rl
+assert not $absent.ok
+assert contains $absent.stderr "1 of 1 link(s) failed to delete"

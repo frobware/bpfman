@@ -25,6 +25,9 @@ pub use xdp_replace::{
     XdpRestoreFailure, XdpRestoreStep, XdpRetirement,
 };
 
+mod delete;
+pub use delete::order_program_deletes;
+
 mod link;
 mod link_list;
 mod list;

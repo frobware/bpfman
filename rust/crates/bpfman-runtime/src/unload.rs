@@ -222,7 +222,7 @@ where
             .map_err(crate::error::filesystem_error)
     }
 
-    fn unload_under_writer(
+    pub(super) fn unload_under_writer(
         &self,
         writer: &RuntimeWriter<'_>,
         id: NonZeroU32,

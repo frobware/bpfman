@@ -40,6 +40,10 @@ fn signal_child() {
         shutdown.exit_code(&error::Error::batch_detach(1, 2, false)),
         std::process::ExitCode::FAILURE
     );
+    assert_eq!(
+        shutdown.exit_code(&error::Error::batch_delete("program", 1, 2, false)),
+        std::process::ExitCode::FAILURE
+    );
     println!("handlers ready");
     std::io::stdout().flush().expect("ready");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -53,6 +57,10 @@ fn signal_child() {
     );
     assert_ne!(
         shutdown.exit_code(&error::Error::batch_detach(1, 2, true)),
+        std::process::ExitCode::FAILURE
+    );
+    assert_ne!(
+        shutdown.exit_code(&error::Error::batch_delete("link", 1, 2, true)),
         std::process::ExitCode::FAILURE
     );
     println!("cancellation received; simulating an in-flight effect");

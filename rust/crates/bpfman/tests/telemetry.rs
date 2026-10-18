@@ -269,8 +269,12 @@ fn batch_mutations_hold_one_writer_scope_for_all_operands() {
         ("program", "unload", true),
         ("link", "detach", false),
         ("link", "detach", true),
+        ("program", "delete", false),
+        ("link", "delete", false),
     ] {
-        let trace = temp.path().join(format!("batch-{verb}-{ignore}.json"));
+        let trace = temp
+            .path()
+            .join(format!("batch-{family}-{verb}-{ignore}.json"));
         let mut args = vec![family, verb, "43", "42", "43"];
         if ignore {
             args.push("--ignore-missing");

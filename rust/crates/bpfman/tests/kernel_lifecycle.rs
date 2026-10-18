@@ -31,6 +31,9 @@ mod batch_unload;
 #[path = "lifecycle/batch_detach.rs"]
 mod batch_detach;
 
+#[path = "lifecycle/delete.rs"]
+mod delete;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -1082,4 +1085,29 @@ fn sqlite_batch_detach_admission() {
 #[test]
 fn sqlite_batch_detach_dispatcher_recovery() {
     batch_detach::dispatcher_recovery(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_cascading_delete_ordering() {
+    delete::ordering(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_cascading_delete_recovery() {
+    delete::recovery(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_cascading_delete_warnings() {
+    delete::warnings(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_cascading_delete_cancellation() {
+    delete::cancellation(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_cascading_delete_observations() {
+    delete::observations(bpfman_store_sqlite::Backend);
 }

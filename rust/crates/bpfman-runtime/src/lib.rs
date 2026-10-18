@@ -32,6 +32,8 @@ pub use xdp::{XdpAttach, XdpError, XdpReport};
 mod application;
 mod cancellation;
 mod compensation;
+mod delete;
+mod delete_error;
 mod detach;
 mod error;
 mod kernel;
@@ -451,4 +453,115 @@ pub struct TracingAttach {
     pub kind: bpfman_model::TracingKind,
     /// Operator labels.
     pub metadata: std::collections::BTreeMap<String, String>,
+}
+
+/// Program selection for cascading deletion.
+#[derive(Clone, Copy, Debug)]
+pub enum ProgramDelete<'a> {
+    /// Delete explicit programs, optionally including unnamed shared-map dependants.
+    Ids {
+        /// Requested identities; selected dependants are processed before owners.
+        ids: &'a [std::num::NonZeroU32],
+        /// Include unnamed shared-map dependants.
+        recursive: bool,
+    },
+    /// Select every managed program under the writer lock.
+    All,
+}
+
+/// One requested deletion and all progress made on its behalf.
+#[must_use = "inspect each result and retain unresolved cleanup"]
+pub struct DeleteOutcome<
+    I,
+    S: bpfman_store::UnloadStore
+        + bpfman_store::LinkStore
+        + bpfman_store::XdpStore
+        + bpfman_store::TcStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
+> {
+    /// Requested program or link identity.
+    pub id: I,
+    /// Completed underlying operations, including recursively deleted dependants.
+    pub progress: Vec<DeleteProgress<S, K>>,
+    /// Failure retains the original underlying cleanup ownership.
+    pub outcome: Result<(), DeleteError<S, K>>,
+}
+
+/// A completed step in cascading deletion, retaining any cleanup warnings.
+#[must_use = "inspect progress and retain unresolved cleanup"]
+pub enum DeleteProgress<
+    S: bpfman_store::UnloadStore
+        + bpfman_store::LinkStore
+        + bpfman_store::XdpStore
+        + bpfman_store::TcStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
+> {
+    /// A detached link; the report retains its attachment family.
+    Link {
+        /// Managed link identity.
+        id: std::num::NonZeroU64,
+        /// Original cleanup report.
+        report: DetachReport<S, K>,
+    },
+    /// An unloaded program, possibly retaining retryable cleanup warnings.
+    Program {
+        /// Managed program identity.
+        id: std::num::NonZeroU32,
+        /// Original cleanup report.
+        report: UnloadReport<S, K>,
+    },
+}
+
+/// Cascading deletion failure, retaining original consuming retry ownership.
+pub enum DeleteError<
+    S: bpfman_store::UnloadStore
+        + bpfman_store::LinkStore
+        + bpfman_store::XdpStore
+        + bpfman_store::TcStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
+> {
+    /// Admission or stored relationship observation failed.
+    Observation(Error),
+    /// A prior attempt in this batch failed; retry its original retained receipt.
+    BlockedProgram(std::num::NonZeroU32),
+    /// A prior link attempt in this batch failed; retry its retained receipt.
+    BlockedLink(std::num::NonZeroU64),
+    /// Link teardown failed.
+    Link {
+        /// Failed managed link identity, possibly belonging to a dependant.
+        id: std::num::NonZeroU64,
+        /// Original family-specific failure and cleanup ownership.
+        error: Box<DetachError<S, K>>,
+    },
+    /// Program teardown failed.
+    Program {
+        /// Failed managed program identity, possibly a dependant.
+        id: std::num::NonZeroU32,
+        /// Original failure and cleanup ownership.
+        error: UnloadError<S, K>,
+    },
+}
+
+/// Stable classification for cascading deletion failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeleteErrorKind {
+    /// Cancelled before the next teardown started.
+    Cancelled,
+    /// A requested managed identity is absent.
+    NotFound,
+    /// Ownership changed or an earlier failed attempt blocks this target.
+    InvalidState,
+    /// This backend does not support the operation.
+    Unsupported,
+    /// Store, filesystem or kernel observation failed.
+    Unavailable,
 }
