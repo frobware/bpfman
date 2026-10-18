@@ -321,6 +321,25 @@ pub struct UnloadReport<
     tc: unload_tc::Progress<S, K>,
 }
 
+/// One ordered batch result. Inspect warnings and retain unresolved cleanup
+/// exactly as for a single-program unload.
+#[must_use = "inspect each result and retain unresolved cleanup"]
+pub struct UnloadOutcome<
+    S: bpfman_store::UnloadStore
+        + bpfman_store::LinkStore
+        + bpfman_store::XdpStore
+        + bpfman_store::TcStore,
+    K: bpfman_kernel::ProgramResources
+        + bpfman_kernel::TracepointLinks
+        + bpfman_kernel::XdpReplacement
+        + bpfman_kernel::TcLifecycle,
+> {
+    /// The requested managed program ID. Duplicates retain separate outcomes.
+    pub id: std::num::NonZeroU32,
+    /// Completed progress or a failure retaining any unresolved cleanup.
+    pub outcome: Result<UnloadReport<S, K>, UnloadError<S, K>>,
+}
+
 /// Unload failure, retaining progress and receipts if teardown began.
 pub struct UnloadError<
     S: bpfman_store::UnloadStore

@@ -7,7 +7,7 @@ use std::{fmt, num::NonZeroU32};
 pub(super) enum Cause {
     #[error("unload cancelled before teardown")]
     Cancelled,
-    #[error("managed program {0} not found")]
+    #[error("managed program {0} does not exist")]
     NotFound(NonZeroU32),
     #[error("{0}")]
     Invalid(&'static str),
@@ -151,6 +151,17 @@ impl<
         + bpfman_kernel::TcLifecycle,
 > UnloadError<S, K>
 {
+    /// True only when admission found no managed program record. Missing links
+    /// and failed teardown must still be reported by idempotent callers.
+    pub fn is_program_missing(&self) -> bool {
+        matches!(
+            &self.failure,
+            Failure::Before(UnloadCause {
+                cause: Cause::NotFound(_)
+            })
+        )
+    }
+
     /// Backend-independent failure category.
     pub fn kind(&self) -> UnloadErrorKind {
         if let Some(cause) = self.primary() {
@@ -383,5 +394,27 @@ impl<
         self.report()
             .and_then(|r| r.xdp.cause().or_else(|| r.tc.cause()))
             .map(|e| e as _)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Error = UnloadError<bpfman_store_sqlite::Backend, bpfman_kernel_aya::Kernel>;
+
+    #[test]
+    fn missing_program_is_distinct_from_missing_attachment_and_other_admission_errors() {
+        let missing = Error::from(UnloadCause::from(Cause::NotFound(NonZeroU32::MIN)));
+        assert!(missing.is_program_missing());
+        for cause in [
+            Cause::Link(crate::link_error::Cause::NotFound.into()),
+            Cause::Cancelled,
+            Cause::Invalid("changed pin identity"),
+        ] {
+            let error = Error::from(UnloadCause::from(cause));
+            assert!(!error.is_program_missing());
+            assert!(error.report().is_none());
+        }
     }
 }

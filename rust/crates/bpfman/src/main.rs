@@ -110,18 +110,42 @@ where
             output::program(&mut io::stdout().lock(), &program, output, false)?;
         }
 
-        cli::PreparedCommand::Unload { id } => {
-            let report = bpfman.unload_with_cancellation(id, cancellation)?;
-
-            for attempt in report.attempts() {
-                if let Err(error) = &attempt.outcome {
-                    writeln!(
-                        io::stderr().lock(),
-                        "Warning: {:?}: {:#}",
-                        attempt.kind,
-                        format_chain(error)
-                    )?;
+        cli::PreparedCommand::Unload {
+            ids,
+            ignore_missing,
+        } => {
+            let results = bpfman.unload_many_with_cancellation(&ids, cancellation)?;
+            let mut failed = 0;
+            let mut cancelled = false;
+            for result in &results {
+                match &result.outcome {
+                    Ok(report) => {
+                        for attempt in report.attempts() {
+                            if let Err(error) = &attempt.outcome {
+                                writeln!(
+                                    io::stderr().lock(),
+                                    "Warning: {:?}: {:#}",
+                                    attempt.kind,
+                                    format_chain(error)
+                                )?;
+                            }
+                        }
+                    }
+                    Err(error) if ignore_missing && error.is_program_missing() => {}
+                    Err(error) => {
+                        failed += 1;
+                        cancelled |= error.kind() == bpfman_runtime::UnloadErrorKind::Cancelled;
+                        writeln!(
+                            io::stderr().lock(),
+                            "program {}: {:#}",
+                            result.id,
+                            format_chain(error)
+                        )?;
+                    }
                 }
+            }
+            if failed != 0 {
+                return Err(error::Error::batch_unload(failed, results.len(), cancelled));
             }
         }
 

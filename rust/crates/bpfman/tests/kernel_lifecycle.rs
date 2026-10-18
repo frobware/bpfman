@@ -25,6 +25,9 @@ mod kprobe;
 #[path = "lifecycle/tcx.rs"]
 mod tcx;
 
+#[path = "lifecycle/batch_unload.rs"]
+mod batch_unload;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -990,6 +993,21 @@ macro_rules! backend_tests {
     };
 }
 backend_tests!(sqlite, bpfman_store_sqlite::Backend);
+
+#[test]
+fn sqlite_batch_unload_recovery() {
+    batch_unload::recovery(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_batch_unload_cancellation() {
+    batch_unload::cancellation(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_batch_unload_admission() {
+    batch_unload::admission(bpfman_store_sqlite::Backend);
+}
 
 #[test]
 fn sqlite_tcx_ordering_and_scopes() {

@@ -2716,7 +2716,9 @@ wrong, change it here before broadening feature coverage.
 
 ### Phase 5: public surfaces and cutover
 
-- Complete gRPC and CLI compatibility. Bare `program` lists with the same filters
+- Complete gRPC and CLI compatibility. Program unload accepts multiple IDs and
+  `--ignore-missing`, with ordered attempts under one writer scope and per-ID
+  failures reported after release. Bare `program` lists with the same filters
   and output flags as `program list`; program detail attachment summaries and
   sorted, blank-line-separated batch-load text follow Go's presentation.
   Program inventory (`program list --all`)
@@ -6290,3 +6292,59 @@ suite takes 67.05 seconds. Every case runs once in its own process and reports
 success. Gate log: `/tmp/bpfman-program-check.log`; focused Go/Rust inventory
 log: `/tmp/bpfman-program-inventory.log`. Remote-image and forced-image lanes
 were not rerun for this presentation slice.
+
+
+## Program batch-unload checkpoint (18 October 2026)
+
+`program unload` now accepts one or more IDs and `--ignore-missing`, matching
+Go's batch mutation policy. All operands are parsed before runtime initialization.
+The runtime acquires one writer scope and attempts each ID in input order,
+including repeated IDs, while retaining the existing standalone and dispatcher
+teardown interpreters. A failed program does not prevent an independent later
+program from being attempted. This does not make the batch transactional:
+completed destructive effects are not rolled back.
+
+The CLI emits warnings, per-ID failures and the `N of M program(s) failed to
+unload` summary only after releasing the writer. Success has no stdout.
+Idempotent mode suppresses only a missing managed program record during admission;
+missing attachments, invalid ownership evidence, store errors and failed cleanup
+remain errors. A typed `is_program_missing` predicate distinguishes this from the
+broader error category, which can also describe missing attachment observations.
+The missing-program diagnostic includes Go's `does not exist` wording.
+
+The generic `unload_many` and `unload_many_with_cancellation` methods return ordered
+`UnloadOutcome` values with the original single-program report/error and consuming
+cleanup receipts. Lock admission fails before any program starts. Cancellation
+before a program's destructive boundary preserves its state; an admitted
+teardown finishes that program's pass and later operands receive cancellation
+without starting. The CLI preserves signal exit classification in batch summaries.
+No store interfaces, persistence schema or kernel teardown policy change.
+
+New shared `TestUnload_Batch.bpfman` checks malformed trailing operands before
+mutation, mixed missing/attached operands, shared XDP dispatcher removal, duplicate
+IDs, summary counts, empty successful output and repeated idempotent cleanup.
+It and unchanged `TestUnload_IgnoreMissingIsIdempotent.bpfman` join the inventory
+selection against both Go and Rust. Existing Go code, tests, script assertions
+and labels are unchanged.
+
+Generic real-store/stateful-kernel contracts cover independent progress after an
+attached-program failure, retained error and warning receipts, explicit consuming
+retries, preflight and destructive-boundary cancellation, writer contention and
+cancelled admission. Process contracts cover ordered per-ID diagnostics, invalid
+operands before runtime creation, ownership refusal even with `--ignore-missing`,
+one continuous writer acquisition through telemetry, and SIGINT/SIGTERM while
+waiting for a single-program or batch mutation lock.
+
+Validation: `direnv exec . make rust-check` exits zero. Formatting, strict Clippy,
+unchanged architecture laws, all userspace/store/stateful-kernel/CLI contracts,
+doctests, all 75 discovered native kernel cases, owned-fixture cleanup and
+warnings-denied Rustdoc pass. Each native case runs once in a distinct process.
+The 16-script inventory selection passes unchanged assertions against Go and Rust
+(32 script passes), including the unchanged idempotent-unload script and new
+batch script. The new script passes the shell checker and canonical formatter.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, the complete
+kernel stages take 69.12 seconds. Gate log:
+`/tmp/bpfman-batch-unload-check.log`; focused Go/Rust comparison log:
+`/tmp/bpfman-batch-unload-inventory.log`. Remote-image and forced-image lanes were
+not rerun for this CLI slice.

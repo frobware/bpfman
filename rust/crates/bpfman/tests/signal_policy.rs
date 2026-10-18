@@ -32,6 +32,10 @@ fn signal_child() {
     let shutdown = signals::Shutdown::install().expect("handlers");
     let error: error::Error = std::io::Error::other("injected error").into();
     assert_eq!(shutdown.exit_code(&error), std::process::ExitCode::FAILURE);
+    assert_eq!(
+        shutdown.exit_code(&error::Error::batch_unload(1, 2, false)),
+        std::process::ExitCode::FAILURE
+    );
     println!("handlers ready");
     std::io::stdout().flush().expect("ready");
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -39,6 +43,10 @@ fn signal_child() {
         assert!(Instant::now() < deadline, "no first signal");
         std::thread::sleep(Duration::from_millis(1));
     }
+    assert_ne!(
+        shutdown.exit_code(&error::Error::batch_unload(1, 2, true)),
+        std::process::ExitCode::FAILURE
+    );
     println!("cancellation received; simulating an in-flight effect");
     std::io::stdout().flush().expect("cancelled");
     // The second signal must exit even while the operation makes no progress.

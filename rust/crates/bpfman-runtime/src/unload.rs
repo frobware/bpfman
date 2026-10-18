@@ -179,39 +179,78 @@ where
                     timeout: self.lock_timeout,
                     cancelled: Some(cancellation.flag()),
                 },
-                |writer| {
-                    if cancellation.is_cancelled() {
-                        return Err(crate::UnloadCause::from(
-                            crate::unload_error::Cause::Cancelled,
-                        )
-                        .into());
-                    }
-                    let operation = prepare(
-                        &writer,
-                        &mut real::Effects(&self.store, &self.kernel),
-                        id,
-                        cancellation,
-                    )?;
-                    let xdp = crate::unload_xdp::observe(self, &writer, id)?;
-                    let tc = crate::unload_tc::observe(self, &writer, id)?;
-                    if cancellation.is_cancelled() {
-                        return Err(crate::UnloadCause::from(
-                            crate::unload_error::Cause::Cancelled,
-                        )
-                        .into());
-                    }
-                    resume(
-                        self,
-                        &writer,
-                        UnloadReport {
-                            report: operation.defer(),
-                            xdp,
-                            tc,
-                        },
-                    )
-                },
+                |writer| self.unload_under_writer(&writer, id, cancellation),
             )
             .map_err(crate::UnloadCause::from)?
+    }
+
+    /// Attempt every ID in order under one writer lock, including duplicates.
+    /// Each outcome retains its own warnings or failed cleanup receipts.
+    pub fn unload_many(
+        &self,
+        ids: &[NonZeroU32],
+    ) -> Result<Vec<crate::UnloadOutcome<S, K>>, crate::Error> {
+        self.unload_many_with_cancellation(ids, &crate::Cancellation::new())
+    }
+
+    /// Acquire one cancellable writer scope for the entire batch. An admitted
+    /// program finishes its teardown pass; cancellation prevents later programs
+    /// from starting. Admission failures perform no teardown. Individual errors
+    /// do not stop the batch, and all results retain input order.
+    #[tracing::instrument(name = "program.unload_many", level = "debug", skip_all, fields(count = ids.len()), err)]
+    pub fn unload_many_with_cancellation(
+        &self,
+        ids: &[NonZeroU32],
+        cancellation: &crate::Cancellation,
+    ) -> Result<Vec<crate::UnloadOutcome<S, K>>, crate::Error> {
+        self.store
+            .runtime()
+            .with_writer(
+                AcquireOptions {
+                    timeout: self.lock_timeout,
+                    cancelled: Some(cancellation.flag()),
+                },
+                |writer| {
+                    ids.iter()
+                        .map(|&id| crate::UnloadOutcome {
+                            id,
+                            outcome: self.unload_under_writer(&writer, id, cancellation),
+                        })
+                        .collect()
+                },
+            )
+            .map_err(crate::error::filesystem_error)
+    }
+
+    fn unload_under_writer(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        id: NonZeroU32,
+        cancellation: &crate::Cancellation,
+    ) -> Result<UnloadReport<S, K>, UnloadError<S, K>> {
+        if cancellation.is_cancelled() {
+            return Err(UnloadCause::from(Cause::Cancelled).into());
+        }
+        let operation = prepare(
+            writer,
+            &mut real::Effects(&self.store, &self.kernel),
+            id,
+            cancellation,
+        )?;
+        let xdp = crate::unload_xdp::observe(self, writer, id)?;
+        let tc = crate::unload_tc::observe(self, writer, id)?;
+        if cancellation.is_cancelled() {
+            return Err(UnloadCause::from(Cause::Cancelled).into());
+        }
+        resume(
+            self,
+            writer,
+            UnloadReport {
+                report: operation.defer(),
+                xdp,
+                tc,
+            },
+        )
     }
 }
 

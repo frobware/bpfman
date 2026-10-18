@@ -961,7 +961,7 @@ program resources.
 ## Program unload
 
 ```sh
-sudo rust/target/debug/bpfman program unload PROGRAM_ID
+sudo rust/target/debug/bpfman program unload PROGRAM_ID [PROGRAM_ID ...] [--ignore-missing]
 direnv exec . make rust-test-unload
 ```
 
@@ -984,6 +984,22 @@ map-set record authorizes inspection of its remaining BPF map pins. Bytecode
 adoption accepts only `bytecode.o` and `provenance.json`. Unknown children and
 unsafe paths fail preflight before any managed-object removal. Ordinary missing
 artifacts are treated as already absent.
+
+The CLI accepts one or more IDs and attempts each operand in input order,
+including duplicates, under one writer lock. Failures do not prevent later IDs
+from being attempted. After releasing the lock it prints each failed ID and a
+`N of M program(s) failed to unload` summary; success has no stdout. This is a
+batch of teardown operations, not an atomic rollback across programs.
+`--ignore-missing` suppresses only admission finding no managed program record.
+Attachment failures, changed ownership evidence and cleanup errors retain their
+normal status. Cancellation finishes an already destructive program pass and
+prevents later programs from starting.
+
+Library callers use `unload_many` or `unload_many_with_cancellation`. Lock admission
+failure returns an application error before any teardown. Ordered `UnloadOutcome`
+values retain each single-program report or error, including independent warning
+receipts for explicit retry. The existing single-program methods use the same
+private interpreter under their own writer scope.
 
 XDP unload first removes all of the program's dispatcher memberships under the
 same writer lock, rebuilding surviving members or synchronously detaching the
@@ -1034,8 +1050,9 @@ not make failures transient: an unchanged failing condition still fails. The
 caller must decide whether external conditions justify another attempt. The CLI
 runs one pass and reports warnings/errors; it does not persist a recovery queue.
 Repeating the CLI command can finish a partial unload while the program record
-still exists. Once the record has gone, repeating by ID reports not found;
-remaining GC residue requires separate repair, which this slice does not add.
+still exists. Once the record has gone, repeating by ID reports not found unless
+`--ignore-missing` is set; remaining GC residue requires separate repair, which
+this slice does not add.
 
 The stateful fake enters the production unload interpreter and checks all 256
 subsets of failure across eight individual effects, including exact order,

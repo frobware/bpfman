@@ -248,3 +248,47 @@ fn list_reuses_the_store_handle_opened_at_startup() {
         );
     }
 }
+
+#[test]
+fn batch_unload_holds_one_writer_scope_for_all_operands() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("runtime");
+    assert!(
+        run(
+            &root,
+            &temp.path().join("init.json"),
+            "off",
+            &["program", "list", "-q"]
+        )
+        .status
+        .success()
+    );
+
+    for ignore in [false, true] {
+        let trace = temp.path().join(format!("batch-{ignore}.json"));
+        let mut args = vec!["program", "unload", "43", "42", "43"];
+        if ignore {
+            args.push("--ignore-missing");
+        }
+        let output = run(&root, &trace, "trace", &args);
+        assert_eq!(output.status.success(), ignore);
+        assert!(output.stdout.is_empty());
+        let events: Vec<Value> = String::from_utf8(output.stderr)
+            .expect("stderr")
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let opens = |name: &str| {
+            events
+                .iter()
+                .filter(|event| {
+                    event["fields"]["message"] == "new" && event["span"]["name"] == name
+                })
+                .count()
+        };
+        assert_eq!(opens("lock.wait"), 1, "one admission for the batch");
+        assert_eq!(opens("lock.held"), 1, "one continuous writer scope");
+        assert_eq!(opens("store.open_reader"), 1, "reuse the startup store");
+        assert!(!names(&trace).iter().any(|name| name == "store.create"));
+    }
+}

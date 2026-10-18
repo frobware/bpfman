@@ -1,0 +1,73 @@
+# -*- mode: bpfman -*-
+# Ordered batch unload continues after missing IDs, cleans attached programs,
+# and preserves duplicate operands and idempotent cleanup semantics.
+
+guard pair <- net veth-pair
+defer net release $pair
+guard absent <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let missing = $absent.programs[0].record.program_id
+defer bpfman program unload $missing --ignore-missing
+guard _ <- bpfman program unload $missing
+
+guard tp <- bpfman program load file testdata/bpf/tracepoint_counter.bpf.o --programs tracepoint:tracepoint_kill_recorder
+let traceID = $tp.programs[0].record.program_id
+defer bpfman program unload $traceID --ignore-missing
+guard trace <- bpfman link attach tracepoint $traceID syscalls/sys_enter_kill
+guard first <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let firstID = $first.programs[0].record.program_id
+defer bpfman program unload $firstID --ignore-missing
+guard second <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let secondID = $second.programs[0].record.program_id
+defer bpfman program unload $secondID --ignore-missing
+guard x <- bpfman link attach xdp $firstID $pair.host_link --priority 50
+guard y <- bpfman link attach xdp $secondID $pair.host_link --priority 60
+
+# All operands are parsed before any unload starts.
+let invalid <- exec bpfman program unload $traceID $firstID bad-id
+assert not $invalid.ok
+guard _ <- bpfman program get $traceID
+guard _ <- bpfman program get $firstID
+
+# Both missing operands count as failures. Attached programs between them still
+# unload, rebuilding the shared dispatcher before its last member is removed.
+let mixed <- exec bpfman program unload $missing $traceID $firstID $secondID $missing
+assert not $mixed.ok
+assert $mixed.stdout == ""
+assert contains $mixed.stderr "2 of 5 program(s) failed to unload"
+let errors = $mixed.stderr |> jq 'split("\n") | map(select(startswith("program ")))'
+assert ($errors |> jq length) == 2
+foreach error in $errors {
+    assert contains $error "program ${missing}:"
+    assert contains $error "does not exist"
+}
+foreach id in [$traceID $firstID $secondID] {
+    assert fail bpfman program get $id
+}
+foreach link in [$trace $x $y] {
+    assert fail bpfman link get $link
+}
+guard dispatchers <- bpfman dispatcher list -o json
+assert ($dispatchers.dispatchers |> jq length) == 0
+
+# Duplicate operands are attempted, including after an earlier success.
+guard duplicate <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let duplicateID = $duplicate.programs[0].record.program_id
+defer bpfman program unload $duplicateID --ignore-missing
+let repeated <- exec bpfman program unload $duplicateID $duplicateID
+assert not $repeated.ok
+assert $repeated.stdout == ""
+assert contains $repeated.stderr "program ${duplicateID}:"
+assert contains $repeated.stderr "1 of 2 program(s) failed to unload"
+assert fail bpfman program get $duplicateID
+
+# Ignoring missing IDs keeps later valid operands and repeated cleanup working.
+guard cleanup <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let cleanupID = $cleanup.programs[0].record.program_id
+defer bpfman program unload $cleanupID --ignore-missing
+guard ignored <- exec bpfman program unload --ignore-missing $missing $cleanupID $cleanupID $missing
+assert $ignored.stdout == ""
+assert $ignored.stderr == ""
+assert fail bpfman program get $cleanupID
+guard again <- exec bpfman program unload $missing $cleanupID --ignore-missing
+assert $again.stdout == ""
+assert $again.stderr == ""

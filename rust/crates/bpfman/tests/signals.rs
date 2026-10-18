@@ -22,7 +22,12 @@ impl Drop for Process {
 #[test]
 fn signals_cancel_startup_and_mutation_lock_waits() {
     for signal in ["INT", "TERM"] {
-        for existing in [false, true] {
+        for operands in [
+            None,
+            Some(&["42"][..]),
+            Some(&["42", "43", "--ignore-missing"][..]),
+        ] {
+            let existing = operands.is_some();
             let temp = tempfile::tempdir().expect("runtime");
             let layout = RuntimeLayout::try_from(temp.path().join("runtime")).expect("layout");
             let trace = temp.path().join("trace.json");
@@ -59,8 +64,8 @@ fn signals_cancel_startup_and_mutation_lock_waits() {
                             .env("RUST_LOG", "bpfman_lock=trace,bpfman_runtime=debug")
                             .stdout(Stdio::piped())
                             .stderr(Stdio::piped());
-                        if existing {
-                            command.args(["program", "unload", "42"]);
+                        if let Some(operands) = operands {
+                            command.args(["program", "unload"]).args(operands);
                         } else {
                             command.args(["program", "list", "-q"]);
                         }

@@ -293,6 +293,8 @@ pub(super) fn corpus() {
 
 pub(super) fn program_inventory_scripts() {
     let scripts = [
+        "TestUnload_IgnoreMissingIsIdempotent",
+        "TestUnload_Batch",
         "TestProgram_Presentation",
         "TestProgramList_All",
         "TestProgramList_AllTypeFilterKernelOnly",

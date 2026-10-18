@@ -9,6 +9,13 @@ pub(crate) struct Error {
 }
 
 impl Error {
+    pub(crate) fn batch_unload(failed: usize, total: usize, cancelled: bool) -> Self {
+        Self {
+            cause: anyhow::anyhow!("{failed} of {total} program(s) failed to unload"),
+            cancelled,
+        }
+    }
+
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled
     }

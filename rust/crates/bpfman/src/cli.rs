@@ -45,7 +45,8 @@ pub(super) enum PreparedCommand {
         output: OutputFormat,
     },
     Unload {
-        id: std::num::NonZeroU32,
+        ids: Vec<std::num::NonZeroU32>,
+        ignore_missing: bool,
     },
     List(ListArgs),
     Load(load::PreparedLoad),
@@ -87,7 +88,13 @@ impl Command {
 
         Ok(match command {
             ProgramCommand::Get { id, output } => PreparedCommand::Get { id, output },
-            ProgramCommand::Unload { id } => PreparedCommand::Unload { id },
+            ProgramCommand::Unload {
+                ids,
+                ignore_missing,
+            } => PreparedCommand::Unload {
+                ids,
+                ignore_missing,
+            },
             ProgramCommand::List(args) => PreparedCommand::List(args),
             ProgramCommand::Load { source } => PreparedCommand::Load(source.prepare(
                 layout,
@@ -147,11 +154,14 @@ pub(super) enum ProgramCommand {
         #[arg(short,long,value_enum,default_value_t=OutputFormat::Text)]
         output: OutputFormat,
     },
-    /// Unload a tracepoint with its links or an unattached XDP program.
+    /// Unload managed programs and clean up their attachments.
     Unload {
-        /// Managed kernel program ID.
-        #[arg(value_name = "PROGRAM_ID")]
-        id: std::num::NonZeroU32,
+        /// Managed kernel program IDs, attempted in order.
+        #[arg(value_name = "PROGRAM_ID", required = true, num_args = 1..)]
+        ids: Vec<std::num::NonZeroU32>,
+        /// Treat a missing managed program as success.
+        #[arg(long)]
+        ignore_missing: bool,
     },
     /// List programs; --all includes unmanaged kernel programs.
     ///
