@@ -65,6 +65,7 @@ fn run_with_store<S>(
 ) -> Result<(), error::Error>
 where
     S: bpfman_store::OpenStore
+        + bpfman_store::DispatcherStore
         + bpfman_store::CommitLoad
         + bpfman_store::UnloadStore
         + bpfman_store::LinkStore
@@ -186,7 +187,7 @@ where
             cli.lock_timeout,
         )?,
         cli::PreparedCommand::Load(request) => request.execute(&bpfman, cancellation)?,
-        cli::PreparedCommand::Dispatcher(command) => command.execute(&bpfman)?,
+        cli::PreparedCommand::Dispatcher(command) => command.execute(&bpfman, cancellation)?,
         cli::PreparedCommand::Link(command, mode) => {
             command.execute(&bpfman, cancellation, mode)?
         }

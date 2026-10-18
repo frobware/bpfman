@@ -623,3 +623,12 @@ fn sqlite_image_build_script_corpus() {
 fn sqlite_image_build_interoperability() {
     image::build_interoperability();
 }
+
+#[path = "kernel/dispatcher_delete.rs"]
+mod dispatcher_delete;
+
+#[test]
+fn sqlite_dispatcher_record_deletion_traffic() {
+    let _timing = support::TestTiming::start("sqlite_dispatcher_record_deletion_traffic");
+    dispatcher_delete::exercise(bpfman_store_sqlite::Backend);
+}

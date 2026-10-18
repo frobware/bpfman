@@ -38,6 +38,7 @@ pub(super) enum Point {
     XdpCommit,
     XdpReplace,
     XdpDelete,
+    DispatcherDelete,
 }
 
 #[derive(Default)]
@@ -619,5 +620,16 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for Faults<S> {
             });
         }
         self.backend.delete_tc(w, r)
+    }
+}
+
+impl<S: bpfman_store::DispatcherStore> bpfman_store::DispatcherStore for Faults<S> {
+    fn delete_dispatcher(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        key: bpfman_model::DispatcherKey,
+    ) -> Result<bool, Error> {
+        check(&self.state, Point::DispatcherDelete)?;
+        self.backend.delete_dispatcher(writer, key)
     }
 }

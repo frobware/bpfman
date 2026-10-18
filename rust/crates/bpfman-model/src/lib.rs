@@ -23,6 +23,15 @@ pub use netns::{InvalidNetworkNamespace, NetworkNamespace};
 mod tcx;
 pub use tcx::{TcxLink, TcxOrder, tcx_order, tcx_positions};
 
+/// A dispatcher attachment point, with direction carried by the TC key.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DispatcherKey {
+    /// An XDP dispatcher.
+    Xdp(XdpKey),
+    /// A legacy TC ingress or egress dispatcher.
+    Tc(TcKey),
+}
+
 mod tc;
 pub use tc::{
     InvalidTc, InvalidTcDirection, InvalidTcSnapshot, TcDirection, TcDispatcherSnapshot, TcKey,

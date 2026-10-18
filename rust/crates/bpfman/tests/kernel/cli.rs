@@ -406,6 +406,7 @@ pub(super) fn program_inventory_scripts() {
         "TestLinkList_Filters",
         "TestLink_Presentation",
         "TestDispatcher_OutputAndFilters",
+        "TestDispatcher_DeleteRecords",
         "TestDispatcher_ZeroPriorityDefaultOrderingXDP",
         "TestDispatcher_ZeroPriorityDefaultOrderingTC",
         "TestDispatcher_LifecycleAfterLastDetachXDP",

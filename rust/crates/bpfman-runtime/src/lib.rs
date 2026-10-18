@@ -35,6 +35,7 @@ mod compensation;
 mod delete;
 mod delete_error;
 mod detach;
+mod dispatcher;
 mod error;
 mod kernel;
 mod link;

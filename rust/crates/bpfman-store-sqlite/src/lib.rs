@@ -6,6 +6,7 @@
 //! remains in bpfman-core.
 
 mod create;
+mod dispatcher;
 mod error;
 mod link;
 mod open;

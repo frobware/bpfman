@@ -450,3 +450,14 @@ impl<S: bpfman_store::TcStore> bpfman_store::TcStore for ActiveStore<S> {
         self.backend.delete_tc(w, r)
     }
 }
+
+impl<S: bpfman_store::DispatcherStore> bpfman_store::DispatcherStore for ActiveStore<S> {
+    fn delete_dispatcher(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        key: bpfman_model::DispatcherKey,
+    ) -> Result<bool, bpfman_store::Error> {
+        self.check_writer(writer)?;
+        self.backend.delete_dispatcher(writer, key)
+    }
+}

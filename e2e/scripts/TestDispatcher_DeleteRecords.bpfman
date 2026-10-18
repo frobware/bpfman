@@ -1,0 +1,87 @@
+# -*- mode: bpfman -*-
+# Administrative deletion removes intent while keeping running chains and pins.
+# Cleanup releases only exact pins from our captured snapshots.
+
+guard pair <- net netns-veth-pair
+defer net release $pair
+let netns = "/var/run/netns/${pair.a.ns}"
+let nsid = $pair.a.nsid
+let ifindex = $pair.a.ifindex
+
+guard xp <- bpfman program load file testdata/bpf/xdp_pass.bpf.o --programs xdp:pass
+let x = $xp.programs[0].record.program_id
+defer bpfman program unload $x
+guard cp <- bpfman program load file testdata/bpf/tc_counter.bpf.o --programs tc:stats
+let c = $cp.programs[0].record.program_id
+defer bpfman program unload $c
+
+guard _ <- bpfman link attach xdp $x $pair.a.link --netns $netns --priority 25
+guard _ <- bpfman link attach xdp $x $pair.a.link --netns $netns --priority 75
+foreach hook in [ingress egress] {
+    guard _ <- bpfman link attach tc $c $pair.a.link $hook --netns $netns --priority 25
+    guard _ <- bpfman link attach tc $c $pair.a.link $hook --netns $netns --priority 75
+}
+
+guard original <- bpfman dispatcher list -o json
+assert ($original.dispatchers |> jq length) == 3
+foreach kind in [tc-ingress xdp tc-egress] {
+    guard snapshot <- bpfman dispatcher get $kind $nsid $ifindex -o json
+    assert ($snapshot.members |> jq length) == 2
+    let memberPin = $snapshot.members[0].link_pin_path
+    let revisionDir = $memberPin |> jq 'split("/") | .[0:-1] | join("/")'
+    let collection = $memberPin |> jq 'split("/") | .[0:-2] | join("/")'
+    let runtimeRoot = $memberPin |> jq 'split("/fs/")[0]'
+    # Reverse defer order removes exact link pins, dispatcher, then empty dir.
+    defer exec rmdir $revisionDir
+    defer exec rm -f "${revisionDir}/dispatcher"
+    foreach member in $snapshot.members {
+        defer exec rm -f $member.link_pin_path
+    }
+    if $kind == xdp {
+        defer exec rm -f "${collection}/dispatcher_${nsid}_${ifindex}_link"
+    } else {
+        if $kind == tc-egress {
+            defer exec rm -f "${runtimeRoot}/tc/egress_dispatcher_${nsid}_${ifindex}_${snapshot.revision}"
+        } else {
+            defer exec rm -f "${runtimeRoot}/tc/dispatcher_${nsid}_${ifindex}_${snapshot.revision}"
+        }
+    }
+    let missingNS = $nsid + 1000000
+    assert fail bpfman dispatcher delete $kind $missingNS $ifindex
+    assert fail bpfman dispatcher delete $kind $nsid 4294967295
+    let malformed <- exec bpfman dispatcher delete $kind $nsid $ifindex trailing
+    assert not $malformed.ok
+    guard unchanged <- bpfman dispatcher get $kind $nsid $ifindex -o json
+    let expected = $snapshot |> jq tojson
+    let observed = $unchanged |> jq tojson
+    assert $observed == $expected
+    guard deleted <- exec bpfman dispatcher delete $kind $nsid $ifindex
+    assert $deleted.stdout == ""
+    assert $deleted.stderr == ""
+    assert fail bpfman dispatcher get $kind $nsid $ifindex
+    assert fail bpfman dispatcher delete $kind $nsid $ifindex
+    foreach member in $snapshot.members {
+        assert fail bpfman link get $member.link_id
+        guard _ <- exec test -e $member.link_pin_path
+        guard native <- linkinfo id $member.kernel_link_id
+        assert $native.id == $member.kernel_link_id
+        assert $native.prog_id == $member.program_id
+    }
+    guard _ <- exec test -e "${revisionDir}/dispatcher"
+    guard _ <- bpfman program get $x
+    guard _ <- bpfman program get $c
+    guard survivors <- bpfman dispatcher list -o json
+    if $kind == tc-ingress {
+        assert ($survivors.dispatchers |> jq length) == 2
+    } else {
+        if $kind == xdp {
+            assert ($survivors.dispatchers |> jq length) == 1
+        } else {
+            assert ($survivors.dispatchers |> jq length) == 0
+        }
+    }
+}
+guard links <- bpfman link list -o json
+assert ($links.links |> jq length) == 0
+# Record deletion leaves XDP PASS and both TC OK chains running.
+guard _ <- net exec $pair.b ping -c 3 -i 0.05 -W 1 $pair.a.addr

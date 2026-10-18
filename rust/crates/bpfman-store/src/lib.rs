@@ -2,6 +2,9 @@
 //! Backends own compatibility checks, atomic publication, and opaque teardown evidence.
 //! No connections, transaction callbacks, schema versions, or serialized data escape.
 
+mod dispatcher;
+pub use dispatcher::DispatcherStore;
+
 mod tc;
 pub use tc::{TcCommit, TcMemberCommit, TcReplace, TcStore};
 mod xdp;

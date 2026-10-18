@@ -1005,7 +1005,7 @@ Independent targets continue; completed destructive effects are not rolled back.
 Cancellation prevents the next underlying teardown from starting and leaves
 completed progress available. Diagnostics and warnings are delivered after writer
 release, with empty successful output. Generic store interfaces and schema 2 are
-unchanged. Dispatcher record deletion remains a separate slice.
+unchanged.
 
 The unchanged shared-map ordering/fan-out scripts and new shared program-delete
 batch/link-delete cascade scripts compare identical assertions against Go and Rust.
@@ -1268,6 +1268,34 @@ The unchanged `TestLoad_XDPFragsProgram` normal-MTU script runs in the backend-w
 script batches. These are XDP multi-buffer packets, not IP fragments.
 Jumbo mixed-chain refusal is asserted for native veth; it is a driver constraint,
 not a generic SKB requirement. Physical NICs remain unverified.
+
+### Administrative dispatcher record deletion
+
+The hidden `dispatcher delete TYPE NSID IFINDEX` command supports `xdp`,
+`tc-ingress`, and `tc-egress`. Like Go, it atomically removes the dispatcher
+header and every extension-link record at that attachment point. Loaded
+programs, map relationships, running attachments, filter/qdisc state, and managed
+pins survive. This command forgets stored intent; ordinary detach and unload
+cannot subsequently discover the forgotten attachments. It is an administrative
+primitive rather than normal lifecycle teardown.
+
+`Bpfman::delete_dispatcher` and its cancellable variant use the narrow generic
+`DispatcherStore` contract and typed `DispatcherKey` under one writer scope.
+The store returns false for an absent dispatcher and the CLI reports an error.
+Absence and failures preserve every record, including orphan members without a
+header. An admitted atomic mutation determines its outcome despite cancellation;
+cancellation before mutation leaves records intact. No cleanup receipts are
+acquired because this operation touches only stored intent. SQLite keeps schema 2.
+
+`TestDispatcher_DeleteRecords` runs identical assertions against Go and Rust,
+including multi-member deletion, preservation of other hooks, unchanged pins,
+missing keys, and continuing traffic. Adapter tests cover namespace/interface/hook
+isolation, empty headers, orphan members, and transaction rollback after rejected
+or ignored member/detail/header deletions. Generic real-store/fake-kernel tests
+cover failures, cancellation before and during mutation, reopened state, and no
+kernel effects. Native XDP/TC ingress/TC egress contracts preserve exact counters
+and filter/link identities before restoring captured intent for ordinary cleanup.
+CLI contracts cover parsing, hidden help, one writer, and real SIGINT/SIGTERM waits.
 
 ### Dispatcher replacement policy
 

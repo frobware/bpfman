@@ -22,6 +22,17 @@ impl DispatcherArgs {
 pub(crate) enum DispatcherCommand {
     /// List committed XDP and TC dispatchers.
     List(ListArgs),
+    /// Delete stored dispatcher and extension-link records.
+    #[command(hide = true)]
+    Delete {
+        /// Dispatcher type.
+        #[arg(value_enum)]
+        kind: DispatcherKind,
+        /// Network namespace inode.
+        nsid: NonZeroU64,
+        /// Interface index.
+        ifindex: NonZeroU32,
+    },
     /// Read the committed complete dispatcher snapshot.
     Get {
         /// Dispatcher type.
@@ -74,12 +85,40 @@ impl DispatcherCommand {
     pub(crate) fn execute<S, K>(
         self,
         app: &bpfman_runtime::Bpfman<S, K>,
+        cancellation: &bpfman_runtime::Cancellation,
     ) -> Result<(), crate::error::Error>
     where
-        S: bpfman_store::OpenStore,
+        S: bpfman_store::DispatcherStore,
         S::Reader: bpfman_store::XdpDispatcherReader + bpfman_store::LinkReader,
     {
         match self {
+            Self::Delete {
+                kind,
+                nsid,
+                ifindex,
+            } => {
+                let key = match kind.direction() {
+                    None => {
+                        bpfman_model::DispatcherKey::Xdp(bpfman_model::XdpKey { nsid, ifindex })
+                    }
+                    Some(direction) => bpfman_model::DispatcherKey::Tc(bpfman_model::TcKey {
+                        nsid,
+                        ifindex,
+                        direction,
+                    }),
+                };
+                if !app.delete_dispatcher_with_cancellation(key, cancellation)? {
+                    let name = match kind {
+                        DispatcherKind::Xdp => "xdp",
+                        DispatcherKind::TcIngress => "tc-ingress",
+                        DispatcherKind::TcEgress => "tc-egress",
+                    };
+                    return Err(anyhow::anyhow!(
+                        "dispatcher ({name}, {nsid}, {ifindex}): record not found"
+                    )
+                    .into());
+                }
+            }
             Self::Get {
                 kind,
                 nsid,

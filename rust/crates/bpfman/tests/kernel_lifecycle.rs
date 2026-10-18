@@ -34,6 +34,9 @@ mod batch_detach;
 #[path = "lifecycle/delete.rs"]
 mod delete;
 
+#[path = "lifecycle/dispatcher_delete.rs"]
+mod dispatcher_delete;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -53,6 +56,7 @@ trait Store:
     + UnloadStore
     + LinkStore
     + XdpReplacementStore
+    + bpfman_store::DispatcherStore
     + bpfman_store::TcStore
     + Copy
     + 'static
@@ -64,6 +68,7 @@ impl<S> Store for S where
         + UnloadStore
         + LinkStore
         + XdpReplacementStore
+        + bpfman_store::DispatcherStore
         + bpfman_store::TcStore
         + Copy
         + 'static
@@ -1110,4 +1115,9 @@ fn sqlite_cascading_delete_cancellation() {
 #[test]
 fn sqlite_cascading_delete_observations() {
     delete::observations(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_dispatcher_record_deletion() {
+    dispatcher_delete::exercise(bpfman_store_sqlite::Backend);
 }

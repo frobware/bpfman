@@ -75,3 +75,51 @@ fn missing_delete_targets_report_per_operand_and_empty_all_is_silent()
     assert!(!temp.path().join("fs").exists());
     Ok(())
 }
+
+#[test]
+fn dispatcher_delete_validates_keys_and_reports_absence() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("runtime");
+    for operands in [
+        &[][..],
+        &["xdp", "1"][..],
+        &["unknown", "1", "7"][..],
+        &["xdp", "0", "7"][..],
+        &["xdp", "1", "0"][..],
+        &["xdp", "-1", "7"][..],
+        &["xdp", "1", "4294967296"][..],
+        &["xdp", "1", "7", "--recursive"][..],
+        &["xdp", "1", "7", "-o", "json"][..],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .arg("--runtime-dir")
+            .arg(&root)
+            .args(["dispatcher", "delete"])
+            .args(operands)
+            .output()?;
+        assert_eq!(output.status.code(), Some(2), "{operands:?}");
+        assert!(output.stdout.is_empty());
+        assert!(!root.exists());
+    }
+    for kind in ["xdp", "tc-ingress", "tc-egress"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+            .arg("--runtime-dir")
+            .arg(&root)
+            .args(["dispatcher", "delete", kind, "1", "7"])
+            .output()?;
+        assert_eq!(output.status.code(), Some(1));
+        assert!(output.stdout.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stderr)?,
+            format!("Error: dispatcher ({kind}, 1, 7): record not found\n")
+        );
+    }
+    let help = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .args(["dispatcher", "--help"])
+        .output()?;
+    assert!(help.status.success());
+    assert!(!String::from_utf8(help.stdout)?.contains("  delete"));
+    assert!(!root.join("fs").exists());
+    Ok(())
+}

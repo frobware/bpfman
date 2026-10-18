@@ -2720,7 +2720,9 @@ wrong, change it here before broadening feature coverage.
   commands support shared-map dependant ordering, recursive expansion and program
   `--all` selection under one writer scope. Link delete unloads its owner only
   after its last link disappears. Outcomes retain original teardown progress and
-  consuming cleanup receipts. Hidden dispatcher record deletion remains pending.
+  consuming cleanup receipts. Hidden dispatcher deletion atomically removes only
+  dispatcher/member records through a separate generic administrative contract;
+  running attachments, pins, programs and map relationships survive.
   Program unload accepts multiple IDs and
   `--ignore-missing`, with ordered attempts under one writer scope and per-ID
   failures reported after release. Link detach likewise accepts multiple IDs and
@@ -6505,3 +6507,69 @@ native stages take 71.64 seconds. Final gate log:
 `/tmp/bpfman-delete-complete-check.log`; focused Go/Rust comparison log:
 `/tmp/bpfman-delete-comparison.log`. Remote-image and forced-image lanes were not
 rerun for this CLI slice.
+
+
+## Administrative dispatcher record deletion checkpoint (18 October 2026)
+
+The hidden Go `dispatcher delete TYPE NSID IFINDEX` command now has a Rust
+counterpart for XDP, TC ingress and TC egress. It removes the dispatcher header
+and all extension-link records at the complete attachment-point key in one store
+transaction. Loaded programs and map relationships survive. Kernel attachments,
+filter/qdisc state, managed pins and TC ownership evidence also survive: this
+administrative command forgets intent rather than tearing down the attachment.
+Ordinary teardown cannot rediscover the forgotten resources from these records.
+
+A payload-bearing `DispatcherKey` selects XDP or directed TC. A narrow generic
+`DispatcherStore` contract keeps administrative deletion separate from the
+existing conditional lifecycle deletion methods, whose kernel/filesystem
+prerequisites remain intact. Runtime deletion holds one cancellable writer scope,
+validates the active store, and invokes one atomic mutation. Missing dispatchers
+return false to generic callers and an error to the CLI. Absence and failure leave
+all records unchanged, including orphan member records without a dispatcher
+header. No decoding of kernel/pin observations is required to forget stored intent.
+SQLite retains schema 2 and private prepared statements. No adapter dependencies
+or SQL escape into the runtime or generic scenarios.
+
+Cancellation before mutation preserves state; an admitted mutation decides its
+own outcome even when the cancellation token fires during the store call. There
+are no cross-adapter effects, compensation, or new cleanup receipts. Diagnostics
+are emitted after writer release. Read commands retain their existing lock-free
+store observations.
+
+New shared `TestDispatcher_DeleteRecords` exercises two members per hook, missing
+namespace/interface keys, malformed operands before mutation, empty successful
+output, repeated missing targets, member absence, independent hook survival,
+unchanged native pins and continuing traffic. The script explicitly releases
+only its captured fixture pins and empty revision directories during cleanup;
+it does not imply cleanup authority in the command. Existing Go source, tests,
+acceptance scripts and labels remain unchanged.
+
+Private adapter tests cover the full namespace/interface/hook key, multi-member
+atomic deletion, empty headers, orphan members, and rollback after both rejected
+and ignored base-link/detail/header deletions. Generic real-store/fake-kernel
+contracts cover store failure, cancellation before mutation, an admitted commit
+winning over cancellation, persistent absence after reopening, and no kernel
+operations. They restore original singleton intent through store contracts solely
+to perform ordinary fixture cleanup. Native contracts do the same for XDP and both
+TC hooks after proving exact three-packet counter increments, unchanged filters,
+native extension identities and managed artifacts before and after CLI deletion.
+CLI tests cover typed admission before runtime creation, hidden help, missing
+keys, a continuous writer scope, and real SIGINT/SIGTERM lock-wait cancellation.
+
+Validation: `direnv exec . make rust-check` exits zero. Formatting, strict
+Clippy, unchanged architecture laws, all userspace/store/CLI/stateful-kernel
+contracts, doctests, all 76 native cases, fixture cleanup and warnings-denied
+Rustdoc pass. All 76 native cases ran once in 76 distinct processes; the new
+traffic case remains in the eight-worker stage. The 23-script inventory selection
+passes identical assertions against Go and Rust (46 script passes), including
+the new administrative deletion script and unchanged dispatcher presentation,
+ordering and lifecycle scripts. The new script passes the shell checker and
+canonical formatter. Existing assertions, script labels and scheduling isolation
+are unchanged. Remote-image and forced-image lanes were not rerun for this
+record-only CLI slice.
+
+On Linux 6.18.54 with the existing `aya-obj` opt-level-two override, native stages
+take 73.50 seconds: corpus 46.91, global inventory 0.23, eight-worker SQLite
+contracts 25.93 and Go compatibility 0.39. Complete gate log:
+`/tmp/bpfman-dispatcher-complete-check.log`; successful Go/Rust comparison log:
+`/tmp/bpfman-dispatcher-comparison.log`.
