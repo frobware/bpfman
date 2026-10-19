@@ -671,6 +671,8 @@ pub(super) fn map_sharing_scripts() {
             "TestKprobe_MapOwnerIDSharedCounter",
             "TestProgramLoad_MapOwnerIDMustNameMapSet",
             "TestTC_PinByNameMapSharing",
+            "TestMapOfMaps_MapOwner",
+            "TestMapOfMaps_PinByName",
         ]),
         &rust(),
         true,

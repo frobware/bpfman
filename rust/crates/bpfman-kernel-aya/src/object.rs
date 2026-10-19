@@ -39,9 +39,6 @@ impl LocalObject {
             }
 
             if matches!(map.pinning(), PinningType::ByName) {
-                if map.inner().is_some() {
-                    return Err(LoadCause::Unsupported("shared map-of-maps creation"));
-                }
                 shared_maps.push(name.clone());
             }
             maps.push(name.clone());

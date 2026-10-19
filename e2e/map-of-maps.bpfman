@@ -1,0 +1,97 @@
+# -*- mode: bpfman -*-
+
+def mom_count(id) {
+    guard dump <- bpftool map dump id $id -j
+    return $dump.stdout |> jq "fromjson | .[0].formatted.value | tonumber"
+}
+
+def mom_pair(owner dependent shared fn) {
+    let first = $owner.record.program_id
+    let second = $dependent.record.program_id
+    defer bpfman program unload $first $second --ignore-missing
+    assert $first != $second
+
+    let a = $owner |> jq '[.status.maps[] | select(.name == "mom_array") | .id][0]'
+    let b = $dependent |> jq '[.status.maps[] | select(.name == "mom_array") | .id][0]'
+    let h = $owner |> jq '[.status.maps[] | select(.name == "mom_hash") | .id][0]'
+    let j = $dependent |> jq '[.status.maps[] | select(.name == "mom_hash") | .id][0]'
+    # Kernel program info reports directly referenced maps only; the standalone
+    # inner map is retained in the canonical map-set pins, before insertion.
+    guard inner_info <- bpftool map show pinned "${owner.record.handles.map_pin_path}/mom_values" -j
+    guard other_info <- bpftool map show pinned "${dependent.record.handles.map_pin_path}/mom_values" -j
+    let inner = $inner_info.stdout |> jq "fromjson | .id"
+    let other_inner = $other_info.stdout |> jq "fromjson | .id"
+    assert not null $a
+    assert not null $h
+    assert not null $inner
+    assert $a == $b
+    assert $h == $j
+    assert $a != $h
+    if $shared == "named" {
+        assert $inner != $other_inner
+    } else {
+        assert $inner == $other_inner
+    }
+
+    # PIN_NONE without an owner still creates independent outer maps.
+    guard control_load <- bpfman program load file testdata/bpf/map_of_maps_private.bpf.o --programs kprobe:mom_counter
+    let control = $control_load.programs[0]
+    defer bpfman program unload $control
+    let control_a = $control |> jq '[.status.maps[] | select(.name == "mom_array") | .id][0]'
+    let control_h = $control |> jq '[.status.maps[] | select(.name == "mom_hash") | .id][0]'
+    assert $control_a != $a
+    assert $control_h != $h
+
+    guard _ <- bpftool map update id $a key hex 00 00 00 00 value id $inner
+    guard _ <- bpftool map update id $h key hex 07 00 00 00 value id $inner
+    guard first_link <- bpfman link attach kprobe $owner $fn.name
+    guard second_link <- bpfman link attach kprobe $dependent $fn.name
+
+    guard before <- mom_count $inner
+    kfunc fire $fn 5
+    guard after <- mom_count $inner
+    assert ($after - $before) == 20
+
+    # Each CLI call reopens the state. The original owner can disappear while
+    # its inner map remains reachable through both shared outer maps.
+    bpfman program unload $first
+    guard surviving <- mom_count $inner
+    kfunc fire $fn 5
+    guard final <- mom_count $inner
+    assert ($final - $surviving) == 10
+    guard got <- bpfman program get $second
+    let final_a = $got |> jq '[.status.maps[] | select(.name == "mom_array") | .id][0]'
+    let final_h = $got |> jq '[.status.maps[] | select(.name == "mom_hash") | .id][0]'
+    assert $final_a == $a
+    assert $final_h == $h
+    bpfman program unload $second
+}
+
+def mom_lifecycle(shared) {
+    guard fn <- kfunc acquire
+    defer kfunc release $fn
+    if $shared == "named" {
+        guard first <- bpfman program load file testdata/bpf/map_of_maps_shared.bpf.o --programs kprobe:mom_counter
+        let owner = $first.programs[0]
+        defer bpfman program unload $owner --ignore-missing
+        guard second <- bpfman program load file testdata/bpf/map_of_maps_shared.bpf.o --programs kprobe:mom_counter
+        let dependent = $second.programs[0]
+        defer bpfman program unload $dependent --ignore-missing
+
+        # An incompatible outer capacity must not replace or modify either pin.
+        let rejected <- bpfman program load file testdata/bpf/map_of_maps_incompatible.bpf.o --programs kprobe:mom_counter
+        assert not $rejected.ok
+        mom_pair $owner $dependent named $fn
+        let root = $owner.record.handles.pin_path |> jq 'split("/fs/")[0]'
+        assert not path-exists "${root}/fs/shared/mom_array"
+        assert not path-exists "${root}/fs/shared/mom_hash"
+    } else {
+        guard first <- bpfman program load file testdata/bpf/map_of_maps_private.bpf.o --programs kprobe:mom_counter
+        let owner = $first.programs[0]
+        defer bpfman program unload $owner --ignore-missing
+        guard second <- bpfman program load file testdata/bpf/map_of_maps_private.bpf.o --programs kprobe:mom_counter --map-owner-id $owner.record.program_id
+        let dependent = $second.programs[0]
+        defer bpfman program unload $dependent --ignore-missing
+        mom_pair $owner $dependent owner $fn
+    }
+}

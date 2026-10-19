@@ -698,9 +698,9 @@ with private or shared maps and
 metadata/application labels are executable, with Go's detailed text output or
 JSON load envelope in selection order. Image loads use the same lifecycle after
 registry/cache admission, including the configured signing policy.
-Explicit map owners and ordinary PinByName maps are supported. PinByName
-map-of-maps definitions and section/type mismatches are rejected
-before runtime setup. Credentials are not echoed in auth diagnostics or help.
+Explicit map owners and PinByName maps, including array/hash map-of-maps, are
+supported. Section/type mismatches are rejected before runtime setup.
+Credentials are not echoed in auth diagnostics or help.
 File is also the implicit source. Repeated ELF selections load independent
 instances, including different compatible types of the same ELF entry. A zero
 map-owner ID selects private maps. An unused third program-spec component is
@@ -2535,10 +2535,21 @@ the adapter checks map type, key/value sizes, capacity, flags and map-extra.
 Creation, reuse, reference publication and teardown all hold the runtime writer
 lock. Shared maps retain BTF for tools such as bpftool; the existing private BPF
 syscall boundary supplies the BTF descriptor required by Aya's public map-create
-API. Aya and dependency versions are unchanged. Sharing map-of-maps definitions
-is outside this slice; PinByName declarations of those maps fail before runtime
-setup, and explicit reuse also refuses them. Internal-looking map names cannot
+API. Aya and dependency versions are unchanged. Internal-looking map names cannot
 declare PinByName; admission rejects them before Aya can choose a default pin path.
+
+`ARRAY_OF_MAPS` and `HASH_OF_MAPS` support explicit owner reuse and independent
+PinByName sharing. Shared creation uses an unpinned inner template retained only
+through the outer-map creation syscall. The existing private syscall boundary
+supplies `inner_map_fd`, which Aya's public standalone constructor cannot supply.
+The actual inner maps and outer entries retain their own lifetimes; a shared
+outer can keep an inner alive after that inner's original program and pin disappear.
+Outer maps do not accept key/value BTF metadata; ordinary inner maps retain BTF.
+Reuse compares observable outer attributes, matching Go's cilium/ebpf behavior.
+Linux does not expose an empty outer's inner template through map info, so this
+is not a load-time comparison of inner templates. The kernel rejects incompatible
+inner-map insertions without changing existing entries. Multi-level nesting is
+subject to the kernel's restrictions.
 
 Newly created name pins have consuming cleanup receipts. Existing pins never
 become load-compensation targets. Failed acquisition, verifier rejection,
@@ -2548,6 +2559,13 @@ retry. If a committed user adopts an unchanged pin before retry, cleanup validat
 the receipt and relinquishes its authority while preserving that user's map.
 Unload follows the same rule for map-set aliases, containers and shared names.
 Changed inode or runtime evidence still refuses cleanup.
+
+`make rust-test-map-sharing` includes shared Go/Rust map-of-maps scripts and native
+Rust recovery contracts. Both outer families execute through two attached kprobes,
+retain exact map identities and counter updates after owner-first unload, and
+clean up after the final user. Native contracts cover failed outer creation,
+verifier rejection, partial acquisition, failed commits, cancellation, retained
+cleanup retries, descriptor release and externally held outer/inner lifetimes.
 
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
 `shared_map_pins`. Older artifacts without a map inventory retain

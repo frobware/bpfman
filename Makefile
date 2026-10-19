@@ -54,6 +54,7 @@ RUST_MANIFEST := rust/Cargo.toml
 # contrib/emacs/syntax-gallery.bpfman is deliberately non-canonical.
 BPFMAN_SHELL_FORMAT_SOURCES := \
 	e2e/lib.bpfman \
+	e2e/map-of-maps.bpfman \
 	e2e/xdp-delivery.bpfman \
 	$(wildcard e2e/scripts/*.bpfman) \
 	cmd/bpfman-shell/shell/lower/testdata/language.bpfman \

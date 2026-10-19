@@ -1,0 +1,6 @@
+# -*- mode: bpfman -*-
+#pragma labels={"program":"kprobe","shared-map":"true"}
+# An explicit owner shares the outer maps and their real inner map.
+import ../map-of-maps.bpfman
+
+mom_lifecycle owner

@@ -1,0 +1,6 @@
+# -*- mode: bpfman -*-
+#pragma labels={"program":"kprobe","shared-map":"true"}
+# Share both outer families, execute both programs, and unload the first owner.
+import ../map-of-maps.bpfman
+
+mom_lifecycle named

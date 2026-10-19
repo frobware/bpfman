@@ -18,27 +18,33 @@ impl MapDefinition for Definition<'_> {
     type Map = SharedMap;
 
     fn create(&self) -> KernelResult<SharedMap> {
-        Ok(SharedMap(MapData::create(
-            self.map.clone(),
-            self.name,
-            self.btf,
-        )?))
+        let map = match self.map.inner() {
+            Some(inner) => {
+                use std::os::fd::AsFd;
+
+                // Aya's standalone public constructor omits inner_map_fd.
+                // Keep the unpinned template alive through outer creation;
+                // neither it nor its descriptor escapes this operation.
+                let template = MapData::create(inner, "bpfman_inner", self.btf)?;
+                let fd =
+                    crate::pin_syscall::map_of_maps(self.map, self.name, template.fd().as_fd())?;
+                MapData::from_fd(fd)?
+            }
+            None => MapData::create(self.map.clone(), self.name, self.btf)?,
+        };
+        Ok(SharedMap(map))
     }
 
     fn validate(&self, source: PinSource<'_>) -> KernelResult<()> {
-        if self.map.inner().is_some() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Unsupported,
-                "sharing map-of-maps definitions is not implemented",
-            )
-            .into());
-        }
         let info = MapInfo::from_pin(source.path())?;
         let (_, native) = crate::syscall::map(info.id())?;
         let kind = info.map_type()? as u32;
         // Aya's reuse path does not compare dimensions. Require them before
         // giving it an existing-only opened pin, rather than relying on verifier
         // rejection (which cannot distinguish all incompatible maps).
+        // Like cilium/ebpf, compare observable outer attributes. Linux does not
+        // expose an empty outer map's inner template through map info; inner
+        // insertion compatibility remains enforced by the kernel.
         if kind != self.map.map_type()
             || info.key_size() != self.map.key_size()
             || info.value_size() != self.map.value_size()

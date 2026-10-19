@@ -11,8 +11,9 @@ below record validation performed when both adapters existed; they do not descri
 current backend availability. Go's backends are unchanged.
 
 Implementation is in progress in the independent `rust/` workspace. The latest
-capability checkpoint adds explicit map-owner joins and PinByName sharing,
-with independent map-set/name-pin lifetimes and consuming recovery on both stores.
+capability checkpoint adds shared array/hash map-of-maps to explicit map-owner
+joins and PinByName sharing, with independent map-set/name-pin/inner-map lifetimes
+and consuming recovery through the implicit SQLite adapter.
 Native kprobe/kretprobe loading and standalone attachment, compensation and
 attached unload remain supported. Native TCX provides
 ordered ingress/egress links alongside legacy TC ingress/egress dispatchers.
@@ -112,7 +113,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
-| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps, named selection, compensation | Other program families and shared map-of-maps |
+| Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps including array/hash map-of-maps, named selection, compensation | Other program families |
 | OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; Cosign signature/identity policy, synchronous production TUF trust refresh, explicit local trust roots and trust-bound cache revalidation | Cache eviction deferred to separate design work, outside Go parity |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
@@ -2697,8 +2698,8 @@ wrong, change it here before broadening feature coverage.
 
 ### Phase 4: remaining capabilities
 
-- Explicit map-owner sharing and ordinary PinByName coordination are implemented;
-  shared map-of-maps definitions remain pending.
+- Explicit map-owner sharing and PinByName coordination are implemented, including
+  shared array/hash map-of-maps definitions and independent inner-map lifetimes.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
@@ -6953,3 +6954,83 @@ Validation completed on Linux 6.18.54 with the existing development/test
 
 This evidence covers daemon RPCs, real BPF maps and Linux mounts. Kubernetes
 cluster deployment was not exercised.
+
+## Shared array/hash map-of-maps (19 October 2026)
+
+`ARRAY_OF_MAPS` and `HASH_OF_MAPS` now participate in both explicit map-owner
+reuse and independent PinByName sharing. The existing generic runtime/store
+contracts, writer scope, reference publication and consuming cleanup remain the
+interpreter for these maps. SQLite stays at Go schema 2; no new persistence
+fields or backend-specific runtime paths are introduced.
+
+Shared creation loads an unpinned inner template through Aya's public map API,
+then creates the outer through the existing private BPF syscall boundary with
+`inner_map_fd`. Aya's public standalone constructor does not expose that field.
+The synchronous syscall borrows the template; both success and failure close its
+descriptor without publishing a template pin. Outer maps do not accept key/value
+BTF IDs; the ordinary inner map retains its BTF. Aya, dependencies and their
+versions are unchanged. Private loads continue through Aya's ordinary loader.
+
+Reuse validates observable outer type, key/value sizes, capacity, flags and
+map-extra before passing an existing-only confined source to Aya. Go's
+cilium/ebpf replacement compatibility likewise compares outer attributes, not
+inner templates. Linux map info does not expose an empty outer's template, so
+this checkpoint does not claim a load-time inner-template comparison. The kernel
+checks an inserted inner against the actual retained template and refuses an
+incompatible update without changing the old entry. Multi-level nesting remains
+subject to kernel restrictions.
+
+Two new shared acceptance scripts run identical source against Go and Rust. They
+cover both outer families, explicit owners and named sharing, independent
+ownerless private controls, exact map identities, capacity mismatch rejection,
+real inner-map insertion and exact counter increments through two attached
+kprobes. Every CLI operation reopens state. Unloading the original owner preserves
+execution and inner references through the survivor; the final user removes its
+map-set aliases and named pins. These scenarios also run with file loads forced
+through the existing local-registry image build/load broker.
+
+These sharing scenarios populate outer entries from userspace. They do not
+establish parity for ELF `.values` initializers.
+
+The new native Rust contract enters production application operations through
+store-neutral interfaces and the real kernel. It covers failed outer creation
+after template acquisition, verifier rejection, partial shared-pin acquisition,
+failed commits for new and reused pins, cancelled admission, late cancellation
+with a failed commit, blocked compensation and cancelled/explicit retry. Exact
+local descriptor counts return to their warmed baseline after failed operations.
+It also proves retained inner BTF, rejected incompatible inner updates, preserved
+inner values through failed reuse and reopened teardown, and external outer
+references keeping an unpinned inner alive after all managed users disappear.
+No polling around managed cleanup is introduced.
+
+The new Go reference case joins the existing Go stage; the native Rust recovery
+case joins the existing process-isolated parallel pool. The shared Rust scripts
+join the existing focused map-sharing corpus. Existing Go code, tests, script
+assertions, labels and scheduling placement are unchanged.
+
+Validation on Linux 6.18.54 with the existing development/test `aya-obj`
+opt-level-two override:
+
+- `direnv exec . make rust-check` exited zero: formatting, strict all-target/
+  all-feature Clippy, userspace and architecture contracts, doctests, the
+  acceptance corpus, all 85 discovered/selected native cases and warnings-denied
+  Rustdoc passed. The native stages took 222.86 seconds. Both fake and real
+  fixture residue checks passed. Definitive gate log:
+  `/tmp/bpfman-mom-rust-check.log`.
+- `direnv exec . make rust-test-map-sharing` exited zero for all four focused
+  cases, including the Go reference contract and the new native recovery case.
+  The focused Rust corpus includes the three existing map-sharing scripts plus
+  the two new scripts. Log: `/tmp/bpfman-mom-rust-focused-final.log`.
+- Both new scripts passed against both implementations with ordinary file loads
+  and with `BPFMAN_E2E_BYTECODE_SOURCE=image`. The final forced-image comparison
+  logs are `/tmp/bpfman-mom-go-image-final.log` and
+  `/tmp/bpfman-mom-rust-image.log`. The OCI lane uses the unchanged local-registry
+  broker and existing no-signature-verification fixture configuration.
+- `direnv exec . make lint-go lint-make` exited zero, including the probe for
+  undefined Make variables. All three new `.bpfman` files passed the shell checker and
+  exact canonical-format comparison. Log: `/tmp/bpfman-mom-lint.log`.
+
+One initial forced-image invocation overlapped another command's shared kernel
+module build and failed while a generated header was being replaced. The
+sequential rerun and final full gate passed; no test or build assertion was
+changed to accommodate that setup failure. `.envrc` remains untouched.

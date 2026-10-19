@@ -1,4 +1,4 @@
-//! Narrow Linux BPF boundary for links, owned pins, BTF and module tracing loads.
+//! Narrow Linux BPF boundary for links, outer maps, pins, BTF and module tracing loads.
 #![allow(unsafe_code)]
 
 use std::{
@@ -22,6 +22,49 @@ fn fd_result(rc: libc::c_long) -> io::Result<OwnedFd> {
     }
     // SAFETY: successful BPF fd-producing calls return a new owned descriptor.
     Ok(unsafe { OwnedFd::from_raw_fd(rc as i32) })
+}
+
+/// Create only an outer map using a borrowed, already-created inner template.
+/// Aya's public standalone constructor cannot supply this descriptor. Outer
+/// maps do not accept key/value BTF IDs; the inner retains its own BTF instead.
+pub(super) fn map_of_maps(
+    definition: &aya_obj::Map,
+    name: &str,
+    template: BorrowedFd<'_>,
+) -> io::Result<OwnedFd> {
+    use aya_obj::generated::{bpf_attr, bpf_map_type};
+
+    if !matches!(
+        bpf_map_type::try_from(definition.map_type()),
+        Ok(bpf_map_type::BPF_MAP_TYPE_ARRAY_OF_MAPS | bpf_map_type::BPF_MAP_TYPE_HASH_OF_MAPS)
+    ) || definition.inner().is_none()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "expected an outer map with an inner template",
+        ));
+    }
+    let name = CString::new(name)?;
+    // SAFETY: the generated BPF attribute is an integer-only C union. Zeroing
+    // initializes every field and reserved byte; no pointers are supplied.
+    let mut attr: bpf_attr = unsafe { std::mem::zeroed() };
+    // SAFETY: BPF_MAP_CREATE selects this generated union member. All accesses
+    // below initialize integer fields within the same member.
+    let create = unsafe { &mut attr.__bindgen_anon_1 };
+    create.map_type = definition.map_type();
+    create.key_size = definition.key_size();
+    create.value_size = definition.value_size();
+    create.max_entries = definition.max_entries();
+    create.map_flags = definition.map_flags();
+    create.map_extra = definition.map_extra();
+    create.inner_map_fd = template.as_raw_fd() as u32;
+    for (to, from) in create.map_name.iter_mut().take(15).zip(name.as_bytes()) {
+        *to = *from as libc::c_char;
+    }
+    // SAFETY: initialized MAP_CREATE ABI, with a live borrowed template FD.
+    // The kernel copies the template metadata synchronously and retains no
+    // userspace address. Success produces a uniquely owned map descriptor.
+    fd_result(unsafe { libc::syscall(libc::SYS_bpf, 0u32, &attr, size_of::<bpf_attr>()) })
 }
 
 pub(super) fn interface(name: &str) -> io::Result<u32> {

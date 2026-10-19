@@ -539,6 +539,21 @@ mod map_sharing;
 fn sqlite_map_sharing_native_recovery() {
     map_sharing::exercise(bpfman_store_sqlite::Backend);
 }
+
+#[path = "kernel/map_of_maps.rs"]
+mod map_of_maps;
+
+#[test]
+fn sqlite_map_sharing_map_of_maps_recovery() {
+    map_of_maps::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn go_map_sharing_map_of_maps_contract() {
+    cli::go_dsl("TestMapOfMaps_MapOwner");
+    cli::go_dsl("TestMapOfMaps_PinByName");
+}
+
 #[test]
 fn sqlite_uprobe_script_corpus() {
     cli::uprobe_scripts();
