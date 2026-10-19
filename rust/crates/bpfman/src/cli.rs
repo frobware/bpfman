@@ -14,7 +14,7 @@ mod duration;
 mod image;
 mod link;
 mod load;
-mod number;
+pub(crate) mod number;
 mod registry_auth;
 
 #[derive(Parser)]

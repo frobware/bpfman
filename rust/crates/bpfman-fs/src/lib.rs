@@ -267,3 +267,6 @@ pub struct PreparedUprobeAttach<P: UprobeProgram> {
 
 mod image;
 pub use image::{ImageCacheKey, ImageCacheStage, TrustCacheStage};
+
+mod volume;
+pub use volume::{MapReopening, VolumeCleanup, VolumeFailure, VolumeRequest, VolumeState};

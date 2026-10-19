@@ -232,3 +232,40 @@ pub(super) fn remove_socket(
     }
     unlinkat(parent, name, AtFlags::empty()).map_err(|e| io("remove owned socket", e))
 }
+
+// CSI cleanup accepts a captured directory receipt. Refuse replacements and
+// foreign filesystems. Unmount before rmdir; never recurse through caller data.
+pub(super) fn remove_volume_directory(
+    mut owned: Box<crate::volume::VolumeDirectory>,
+    remove: bool,
+) -> Result<(), (Error, Box<crate::volume::VolumeDirectory>)> {
+    let result = (|| {
+        owned.check()?;
+        if owned.fd.is_none() {
+            owned.reopen()?;
+        }
+        owned.require_bpf()?;
+        if owned.mounted {
+            // A directory FD into this mount is itself a busy reference. Retain
+            // the parent outside the mount, close our root FD, then unmount the
+            // identity-checked child through that parent. No lazy unmount.
+            drop(owned.fd.take());
+            let path = proc_path(&owned.parent).join(&owned.name);
+            if let Err(e) = rustix::mount::unmount(path, rustix::mount::UnmountFlags::empty()) {
+                // Reopening preserves the original identity; failure leaves the
+                // receipt without an FD so an explicit retry can re-adopt it.
+                let _ = owned.reopen();
+                return Err(io("unmount CSI volume", e));
+            }
+            owned.mounted = false;
+            owned.refresh()?;
+        }
+        owned.check()?;
+        if !remove {
+            return Ok(());
+        }
+        unlinkat(&owned.parent, &owned.name, AtFlags::REMOVEDIR)
+            .map_err(|e| io("remove CSI volume directory", e))
+    })();
+    result.map_err(|e| (e, owned))
+}

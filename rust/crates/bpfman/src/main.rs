@@ -21,7 +21,11 @@ mod version;
 
 fn main() -> ExitCode {
     let definition = cli::Cli::command();
-    let matches = definition.clone().get_matches();
+    let mut args: Vec<_> = std::env::args_os().collect();
+    if args.get(1).is_some_and(|s| s == "--csi-support") {
+        args.insert(1, "serve".into());
+    }
+    let matches = definition.clone().get_matches_from(args);
     if let Err(error) = cli::validate_scopes(&definition, &matches) {
         error.exit();
     }

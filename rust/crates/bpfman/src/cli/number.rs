@@ -2,7 +2,7 @@
 
 use std::num::{NonZeroU32, NonZeroU64};
 
-pub(super) fn boolean(raw: &str) -> Result<bool, String> {
+pub(crate) fn boolean(raw: &str) -> Result<bool, String> {
     match raw.to_ascii_lowercase().as_str() {
         "true" | "1" | "yes" => Ok(true),
         "false" | "0" | "no" => Ok(false),

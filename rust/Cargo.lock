@@ -259,6 +259,7 @@ name = "bpfman-api"
 version = "0.1.0"
 dependencies = [
  "bpfman-core",
+ "bpfman-fs",
  "bpfman-kernel",
  "bpfman-model",
  "bpfman-proto",
@@ -361,6 +362,7 @@ version = "0.1.0"
 dependencies = [
  "prost",
  "prost-build",
+ "prost-types",
 ]
 
 [[package]]

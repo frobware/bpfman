@@ -15,6 +15,7 @@ bpfman-proto = { path = "crates/bpfman-proto" }
 bpfman-api = { path = "crates/bpfman-api" }
 prost = "0.13"
 prost-build = "0.13"
+prost-types = "0.13"
 grpcuds = { version = "=0.1.0", default-features = false, features = ["server", "bundled"] }
 bpfman-image-oci = { path = "crates/bpfman-image-oci" }
 ureq = { version = "3", default-features = false, features = ["rustls"] }

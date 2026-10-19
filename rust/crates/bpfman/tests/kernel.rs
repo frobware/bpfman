@@ -659,3 +659,30 @@ fn sqlite_serve_grpc_persistence_and_policy() {
     let _timing = support::TestTiming::start("sqlite_serve_grpc_persistence_and_policy");
     serve::production();
 }
+
+#[path = "kernel/csi.rs"]
+mod csi;
+
+#[test]
+fn sqlite_csi_wire_contract() {
+    let _timing = support::TestTiming::start("sqlite_csi_wire_contract");
+    csi::wire("rust");
+}
+
+#[test]
+fn sqlite_csi_rollback_and_cancellation() {
+    let _timing = support::TestTiming::start("sqlite_csi_rollback_and_cancellation");
+    csi::rollback(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_csi_admission_and_explicit_recovery() {
+    let _timing = support::TestTiming::start("sqlite_csi_admission_and_explicit_recovery");
+    csi::admission(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn go_csi_wire_contract() {
+    let _timing = support::TestTiming::start("go_csi_wire_contract");
+    csi::wire("go");
+}

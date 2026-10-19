@@ -17,6 +17,8 @@ formatters:
       # The example applications predate this configuration and
       # keep their original import grouping.
       - examples
+      # Rust dependencies generate foreign Go fixtures inside Cargo build output.
+      - ^rust/target/
 
 linters:
   default: none
@@ -63,6 +65,8 @@ linters:
     paths:
       - vendor
       - third_party
+      # Cargo dependency build output is not repository Go source.
+      - ^rust/target/
     rules:
       # Generated protobuf files.
       - path: \.pb\.go$

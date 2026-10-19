@@ -16,6 +16,7 @@ bpfman-proto.workspace = true
 bpfman-model.workspace = true
 bpfman-core.workspace = true
 bpfman-runtime.workspace = true
+bpfman-fs.workspace = true
 bpfman-kernel.workspace = true
 bpfman-store.workspace = true
 prost.workspace = true

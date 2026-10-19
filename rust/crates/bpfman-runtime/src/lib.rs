@@ -566,3 +566,6 @@ pub enum DeleteErrorKind {
     /// Store, filesystem or kernel observation failed.
     Unavailable,
 }
+
+mod volume;
+pub use volume::{MapVolumes, VolumeError, VolumeErrorKind};

@@ -90,7 +90,7 @@ where
         + bpfman_store::TcStore,
     K: Kernel,
 {
-    app: Bpfman<S, K>,
+    app: std::sync::Arc<Bpfman<S, K>>,
     inspector: K,
     images: I,
     mode: Box<XdpModes>,
@@ -111,6 +111,16 @@ where
 {
     /// Bind one application and its stateless ELF inspector and image policy.
     pub fn new(app: Bpfman<S, K>, inspector: K, images: I, mode: bpfman_model::XdpMode) -> Self {
+        Self::from_shared(std::sync::Arc::new(app), inspector, images, mode)
+    }
+
+    /// Share one active application with another daemon frontend such as CSI.
+    pub fn from_shared(
+        app: std::sync::Arc<Bpfman<S, K>>,
+        inspector: K,
+        images: I,
+        mode: bpfman_model::XdpMode,
+    ) -> Self {
         Self {
             app,
             inspector,

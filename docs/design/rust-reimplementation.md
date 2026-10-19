@@ -2710,7 +2710,7 @@ wrong, change it here before broadening feature coverage.
   acceptance tests to port, so it is not a prerequisite for parity. Automatic
   pruning and abandoned-stage recovery also require an explicit design rather
   than being inferred from this port.
-- The uprobe mount-namespace helper is implemented; CSI integration is pending.
+- The uprobe mount-namespace helper and synchronous CSI integration are implemented.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
   file-bytecode, image-bytecode, parallel, and stress lanes.
 
@@ -6849,7 +6849,7 @@ attachment cleanup after shutdown/reopen. The stock launcher gets its own mount 
 its bpffs mounts are reclaimed without changing the Go harness. New native
 cases remain in the normal eight-process pool. Existing Go tests, scripts and kernel scheduling are unchanged.
 
-CSI and the operator's `--csi-support` startup form remain the next slice.
+CSI and the operator's `--csi-support` startup form are covered in the following section.
 
 Final validation: `direnv exec . make rust-check` exits zero, including all
 79 discovered/selected native cases and both fixture residue checks. The unchanged
@@ -6860,3 +6860,96 @@ override, including the added full-load daemon case. `make lint-make` passes.
 Definitive gate log: `/tmp/bpfman-serve-check3.log`; Makefile lint log:
 `/tmp/bpfman-serve-make-lint.log`. Existing Go tests, acceptance scripts and
 kernel-runner placement/assertions remain unchanged.
+
+## CSI daemon integration (19 October 2026)
+
+The daemon now supports `serve --csi-support` and the operator's leading
+`--csi-support` invocation, using the existing synchronous transport. The
+`bpfman-api` frontend contains CSI Identity and Node wire conversion alongside
+bpfman.v1; a separate CSI transport or async runtime is unnecessary. CSI messages
+are generated from the shared `proto/csi.proto`, independently of the legacy
+Rust workspace.
+
+Identity reports `csi.bpfman.io`, version `0.1.0`, ready, and no controller
+capabilities. Node reports the hostname and VOLUME_MOUNT_GROUP. Staging, stats
+and expansion return Unimplemented, matching Go. CSI listens at
+`<runtime>/csi/csi.sock` beside the primary service, using the same confined
+socket publication, lifetime lock, stale-socket and identity-checked cleanup
+policy. Either server stopping cancels and joins both services and their workers.
+
+`MapVolumes<S, K>` shares the active generic application with bpfman.v1. It
+serializes each volume with nonblocking admission, acquires the existing runtime
+writer for mutation, resolves `bpfman.io/ProgramName` against live managed records
+in ascending program-ID order, and verifies requested map membership. Program
+reads remain lock-free. Map opening and pinning use narrow kernel capabilities;
+all mount, permission and removal operations belong to `bpfman-fs`.
+
+Publication mounts hardened per-volume bpffs at `<runtime>/csi/fs/<volume>`,
+re-pins the requested maps, applies fsGroup and map mode 0660, and bind-mounts
+the target with the requested read-only state. The mounted root uses Go's bpffs
+default permissions; its underlying mountpoint directory is a separate inode.
+Map lists are trimmed and deduplicated. Repeated publication compares observable
+map names and read-only state before looking up the program, so it survives
+restart and program unload without an in-memory request cache. Different
+arguments return AlreadyExists; concurrent same-volume work returns Aborted.
+
+Forward cancellation compensates acquired mounts once. Cleanup retains consuming
+receipts, the primary failure and independent cleanup outcomes. An unresolved
+volume blocks new publication until an explicitly admitted recovery pass. A
+repeated NodeUnpublishVolume RPC for the same volume and target admits one such
+pass; it cannot redirect retained ownership to another target. There are no
+automatic cleanup retries. Target and backing cleanup each receive their
+pass, even if the other fails. Rollback preserves the CO-owned target directory;
+unpublish removes empty directories after normal unmount. Reopened cleanup
+adopts existing mounts and tolerates absence. Foreign mounts, symlinks and
+replaced identities are refused, and caller directories are never recursively
+removed. These are cooperative ownership checks, not a sandbox against privileged
+external mount replacement.
+
+Normal unmount must release the operation's own directory descriptor into that
+mount first. Cleanup retains the outside parent descriptor and captured identity,
+closes the mounted-root descriptor, unmounts the checked child through its parent,
+and re-adopts the underlying directory. Failed unmount retains ownership for an
+explicit retry; lazy unmount is not used.
+
+The new stock Go CSI client runs unchanged against the production Go and Rust
+daemons, including operator startup, Identity/Node responses, request validation,
+map identity, fsGroup, read-only publication, duplicate/conflicting arguments,
+concurrent publication, stale mounts, repeated cleanup, map lifetime after
+program unload and daemon restart. The fixture uses Go's existing default CSI
+backing root and Rust's runtime-scoped root; it does not alter Go production code
+or existing tests. Native Rust cases cover partial pin failures, cancellation,
+descriptor release, blocked cleanup, independent cleanup progress and explicit
+retry. Rust CSI cases remain in the existing process-isolated parallel native
+test pool. The Go reference case uses the existing Go stage: its metadata lookup
+calls `inspect.Snapshot`, which enumerates all kernel programs and temporarily
+opens foreign descriptors. Existing cases and scheduling are unchanged.
+
+Make declares shared gRPC/CSI helper prerequisites before the test targets that
+consume them, so the normal gate builds missing or stale clients. The dependency
+probe forces both client sources out of date and verifies all helper build
+commands precede userspace testing. Go lint excludes Cargo's generated dependency
+build output under `rust/target`; repository Go source and tests remain checked.
+
+Validation completed on Linux 6.18.54 with the existing development/test
+`aya-obj` opt-level-two override:
+
+- `direnv exec . make rust-test-csi rust-check` exited zero. All four focused
+  native CSI cases passed, followed by the complete gate: userspace and
+  filesystem contracts, architecture laws, strict Clippy, doctests, unchanged
+  acceptance corpus, all 83 discovered/selected native cases and Rustdoc. The
+  native gate took 240.61 seconds; fake and real fixture residue checks passed.
+- The same freshly rebuilt Go CSI client passed against both production
+  daemons, including large fsGroup conversion and an explicit unpublish RPC
+  retry after a busy mount. Rust's three CSI cases used the existing parallel
+  pool; the new Go reference case used the existing Go stage. No existing test
+  changed its placement or assertions.
+- `direnv exec . make test-e2e TEST='^TestCSIDriver_'` exited zero: all 11
+  existing Go CSI e2e cases passed unchanged. Existing CSI unit tests passed
+  with `direnv exec . env CGO_ENABLED=0 go test ./csi`.
+- `direnv exec . make lint-go lint-make` and an explicit golangci-lint run of
+  `./e2e/testdata/csi-contract` exited zero. Make's forced-staleness dependency
+  probe scheduled gRPC, daemon-launcher and CSI helper builds before tests.
+
+This evidence covers daemon RPCs, real BPF maps and Linux mounts. Kubernetes
+cluster deployment was not exercised.

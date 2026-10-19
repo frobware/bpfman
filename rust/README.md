@@ -46,7 +46,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-runtime` | 4 | Generic attachment lifecycle interpreters, consuming compensation, and observations |
-| `bpfman-proto` | 0 | Generated protobuf messages from the shared schema |
+| `bpfman-proto` | 0 | Generated protobuf messages from the shared schemas |
 | `bpfman-api` | 5 | Synchronous gRPC conversion and transport |
 | `bpfman` | 6 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
@@ -548,8 +548,8 @@ Configuration is read and validated for all tool commands, including `version`
 and image tools. An absent implicit default is optional; an explicitly selected
 missing, unreadable or invalid file fails before runtime creation. Process tests
 select an empty configuration fixture rather than depending on host settings.
-`serve` and the operator `--csi-support` startup form remain separate follow-ups
-to the library gRPC service, as explicitly agreed for this CLI pass.
+`serve` and the operator `--csi-support` startup form followed the library gRPC
+service in separate slices, described below.
 
 `tests/cli_compatibility.rs` discovers Go's visible command leaves and compares
 every command's long/short flags and aliases, with an explicit inventory of
@@ -2855,7 +2855,7 @@ The Nix shell includes CMake and `rustPlatform.bindgenHook`; the user's `.envrc`
 is unchanged. Existing locked dependency versions remain unchanged.
 
 Production `serve` composition and the unchanged `e2e/grpc` launcher suite are
-covered below. CSI and the operator startup form remain separate.
+covered below. CSI and the operator startup form are covered in the following section.
 
 Validation on Linux 6.18.54: `make rust-check` passes with all 77 native cases
 and residue checks, including the new gRPC case in the eight-process pool.
@@ -2897,7 +2897,7 @@ restart persistence and OCI policy. The stock launcher has a private mount
 namespace so its bpffs mounts disappear before fixture cleanup. These cases
 join the full `rust-check` gate
 without changing Go tests, acceptance scripts or parallel test placement.
-CSI and operator `--csi-support` startup are next.
+CSI and operator `--csi-support` startup are covered below.
 
 Validation: `direnv exec . make rust-check` passes all 79 native cases and
 residue checks, plus strict Clippy, architecture, userspace and documentation
@@ -2905,3 +2905,33 @@ checks. The native stages take 222.86 seconds on Linux 6.18.54 with the existing
 aya-obj opt-level-two override, including the default-load daemon launcher.
 `make lint-make` also passes. Logs: `/tmp/bpfman-serve-check3.log` and
 `/tmp/bpfman-serve-make-lint.log`.
+
+### CSI daemon support
+
+`bpfman serve --csi-support` runs the synchronous CSI Identity and Node services
+alongside bpfman.v1. The operator's leading `bpfman --csi-support ...` invocation
+selects `serve` as Go does. CSI listens at `<runtime>/csi/csi.sock`; per-volume
+bpffs mounts live at `<runtime>/csi/fs/<volume>`. Both services share one active
+application and stop together on SIGINT/SIGTERM.
+
+The generic `MapVolumes` application resolves live managed programs by metadata,
+publishes map pins with fsGroup/read-only handling, and supports idempotent
+publish/unpublish after restart. Writer admission and cancellation preserve
+existing runtime authority. Failed compensation retains receipts for explicit
+retry and blocks new work for that volume. Managed effects use confined filesystem
+capabilities and normal unmount; map references survive program unload while the
+volume remains published. CSI staging, controller operations, stats and expansion
+remain unsupported, matching Go's advertised capabilities.
+
+`make rust-test-csi` runs wire validation, daemon startup/shutdown tests and native
+CSI contracts. A single stock Go protobuf client exercises both production
+daemons. The full `rust-check` gate runs the Rust cases in the native process
+pool and the Go reference case in the existing Go stage, since Go metadata
+lookup enumerates kernel programs. Existing Go tests and script assertions are
+unchanged.
+
+Validation: `direnv exec . make rust-test-csi rust-check` passed all four focused
+CSI cases and all 83 discovered native cases, including the unchanged acceptance
+corpus. All 11 existing Go CSI e2e tests, existing CSI unit tests, Go/Makefile
+linters and explicit shared-client lint passed. Kubernetes cluster deployment
+was not exercised.

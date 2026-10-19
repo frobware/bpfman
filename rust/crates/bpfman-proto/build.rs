@@ -3,8 +3,10 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let proto = "../../../proto/bpfman.proto";
     println!("cargo:rerun-if-changed={proto}");
+    println!("cargo:rerun-if-changed=../../../proto/csi.proto");
     prost_build::Config::new()
         .btree_map(["."])
-        .compile_protos(&[proto], &["../../../proto"])?;
+        .disable_comments([".csi"])
+        .compile_protos(&[proto, "../../../proto/csi.proto"], &["../../../proto"])?;
     Ok(())
 }

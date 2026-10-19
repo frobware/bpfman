@@ -218,3 +218,15 @@ impl crate::RuntimeLayout {
             .join(format!("link_{}_{}_{}", key.nsid, key.ifindex, program))
     }
 }
+
+impl RuntimeLayout {
+    /// CSI registration endpoint for kubelet.
+    pub fn csi_socket_path(&self) -> PathBuf {
+        self.root.join("csi/csi.sock")
+    }
+
+    /// Per-volume bpffs mount collection.
+    pub fn csi_filesystem_path(&self) -> PathBuf {
+        self.root.join("csi/fs")
+    }
+}

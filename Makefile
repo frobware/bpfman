@@ -1085,6 +1085,9 @@ rust-build: $(RUST_DISPATCHER)
 RUST_TEST_INPUTS = e2e/testdata/bpf/fentry_counter.bpf.o e2e/testdata/bpf/fentry_kmod_exact.bpf.o e2e/testdata/bpf/fexit_kmod_exact.bpf.o e2e/testdata/bpf/multi_prog_fentry_kmod_counter.bpf.o e2e/testdata/bpf/multi_prog_fexit_kmod_counter.bpf.o e2e/testdata/bpf/uprobe_exact.bpf.o e2e/testdata/bpf/uprobe_counter.bpf.o e2e/testdata/bpf/multi_prog_uprobe_counter.bpf.o e2e/testdata/bpf/shared_map_contract.bpf.o e2e/testdata/bpf/tc_counter_pinned.bpf.o e2e/testdata/bpf/kprobe_counter.bpf.o e2e/testdata/bpf/multi_prog_kprobe_kmod_counter.bpf.o e2e/testdata/bpf/tcx_counter.bpf.o e2e/testdata/bpf/tc_ingress.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_hash.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_hash.bpf.o e2e/testdata/bpf/xdp_devmap_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_egress.bpf.o e2e/testdata/bpf/xdp_devmap_egress_frags.bpf.o e2e/testdata/bpf/xdp_redirect_error.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_frags.bpf.o e2e/testdata/bpf/xdp_delivery_frags.bpf.o e2e/testdata/bpf/xdp_devmap_frags.bpf.o $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_devmap.bpf.o e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
 RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
 RUST_TEST_INPUTS += e2e/testdata/bpf/xdp_pass_be.bpf.o
+# Prerequisites expand when Make reads a target, so declare shared client inputs
+# before every Rust test target, including rust-test-userspace and rust-check.
+RUST_TEST_INPUTS += $(BIN_DIR)/grpc-contract $(BIN_DIR)/e2e-grpc.test $(BIN_DIR)/csi-contract
 RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh", "$(abspath rust/test-runner.sh)"]'
 
 # A raw-Ethernet test fixture; Go and x/sys are already in the test toolchain.
@@ -2064,16 +2067,23 @@ rust-test-image-build: rust-build $(RUST_TEST_INPUTS)
 # Stock protobuf client for the library gRPC host, before the serve CLI lands.
 $(BIN_DIR)/grpc-contract: e2e/testdata/grpc-contract/main.go server/pb/bpfman.pb.go server/pb/bpfman_grpc.pb.go go.mod go.sum | $(BIN_DIR)
 	CGO_ENABLED=0 go build -o $@ ./e2e/testdata/grpc-contract
-RUST_TEST_INPUTS += $(BIN_DIR)/grpc-contract
 
 .PHONY: rust-test-grpc
 rust-test-grpc: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_grpc_wire_contract -- --exact --nocapture
 
 # The unchanged daemon lifecycle suite also exercises the Rust composition root.
-RUST_TEST_INPUTS += $(BIN_DIR)/e2e-grpc.test
 
 .PHONY: rust-test-serve
 rust-test-serve: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test serve --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_serve_grpc -- --nocapture
+
+# One stock CSI client exercises both production daemon implementations.
+$(BIN_DIR)/csi-contract: e2e/testdata/csi-contract/main.go server/pb/bpfman.pb.go server/pb/bpfman_grpc.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi_grpc.pb.go go.mod go.sum | $(BIN_DIR)
+	CGO_ENABLED=0 go build -o $@ ./e2e/testdata/csi-contract
+
+.PHONY: rust-test-csi
+rust-test-csi: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test csi --test serve --locked
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) csi_ -- --nocapture

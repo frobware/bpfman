@@ -183,3 +183,20 @@ impl Kernel {
         Ok(acquired)
     }
 }
+
+/// Retained map reference used to publish a CSI pin.
+pub struct VolumeMap(MapData);
+
+impl MapPinning for VolumeMap {
+    fn pin(&self, target: PinTarget<'_>) -> KernelResult<()> {
+        self.0.pin(target.path()).map_err(Into::into)
+    }
+}
+
+impl bpfman_fs::MapReopening for Kernel {
+    type Map = VolumeMap;
+
+    fn open_map(&self, source: PinSource<'_>) -> KernelResult<Self::Map> {
+        Ok(VolumeMap(MapData::from_pin(source.path())?))
+    }
+}

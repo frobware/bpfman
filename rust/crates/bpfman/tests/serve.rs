@@ -293,3 +293,95 @@ fn a_foreign_live_socket_and_symlinked_parent_are_preserved() {
     );
     assert_eq!(fs::read_dir(&target).expect("outside").count(), 0);
 }
+
+#[test]
+fn csi_startup_form_serves_both_sockets_and_stops_both() {
+    for operator in [true, false] {
+        let f = Fixture::new();
+        let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
+        if !operator {
+            command.arg("serve");
+        }
+        let mut daemon = Daemon(
+            command
+                .arg("--csi-support")
+                .arg("--runtime-dir")
+                .arg(&f.runtime)
+                .arg("--socket-path")
+                .arg(&f.socket)
+                .arg("--config")
+                .arg(&f.config)
+                .arg("--image-cache-dir")
+                .arg(&f.cache)
+                .env_remove("BPFMAN_SOCKET_PATH")
+                .env_remove("BPFMAN_RUNTIME_DIR")
+                .stdout(Stdio::null())
+                .spawn()
+                .expect("CSI daemon"),
+        );
+        let csi = f.runtime.join("csi/csi.sock");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while UnixStream::connect(&csi).is_err() || UnixStream::connect(&f.socket).is_err() {
+            assert!(daemon.0.try_wait().expect("status").is_none());
+            assert!(Instant::now() < deadline, "CSI readiness");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let output =
+            Command::new(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bin/csi-contract"))
+                .arg("-csi-socket")
+                .arg(&csi)
+                .arg("-lane=identity")
+                .output()
+                .expect("stock CSI client");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        stop(&mut daemon, if operator { "INT" } else { "TERM" });
+        assert!(!csi.exists());
+        assert!(!f.socket.exists());
+    }
+    // Only the leading marker selects the daemon implicitly, matching Go.
+    let output = Command::new(env!("CARGO_BIN_EXE_bpfman"))
+        .args(["version", "--csi-support"])
+        .output()
+        .expect("flag scope");
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn csi_startup_failure_preserves_foreign_endpoint_and_cleans_primary_socket() {
+    let f = Fixture::new();
+    let csi = f.runtime.join("csi/csi.sock");
+    fs::create_dir_all(csi.parent().expect("parent")).expect("directory");
+    fs::write(&csi, "foreign").expect("foreign file");
+    let result = f
+        .command()
+        .arg("--csi-support")
+        .output()
+        .expect("startup failure");
+    assert!(!result.status.success());
+    assert_eq!(fs::read_to_string(csi).expect("preserved"), "foreign");
+    assert!(!f.socket.exists());
+}
+
+#[test]
+fn csi_boolean_false_leaves_the_primary_daemon_available() {
+    let f = Fixture::new();
+    let mut daemon = Daemon(
+        f.command()
+            .arg("--csi-support=false")
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("daemon"),
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while UnixStream::connect(&f.socket).is_err() {
+        assert!(daemon.0.try_wait().expect("status").is_none());
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!f.runtime.join("csi").exists());
+    stop(&mut daemon, "TERM");
+}

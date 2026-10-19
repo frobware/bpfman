@@ -26,6 +26,7 @@ mod verification;
 mod xdp;
 
 pub use image::{BytecodeMetadata, inspect_bytecode};
+pub use maps::VolumeMap;
 pub use netns::XdpNamespace;
 
 use bpfman_kernel::{Error, ErrorKind};

@@ -45,34 +45,54 @@ struct Job {
 
 /// Bound Unix-socket server. The composition root owns its shutdown signal and
 /// socket policy. Serving joins every operation worker before returning.
-pub struct Server<S, K, I>
-where
-    S: bpfman_store::UnloadStore
-        + bpfman_store::LinkStore
-        + bpfman_store::XdpStore
-        + bpfman_store::TcStore,
-    K: Kernel,
-{
+pub struct RpcServer<H> {
     io: grpcuds::Server,
     jobs: Mutex<mpsc::Receiver<Job>>,
     teardown: Mutex<mpsc::Receiver<Job>>,
     reads: Mutex<mpsc::Receiver<Job>>,
-    service: Arc<Service<S, K, I>>,
+    service: Arc<H>,
     active: Arc<Mutex<Vec<Arc<Call>>>>,
     options: ServerOptions,
 }
 
-const METHODS: &[&str] = &[
-    "/bpfman.v1.Bpfman/Load",
-    "/bpfman.v1.Bpfman/Unload",
-    "/bpfman.v1.Bpfman/Attach",
-    "/bpfman.v1.Bpfman/Detach",
-    "/bpfman.v1.Bpfman/List",
-    "/bpfman.v1.Bpfman/Get",
-    "/bpfman.v1.Bpfman/PullBytecode",
+const METHODS: &[(&str, Execution)] = &[
+    ("/bpfman.v1.Bpfman/Load", Execution::Mutation),
+    ("/bpfman.v1.Bpfman/Unload", Execution::Teardown),
+    ("/bpfman.v1.Bpfman/Attach", Execution::Mutation),
+    ("/bpfman.v1.Bpfman/Detach", Execution::Teardown),
+    ("/bpfman.v1.Bpfman/List", Execution::Read),
+    ("/bpfman.v1.Bpfman/Get", Execution::Read),
+    ("/bpfman.v1.Bpfman/PullBytecode", Execution::Mutation),
 ];
 
-impl<S, K, I> Server<S, K, I>
+/// A synchronous unary service with explicit execution classes.
+pub trait Handler: Send + Sync + 'static {
+    /// Registered methods and their scheduling classes.
+    fn methods() -> &'static [(&'static str, Execution)];
+    /// Execute one request with caller-owned cancellation.
+    fn handle(
+        &self,
+        method: &str,
+        bytes: &[u8],
+        cancellation: &Cancellation,
+    ) -> Result<Vec<u8>, Status>;
+}
+
+/// Scheduling classes preserve read availability and prioritize resource release.
+#[derive(Clone, Copy)]
+pub enum Execution {
+    /// Admission or resource acquisition.
+    Mutation,
+    /// Read-only observation.
+    Read,
+    /// Release of previously acquired resources.
+    Teardown,
+}
+
+/// The bpfman service's synchronous server.
+pub type Server<S, K, I> = RpcServer<Service<S, K, I>>;
+
+impl<S, K, I> Handler for Service<S, K, I>
 where
     S: bpfman_store::UnloadStore
         + bpfman_store::CommitLoad
@@ -87,11 +107,26 @@ where
     K::PreparedXdp: Send,
     I: Images + Send + Sync + 'static,
 {
+    fn methods() -> &'static [(&'static str, Execution)] {
+        METHODS
+    }
+
+    fn handle(
+        &self,
+        method: &str,
+        bytes: &[u8],
+        cancellation: &Cancellation,
+    ) -> Result<Vec<u8>, Status> {
+        Service::handle(self, method, bytes, cancellation)
+    }
+}
+
+impl<H: Handler> RpcServer<H> {
     /// Bind a fresh socket. The synchronous transport has no async dependency.
     /// A full worker queue rejects immediately, leaving the I/O loop available.
     pub fn bind(
         path: &Path,
-        service: Arc<Service<S, K, I>>,
+        service: Arc<H>,
         options: ServerOptions,
     ) -> Result<Self, std::io::Error> {
         if options.workers == 0 || options.readers == 0 || options.pending == 0 {
@@ -114,16 +149,11 @@ where
         let (teardown_sender, teardown_receiver) = mpsc::sync_channel::<Job>(options.pending);
         let active = Arc::new(Mutex::new(Vec::<Arc<Call>>::new()));
         let mut builder = grpcuds::Server::builder().bind(path);
-        for &method in METHODS {
-            let sender = if matches!(method, "/bpfman.v1.Bpfman/List" | "/bpfman.v1.Bpfman/Get") {
-                read_sender.clone()
-            } else if matches!(
-                method,
-                "/bpfman.v1.Bpfman/Detach" | "/bpfman.v1.Bpfman/Unload"
-            ) {
-                teardown_sender.clone()
-            } else {
-                sender.clone()
+        for &(method, execution) in H::methods() {
+            let sender = match execution {
+                Execution::Read => read_sender.clone(),
+                Execution::Teardown => teardown_sender.clone(),
+                Execution::Mutation => sender.clone(),
             };
             let active = active.clone();
             // Deferred single-response completion lets ordinary operation
