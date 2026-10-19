@@ -119,6 +119,11 @@ impl<S: TcStore, K: TcLifecycle> TcError<S, K> {
             })
     }
 
+    /// Primary classified failure, including admission and restoration errors.
+    pub fn primary_failure(&self) -> Option<&LinkCause> {
+        self.primary()
+    }
+
     /// Portable application category.
     pub fn kind(&self) -> crate::LinkErrorKind {
         self.primary()

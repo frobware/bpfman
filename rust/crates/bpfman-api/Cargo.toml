@@ -1,0 +1,22 @@
+[package]
+name = "bpfman-api"
+description = "Synchronous bpfman gRPC frontend"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+bpfman-proto.workspace = true
+bpfman-model.workspace = true
+bpfman-core.workspace = true
+bpfman-runtime.workspace = true
+bpfman-kernel.workspace = true
+bpfman-store.workspace = true
+prost.workspace = true
+grpcuds.workspace = true

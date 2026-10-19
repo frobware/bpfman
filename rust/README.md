@@ -46,7 +46,9 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-runtime` | 4 | Generic attachment lifecycle interpreters, consuming compensation, and observations |
-| `bpfman` | 5 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
+| `bpfman-proto` | 0 | Generated protobuf messages from the shared schema |
+| `bpfman-api` | 5 | Synchronous gRPC conversion and transport |
+| `bpfman` | 6 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
 point down through tiers, pure normal dependency closures are explicitly
@@ -546,8 +548,8 @@ Configuration is read and validated for all tool commands, including `version`
 and image tools. An absent implicit default is optional; an explicitly selected
 missing, unreadable or invalid file fails before runtime creation. Process tests
 select an empty configuration fixture rather than depending on host settings.
-`serve` and the operator `--csi-support` startup form are deferred until gRPC is
-implemented, as explicitly agreed for this CLI pass.
+`serve` and the operator `--csi-support` startup form remain separate follow-ups
+to the library gRPC service, as explicitly agreed for this CLI pass.
 
 `tests/cli_compatibility.rs` discovers Go's visible command leaves and compares
 every command's long/short flags and aliases, with an explicit inventory of
@@ -2787,3 +2789,78 @@ based on the case process ID: ordinary libtest names share the `sqlite_l` prefix
 that the BPF fixture compares. A synchronized peer using that old prefix proves
 its reads cannot affect the exact counter. Existing script assertions and labels
 remain unchanged. OCI loading and other attachment families remain separate work.
+
+
+## Library gRPC service
+
+`bpfman-proto` generates only messages from the unchanged `proto/bpfman.proto`
+using prost. `bpfman-api` implements Load, Unload, Attach, Detach, List, Get and
+PullBytecode over generic `Bpfman`/store/kernel capabilities. The composition
+root supplies the ELF inspector and image policy; no concrete store or Aya
+implementation enters the frontend's normal dependencies. Image credentials
+are normalized at the frontend and never enter runtime/store requests.
+
+The Unix-socket transport pins grpcuds 0.1.0 with its bundled nghttp2 backend,
+without its optional Tokio integration. It uses a synchronous poll loop, eight
+mutation workers, two reserved read workers and separate bounded queues.
+Requests beyond queue capacity receive ResourceExhausted. Reads bypass the
+runtime writer lock even when every mutation worker is waiting on it. RPC
+cancellation/deadlines and shutdown feed per-call runtime cancellation tokens;
+all workers join before serving returns. Go-compatible daemon composition uses
+`Duration::ZERO` for the application lock budget, leaving RPC deadlines to bound
+lock waiting. Startup/cache preparation may still have their own budgets.
+
+The transport's cancellation flag is lazy in this pinned dependency: a vanished
+stream is reported after an outbound operation is rejected. While a call is
+pending, a 20 ms monitor reapplies the unchanged stream queue policy to probe
+liveness without writing a response message. Client deadline expiry is checked
+independently. The shared contract observes waiter descriptor closure before
+releasing an external flock; cancellation is not inferred from client return.
+The present host binds a fresh socket inside its private fixture directory and
+refuses existing path entries. Production socket-directory ownership,
+permissions and replacement policy belong to the upcoming `serve` slice.
+
+Response projection follows the Go server, including its field omissions:
+List returns only managed programs present in the kernel and ignores
+`bpfman_programs_only`; List omits link IDs and GPL, while Get includes them. Both leave the JIT flag,
+memlock and verified-instruction count unset; translated/JIT byte sizes remain
+populated. Load echoes the original
+bytecode oneof and omits map-owner ID even for an explicit map join; Get/List
+read the durable map-owner handle. Operator `bpfman.io/actual-type:NAME`
+metadata selects return probes absent from the wire enum. Attach metadata,
+position and the kprobe container selector are ignored by the existing Go
+service and retain that behavior here. Typed runtime failures supply status
+mapping, including map-owner absence and attachment-family mismatch, without
+matching error strings or exposing concrete backend failures.
+
+Failed compensation/teardown receipts stay in the service. `retry_cleanup`
+attempts one explicit pass and preserves unresolved ownership, including when
+retry admission is cancelled. No automatic retry runs after an RPC failure.
+
+`direnv exec . make rust-test-grpc` runs the stock Go protobuf client against
+both the Rust library host and the unchanged Go daemon. It covers all seven
+methods, all attachment families, return-probe metadata, shared maps, local OCI
+pull/load, concurrent clients, saturated writers with independent reads,
+request/status conversion, retained-descriptor controls and immediate native
+link release. Rust additionally closes and reconstructs its host before cleaning
+up a persisted attachment. Userspace fault tests use the stateful kernel with
+real SQLite and exercise retained cleanup and cancellation. These contracts
+join the normal `rust-check` gate; no existing Go tests or acceptance scripts
+are changed. The registry fixture now supplies standard manifest media types,
+digest headers and HEAD semantics for the stock Go registry client.
+
+Building the synchronous transport needs CMake and libclang for its pinned
+nghttp2 build/bindings, plus the existing protoc tool for message generation.
+The Nix shell includes CMake and `rustPlatform.bindgenHook`; the user's `.envrc`
+is unchanged. Existing locked dependency versions remain unchanged.
+
+The public `serve` command, operator startup form, CSI, production daemon
+configuration and the unchanged `e2e/grpc` launcher suite follow separately.
+
+Validation on Linux 6.18.54: `make rust-check` passes with all 77 native cases
+and residue checks, including the new gRPC case in the eight-process pool.
+The native stages take 93.23 seconds with the existing aya-obj opt-level-two
+override. Gate log: `/tmp/bpfman-grpc-check2.log`. Focused shared-client evidence:
+`/tmp/bpfman-grpc-test9.log`; Go fixture lint and Makefile lint both pass. The
+existing Go tests and `.bpfman` scripts, and the kernel runner's scheduling and
+assertions, remain unchanged.

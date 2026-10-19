@@ -26,6 +26,25 @@ impl TracepointLinks for Kernel {
         p: PreparedTracepointAttach<crate::AyaTracepoint>,
         t: &Tracepoint,
     ) -> Result<LiveTracepoint<crate::AyaLink>, Error> {
+        // Resolve the event at the concrete kernel boundary so an absent
+        // tracepoint remains a typed NotFound rather than a boxed fs failure.
+        let base = if std::path::Path::new("/sys/kernel/tracing/events").is_dir() {
+            "/sys/kernel/tracing/events"
+        } else {
+            "/sys/kernel/debug/tracing/events"
+        };
+        let path = std::path::Path::new(base)
+            .join(t.group())
+            .join(t.name())
+            .join("id");
+        std::fs::read_to_string(path).map_err(|error| {
+            let kind = if error.kind() == std::io::ErrorKind::NotFound {
+                bpfman_kernel::ErrorKind::Missing
+            } else {
+                bpfman_kernel::ErrorKind::Unavailable
+            };
+            Error::new(kind, "resolve tracepoint event", error)
+        })?;
         p.attach(w, t).map_err(filesystem)
     }
 

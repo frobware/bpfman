@@ -28,6 +28,8 @@ pub(super) enum LoadCause {
     Kernel(#[from] bpfman_kernel::Error),
     #[error("{0}")]
     Invalid(String),
+    #[error("map_owner_id {0} does not exist")]
+    MapOwnerNotFound(std::num::NonZeroU32),
     #[error(transparent)]
     Filesystem(#[from] bpfman_fs::Error),
     #[error(transparent)]
@@ -81,7 +83,7 @@ impl<K: bpfman_kernel::ProgramResources> LoadError<K> {
             LoadCause::Filesystem(e) if e.kind() == bpfman_fs::ErrorKind::Cancelled => {
                 LoadErrorKind::Cancelled
             }
-            LoadCause::Invalid(_) => LoadErrorKind::InvalidInput,
+            LoadCause::Invalid(_) | LoadCause::MapOwnerNotFound(_) => LoadErrorKind::InvalidInput,
             LoadCause::Store(e) => match e.kind() {
                 bpfman_store::ErrorKind::Unsupported => LoadErrorKind::Unsupported,
                 bpfman_store::ErrorKind::InvalidData => LoadErrorKind::InvalidInput,
@@ -94,6 +96,11 @@ impl<K: bpfman_kernel::ProgramResources> LoadError<K> {
             },
             _ => LoadErrorKind::Unavailable,
         }
+    }
+
+    /// A requested map owner did not name an existing map set at admission.
+    pub fn is_map_owner_missing(&self) -> bool {
+        matches!(self.failure.primary(), LoadCause::MapOwnerNotFound(_))
     }
 
     /// Number of owned resources still requiring cleanup (including a blocked map directory).

@@ -210,6 +210,16 @@ impl XdpNamespace {
     }
 }
 
+// if_nametoindex identifies an absent interface as ENODEV/ENXIO; namespace
+// selection failures retain their ordinary backend category.
+pub(super) fn attachment_error(error: io::Error) -> bpfman_kernel::Error {
+    let kind = match error.raw_os_error() {
+        Some(libc::ENODEV | libc::ENXIO) => bpfman_kernel::ErrorKind::InvalidInput,
+        _ => bpfman_kernel::ErrorKind::Unavailable,
+    };
+    bpfman_kernel::Error::new(kind, "resolve attachment interface", error)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]

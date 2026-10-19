@@ -43,6 +43,10 @@ impl XdpLifecycle for Kernel {
         ),
         Error,
     > {
+        // Classify interface admission before the confined filesystem API
+        // erases backend-specific causes. Actual preparation revalidates it.
+        let _namespace =
+            crate::XdpNamespace::open(interface, netns).map_err(crate::netns::attachment_error)?;
         let p = w
             .prepare_xdp(self, program, interface, netns)
             .map_err(filesystem)?;

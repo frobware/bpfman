@@ -59,6 +59,10 @@
             rustc
             rustfmt
 
+            # Synchronous gRPC transport builds its pinned nghttp2 library.
+            cmake
+            rustPlatform.bindgenHook
+
             parallel
 
             # BPF build toolchain. Use clang-unwrapped: the cc-

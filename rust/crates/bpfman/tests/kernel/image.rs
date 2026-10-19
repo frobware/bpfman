@@ -1,9 +1,8 @@
 //! OCI inputs feed the same native lifecycle, stored observations and teardown.
-#[path = "../../../../tests/support/oci.rs"]
-mod fixture;
 #[path = "../../../../tests/support/signed_image.rs"]
 mod signed_image;
 
+use crate::oci_registry as fixture;
 use fixture as registry;
 
 use super::support::*;

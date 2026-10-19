@@ -84,6 +84,11 @@ impl Registry {
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .expect("timeout");
+                // Stock registry clients may probe TLS before HTTP on loopback.
+                let mut first = [0];
+                if stream.peek(&mut first).unwrap_or(0) == 0 || first[0] == 0x16 {
+                    continue;
+                }
                 let mut request = Vec::new();
                 let mut byte = [0];
                 while !request.ends_with(b"\r\n\r\n") {
@@ -119,12 +124,23 @@ impl Registry {
                 } else {
                     String::new()
                 };
+                let manifest: Option<serde_json::Value> = path
+                    .contains("/manifests/")
+                    .then(|| serde_json::from_slice(&body).ok())
+                    .flatten();
+                let media_type = manifest
+                    .as_ref()
+                    .and_then(|manifest| manifest["mediaType"].as_str())
+                    .unwrap_or("application/octet-stream");
                 let header = format!(
-                    "HTTP/1.1 {status} result\r\n{challenge}Content-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
+                    "HTTP/1.1 {status} result\r\n{challenge}Content-Length: {}\r\nContent-Type: {media_type}\r\nDocker-Content-Digest: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                    hash(&body)
                 );
                 let _ = stream.write_all(header.as_bytes());
-                let _ = stream.write_all(&body);
+                if !request.starts_with("HEAD ") {
+                    let _ = stream.write_all(&body);
+                }
             }
         });
         Self {

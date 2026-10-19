@@ -32,7 +32,12 @@ impl<S: XdpStore, K: bpfman_kernel::XdpLifecycle> Effects for Adapter<'_, S, K> 
             .find(|p| p.id == r.program_id)
             .ok_or(Cause::NotFound)?;
         if !matches!(program.spec, bpfman_model::ProgramSpec::Xdp(_)) {
-            return Err(Cause::Unsupported.into());
+            return Err(Cause::ProgramMismatch {
+                id: program.id,
+                actual: program.spec.kind(),
+                requested: bpfman_model::ProgramType::Xdp,
+            }
+            .into());
         }
         if w.layout().program_pin_path(program.id).to_str() != Some(program.pin_path.as_str()) {
             return Err(Cause::Invalid("noncanonical managed program pin").into());

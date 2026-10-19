@@ -45,6 +45,9 @@ tracing-subscriber.workspace = true
 tracing-chrome.workspace = true
 
 [dev-dependencies]
+bpfman-api.workspace = true
+bpfman-proto.workspace = true
+prost.workspace = true
 sha2.workspace = true
 aya.workspace = true
 rusqlite.workspace = true

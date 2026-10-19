@@ -36,7 +36,12 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::TracepointLinks> Effects for Ad
             .ok_or(Cause::NotFound)?;
 
         if !matches!(record.spec, ProgramSpec::Tracepoint(_)) {
-            return Err(Cause::Unsupported.into());
+            return Err(Cause::ProgramMismatch {
+                id: program,
+                actual: record.spec.kind(),
+                requested: bpfman_model::ProgramType::Tracepoint,
+            }
+            .into());
         }
 
         if writer.layout().program_pin_path(program).to_str() != Some(record.pin_path.as_str()) {

@@ -124,6 +124,11 @@ impl<S: XdpStore, K: bpfman_kernel::XdpReplacement> XdpError<S, K> {
         }
     }
 
+    /// Primary classified failure, including admission and restoration errors.
+    pub fn primary_failure(&self) -> Option<&LinkCause> {
+        self.cause()
+    }
+
     /// Backend-independent failure classification.
     pub fn kind(&self) -> crate::LinkErrorKind {
         self.cause()

@@ -74,6 +74,16 @@ impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> From<LinkCause> for LinkEr
 }
 
 impl LinkCause {
+    /// The loaded program family cannot drive the requested attachment.
+    pub fn is_program_mismatch(&self) -> bool {
+        matches!(self.cause, Cause::ProgramMismatch { .. })
+    }
+
+    /// A kernel adapter rejected the requested attachment target before effects.
+    pub fn is_invalid_input(&self) -> bool {
+        matches!(&self.cause,Cause::Kernel(error) if error.kind() == bpfman_kernel::ErrorKind::InvalidInput)
+    }
+
     /// Stable classification; adapter diagnostics remain in the source chain.
     pub fn kind(&self) -> LinkErrorKind {
         match &self.cause {
@@ -86,6 +96,7 @@ impl LinkCause {
             | Cause::ProgramMismatch { .. } => LinkErrorKind::InvalidState,
             Cause::Kernel(cause) => match cause.kind() {
                 bpfman_kernel::ErrorKind::Unsupported => LinkErrorKind::Unsupported,
+                bpfman_kernel::ErrorKind::Missing => LinkErrorKind::NotFound,
                 bpfman_kernel::ErrorKind::InvalidInput | bpfman_kernel::ErrorKind::InvalidData => {
                     LinkErrorKind::InvalidState
                 }
@@ -142,6 +153,11 @@ impl<S: LinkStore, K: bpfman_kernel::TracepointLinks> LinkError<S, K> {
     pub fn kind(&self) -> LinkErrorKind {
         self.cause()
             .map_or(LinkErrorKind::Unavailable, LinkCause::kind)
+    }
+
+    /// Primary classified cause, without exposing concrete backend errors.
+    pub fn primary_failure(&self) -> Option<&LinkCause> {
+        self.cause()
     }
 
     /// Cleanup progress; absent when the operation failed before owning intent.

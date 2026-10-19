@@ -2060,3 +2060,12 @@ rust-test-image-build: rust-build $(RUST_TEST_INPUTS)
 	cargo test --manifest-path $(RUST_MANIFEST) -p bpfman-image-oci --test publish --test authentication --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test image_build --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- image_build --nocapture
+
+# Stock protobuf client for the library gRPC host, before the serve CLI lands.
+$(BIN_DIR)/grpc-contract: e2e/testdata/grpc-contract/main.go server/pb/bpfman.pb.go server/pb/bpfman_grpc.pb.go go.mod go.sum | $(BIN_DIR)
+	CGO_ENABLED=0 go build -o $@ ./e2e/testdata/grpc-contract
+RUST_TEST_INPUTS += $(BIN_DIR)/grpc-contract
+
+.PHONY: rust-test-grpc
+rust-test-grpc: rust-build $(RUST_TEST_INPUTS)
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_grpc_wire_contract -- --exact --nocapture

@@ -38,7 +38,7 @@ impl TcxLinks for Kernel {
         direction: TcDirection,
         priority: u32,
     ) -> Result<(TcxLink, Self::PreparedTcx), Error> {
-        let ns = XdpNamespace::open(interface, netns).map_err(failure)?;
+        let ns = XdpNamespace::open(interface, netns).map_err(crate::netns::attachment_error)?;
         let key = ns.key();
         let target = TcxLink {
             key: TcKey {

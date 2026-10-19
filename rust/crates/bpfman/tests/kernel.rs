@@ -22,6 +22,9 @@ mod pending;
 #[path = "kernel/support.rs"]
 mod support;
 
+#[path = "../../../tests/support/oci.rs"]
+mod oci_registry;
+
 #[test]
 fn sqlite_lifecycle_store_failures() {
     let _timing = support::TestTiming::start("sqlite_lifecycle_store_failures");
@@ -631,4 +634,13 @@ mod dispatcher_delete;
 fn sqlite_dispatcher_record_deletion_traffic() {
     let _timing = support::TestTiming::start("sqlite_dispatcher_record_deletion_traffic");
     dispatcher_delete::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[path = "kernel/grpc.rs"]
+mod grpc;
+
+#[test]
+fn sqlite_grpc_wire_contract() {
+    let _timing = support::TestTiming::start("sqlite_grpc_wire_contract");
+    grpc::exercise();
 }

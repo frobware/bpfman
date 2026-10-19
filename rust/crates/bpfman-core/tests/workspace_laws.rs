@@ -18,7 +18,9 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-store-sqlite", 4),
     ("bpfman-runtime", 4),
     ("bpfman-image-oci", 3),
-    ("bpfman", 5),
+    ("bpfman-proto", 0),
+    ("bpfman-api", 5),
+    ("bpfman", 6),
 ];
 const PURE: &[&str] = &["bpfman-model", "bpfman-core"];
 
@@ -438,4 +440,38 @@ fn binary_unsafe_is_confined_to_helper_descriptor_inheritance() {
         }
     }
     walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../bpfman/src"));
+}
+
+#[test]
+fn grpc_frontend_stays_generic_and_synchronous() {
+    let meta = metadata();
+    let start = array(&meta["workspace_members"])
+        .iter()
+        .find(|id| package(meta, id)["name"] == "bpfman-api")
+        .expect("gRPC frontend");
+    let mut pending = vec![start];
+    let mut seen = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(string(id)) {
+            continue;
+        }
+        let dependency = string(&package(meta, id)["name"]);
+        assert!(
+            !dependency.starts_with("bpfman-store-")
+                && !matches!(
+                    dependency,
+                    "rusqlite"
+                        | "libsqlite3-sys"
+                        | "bpfman-kernel-aya"
+                        | "aya"
+                        | "aya-obj"
+                        | "tokio"
+                        | "async-std"
+                        | "smol"
+                        | "futures-executor"
+                ),
+            "gRPC frontend reaches a concrete backend or async runtime: {dependency}"
+        );
+        pending.extend(normal_dependencies(meta, id));
+    }
 }

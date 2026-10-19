@@ -115,7 +115,8 @@ impl TcLifecycle for Kernel {
         netns: &NetworkNamespace,
         direction: bpfman_model::TcDirection,
     ) -> Result<(TcKey, PreparedTc), Error> {
-        let namespace = XdpNamespace::open(interface, netns).map_err(kernel)?;
+        let namespace =
+            XdpNamespace::open(interface, netns).map_err(crate::netns::attachment_error)?;
         let key = TcKey::new(namespace.key(), direction);
         let program = w.prepare_tc_program(self, program).map_err(filesystem)?;
         Ok((

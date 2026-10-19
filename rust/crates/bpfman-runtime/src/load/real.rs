@@ -106,9 +106,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         reader.validate_map_sharing()?;
         if let Some(owner) = input.map_owner {
             if !reader.read_map_sets()?.contains(&owner) {
-                return Err(LoadCause::Invalid(format!(
-                    "map_owner_id {owner} does not exist"
-                )));
+                return Err(LoadCause::MapOwnerNotFound(owner));
             }
         }
         Ok(())

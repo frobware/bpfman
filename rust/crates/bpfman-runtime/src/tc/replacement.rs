@@ -72,7 +72,12 @@ pub(super) fn attach<S: TcStore, K: TcLifecycle>(
         .find(|p| p.id == r.program_id)
         .ok_or_else(|| LinkCause::from(Cause::NotFound))?;
     if !matches!(program.spec, ProgramSpec::Tc(_)) {
-        return Err(LinkCause::from(Cause::Unsupported).into());
+        return Err(LinkCause::from(Cause::ProgramMismatch {
+            id: program.id,
+            actual: program.spec.kind(),
+            requested: bpfman_model::ProgramType::Tc,
+        })
+        .into());
     }
     if w.layout().program_pin_path(program.id).to_str() != Some(program.pin_path.as_str()) {
         return Err(invalid("noncanonical managed TC pin").into());

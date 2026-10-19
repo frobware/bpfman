@@ -66,7 +66,12 @@ where
         .find(|p| p.id == request.program_id)
         .ok_or_else(|| LinkCause::from(Cause::NotFound))?;
     if !matches!(program.spec, bpfman_model::ProgramSpec::Xdp(_)) {
-        return Err(LinkCause::from(Cause::Unsupported).into());
+        return Err(LinkCause::from(Cause::ProgramMismatch {
+            id: program.id,
+            actual: program.spec.kind(),
+            requested: bpfman_model::ProgramType::Xdp,
+        })
+        .into());
     }
     if w.layout().program_pin_path(program.id).to_str() != Some(program.pin_path.as_str()) {
         return Err(invalid("noncanonical managed program pin").into());

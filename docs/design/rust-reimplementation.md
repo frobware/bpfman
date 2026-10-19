@@ -6722,3 +6722,80 @@ whitespace as Go does, while native non-UTF-8 input remains preserved until the
 existing persistence boundary rejects it. Explicit registry-auth decoding accepts
 CR/LF inside base64 as Go's decoder does, without relaxing other whitespace,
 credential bounds or diagnostic redaction.
+
+
+## Library gRPC compatibility checkpoint (19 October 2026)
+
+The seven existing bpfman.v1 RPCs are implemented in `bpfman-api`, with prost
+messages generated from the unchanged shared protobuf in `bpfman-proto`.
+Runtime operations and stores remain generic; frontend normal dependencies
+cannot reach Aya, SQLite or an async runtime. The composition root supplies
+image policy and ELF inspection. All nine attachment oneof variants dispatch
+through existing native lifecycle operations. Operator actual-type metadata
+preserves entry/return probe selection despite the older wire enum.
+
+The synchronous grpcuds 0.1.0 transport uses bundled nghttp2, separate mutation
+and read queues, bounded operation workers, per-call cancellation and joined
+shutdown. Reserved readers remain available with every mutation worker waiting
+on the flock. No Tokio, async/await or synchronous wrapper around an async
+library is introduced. For Go's deadline-only writer wait semantics the host
+constructs `Bpfman` with a zero lock budget. The pinned transport observes client
+reset/disconnect lazily after a queued operation bounces; the monitor probes
+with the unchanged queue policy every 20 ms, without emitting a message, and
+also checks the captured client deadline. Cancellation contracts wait for the
+server's actual writer descriptor to close before releasing the external lock.
+Fresh socket binding in a private fixture directory is the current host scope;
+production socket ownership/permissions/replacement is part of `serve`.
+
+Go response projection is preserved rather than inferred from protobuf comments.
+List returns live managed records, ignores `bpfman_programs_only` and omits
+links/GPL. Get supplies links/GPL; both omit the JIT flag, memlock and verified
+instruction count that Load populates, while retaining translated/JIT byte sizes. Load echoes its bytecode source and omits map-owner ID even for a genuine
+map join; Get/List expose the durable handle. The shared client checks the
+actual map membership and Get's owner in addition to Load's omission. The Go
+service ignores attachment metadata/position and the kprobe container selector;
+this frontend does likewise. Request validation, cancellation and typed runtime
+causes map to gRPC statuses. Map-owner absence and attachment-family mismatches
+are explicit runtime identities, never parsed diagnostic text. Concrete kernel
+adapters classify absent tracepoints/interfaces before their causes are erased
+by the confined filesystem boundary.
+
+RPC failures retain outstanding compensation/unload ownership inside the
+service; explicit retry performs one pass and retains admission failures.
+Userspace fault tests cross forward failure with cleanup failure, cancelled
+retry admission and successful retry, using the stateful kernel and real SQLite.
+The service also preserves warning-only unload cleanup receipts.
+
+The new stock Go protobuf client runs unchanged against the Rust library test
+host and the Go daemon. It exercises Load/Unload/Attach/Detach/List/Get/
+PullBytecode, all native families and return probes, explicit map sharing,
+local registry pulls and cached image loads, concurrent callers, saturated
+writers, independent reads, deadline/reset cancellation, and request/response
+status contracts. A real retained-link descriptor validates the /proc FD matcher
+before trusting the daemon's empty FD table; native link absence is checked
+immediately at Detach return. Rust additionally stops and reconstructs its host
+before reading and unloading a pinned attachment. The native case remains in
+the parallel, process-isolated suite. The shared registry fixture gained valid
+manifest media types, digest headers and HEAD responses; no existing Go test or
+`.bpfman` acceptance contract is modified.
+
+`make rust-test-grpc` is the focused native gate and `make rust-check` retains
+all architecture, userspace, shared script, kernel, lint and documentation gates.
+The new transport needs CMake/libclang; the Nix shell supplies CMake and the
+bindgen setup hook without editing `.envrc`. The new lockfile adds the transport
+and protobuf closures without changing existing locked package versions.
+
+Next: wire the public `serve` command and its configuration/helper/signal/socket
+policy, then run the unchanged `e2e/grpc` lifecycle/concurrency launcher suite.
+CSI and operator `--csi-support` follow after that. Full daemon readiness and
+packaging/cutover are not claimed by this library-only checkpoint.
+
+Final validation: `direnv exec . make rust-check` exits zero. All 77 native
+cases and residue checks pass, including `sqlite_grpc_wire_contract` in the
+existing eight-process parallel pool; no test placement, scheduler, assertions
+or acceptance labels change. The native stages take 93.23 seconds on Linux
+6.18.54 with the existing aya-obj opt-level-two override. The focused shared
+Go/Rust client also passes, including its descriptor self-control and immediate
+link-release assertions. New-client golangci-lint reports zero issues, and
+`make lint-make` passes. Definitive gate log: `/tmp/bpfman-grpc-check2.log`;
+focused log: `/tmp/bpfman-grpc-test9.log`.
