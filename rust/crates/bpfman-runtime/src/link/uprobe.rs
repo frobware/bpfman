@@ -50,7 +50,7 @@ impl<S: OpenStore + LinkStore, K: bpfman_kernel::UprobeLinks> Effects for Adapte
         let target = request.target.clone().into_link(retprobe);
         let program = self
             .1
-            .prepare_uprobe(writer, request.program_id, &target)
+            .prepare_uprobe_with_cancellation(writer, request.program_id, &target, self.2.flag())
             .map_err(|error| -> LinkCause {
                 if self.2.is_cancelled() {
                     Cause::Cancelled.into()

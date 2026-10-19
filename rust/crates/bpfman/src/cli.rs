@@ -137,10 +137,11 @@ impl Command {
                     ));
                 }
             },
-            Self::Version => {
-                return Err(
-                    anyhow::anyhow!("version must dispatch before runtime initialization").into(),
-                );
+            Self::Serve(_) | Self::Version => {
+                return Err(anyhow::anyhow!(
+                    "serve/version must dispatch before runtime initialization"
+                )
+                .into());
             }
             Self::Image { command } => return Ok(PreparedCommand::Image(command)),
             Self::NsHelper { .. } => {
@@ -186,6 +187,9 @@ impl Command {
 
 #[derive(Subcommand)]
 pub(super) enum Command {
+    /// Start the gRPC daemon.
+    #[command(hide = true)]
+    Serve(crate::serve::Args),
     /// Print build version information.
     Version,
     #[command(hide = true)]

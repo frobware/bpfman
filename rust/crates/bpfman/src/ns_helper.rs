@@ -131,6 +131,15 @@ impl Launcher {
         writer: &bpfman_fs::RuntimeWriter<'_>,
         target: &bpfman_model::UprobeLink,
     ) -> io::Result<File> {
+        self.open_with_cancellation(writer, target, self.cancellation.flag())
+    }
+
+    pub(super) fn open_with_cancellation(
+        &self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        target: &bpfman_model::UprobeLink,
+        cancelled_flag: &std::sync::atomic::AtomicBool,
+    ) -> io::Result<File> {
         let pid = target
             .container_pid()
             .ok_or_else(|| io::Error::other("missing container PID"))?;
@@ -146,12 +155,20 @@ impl Launcher {
         };
         let lookup = mapped.unwrap_or_else(|| target.target().into());
         let lock = writer.duplicate_lock_fd().map_err(io::Error::other)?;
-        self.launch(&lookup, namespace, lock)
+        self.launch_with_cancellation(&lookup, namespace, lock, cancelled_flag)
     }
 
-    fn launch(&self, target: &Path, namespace: File, lock: OwnedFd) -> io::Result<File> {
+    fn launch_with_cancellation(
+        &self,
+        target: &Path,
+        namespace: File,
+        lock: OwnedFd,
+        cancelled_flag: &std::sync::atomic::AtomicBool,
+    ) -> io::Result<File> {
         helper_target(target.to_owned()).map_err(io::Error::other)?;
-        if self.cancellation.is_cancelled() {
+        if self.cancellation.is_cancelled()
+            || cancelled_flag.load(std::sync::atomic::Ordering::Acquire)
+        {
             return Err(cancelled());
         }
         let (parent, child_socket) = UnixDatagram::pair()?;
@@ -186,7 +203,9 @@ impl Launcher {
         drop(lock);
         let started = Instant::now();
         loop {
-            if self.cancellation.is_cancelled() {
+            if self.cancellation.is_cancelled()
+                || cancelled_flag.load(std::sync::atomic::Ordering::Acquire)
+            {
                 return Err(cancelled());
             }
             if let Some(status) = child.0.try_wait()? {

@@ -158,3 +158,13 @@ impl From<bpfman_image_oci::Error> for Error {
         }
     }
 }
+
+impl From<bpfman_fs::Error> for Error {
+    fn from(cause: bpfman_fs::Error) -> Self {
+        let cancelled = cause.kind() == bpfman_fs::ErrorKind::Cancelled;
+        Self {
+            cause: cause.into(),
+            cancelled,
+        }
+    }
+}

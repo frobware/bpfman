@@ -32,6 +32,8 @@ mod layout;
 mod link;
 mod observe;
 mod removal;
+mod socket;
+pub use socket::{SocketBinding, SocketDirectory};
 mod sigstore;
 pub use sigstore::open_sigstore_trust_root;
 

@@ -38,7 +38,7 @@ fn helper_fixture() {
         std::process::id().to_string(),
     )
     .expect("pid marker");
-    if mode == "wait" {
+    if matches!(mode.as_str(), "wait" | "request-wait") {
         loop {
             std::thread::sleep(Duration::from_secs(1));
         }
@@ -112,6 +112,7 @@ fn helper_handoff_failure_cancellation_and_reaping() -> anyhow::Result<()> {
         "nonregular",
         "sendfail",
         "wait",
+        "request-wait",
         "precancel",
     ] {
         fs::write(
@@ -131,6 +132,7 @@ fn helper_handoff_failure_cancellation_and_reaping() -> anyhow::Result<()> {
             cancellation.cancel();
         }
         let launcher = ns_helper::Launcher::new(executable.clone(), cancellation.clone());
+        let request_cancel = Cancellation::new();
         let before = fd_count();
         let result = runtime.with_writer(
             AcquireOptions {
@@ -139,7 +141,12 @@ fn helper_handoff_failure_cancellation_and_reaping() -> anyhow::Result<()> {
             },
             |writer| {
                 std::thread::scope(|scope| {
-                    let worker = if mode == "wait" {
+                    let worker = if matches!(mode, "wait" | "request-wait") {
+                        let cancellation = if mode == "request-wait" {
+                            request_cancel.clone()
+                        } else {
+                            cancellation.clone()
+                        };
                         let marker = temp.path().join("pid");
                         // Remove the previous marker before launching this child.
                         fs::write(&marker, "").expect("clear marker");
@@ -157,7 +164,11 @@ fn helper_handoff_failure_cancellation_and_reaping() -> anyhow::Result<()> {
                     } else {
                         None
                     };
-                    let result = launcher.open(&writer, &target);
+                    let result = if mode == "request-wait" {
+                        launcher.open_with_cancellation(&writer, &target, request_cancel.flag())
+                    } else {
+                        launcher.open(&writer, &target)
+                    };
                     if let Some(worker) = worker {
                         worker.join().expect("cancellation worker");
                     }
@@ -165,6 +176,13 @@ fn helper_handoff_failure_cancellation_and_reaping() -> anyhow::Result<()> {
                 })
             },
         )?;
+        if mode == "request-wait" {
+            assert!(request_cancel.is_cancelled());
+            assert!(
+                !cancellation.is_cancelled(),
+                "one RPC must not cancel the daemon"
+            );
+        }
         if mode == "success" {
             let mut file = result?;
             let mut magic = [0; 4];

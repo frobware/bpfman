@@ -644,3 +644,18 @@ fn sqlite_grpc_wire_contract() {
     let _timing = support::TestTiming::start("sqlite_grpc_wire_contract");
     grpc::exercise();
 }
+
+#[path = "kernel/serve.rs"]
+mod serve;
+
+#[test]
+fn sqlite_serve_grpc_launcher() {
+    let _timing = support::TestTiming::start("sqlite_serve_grpc_launcher");
+    serve::exercise();
+}
+
+#[test]
+fn sqlite_serve_grpc_persistence_and_policy() {
+    let _timing = support::TestTiming::start("sqlite_serve_grpc_persistence_and_policy");
+    serve::production();
+}

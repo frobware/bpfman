@@ -2069,3 +2069,11 @@ RUST_TEST_INPUTS += $(BIN_DIR)/grpc-contract
 .PHONY: rust-test-grpc
 rust-test-grpc: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_grpc_wire_contract -- --exact --nocapture
+
+# The unchanged daemon lifecycle suite also exercises the Rust composition root.
+RUST_TEST_INPUTS += $(BIN_DIR)/e2e-grpc.test
+
+.PHONY: rust-test-serve
+rust-test-serve: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test serve --locked
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_serve_grpc -- --nocapture

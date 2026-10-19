@@ -82,7 +82,7 @@ impl Config {
         self.logging.format.trim().eq_ignore_ascii_case("json")
     }
 
-    pub(super) fn trust(
+    pub(crate) fn trust(
         &self,
         policy: bpfman_image_oci::SigningPolicy,
         cache: Option<&bpfman_fs::RuntimeLayout>,
@@ -113,7 +113,7 @@ impl Config {
         Ok(policy.with_trust_cache(layout, timeout))
     }
 
-    pub(super) fn signing(&self) -> anyhow::Result<bpfman_image_oci::SigningPolicy> {
+    pub(crate) fn signing(&self) -> anyhow::Result<bpfman_image_oci::SigningPolicy> {
         let policy = self.verification(None, None)?;
         Ok(if self.signing.verify_enabled {
             policy
@@ -185,7 +185,7 @@ impl Config {
         Ok(config)
     }
 
-    pub(super) fn xdp_mode(&self, interface: &InterfaceName) -> anyhow::Result<XdpMode> {
+    pub(crate) fn xdp_mode(&self, interface: &InterfaceName) -> anyhow::Result<XdpMode> {
         let spelling = self
             .interfaces
             .get(interface.as_str())

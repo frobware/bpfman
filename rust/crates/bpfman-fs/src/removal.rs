@@ -204,3 +204,31 @@ impl RuntimeWriter<'_> {
         }
     }
 }
+
+// Endpoint authority is a separate lifetime lock, never the program writer.
+pub(super) fn remove_socket(
+    parent: &OwnedFd,
+    name: &std::ffi::OsStr,
+    expected: crate::artifacts::Identity,
+) -> Result<(), Error> {
+    let owned = match crate::socket::open_socket(parent, name) {
+        Ok(fd) => fd,
+        Err(error) => {
+            // A removed endpoint needs no cleanup; all other failures preserve it.
+            match openat2(
+                parent,
+                name,
+                OFlags::PATH | OFlags::CLOEXEC,
+                Mode::empty(),
+                CONFINED,
+            ) {
+                Err(rustix::io::Errno::NOENT) => return Ok(()),
+                _ => return Err(error),
+            }
+        }
+    };
+    if identity(&owned)? != expected {
+        return Err(Failure::Unsafe("published socket was replaced").into());
+    }
+    unlinkat(parent, name, AtFlags::empty()).map_err(|e| io("remove owned socket", e))
+}

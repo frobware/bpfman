@@ -53,6 +53,11 @@ impl RuntimeLayout {
         self.root.join(LOCK_FILE)
     }
 
+    /// Runtime-relative gRPC endpoint used for an explicitly empty socket override.
+    pub fn socket_path(&self) -> PathBuf {
+        self.root.join("sock/bpfman.sock")
+    }
+
     /// SQLite database shared with the Go implementation.
     pub fn database_path(&self) -> PathBuf {
         self.root.join(DATABASE_DIRECTORY).join(DATABASE_FILE)

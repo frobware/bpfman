@@ -14,6 +14,7 @@ mod cli;
 mod error;
 mod ns_helper;
 mod output;
+mod serve;
 mod signals;
 mod telemetry;
 mod version;
@@ -71,6 +72,10 @@ fn run(cli: cli::Cli, cancellation: &bpfman_runtime::Cancellation) -> Result<(),
     }
     let _command =
         tracing::debug_span!("cli.command", runtime = %cli.layout.root().display()).entered();
+
+    if let cli::Command::Serve(args) = &cli.command {
+        return serve::run(&cli, args, cancellation);
+    }
 
     run_with_store(cli, bpfman_store_sqlite::Backend, cancellation)
 }

@@ -35,6 +35,7 @@ where
         let record = match info {
             Info::XdpAttachInfo(info) => {
                 let interface = info.iface.parse::<InterfaceName>().map_err(invalid)?;
+                let mode = (self.mode)(&interface)?;
                 let priority = u32::try_from(info.priority).map_err(invalid)?;
                 let netns = namespace(info.netns)?;
                 let proceed_on = if info.proceed_on.is_empty() {
@@ -53,7 +54,7 @@ where
                     .attach_xdp_with_cancellation(
                         XdpAttach {
                             netns,
-                            mode: self.mode,
+                            mode,
                             program_id: id,
                             interface,
                             priority,

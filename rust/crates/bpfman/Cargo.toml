@@ -21,6 +21,8 @@ panic = "deny"
 dbg_macro = "deny"
 
 [dependencies]
+bpfman-api.workspace = true
+bpfman-proto.workspace = true
 bpfman-kernel.workspace = true
 bpfman-image-oci.workspace = true
 bpfman-lock.workspace = true
@@ -45,8 +47,6 @@ tracing-subscriber.workspace = true
 tracing-chrome.workspace = true
 
 [dev-dependencies]
-bpfman-api.workspace = true
-bpfman-proto.workspace = true
 prost.workspace = true
 sha2.workspace = true
 aya.workspace = true

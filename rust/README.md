@@ -2854,8 +2854,8 @@ nghttp2 build/bindings, plus the existing protoc tool for message generation.
 The Nix shell includes CMake and `rustPlatform.bindgenHook`; the user's `.envrc`
 is unchanged. Existing locked dependency versions remain unchanged.
 
-The public `serve` command, operator startup form, CSI, production daemon
-configuration and the unchanged `e2e/grpc` launcher suite follow separately.
+Production `serve` composition and the unchanged `e2e/grpc` launcher suite are
+covered below. CSI and the operator startup form remain separate.
 
 Validation on Linux 6.18.54: `make rust-check` passes with all 77 native cases
 and residue checks, including the new gRPC case in the eight-process pool.
@@ -2864,3 +2864,44 @@ override. Gate log: `/tmp/bpfman-grpc-check2.log`. Focused shared-client evidenc
 `/tmp/bpfman-grpc-test9.log`; Go fixture lint and Makefile lint both pass. The
 existing Go tests and `.bpfman` scripts, and the kernel runner's scheduling and
 assertions, remain unchanged.
+
+### Production daemon command
+
+`bpfman serve` now runs the synchronous service using Aya, implicit SQLite,
+configured signing/image caches, per-interface XDP mode and the namespace helper.
+`--socket-path` (or `BPFMAN_SOCKET_PATH`) defaults to
+`/run/bpfman-sock/bpfman.sock`; an explicitly empty value uses
+`<runtime>/sock/bpfman.sock`. SIGINT/SIGTERM cancel admission, finish each admitted
+cleanup pass and join the workers. Successful managed state remains pinned for
+reopening. Retained cleanup is reported on shutdown, without automatic retries.
+
+An independent socket lifetime lock protects a private `0700` staging directory
+owned by the daemon user.
+The bound socket is published atomically with mode `0660`; shutdown removes only
+its captured inode. Live listeners, unrelated entries and endpoint replacements
+are preserved. ECONNREFUSED admits stale-socket recovery. Lock/staging directories
+persist for reuse. Symlinked parents and filesystem-root parents are refused.
+The transport's listener-drop unlink only addresses its private staging name.
+
+The daemon reserves two read workers alongside eight mutation workers, with
+bounded 512-entry queues. Detach/unload work precedes new acquisitions so a burst
+of attachments cannot queue all releases behind itself and exhaust a kernel hook.
+Program writes retain the cross-process flock and caller cancellation; startup
+and cache locks retain their configured budgets. Helpers receive each RPC's
+cancellation independently of the daemon shutdown token.
+
+`direnv exec . make rust-test-serve` runs socket/signal/startup contracts, the
+unchanged `e2e/grpc` launcher at its default 32 clients per program family and four
+iterations, and the shared Go client against the production executable with
+restart persistence and OCI policy. The stock launcher has a private mount
+namespace so its bpffs mounts disappear before fixture cleanup. These cases
+join the full `rust-check` gate
+without changing Go tests, acceptance scripts or parallel test placement.
+CSI and operator `--csi-support` startup are next.
+
+Validation: `direnv exec . make rust-check` passes all 79 native cases and
+residue checks, plus strict Clippy, architecture, userspace and documentation
+checks. The native stages take 222.86 seconds on Linux 6.18.54 with the existing
+aya-obj opt-level-two override, including the default-load daemon launcher.
+`make lint-make` also passes. Logs: `/tmp/bpfman-serve-check3.log` and
+`/tmp/bpfman-serve-make-lint.log`.

@@ -15,6 +15,16 @@ pub trait UprobeLinks: TracepointLinks {
         program: NonZeroU32,
         target: &UprobeLink,
     ) -> Result<Self::PreparedUprobe, Error>;
+    /// Adopt with caller-owned cancellation for a potentially blocking target lookup.
+    fn prepare_uprobe_with_cancellation(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        program: NonZeroU32,
+        target: &UprobeLink,
+        _cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Self::PreparedUprobe, Error> {
+        self.prepare_uprobe(writer, program, target)
+    }
     /// Attach once without acquiring a persistent pin.
     fn attach_uprobe(
         &self,

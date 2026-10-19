@@ -25,12 +25,27 @@ impl UprobeLinks for Kernel {
         program: NonZeroU32,
         target: &UprobeLink,
     ) -> Result<Self::PreparedUprobe, Error> {
+        self.prepare_uprobe_with_cancellation(
+            writer,
+            program,
+            target,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+    }
+
+    fn prepare_uprobe_with_cancellation(
+        &self,
+        writer: &RuntimeWriter<'_>,
+        program: NonZeroU32,
+        target: &UprobeLink,
+        cancelled: &std::sync::atomic::AtomicBool,
+    ) -> Result<Self::PreparedUprobe, Error> {
         let program = writer
             .prepare_uprobe_attach(self, program, target.retprobe())
             .map_err(filesystem)?;
         let file = match (&self.uprobe_opener, target.container_pid()) {
             (Some(open), Some(_)) => Some(
-                open(writer, target)
+                open(writer, target, cancelled)
                     .and_then(regular)
                     .map_err(target_error)?,
             ),
@@ -111,8 +126,13 @@ impl UprobeProgram for AyaUprobe {
     }
 }
 
-pub(super) type TargetOpener =
-    dyn Fn(&RuntimeWriter<'_>, &UprobeLink) -> std::io::Result<std::fs::File> + Send + Sync;
+pub(super) type TargetOpener = dyn Fn(
+        &RuntimeWriter<'_>,
+        &UprobeLink,
+        &std::sync::atomic::AtomicBool,
+    ) -> std::io::Result<std::fs::File>
+    + Send
+    + Sync;
 
 impl Kernel {
     /// Inject container target lookup. The callback returns an owned regular-file
@@ -120,6 +140,20 @@ impl Kernel {
     /// The caller owns process policy and cooperative cancellation for the lookup.
     pub fn with_uprobe_target_opener(
         open: impl Fn(&RuntimeWriter<'_>, &UprobeLink) -> std::io::Result<std::fs::File>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self::with_cancellable_uprobe_target_opener(move |writer, target, _| open(writer, target))
+    }
+
+    /// Inject per-operation cancellable namespace lookup for a long-lived host.
+    pub fn with_cancellable_uprobe_target_opener(
+        open: impl Fn(
+            &RuntimeWriter<'_>,
+            &UprobeLink,
+            &std::sync::atomic::AtomicBool,
+        ) -> std::io::Result<std::fs::File>
         + Send
         + Sync
         + 'static,

@@ -18,7 +18,7 @@ pub struct ServerOptions {
     pub workers: usize,
     /// Dedicated read threads, independent of mutators waiting on the flock.
     pub readers: usize,
-    /// Maximum queued requests; excess calls receive ResourceExhausted.
+    /// Queued requests per execution class; excess calls receive ResourceExhausted.
     pub pending: usize,
 }
 
@@ -55,6 +55,7 @@ where
 {
     io: grpcuds::Server,
     jobs: Mutex<mpsc::Receiver<Job>>,
+    teardown: Mutex<mpsc::Receiver<Job>>,
     reads: Mutex<mpsc::Receiver<Job>>,
     service: Arc<Service<S, K, I>>,
     active: Arc<Mutex<Vec<Arc<Call>>>>,
@@ -110,11 +111,17 @@ where
         }
         let (sender, receiver) = mpsc::sync_channel::<Job>(options.pending);
         let (read_sender, read_receiver) = mpsc::sync_channel::<Job>(options.pending);
+        let (teardown_sender, teardown_receiver) = mpsc::sync_channel::<Job>(options.pending);
         let active = Arc::new(Mutex::new(Vec::<Arc<Call>>::new()));
         let mut builder = grpcuds::Server::builder().bind(path);
         for &method in METHODS {
             let sender = if matches!(method, "/bpfman.v1.Bpfman/List" | "/bpfman.v1.Bpfman/Get") {
                 read_sender.clone()
+            } else if matches!(
+                method,
+                "/bpfman.v1.Bpfman/Detach" | "/bpfman.v1.Bpfman/Unload"
+            ) {
+                teardown_sender.clone()
             } else {
                 sender.clone()
             };
@@ -155,6 +162,7 @@ where
         Ok(Self {
             io,
             jobs: Mutex::new(receiver),
+            teardown: Mutex::new(teardown_receiver),
             reads: Mutex::new(read_receiver),
             service,
             active,
@@ -169,6 +177,7 @@ where
         let Self {
             io,
             jobs,
+            teardown,
             reads,
             service,
             active,
@@ -182,16 +191,35 @@ where
                 } else {
                     &reads
                 };
+                let teardown = if index < options.workers {
+                    Some(&teardown)
+                } else {
+                    None
+                };
                 let service = &service;
                 let stopping = &stopping;
                 let handle = std::thread::Builder::new()
                     .name(format!("grpc-worker-{index}"))
                     .spawn_scoped(scope, move || {
                         loop {
-                            let received = jobs
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .recv_timeout(Duration::from_millis(20));
+                            // Resource release must progress ahead of new acquisitions.
+                            // FIFO admission alone can exhaust per-hook kernel limits
+                            // while the corresponding detaches sit behind that burst.
+                            let release = teardown.and_then(|queue| {
+                                queue
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                    .try_recv()
+                                    .ok()
+                            });
+                            let received = release.map_or_else(
+                                || {
+                                    jobs.lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .recv_timeout(Duration::from_millis(20))
+                                },
+                                Ok,
+                            );
                             let job = match received {
                                 Ok(job) => job,
                                 Err(mpsc::RecvTimeoutError::Disconnected) => break,

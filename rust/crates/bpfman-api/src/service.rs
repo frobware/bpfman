@@ -76,6 +76,9 @@ where
     UnloadReport(bpfman_runtime::UnloadReport<S, K>),
 }
 
+type XdpModes =
+    dyn Fn(&bpfman_model::InterfaceName) -> Result<bpfman_model::XdpMode, Status> + Send + Sync;
+
 /// Generic synchronous implementation of the bpfman.v1 service.
 /// Request workers borrow one active application; no operation-wide mutex
 /// serializes readers. The inspector is used only for pre-load ELF validation.
@@ -90,7 +93,7 @@ where
     app: Bpfman<S, K>,
     inspector: K,
     images: I,
-    mode: bpfman_model::XdpMode,
+    mode: Box<XdpModes>,
     recovery: Mutex<Vec<Recovery<S, K>>>,
 }
 
@@ -112,9 +115,21 @@ where
             app,
             inspector,
             images,
-            mode,
+            mode: Box::new(move |_| Ok(mode)),
             recovery: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Resolve configured XDP mode independently for each requested interface.
+    pub fn with_xdp_modes(
+        mut self,
+        resolve: impl Fn(&bpfman_model::InterfaceName) -> Result<bpfman_model::XdpMode, Status>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.mode = Box::new(resolve);
+        self
     }
 
     /// Take retained cleanup receipts for explicit recovery. Poisoned ownership

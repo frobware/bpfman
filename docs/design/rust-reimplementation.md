@@ -6799,3 +6799,64 @@ Go/Rust client also passes, including its descriptor self-control and immediate
 link-release assertions. New-client golangci-lint reports zero issues, and
 `make lint-make` passes. Definitive gate log: `/tmp/bpfman-grpc-check2.log`;
 focused log: `/tmp/bpfman-grpc-test9.log`.
+
+## Daemon serve composition (19 October 2026)
+
+The hidden `serve` command now composes the generic synchronous gRPC frontend
+with the production Aya adapter, implicit SQLite backend, OCI/signing policy,
+configuration and the single-threaded namespace helper. `--socket-path` and
+`BPFMAN_SOCKET_PATH` use Go's default `/run/bpfman-sock/bpfman.sock`; an explicitly
+empty override selects `<runtime>/sock/bpfman.sock`. XDP mode is resolved from
+configuration for each requested interface. The helper receives the operation's
+cancellation flag as well as daemon shutdown, preserving parent writer ownership,
+descriptor handoff and child reaping. Cancelling one RPC never cancels the daemon.
+
+Startup and image/cache operations retain the configured lock budget. RPC program
+mutations wait for the caller's deadline/cancellation rather than inheriting that
+startup budget. SIGINT/SIGTERM stop acceptance, cancel outstanding requests and
+join operation workers through their compensation/destructive boundaries. Durable
+programs and links survive shutdown. Unresolved lifecycle and image cleanup stays
+owned during serving and is reported as shutdown failure; there is no automatic
+retry or persistent recovery queue.
+
+Endpoint authority uses a separate lifetime lock in a private `0700` staging
+directory beside the requested socket, owned by the daemon user and independent
+of the program writer lock.
+The transport binds through an opened staging descriptor; publication chmods the
+captured socket inode to `0660` and atomically renames it to the endpoint. Its
+underlying listener's unconditional unlink-on-drop only addresses the private
+staging name. Typed, descriptor-relative cleanup removes only the captured
+published inode. A stale socket is reclaimed only after ECONNREFUSED; live
+listeners, files, directories, symlinks, inaccessible entries and replaced
+endpoints are preserved. Private directories and lock inodes remain for reuse.
+As elsewhere, opened-directory confinement and cooperative locks do not sandbox
+privileged processes replacing directory entries. Endpoint parents cannot be
+filesystem root or contain symlinks.
+
+The daemon has eight mutation workers, two independent read workers, and bounded
+512-entry queues. Teardown is selected before new acquisition work: an admission
+FIFO can otherwise put an entire attach burst ahead of the matching detaches and
+exhaust the kernel's per-function trampoline capacity. This scheduling policy
+changes neither writer authority nor operation results and performs no retries.
+
+`make rust-test-serve` runs process contracts and the production native cases.
+The unchanged `e2e/grpc` launcher exercises the real Rust executable at its default
+32 goroutines per each of nine program families, four iterations, retaining all
+FD self-controls, immediate link-release assertions and quiescence checks. The
+shared stock-Go client additionally exercises the production host's seven RPCs,
+image/cache policy, cancellation, read progress with saturated writers and durable
+attachment cleanup after shutdown/reopen. The stock launcher gets its own mount namespace and owned temporary parent so
+its bpffs mounts are reclaimed without changing the Go harness. New native
+cases remain in the normal eight-process pool. Existing Go tests, scripts and kernel scheduling are unchanged.
+
+CSI and the operator's `--csi-support` startup form remain the next slice.
+
+Final validation: `direnv exec . make rust-check` exits zero, including all
+79 discovered/selected native cases and both fixture residue checks. The unchanged
+gRPC launcher passes at its default load, and production restart, cancellation,
+strict unsigned-image refusal and foreign staging-owner refusal pass. Native
+stages take 222.86 seconds on Linux 6.18.54 with the existing aya-obj opt-level-two
+override, including the added full-load daemon case. `make lint-make` passes.
+Definitive gate log: `/tmp/bpfman-serve-check3.log`; Makefile lint log:
+`/tmp/bpfman-serve-make-lint.log`. Existing Go tests, acceptance scripts and
+kernel-runner placement/assertions remain unchanged.
