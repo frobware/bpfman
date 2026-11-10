@@ -11,9 +11,12 @@ use std::{
 use clap::{CommandFactory, FromArgMatches};
 
 mod cli;
+mod csi;
+mod daemon;
 mod error;
 mod ns_helper;
 mod output;
+#[cfg(feature = "management-api")]
 mod serve;
 mod signals;
 mod telemetry;
@@ -21,7 +24,10 @@ mod version;
 
 fn main() -> ExitCode {
     let definition = cli::Cli::command();
-    let mut args: Vec<_> = std::env::args_os().collect();
+    let args: Vec<_> = std::env::args_os().collect();
+    #[cfg(feature = "management-api")]
+    let mut args = args;
+    #[cfg(feature = "management-api")]
     if args.get(1).is_some_and(|s| s == "--csi-support") {
         args.insert(1, "serve".into());
     }
@@ -65,11 +71,12 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: cli::Cli, cancellation: &bpfman_runtime::Cancellation) -> Result<(), error::Error> {
-    let _telemetry = telemetry::init(
-        cli.trace_file.as_deref(),
-        cli.log.as_deref(),
-        cli.config.as_deref(),
-    )?;
+    let config = if matches!(cli.command, cli::Command::Csi) {
+        cli::config::Config::load_logging(cli.config.as_deref())?
+    } else {
+        cli::config::Config::load(cli.config.as_deref())?
+    };
+    let _telemetry = telemetry::init(cli.trace_file.as_deref(), cli.log.as_deref(), &config)?;
     if matches!(cli.command, cli::Command::Version) {
         version::write(&mut io::stdout().lock())?;
         return Ok(());
@@ -77,8 +84,13 @@ fn run(cli: cli::Cli, cancellation: &bpfman_runtime::Cancellation) -> Result<(),
     let _command =
         tracing::debug_span!("cli.command", runtime = %cli.layout.root().display()).entered();
 
+    #[cfg(feature = "management-api")]
     if let cli::Command::Serve(args) = &cli.command {
         return serve::run(&cli, args, cancellation);
+    }
+
+    if matches!(cli.command, cli::Command::Csi) {
+        return csi::run(&cli, cancellation);
     }
 
     run_with_store(cli, bpfman_store_sqlite::Backend, cancellation)

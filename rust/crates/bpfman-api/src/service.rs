@@ -1,4 +1,5 @@
 use crate::convert::{self, internal, invalid};
+use crate::{Execution, Handler, RpcServer};
 use bpfman_proto::v1 as pb;
 use bpfman_runtime::{Bpfman, Cancellation, PreparedProgram};
 use grpcuds::Status;
@@ -541,3 +542,45 @@ where
 }
 
 mod attach;
+
+const METHODS: &[(&str, Execution)] = &[
+    ("/bpfman.v1.Bpfman/Load", Execution::Mutation),
+    ("/bpfman.v1.Bpfman/Unload", Execution::Teardown),
+    ("/bpfman.v1.Bpfman/Attach", Execution::Mutation),
+    ("/bpfman.v1.Bpfman/Detach", Execution::Teardown),
+    ("/bpfman.v1.Bpfman/List", Execution::Read),
+    ("/bpfman.v1.Bpfman/Get", Execution::Read),
+    ("/bpfman.v1.Bpfman/PullBytecode", Execution::Mutation),
+];
+
+/// The bpfman service's synchronous server.
+pub type Server<S, K, I> = RpcServer<Service<S, K, I>>;
+
+impl<S, K, I> Handler for Service<S, K, I>
+where
+    S: bpfman_store::UnloadStore
+        + bpfman_store::CommitLoad
+        + bpfman_store::LinkStore
+        + bpfman_store::XdpReplacementStore
+        + bpfman_store::TcStore
+        + Send
+        + Sync
+        + 'static,
+    S::Reader: bpfman_store::LinkReader,
+    K: Kernel + Send + Sync + 'static,
+    K::PreparedXdp: Send,
+    I: Images + Send + Sync + 'static,
+{
+    fn methods() -> &'static [(&'static str, Execution)] {
+        METHODS
+    }
+
+    fn handle(
+        &self,
+        method: &str,
+        bytes: &[u8],
+        cancellation: &Cancellation,
+    ) -> Result<Vec<u8>, Status> {
+        Service::handle(self, method, bytes, cancellation)
+    }
+}

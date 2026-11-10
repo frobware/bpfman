@@ -685,24 +685,29 @@ fn sqlite_dispatcher_record_deletion_traffic() {
     dispatcher_delete::exercise(bpfman_store_sqlite::Backend);
 }
 
+#[cfg(feature = "management-api")]
 #[path = "kernel/grpc.rs"]
 mod grpc;
 
+#[cfg(feature = "management-api")]
 #[test]
 fn sqlite_grpc_wire_contract() {
     let _timing = support::TestTiming::start("sqlite_grpc_wire_contract");
     grpc::exercise();
 }
 
+#[cfg(feature = "management-api")]
 #[path = "kernel/serve.rs"]
 mod serve;
 
+#[cfg(feature = "management-api")]
 #[test]
 fn sqlite_serve_grpc_launcher() {
     let _timing = support::TestTiming::start("sqlite_serve_grpc_launcher");
     serve::exercise();
 }
 
+#[cfg(feature = "management-api")]
 #[test]
 fn sqlite_serve_grpc_persistence_and_policy() {
     let _timing = support::TestTiming::start("sqlite_serve_grpc_persistence_and_policy");
@@ -712,6 +717,7 @@ fn sqlite_serve_grpc_persistence_and_policy() {
 #[path = "kernel/csi.rs"]
 mod csi;
 
+#[cfg(feature = "management-api")]
 #[test]
 fn sqlite_csi_wire_contract() {
     let _timing = support::TestTiming::start("sqlite_csi_wire_contract");
@@ -734,4 +740,10 @@ fn sqlite_csi_admission_and_explicit_recovery() {
 fn go_csi_wire_contract() {
     let _timing = support::TestTiming::start("go_csi_wire_contract");
     csi::wire("go");
+}
+
+#[test]
+fn sqlite_csi_only_wire_contract() {
+    let _timing = support::TestTiming::start("sqlite_csi_only_wire_contract");
+    csi::wire("rust-csi");
 }

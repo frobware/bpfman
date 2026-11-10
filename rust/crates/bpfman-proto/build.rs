@@ -1,12 +1,16 @@
-//! Generate messages from the shared protobuf contract.
+//! Generate CSI messages and the optional bpfman compatibility protocol.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let proto = "../../../proto/bpfman.proto";
-    println!("cargo:rerun-if-changed={proto}");
-    println!("cargo:rerun-if-changed=../../../proto/csi.proto");
+    let mut protos = vec!["../../../proto/csi.proto"];
+    if cfg!(feature = "management-api") {
+        protos.push("../../../proto/bpfman.proto");
+    }
+    for proto in &protos {
+        println!("cargo:rerun-if-changed={proto}");
+    }
     prost_build::Config::new()
         .btree_map(["."])
         .disable_comments([".csi"])
-        .compile_protos(&[proto, "../../../proto/csi.proto"], &["../../../proto"])?;
+        .compile_protos(&protos, &["../../../proto"])?;
     Ok(())
 }

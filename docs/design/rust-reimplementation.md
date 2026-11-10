@@ -38,6 +38,19 @@ evidence. Historical "next" notes
 below describe their checkpoint dates; this status and the latest appended
 checkpoint identify the current continuation.
 
+The bpfman.v1 gRPC API is a temporary compatibility frontend and is intended to
+be removed. CSI Identity and Node services are permanent; they retain their own
+gRPC protocol and may retain the shared transport. Removing the bpfman API must
+leave CSI, direct CLI operations, runtime behavior, kernel adapters and persistence
+intact. `bpfman csi` now starts CSI independently; `serve --csi-support` retains
+the combined compatibility launcher. The default `management-api` Cargo feature
+controls the management handlers, startup and message generation. Building only
+the `bpfman` package without default features retains CSI and the direct CLI.
+The two services share frontend crates, so retirement is not deletion of those
+entire crates.
+Keep their handlers and wire conversion separate, with application operations in
+`Bpfman` and `MapVolumes` rather than either protocol frontend.
+
 SQLite is now the only Rust persistence adapter and is implicit in the CLI;
 `--store` and the `BPFMAN_STORE` binding are removed. The experimental JSON adapter
 and its dedicated snapshot publisher are retired. Store traits, consuming receipts,
@@ -7927,3 +7940,93 @@ container restart, retained exact program/map identity and normal cleanup.
 No Rust implementation changes follow the successful full gate recorded above.
 `final-audit.log` confirms empty managed inventories, pins, artifacts, CSI volumes
 and application states, with the Fedora daemon ready and CSI registered.
+
+## Independent CSI and management-removal rehearsal (10 November 2026)
+
+`bpfman csi` starts the permanent CSI Identity/Node endpoint independently. Shared
+application construction is in `src/daemon.rs`; CSI composition, volume-error
+projection, socket ownership and cleanup reporting are in `src/csi.rs`.
+`src/serve.rs` retains the temporary management adapter and compatibility
+composition for `serve --csi-support`, sharing the same active application with
+CSI. Either combined-daemon service stopping still cancels its peer and joins
+both services. CSI does not call the management API. Core runtime, kernel and
+persistence implementations are unchanged by this separation.
+
+The shared transport no longer imports management service types or registers
+management methods itself. That registration and its `Handler` implementation
+belong to the management adapter. The default `management-api` feature in the
+CLI, frontend and protobuf crates retains existing behavior. Without that
+feature, the management handlers/converters, `serve` module/command and bpfman.v1
+message generation are absent; CSI messages and transport remain. Workspace
+dependencies disable implicit frontend defaults, and the CLI forwards its feature
+explicitly. The removal build selects only `-p bpfman`, avoiding workspace-wide
+feature unification. An architecture contract prevents application crates from
+reaching either protocol frontend or the gRPC transport dependency.
+
+The CSI-only process test occupies the management socket, makes image/trust
+cache paths unusable and supplies an invalid unused signing identity regexp.
+CSI must still pass the stock Identity/Node client, preserve the foreign socket
+and cache sentinel, and clean its own socket across SIGTERM/SIGINT and reopening.
+The first control found that telemetry startup called general configuration
+validation, admitting signing policy before CSI ran. Configuration now separates
+logging parsing from image-policy admission; ordinary CLI/management commands
+retain full policy validation. The failed control is retained as
+`csi-only-before-logging-fix.log`.
+
+`make rust-test-csi-only` builds without default features and runs the CSI wire
+validation, process contracts and native standalone CSI lifecycle. The existing
+stock Go client's optional `-bpfman`/`-bpfman-config` selects direct CLI
+load/list/unload instead of management RPCs. Its existing CSI assertions are
+unchanged, including fsGroup, read-only duplicate publication, concurrent calls,
+foreign mounts, busy cleanup/retry, map lifetime through unload and restart.
+The native fixture additionally requires a live persisted program and identical
+kernel program/map observations across restart, propagated read-only flags,
+empty inventories/artifacts and normal unmount. This standalone case also joins
+the regular default-feature native gate; existing management/combined-daemon and
+Go reference cases remain there.
+
+Evidence is under `/tmp/bpfman-csi-separation-fcv59j66/`. A disposable source copy
+at `without-management-source/` physically removes the management `service.rs`,
+`service/attach.rs`, `convert.rs`, CLI `serve.rs`, and shared `proto/bpfman.proto`.
+The CSI-only build and all the focused contracts pass from that copy:
+`removed-source.log`. `removed-source.json` records the deleted paths.
+`removal-proof.json` checks absence of management route strings, service symbols
+and bpfman.v1 message symbols in the resulting executable. The selected Cargo
+feature tree has no `management-api` activation. The binary is retained as
+`csi-only-bpfman`. This is a build with management disabled and its production
+source files absent, not a final workspace deletion patch: the default feature,
+Go reference implementation and checked-in Go wire fixtures remain available.
+
+That physical-removal control also exposed test-setup coupling: the broad Rust
+fixture prerequisite list tried to regenerate management IDL for Go helpers.
+The focused target now builds only its CSI client and tracepoint fixture; the
+Go tool owns helper source freshness using the checked-in wire fixtures.
+`removed-source-before-fixtures-fix.log` retains the failed control. No original
+CSI assertions or `.bpfman` contracts are weakened or skipped in default builds.
+
+The final default `direnv exec . make rust-check lint-make` exits zero:
+`rust-check.log`. All userspace, architecture, fault/cancellation and process
+contracts, strict all-feature Clippy, doctests and warnings-denied Rustdoc pass.
+The native runner discovers/selects/passes all 91 cases in 257.43 seconds, including
+the original management gRPC and combined-daemon cases and new standalone CSI
+case, with normal real-kernel fixture cleanup. The existing aya-obj development/
+test optimization override remains at level two. Explicit Go client lint reports
+zero issues (`csi-client-lint.log`). The default build is restored after the
+management-free rehearsal; production Rust sources do not change after the full
+gate. All code remains in the independent workspace, with no dependency upgrades.
+
+The default binary is packaged through the existing Fedora development target
+as `bpfman:rust-csi-separated` (`build-image.log`), loaded with the existing operator
+Make workflow and selected through its supported Config. The task-owned KIND
+agents are paused for native lifetime acceptance and restored with that image
+(`deploy.log`). This deployment retains the management API for the current Go
+agent; the removal rehearsal does not claim that the existing agent can operate
+without management RPCs. Agent migration and default cutover remain separate work.
+`kind-restart.log` records successful deployed lifecycle, strict read-only repeat
+publication and actual container restart with exact program/map identity retained.
+The existing operator mount layout and stock CSI assertions remain unchanged.
+`final-audit.log` confirms empty managed inventories, pins, artifacts, CSI volumes
+and application states, with the daemon ready and CSI registered. Its empty
+runtime bpffs remains mounted for the running deployment. This is single-node
+KIND evidence; the management-free variant is qualified by the native removal
+rehearsal, not a management-free deployment of the current Go agent.

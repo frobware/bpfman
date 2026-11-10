@@ -1,8 +1,8 @@
 //! Long-lived daemon composition; transport and runtime retain their own contracts.
 use anyhow::Context;
-use bpfman_api::{CsiService, Images, RpcServer, Server, ServerOptions, Service, Status, Volumes};
+use bpfman_api::{Images, RpcServer, Server, ServerOptions, Service, Status};
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout, SocketDirectory};
-use bpfman_runtime::{ActiveStore, Bpfman, Cancellation, MapVolumes, VolumeError, VolumeErrorKind};
+use bpfman_runtime::Cancellation;
 use clap::builder::TypedValueParser;
 use std::{
     path::PathBuf,
@@ -124,26 +124,12 @@ pub(super) fn run(
             cancelled: Some(cancellation.flag()),
         },
         |binding| -> Result<(), crate::error::Error> {
-            let store = ActiveStore::open_with_cancellation(
-                bpfman_store_sqlite::Backend,
-                &cli.layout,
-                cli.lock_timeout,
-                cancellation,
-            )?;
-            // Prepare the cache independently of the program writer lock.
+            let app = crate::daemon::application(cli, cancellation)?;
+            // Image preparation belongs only to the temporary management API.
             RuntimeDirectory::open_or_create(cli.image_cache.clone())?;
-            let launcher =
-                crate::ns_helper::Launcher::new(std::env::current_exe()?, cancellation.clone());
-            let kernel = bpfman_kernel_aya::Kernel::with_cancellable_uprobe_target_opener(
-                move |writer, target, cancelled| {
-                    launcher.open_with_cancellation(writer, target, cancelled)
-                },
-            );
-            let app = Arc::new(Bpfman::new(store, kernel, Duration::ZERO));
-            let volumes = Arc::new(MapVolumes::new(app.clone()));
             let service = Arc::new(
                 Service::from_shared(
-                    app,
+                    app.clone(),
                     bpfman_kernel_aya::Kernel::default(),
                     ImagePolicy {
                         cache: cli.image_cache.clone(),
@@ -170,11 +156,13 @@ pub(super) fn run(
             binding.publish()?;
             tracing::info!(socket = %socket_path.display(), "bpfman gRPC server listening");
             let outcome = if args.csi_support {
-                serve_csi(cli, server, VolumePolicy(volumes.clone()), cancellation)
+                serve_with_csi(cli, app, server, cancellation)
             } else {
-                server.serve(cancellation.flag()).context("serve gRPC").map_err(Into::into)
+                server
+                    .serve(cancellation.flag())
+                    .context("serve gRPC")
+                    .map_err(Into::into)
             };
-            let volume_pending = volumes.take_recovery();
             let pending = service.take_recovery();
             if !pending.is_empty() {
                 tracing::error!(
@@ -193,12 +181,11 @@ pub(super) fn run(
                 );
             }
             outcome?;
-            if !pending.is_empty() || image_pending != 0 || !volume_pending.is_empty() {
+            if !pending.is_empty() || image_pending != 0 {
                 return Err(anyhow::anyhow!(
-                    "daemon stopped with {} unresolved lifecycle, {} image and {} CSI cleanup receipts",
+                    "daemon stopped with {} unresolved lifecycle and {} image cleanup receipts",
                     pending.len(),
-                    image_pending,
-                    volume_pending.len()
+                    image_pending
                 )
                 .into());
             }
@@ -215,101 +202,30 @@ pub(super) fn run(
     }
 }
 
-struct VolumePolicy<S: bpfman_store::OpenStore, K>(Arc<MapVolumes<S, K>>);
-
-fn volume_status(error: VolumeError) -> Status {
-    let kind = error.kind();
-    let message = format!("{:#}", anyhow::Error::new(error));
-    match kind {
-        VolumeErrorKind::Cancelled => Status::cancelled(message),
-        VolumeErrorKind::NotFound => Status::not_found(message),
-        VolumeErrorKind::Busy => Status::aborted(message),
-        VolumeErrorKind::AlreadyExists => Status::already_exists(message),
-        VolumeErrorKind::FailedPrecondition => Status::failed_precondition(message),
-        VolumeErrorKind::Internal => Status::internal(message),
-    }
-}
-
-impl<S, K> Volumes for VolumePolicy<S, K>
-where
-    S: bpfman_store::OpenStore + Send + Sync + 'static,
-    K: bpfman_kernel::ProgramObservations + bpfman_fs::MapReopening + Send + Sync + 'static,
-{
-    fn publish(
-        &self,
-        program: &str,
-        request: &bpfman_fs::VolumeRequest,
-        cancellation: &Cancellation,
-    ) -> Result<(), Status> {
-        self.0
-            .publish(program, request, cancellation)
-            .map_err(volume_status)
-    }
-    fn unpublish(
-        &self,
-        volume: &str,
-        target: &std::path::Path,
-        cancellation: &Cancellation,
-    ) -> Result<(), Status> {
-        self.0
-            .unpublish(volume, target, cancellation)
-            .map_err(volume_status)
-    }
-}
-
-fn serve_csi<H: bpfman_api::Handler>(
+fn serve_with_csi<H: bpfman_api::Handler>(
     cli: &crate::cli::Cli,
+    app: crate::daemon::SharedApplication,
     server: RpcServer<H>,
-    volumes: impl Volumes,
     cancellation: &Cancellation,
 ) -> Result<(), crate::error::Error> {
-    RuntimeDirectory::open_or_create(
-        RuntimeLayout::try_from(cli.layout.csi_filesystem_path()).map_err(anyhow::Error::new)?,
-    )?;
-    let socket = cli.layout.csi_socket_path();
-    let sockets = SocketDirectory::open(&socket)?;
-    let node = std::fs::read_to_string("/proc/sys/kernel/hostname")?
-        .trim_end_matches('\n')
-        .to_owned();
-    let service = Arc::new(CsiService::new(node, volumes));
-    let (outcome, cleanup) = sockets.with_socket(
-        bpfman_lock::AcquireOptions {
-            timeout: cli.lock_timeout,
-            cancelled: Some(cancellation.flag()),
-        },
-        |binding| -> Result<(), crate::error::Error> {
-            let csi = RpcServer::bind(binding.path(), service, ServerOptions::default())?;
-            binding.publish()?;
-            tracing::info!(socket = %socket.display(), "CSI server listening");
-            std::thread::scope(|scope| -> Result<(), crate::error::Error> {
-                let peer = std::thread::Builder::new()
-                    .name("csi-server".into())
-                    .spawn_scoped(scope, || {
-                        let outcome = csi.serve(cancellation.flag()).context("serve CSI");
-                        cancellation.cancel();
-                        outcome
-                    })?;
-                let outcome = server.serve(cancellation.flag()).context("serve gRPC");
+    std::thread::scope(|scope| -> Result<(), crate::error::Error> {
+        let peer = std::thread::Builder::new()
+            .name("csi-server".into())
+            .spawn_scoped(scope, || {
+                let outcome = crate::csi::run_with_application(cli, app, cancellation);
                 cancellation.cancel();
-                let csi_outcome = peer
-                    .join()
-                    .map_err(|_| anyhow::anyhow!("CSI server worker panicked"))?;
-                match (outcome, csi_outcome) {
-                    (Err(error), Err(csi)) => {
-                        Err(anyhow::anyhow!("{error:#}; CSI: {csi:#}").into())
-                    }
-                    (Err(error), _) | (_, Err(error)) => Err(error.into()),
-                    _ => Ok(()),
-                }
-            })
-        },
-    )?;
-    match (outcome, cleanup) {
-        (Err(error), Err(cleanup)) => {
-            Err(anyhow::anyhow!("{error:#}; CSI socket cleanup: {cleanup:#}").into())
+                outcome
+            })?;
+        let outcome = server.serve(cancellation.flag()).context("serve gRPC");
+        cancellation.cancel();
+        let csi_outcome = peer
+            .join()
+            .map_err(|_| anyhow::anyhow!("CSI server worker panicked"))?;
+        match (outcome, csi_outcome) {
+            (Err(error), Err(csi)) => Err(anyhow::anyhow!("{error:#}; CSI: {csi:#}").into()),
+            (Err(error), _) => Err(error.into()),
+            (_, Err(error)) => Err(error),
+            _ => Ok(()),
         }
-        (Err(error), _) => Err(error),
-        (_, Err(error)) => Err(anyhow::Error::from(error).into()),
-        _ => Ok(()),
-    }
+    })
 }

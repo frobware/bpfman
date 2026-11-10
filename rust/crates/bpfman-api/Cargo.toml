@@ -11,6 +11,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["management-api"]
+management-api = ["bpfman-proto/management-api"]
+
 [dependencies]
 bpfman-proto.workspace = true
 bpfman-model.workspace = true

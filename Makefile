@@ -595,7 +595,7 @@ BUILDX_ATTEST := $(if $(PUSH),--provenance=mode=max --sbom=true)
 # EXTRA_*, etc.) for those references to get probed.
 # ---------------------------------------------------------------------------
 LINT_MAKE_TARGETS := \
-	help \
+	help rust-build-csi rust-test-csi-only \
 	test test-e2e test-e2e-scripts \
 	test-bpfman-ns test-bpfman-ns-amd64 test-bpfman-ns-arm64 test-bpfman-ns-cross \
 	bpfman-compile \
@@ -641,6 +641,8 @@ help:
 	@echo ""
 	@echo "Testing:"
 	@printf "  %-31s %s\n" "rust-check" "Check the new Rust workspace (format, clippy, tests, docs)"
+	@printf "  %-31s %s\n" "rust-build-csi" "Build CLI/CSI with the management API disabled"
+	@printf "  %-31s %s\n" "rust-test-csi-only" "Verify CSI lifecycle and restart without the management API"
 	@printf "  %-31s %s\n" "rust-test-bytecode-corpus" "Run shared scripts against Rust with file and local OCI bytecode"
 	@printf "  %-31s %s\n" "test-e2e-selection" "Verify CLI selection for the script runner without root"
 	@printf "  %-31s %s\n" "test" "Run all tests"
@@ -1087,6 +1089,11 @@ rust-check: rust-fmt rust-lint rust-test rust-doc
 
 rust-build: $(RUST_DISPATCHER)
 	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked --profile $(RUST_BUILD_PROFILE)
+
+# Build the permanent CSI/CLI surface without bpfman management handlers/messages.
+.PHONY: rust-build-csi
+rust-build-csi: $(RUST_DISPATCHER)
+	cargo build --manifest-path $(RUST_MANIFEST) -p bpfman --no-default-features --locked --profile $(RUST_BUILD_PROFILE)
 
 # Build fixtures before entering the privileged test runner. Passwordless sudo
 # is required; unavailable privileges fail the gate rather than skipping tests.
@@ -2124,10 +2131,22 @@ rust-test-serve: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_serve_grpc -- --nocapture
 
 # One stock CSI client exercises both production daemon implementations.
-$(BIN_DIR)/csi-contract: e2e/testdata/csi-contract/main.go server/pb/bpfman.pb.go server/pb/bpfman_grpc.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi_grpc.pb.go go.mod go.sum | $(BIN_DIR)
-	CGO_ENABLED=0 go build -o $@ ./e2e/testdata/csi-contract
+$(BIN_DIR)/csi-contract: e2e/testdata/csi-contract/main.go e2e/testdata/csi-contract/cli.go server/pb/bpfman.pb.go server/pb/bpfman_grpc.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi_grpc.pb.go go.mod go.sum | $(BIN_DIR)
+	$(Q)$(MAKE) build-csi-contract
+
+# Go owns source freshness here. The CSI-only rehearsal uses the checked-in Go
+# wire fixtures without rebuilding the Go daemon or regenerating management IDL.
+.PHONY: build-csi-contract
+build-csi-contract: | $(BIN_DIR)
+	CGO_ENABLED=0 go build -o $(BIN_DIR)/csi-contract ./e2e/testdata/csi-contract
 
 .PHONY: rust-test-csi
 rust-test-csi: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test csi --test serve --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) csi_ -- --nocapture
+
+# This selection needs no management server, including for program preparation.
+.PHONY: rust-test-csi-only
+rust-test-csi-only: rust-build-csi build-csi-contract e2e/testdata/bpf/tracepoint_counter.bpf.o
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --no-default-features --test csi --test csi_only --locked
+	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --no-default-features --test kernel --locked $(RUST_TEST_RUNNER) -- sqlite_csi_only_wire_contract --exact --nocapture

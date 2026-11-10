@@ -12,9 +12,8 @@ pub(super) fn validate_spec(value: &str) -> anyhow::Result<()> {
 pub(super) fn init(
     path: Option<&Path>,
     log: Option<&str>,
-    config: Option<&Path>,
+    config: &crate::cli::config::Config,
 ) -> anyhow::Result<Option<tracing_chrome::FlushGuard>> {
-    let config = crate::cli::config::Config::load(config)?;
     let default = if path.is_some() {
         tracing::level_filters::LevelFilter::DEBUG
     } else {

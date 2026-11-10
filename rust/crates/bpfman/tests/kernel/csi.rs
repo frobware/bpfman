@@ -92,32 +92,40 @@ impl Drop for RegistrationMount {
 }
 
 pub(super) fn wire(implementation: &str) {
+    let standalone = implementation == "rust-csi";
+    let is_rust = implementation.starts_with("rust");
     let c = Context::new();
-    let registration = (implementation == "rust").then(|| RegistrationMount::new(&c));
+    let registration = is_rust.then(|| RegistrationMount::new(&c));
     let parent = c.layout.root().parent().expect("parent");
     let socket = parent.join("bpfman.sock");
     let config = parent.join("bpfman.toml");
     fs::write(&config, "[signing]\nverify_enabled = false\n").expect("config");
-    let binary = if implementation == "rust" {
+    let binary = if is_rust {
         rust()
     } else {
         repository().join("bin/bpfman")
     };
     let label = format!("csi-{}-{}", implementation, fixture_id());
-    let backing = if implementation == "rust" {
+    let backing = if is_rust {
         c.layout.csi_filesystem_path()
     } else {
         PathBuf::from("/run/bpfman/csi/fs")
     };
     let start = || {
-        let mut daemon = Daemon(
-            Command::new(&binary)
-                // Operator startup form is the actual production entrypoint.
+        let mut command = Command::new(&binary);
+        if standalone {
+            command.arg("csi");
+        } else {
+            // Preserve the production operator entrypoint for the shared lane.
+            command
                 .arg("--csi-support")
+                .arg("--socket-path")
+                .arg(&socket);
+        }
+        let mut daemon = Daemon(
+            command
                 .arg("--runtime-dir")
                 .arg(c.layout.root())
-                .arg("--socket-path")
-                .arg(&socket)
                 .arg("--config")
                 .arg(&config)
                 .arg("--image-cache-dir")
@@ -131,7 +139,7 @@ pub(super) fn wire(implementation: &str) {
                 .expect("daemon"),
         );
         let deadline = Instant::now() + Duration::from_secs(15);
-        while !socket.exists() || !c.layout.csi_socket_path().exists() {
+        while (!standalone && !socket.exists()) || !c.layout.csi_socket_path().exists() {
             assert!(
                 daemon.0.try_wait().expect("status").is_none(),
                 "{implementation} daemon exited"
@@ -142,9 +150,18 @@ pub(super) fn wire(implementation: &str) {
         daemon
     };
     let client = |lane: &str| {
-        let result = Command::new("timeout")
+        let mut command = Command::new("timeout");
+        command
             .arg("60s")
-            .arg(repository().join("bin/csi-contract"))
+            .arg(repository().join("bin/csi-contract"));
+        if standalone {
+            command
+                .arg("-bpfman")
+                .arg(&binary)
+                .arg("-bpfman-config")
+                .arg(&config);
+        }
+        let result = command
             .arg("-socket")
             .arg(&socket)
             .arg("-csi-socket")
@@ -192,6 +209,15 @@ pub(super) fn wire(implementation: &str) {
     let mut daemon = start();
     client("exercise");
     client("persist-create");
+    let observe_kernel = || {
+        let list = c.json(&binary, &["program", "list", "-o", "json"]);
+        let programs = list["programs"].as_array().expect("program inventory");
+        assert_eq!(programs.len(), 1, "one persistent program");
+        let kernel = &programs[0]["kernel"];
+        assert!(kernel.is_object(), "persistent program remains live");
+        kernel.clone()
+    };
+    let before = standalone.then(observe_kernel);
     let peer_readonly = registration.as_ref().map(|mounts| {
         rustix::fs::statfs(mounts.peer.join("persist"))
             .expect("propagated target")
@@ -200,16 +226,26 @@ pub(super) fn wire(implementation: &str) {
             != 0
     });
     stop(&mut daemon);
-    if implementation == "rust" {
+    if is_rust {
         assert!(!c.layout.csi_socket_path().exists());
     }
     let mut daemon = start();
+    if let Some(before) = before {
+        assert_eq!(
+            before,
+            observe_kernel(),
+            "CSI restart preserves program/map identity"
+        );
+    }
     client("persist-read");
     stop(&mut daemon);
-    if implementation == "rust" {
+    if is_rust {
         assert!(names(&c.layout.csi_filesystem_path()).is_empty());
     }
     c.no_artifacts();
+    if standalone {
+        assert!(!socket.exists(), "CSI-only mode has no management socket");
+    }
     assert!(
         c.json(&rust(), &["program", "list", "-o", "json"])["programs"]
             .as_array()

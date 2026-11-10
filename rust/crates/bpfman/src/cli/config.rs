@@ -155,6 +155,13 @@ impl Config {
     }
 
     pub(crate) fn load(path: Option<&Path>) -> anyhow::Result<Self> {
+        let config = Self::load_logging(path)?;
+        config.verification(None, None)?;
+        Ok(config)
+    }
+
+    // CSI shares logging configuration but never admits image-signing policy.
+    pub(crate) fn load_logging(path: Option<&Path>) -> anyhow::Result<Self> {
         let path = path.filter(|path| !path.as_os_str().is_empty());
         let selected = path.unwrap_or(Path::new(DEFAULT_CONFIG_PATH));
         let contents = match std::fs::read_to_string(selected) {
@@ -181,7 +188,6 @@ impl Config {
             spec.push_str(&format!(",{component}={level}"));
         }
         crate::telemetry::validate_spec(&spec)?;
-        config.verification(None, None)?;
         Ok(config)
     }
 

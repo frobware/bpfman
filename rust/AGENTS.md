@@ -177,6 +177,22 @@ The architecture and compatibility goals are in
 
 ## Domain modelling and SANS-I/O
 
+- Treat the bpfman.v1 gRPC API as a temporary compatibility frontend. CSI Identity
+  and Node services are permanent and retain their own gRPC protocol/transport.
+  Future removal of the bpfman API must preserve CSI, the CLI, and application
+  behavior without kernel, persistence or runtime redesign. Keep lifecycle and
+  map-volume operations in `Bpfman` and `MapVolumes`; protobuf conversion and RPC
+  status handling belong at the frontend boundary. The current joint
+  `serve --csi-support` launcher is compatibility wiring, not a requirement that
+  CSI retain the bpfman RPC service. Keep service-specific handlers removable
+  independently of CSI and shared transport code.
+- `bpfman csi` must work with the `management-api` feature disabled. Use
+  `direnv exec . make rust-test-csi-only` to exercise the permanent CSI/CLI
+  surface without management handlers or bpfman.v1 message generation. Select
+  only the `bpfman` package for that build: building the whole workspace can
+  unify frontend members' default features back in. Keep ordinary `rust-check`
+  on default features so existing management/combined-daemon contracts still run.
+
 - Put state-dependent data inside enum variants. Requests, heterogeneous
   records, effects, and lifecycle states use payload-bearing enums; avoid a
   discriminator plus unrelated optional fields. Derive kind from the variant.

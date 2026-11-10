@@ -137,9 +137,16 @@ impl Command {
                     ));
                 }
             },
-            Self::Serve(_) | Self::Version => {
+            #[cfg(feature = "management-api")]
+            Self::Serve(_) => {
                 return Err(anyhow::anyhow!(
                     "serve/version must dispatch before runtime initialization"
+                )
+                .into());
+            }
+            Self::Csi | Self::Version => {
+                return Err(anyhow::anyhow!(
+                    "CSI/version must dispatch before runtime initialization"
                 )
                 .into());
             }
@@ -189,7 +196,10 @@ impl Command {
 pub(super) enum Command {
     /// Start the gRPC daemon.
     #[command(hide = true)]
+    #[cfg(feature = "management-api")]
     Serve(crate::serve::Args),
+    /// Start the CSI Identity and Node services without the management API.
+    Csi,
     /// Print build version information.
     Version,
     #[command(hide = true)]

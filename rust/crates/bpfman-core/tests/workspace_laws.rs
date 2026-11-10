@@ -475,3 +475,27 @@ fn grpc_frontend_stays_generic_and_synchronous() {
         pending.extend(normal_dependencies(meta, id));
     }
 }
+
+#[test]
+fn application_crates_cannot_reach_rpc_frontends() {
+    let meta = metadata();
+    for start in array(&meta["workspace_members"]) {
+        let name = string(&package(meta, start)["name"]);
+        if matches!(name, "bpfman" | "bpfman-api" | "bpfman-proto") {
+            continue;
+        }
+        let mut pending = vec![start];
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            if !seen.insert(string(id)) {
+                continue;
+            }
+            let dependency = string(&package(meta, id)["name"]);
+            assert!(
+                !matches!(dependency, "bpfman-api" | "bpfman-proto" | "grpcuds"),
+                "{name} reaches a protocol frontend: {dependency}"
+            );
+            pending.extend(normal_dependencies(meta, id));
+        }
+    }
+}

@@ -11,6 +11,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["management-api"]
+management-api = []
+
 [dependencies]
 prost.workspace = true
 prost-types.workspace = true

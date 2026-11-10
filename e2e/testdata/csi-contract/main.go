@@ -23,6 +23,8 @@ import (
 	pb "github.com/bpfman/bpfman/server/pb"
 )
 
+var cliBinary = flag.String("bpfman", "", "manage fixture programs through this CLI instead of gRPC")
+var cliConfig = flag.String("bpfman-config", "", "configuration for CLI fixture management")
 var socket = flag.String("socket", "", "bpfman socket")
 var csiSocket = flag.String("csi-socket", "", "CSI socket")
 var objects = flag.String("objects", "", "BPF fixtures")
@@ -88,9 +90,14 @@ func main() {
 		fmt.Println("CSI identity contract passed")
 		return
 	}
-	bconn := connect(*socket)
-	defer bconn.Close()
-	b := pb.NewBpfmanClient(bconn)
+	var b management
+	if *cliBinary != "" {
+		b = cliManagement{binary: *cliBinary, config: *cliConfig}
+	} else {
+		bconn := connect(*socket)
+		defer bconn.Close()
+		b = pb.NewBpfmanClient(bconn)
+	}
 	if *lane == "persist-read" {
 		req := request("persist")
 		_, err = node.NodePublishVolume(ctx, req)

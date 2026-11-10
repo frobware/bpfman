@@ -20,6 +20,10 @@ expect_used = "deny"
 panic = "deny"
 dbg_macro = "deny"
 
+[features]
+default = ["management-api"]
+management-api = ["bpfman-api/management-api", "bpfman-proto/management-api"]
+
 [dependencies]
 bpfman-api.workspace = true
 bpfman-proto.workspace = true
@@ -52,3 +56,11 @@ sha2.workspace = true
 aya.workspace = true
 rusqlite.workspace = true
 tempfile.workspace = true
+
+[[test]]
+name = "grpc"
+required-features = ["management-api"]
+
+[[test]]
+name = "serve"
+required-features = ["management-api"]

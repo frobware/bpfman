@@ -75,8 +75,8 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-store` | 3 | Backend-independent read, commit, and conditional teardown contracts |
 | `bpfman-store-sqlite` | 4 | Go-compatible creation, queries, and atomic program/map-set persistence and conditional teardown |
 | `bpfman-runtime` | 4 | Generic attachment lifecycle interpreters, consuming compensation, and observations |
-| `bpfman-proto` | 0 | Generated protobuf messages from the shared schemas |
-| `bpfman-api` | 5 | Synchronous gRPC conversion and transport |
+| `bpfman-proto` | 0 | CSI and optional management messages from the shared schemas |
+| `bpfman-api` | 5 | CSI and optional management adapters over synchronous gRPC transport |
 | `bpfman` | 6 | Typed program/link CLI, load/get/list/unload and attach/detach dispatch, and presentation |
 
 The model and core library targets are `no_std`. Workspace tests enforce that normal edges
@@ -3063,6 +3063,31 @@ aya-obj opt-level-two override, including the default-load daemon launcher.
 `/tmp/bpfman-serve-make-lint.log`.
 
 ### CSI daemon support
+
+`bpfman csi` runs CSI independently of the temporary bpfman.v1 management API.
+It opens the application store and CSI socket without creating a management
+socket, preparing image caches or admitting unused image-signing policy. Logging
+configuration remains shared. CSI continues to use gRPC after the management API
+is retired; shared transport code contains no management service registration.
+
+The `management-api` feature is enabled by default for compatibility. To build
+and test without management handlers, its startup module or bpfman.v1 messages:
+
+```sh
+direnv exec . make rust-build-csi
+direnv exec . make rust-test-csi-only
+rust/target/debug/bpfman csi --runtime-dir /run/bpfman
+```
+
+These targets select only the `bpfman` package with `--no-default-features` and
+use the normal output directory. A subsequent `make rust-build` restores the
+default build. Workspace-wide default builds can enable the frontend members'
+features through Cargo feature unification, so they are not a removal rehearsal.
+The CSI-only native lane runs the same stock CSI client assertions, supplying
+program load/list/unload through the direct CLI, including restart idempotence,
+exact retained program/map identity and normal residue cleanup. The regular
+`rust-check` also includes the standalone CSI lane alongside all existing
+management and combined-daemon contracts.
 
 `bpfman serve --csi-support` runs the synchronous CSI Identity and Node services
 alongside bpfman.v1. The operator's leading `bpfman --csi-support ...` invocation

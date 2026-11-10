@@ -11,8 +11,8 @@ repository = "https://github.com/bpfman/bpfman"
 publish = false
 
 [workspace.dependencies]
-bpfman-proto = { path = "crates/bpfman-proto" }
-bpfman-api = { path = "crates/bpfman-api" }
+bpfman-proto = { path = "crates/bpfman-proto", default-features = false }
+bpfman-api = { path = "crates/bpfman-api", default-features = false }
 prost = "0.13"
 prost-build = "0.13"
 prost-types = "0.13"
