@@ -1,12 +1,89 @@
 //! Full observations decoded from the unchanged Go schema.
 
 use bpfman_model::{ImagePullPolicy, ProgramSource, ProgramSpec};
+use bpfman_store::ProgramReader;
 use bpfman_store_sqlite::{ErrorKind, Store};
 
 #[path = "../../../tests/support/mod.rs"]
 mod support;
 
 type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+
+#[test]
+fn targeted_reads_preserve_relationships_and_decode_only_the_requested_program() -> Result {
+    let db = support::database()?;
+    support::seed(&db)?;
+    let mut store = Store::open(&db.path)?;
+    let id = |raw| std::num::NonZeroU32::new(raw).expect("id");
+    let all = store.read_records()?;
+    for record in &all {
+        let selected = store.read_record(record.id)?.expect("selected");
+        assert_eq!(selected.record, *record);
+        assert_eq!(selected.map_users, [id(7), id(42)]);
+    }
+
+    db.connection
+        .execute_batch("UPDATE managed_programs SET global_data='invalid' WHERE program_id=7;")?;
+    assert!(store.read_records().is_err());
+    assert_eq!(
+        store
+            .read_record(id(42))?
+            .expect("unrelated corruption")
+            .record,
+        all[1]
+    );
+    assert_eq!(
+        store
+            .read_record(id(7))
+            .expect_err("selected corruption")
+            .kind(),
+        bpfman_store::ErrorKind::InvalidData
+    );
+    assert!(store.read_record(id(999))?.is_none());
+
+    db.connection.execute_batch(
+        "UPDATE managed_programs SET global_data=NULL, owner='fresh' WHERE program_id=7;
+         DELETE FROM links WHERE id=2;
+         UPDATE managed_programs SET map_set_id=42 WHERE program_id=7;",
+    )?;
+    assert_eq!(
+        store.read_record(id(7))?.expect("fresh").record.owner,
+        "fresh"
+    );
+    assert_eq!(
+        store
+            .read_record(id(42))?
+            .expect("fresh links")
+            .record
+            .links,
+        [std::num::NonZeroU64::new(10).expect("link")]
+    );
+
+    db.connection
+        .execute_batch("DELETE FROM managed_programs WHERE program_id=7")?;
+    assert_eq!(
+        store.read_record(id(42))?.expect("owner remains").map_users,
+        [id(42)]
+    );
+
+    db.connection
+        .execute_batch("UPDATE goose_db_version SET version_id=99")?;
+    assert_eq!(
+        store
+            .read_record(id(42))
+            .expect_err("changed schema")
+            .kind(),
+        bpfman_store::ErrorKind::IncompatibleState
+    );
+    assert_eq!(
+        store
+            .read_record(id(999))
+            .expect_err("schema before absence")
+            .kind(),
+        bpfman_store::ErrorKind::IncompatibleState
+    );
+    Ok(())
+}
 
 #[test]
 fn full_records_preserve_nullable_values_and_payloads_without_writing() -> Result {

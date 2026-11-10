@@ -138,6 +138,14 @@ impl<R: ProgramReader> ProgramReader for Reader<R> {
         check(&self.state, "records")?;
         self.reader.read_records()
     }
+
+    fn read_record(
+        &mut self,
+        id: NonZeroU32,
+    ) -> Result<Option<bpfman_store::ProgramSnapshot>, Error> {
+        check(&self.state, "records")?;
+        self.reader.read_record(id)
+    }
 }
 
 impl<S: CommitLoad> CommitLoad for Faults<S> {
@@ -215,6 +223,14 @@ impl<R: bpfman_store::LinkReader> bpfman_store::LinkReader for Reader<R> {
     fn read_links(&mut self) -> Result<Vec<bpfman_model::StoredLink>, Error> {
         check(&self.state, "links")?;
         self.reader.read_links()
+    }
+
+    fn read_links_by_program(
+        &mut self,
+        id: NonZeroU32,
+    ) -> Result<Vec<bpfman_model::StoredLink>, Error> {
+        check(&self.state, "links")?;
+        self.reader.read_links_by_program(id)
     }
 }
 

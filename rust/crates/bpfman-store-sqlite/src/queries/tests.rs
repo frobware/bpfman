@@ -163,3 +163,39 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
 
     Ok(())
 }
+
+#[test]
+fn program_and_link_selection_use_existing_sqlite_indexes() -> Result {
+    let c = crate::test_support::database()?;
+    crate::test_support::seed(&c)?;
+    for (sql, parameters, expected) in [
+        (
+            PROGRAM_ROWS,
+            named_params! { ":first": 42, ":last": 42 }.to_vec(),
+            "SEARCH p USING INTEGER PRIMARY KEY",
+        ),
+        (
+            LINKS_BY_PROGRAM,
+            named_params! { ":program_id": 42 }.to_vec(),
+            "idx_links_by_prog",
+        ),
+        (
+            LINKS_WITH_TCX_PEERS,
+            named_params! { ":program_id": 42 }.to_vec(),
+            "idx_links_by_prog",
+        ),
+    ] {
+        let plan = c
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?
+            .query_map(parameters.as_slice(), |r| r.get::<_, String>("detail"))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(plan.iter().any(|line| line.contains(expected)), "{plan:?}");
+        assert!(
+            !plan
+                .iter()
+                .any(|line| line == "SCAN l" || line == "SCAN links"),
+            "{plan:?}"
+        );
+    }
+    Ok(())
+}

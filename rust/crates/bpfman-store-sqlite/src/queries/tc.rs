@@ -32,13 +32,8 @@ pub(crate) struct Row {
     pub dispatcher_updated: String,
 }
 
-pub(crate) fn rows(
-    conn: &Connection,
-    key: Option<TcKey>,
-    link: Option<i64>,
-) -> rusqlite::Result<Vec<Row>> {
-    let mut statement = conn.prepare_cached(
-        "SELECT l.id, l.kernel_prog_id AS program, p.program_type AS program_kind,
+macro_rules! snapshot_sql {
+    ($predicate:literal) => { concat!("SELECT l.id, l.kernel_prog_id AS program, p.program_type AS program_kind,
             p.program_name, p.pin_path AS program_pin, l.kernel_link_id AS kernel,
             l.pin_path AS pin, l.metadata_json AS metadata, l.created_at AS created,
             x.interface, x.nsid, x.ifindex, x.priority, x.position, x.proceed_on,
@@ -49,19 +44,43 @@ pub(crate) fn rows(
          LEFT JOIN dispatchers d ON d.program_id=x.dispatcher_program_id
             AND d.type=('tc-' || x.direction) AND d.nsid=x.nsid AND d.ifindex=x.ifindex
          LEFT JOIN managed_programs p ON p.program_id=l.kernel_prog_id
-         WHERE l.kind='tc' AND (:nsid IS NULL OR x.nsid=:nsid)
-            AND (:ifindex IS NULL OR x.ifindex=:ifindex)
-            AND (:direction IS NULL OR x.direction=:direction)
-            AND (:link IS NULL OR l.id=:link) ORDER BY l.id",
-    )?;
-    let parameters = named_params! {
-        ":nsid": key.map(|k| k.nsid.get()),
-        ":ifindex": key.map(|k| k.ifindex.get()),
-        ":link": link,
-        ":direction": key.map(|k| k.direction.as_str()),
-    };
+         WHERE l.kind='tc' ", $predicate, " ORDER BY l.id") };
+}
 
-    statement
+const ALL_ROWS: &str = snapshot_sql!("");
+const ROWS_BY_KEY: &str =
+    snapshot_sql!("AND x.nsid=:nsid AND x.ifindex=:ifindex AND x.direction=:direction");
+const ROW_BY_LINK: &str = snapshot_sql!("AND l.id=:link");
+
+pub(crate) fn rows(
+    conn: &Connection,
+    key: Option<TcKey>,
+    link: Option<i64>,
+) -> rusqlite::Result<Vec<Row>> {
+    match (key, link) {
+        (None, None) => query_rows(conn, ALL_ROWS, []),
+        (Some(k), None) => query_rows(
+            conn,
+            ROWS_BY_KEY,
+            named_params! { ":nsid": k.nsid.get(), ":ifindex": k.ifindex.get(), ":direction": k.direction.as_str() },
+        ),
+        (None, Some(id)) => query_rows(conn, ROW_BY_LINK, named_params! { ":link": id }),
+        (Some(k), Some(id)) => query_rows(
+            conn,
+            snapshot_sql!(
+                "AND x.nsid=:nsid AND x.ifindex=:ifindex AND x.direction=:direction AND l.id=:link"
+            ),
+            named_params! { ":nsid": k.nsid.get(), ":ifindex": k.ifindex.get(), ":direction": k.direction.as_str(), ":link": id },
+        ),
+    }
+}
+
+fn query_rows(
+    conn: &Connection,
+    sql: &str,
+    parameters: impl rusqlite::Params,
+) -> rusqlite::Result<Vec<Row>> {
+    conn.prepare_cached(sql)?
         .query_map(parameters, |r| {
             Ok(Row {
                 id: r.get("id")?,
@@ -209,4 +228,27 @@ pub(crate) fn remove_dispatcher(tx: &Transaction<'_>, row: &Row) -> rusqlite::Re
 pub(crate) fn updated(tx: &Transaction<'_>, key: TcKey, timestamp: &str) -> rusqlite::Result<()> {
     tx.prepare_cached("UPDATE dispatchers SET updated_at=:updated WHERE type=:type AND nsid=:nsid AND ifindex=:ifindex")?.execute(named_params! { ":updated": timestamp, ":type": key.direction.dispatcher_type(), ":nsid": key.nsid.get(), ":ifindex": key.ifindex.get() })?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_point_selection_uses_the_existing_index() -> rusqlite::Result<()> {
+        let c = crate::test_support::database()?;
+        let plan = c
+            .prepare(&format!("EXPLAIN QUERY PLAN {ROWS_BY_KEY}"))?
+            .query_map(
+                named_params! { ":nsid": 1, ":ifindex": 7, ":direction": "ingress" },
+                |row| row.get::<_, String>("detail"),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("idx_link_tc_by_attach_point")),
+            "{plan:?}"
+        );
+        Ok(())
+    }
 }

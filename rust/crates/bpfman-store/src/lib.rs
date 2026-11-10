@@ -68,6 +68,19 @@ pub trait ProgramReader {
     /// Read complete records and relationships in one consistent snapshot.
     /// Validate current format compatibility on every read.
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error>;
+
+    /// Read one complete record and its map-set users in the same fresh snapshot.
+    /// Only absence returns None. Unrelated records need not be decoded.
+    fn read_record(&mut self, id: NonZeroU32) -> Result<Option<ProgramSnapshot>, Error>;
+}
+
+/// One stored program and the identities sharing its map set, read atomically.
+#[derive(Debug)]
+pub struct ProgramSnapshot {
+    /// Complete program record, including its stored link identities.
+    pub record: StoredProgram,
+    /// Map-set members, including this program, sorted by program ID.
+    pub map_users: Vec<NonZeroU32>,
 }
 
 /// Inputs for committing one local program and its map relationships.

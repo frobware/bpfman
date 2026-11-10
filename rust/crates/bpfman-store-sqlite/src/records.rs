@@ -210,5 +210,41 @@ fn read(connection: &mut rusqlite::Connection) -> Result<Vec<StoredProgram>, Fai
     Ok(records)
 }
 
+pub(super) fn read_record(
+    store: &Store,
+    program: NonZeroU32,
+) -> Result<Option<bpfman_store::ProgramSnapshot>, Error> {
+    store
+        .reader
+        .read(|connection| read_one(connection, program))
+        .map_err(Error::from)
+}
+
+fn read_one(
+    connection: &mut rusqlite::Connection,
+    program: NonZeroU32,
+) -> Result<Option<bpfman_store::ProgramSnapshot>, Failure> {
+    let tx = connection.transaction()?;
+    require_supported(schema_version(&tx)?)?;
+    let Some(row) = queries::program(&tx, program)? else {
+        return Ok(None);
+    };
+    let mut record = decode(row)?;
+    for raw in queries::link_ids_by_program(&tx, program)? {
+        record.links.push(
+            u64::try_from(raw)
+                .ok()
+                .and_then(NonZeroU64::new)
+                .ok_or_else(|| invalid(i64::from(program.get()), "invalid link ID"))?,
+        );
+    }
+    let map_users = queries::map_set_users(&tx, record.map_set)?
+        .into_iter()
+        .map(id)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(Some(bpfman_store::ProgramSnapshot { record, map_users }))
+}
+
 #[cfg(test)]
 mod tests;

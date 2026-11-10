@@ -54,12 +54,11 @@ pub fn tcx_positions(links: &mut [crate::StoredLink]) {
     ordered.sort();
     for r in links {
         if let crate::LinkDetails::Tcx(d) = &mut r.details {
-            d.position = ordered
-                .iter()
-                .filter(|(key, priority, id)| {
-                    *key == d.key && (*priority, *id) < (d.priority, r.id)
-                })
-                .count();
+            d.position = ordered.partition_point(|entry| *entry < (d.key, d.priority, r.id))
+                - ordered.partition_point(|(key, _, _)| *key < d.key);
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -301,6 +301,18 @@ fn check(
 }
 
 impl LinkReader for Store {
+    #[tracing::instrument(name = "store.read_links_by_program", level = "debug", skip_all, fields(program_id = id.get()), err)]
+    fn read_links_by_program(&mut self, id: NonZeroU32) -> Result<Vec<StoredLink>, Error> {
+        self.reader
+            .read(|connection| {
+                let tx = connection.transaction()?;
+                open::require_supported(open::schema_version(&tx)?)?;
+                read_by_program(&tx, id)
+            })
+            .map_err(crate::Error::from)
+            .map_err(Into::into)
+    }
+
     fn read_tc_dispatchers(&mut self) -> Result<Vec<bpfman_model::TcDispatcherSnapshot>, Error> {
         self.reader
             .read(|c| {
@@ -346,6 +358,57 @@ impl LinkReader for Store {
             .map_err(crate::Error::from)
             .map_err(Into::into)
     }
+}
+
+fn read_by_program(
+    connection: &Connection,
+    program: NonZeroU32,
+) -> Result<Vec<StoredLink>, Failure> {
+    let mut rows = queries::stored_links_by_program(connection, program)?;
+    if rows.iter().any(|row| row.kind == "tcx") {
+        rows = queries::stored_links_with_tcx_peers(connection, program)?;
+    }
+    let mut links = Vec::new();
+    let mut xdp_keys = std::collections::BTreeSet::new();
+    let mut tc_keys = std::collections::BTreeSet::new();
+
+    for row in rows {
+        match row.kind.as_str() {
+            "xdp" => {
+                let member = queries::xdp::rows(connection, None, Some(row.id))?
+                    .pop()
+                    .ok_or(Failure::InvalidLink("missing XDP member"))?;
+                let key = crate::xdp::decode(&member)?.details.key;
+                if xdp_keys.insert(key) {
+                    let members = queries::xdp::rows(connection, Some(key), None)?;
+                    let snapshot = crate::xdp::decode_rows(&members)?
+                        .ok_or(Failure::InvalidLink("missing XDP dispatcher"))?;
+                    links.extend(snapshot.members().iter().map(|s| s.member.clone()));
+                }
+            }
+            "tc" => {
+                let member = queries::tc::rows(connection, None, Some(row.id))?
+                    .pop()
+                    .ok_or(Failure::InvalidLink("missing TC member"))?;
+                let key = crate::tc::decode(&member)?.details.key;
+                if tc_keys.insert(key) {
+                    let members = queries::tc::rows(connection, Some(key), None)?
+                        .iter()
+                        .map(crate::tc::decode)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let snapshot = bpfman_model::TcDispatcherSnapshot::new(members)
+                        .map_err(|_| Failure::InvalidLink("invalid TC snapshot"))?;
+                    links.extend(snapshot.members().iter().map(|s| s.member.clone()));
+                }
+            }
+            _ => links.push(decode(&row)?),
+        }
+    }
+
+    bpfman_model::tcx_positions(&mut links);
+    links.retain(|link| link.program_id == program);
+    links.sort_by_key(|link| link.id);
+    Ok(links)
 }
 
 impl LinkStore for Backend {
@@ -672,3 +735,6 @@ impl LinkStore for Backend {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

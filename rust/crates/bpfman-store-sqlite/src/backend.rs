@@ -126,6 +126,14 @@ impl ProgramReader for Store {
     fn read_records(&mut self) -> Result<Vec<StoredProgram>, Error> {
         Store::read_records(self).map_err(Into::into)
     }
+
+    #[tracing::instrument(name = "store.read_record", level = "debug", skip_all, fields(program_id = id.get()), err)]
+    fn read_record(
+        &mut self,
+        id: NonZeroU32,
+    ) -> Result<Option<bpfman_store::ProgramSnapshot>, Error> {
+        crate::records::read_record(self, id).map_err(Into::into)
+    }
 }
 
 impl CommitLoad for Backend {

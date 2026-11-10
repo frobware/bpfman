@@ -459,7 +459,10 @@ where
         } else {
             Vec::new()
         };
-        let records = reader.read_links();
+        let records = match filter.program_id {
+            Some(id) => reader.read_links_by_program(id),
+            None => reader.read_links(),
+        };
         check(cancellation)?;
         let selected = bpfman_core::list_links(records?, programs, filter);
         check(cancellation)?;

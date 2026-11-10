@@ -27,6 +27,11 @@ pub trait LinkReader {
     /// Read links from one fresh, validated snapshot, sorted by managed ID.
     /// Unsupported attachment types fail explicitly instead of being omitted.
     fn read_links(&mut self) -> Result<Vec<StoredLink>, Error>;
+
+    /// Read a program's links from one fresh snapshot, sorted by managed ID.
+    /// Validate complete selected dispatcher groups and same-hook TCX ordering
+    /// before selecting members. Unrelated attachment groups need not be decoded.
+    fn read_links_by_program(&mut self, id: NonZeroU32) -> Result<Vec<StoredLink>, Error>;
 }
 
 /// Conditional mutations for standalone tracepoint, probe and TCX pending intent.

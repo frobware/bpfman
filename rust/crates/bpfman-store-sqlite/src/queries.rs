@@ -45,12 +45,10 @@ pub(super) struct StoredLinkRow {
     pub(super) user_retprobe: Option<i64>,
 }
 
-pub(super) fn stored_links(
-    connection: &Connection,
-    id: Option<i64>,
-) -> rusqlite::Result<Vec<StoredLinkRow>> {
-    let mut statement = connection.prepare_cached(
-        "SELECT l.id, l.kind, l.kernel_prog_id AS program_id,
+macro_rules! stored_link_sql {
+    ($prefix:literal, $predicate:literal) => {
+        concat!($prefix,
+            "SELECT l.id, l.kind, l.kernel_prog_id AS program_id,
                 p.program_type AS program_kind, l.kernel_link_id AS kernel_id,
                 l.pin_path, l.metadata_json AS metadata, l.created_at,
                 t.tp_group AS tp_group, t.tp_name AS tp_name,
@@ -67,10 +65,68 @@ pub(super) fn stored_links(
          LEFT JOIN link_fentry_details fe ON fe.id = l.id
          LEFT JOIN link_fexit_details fx ON fx.id = l.id
          LEFT JOIN link_lsm_details ls ON ls.id = l.id
-         WHERE (:id IS NULL OR l.id = :id) ORDER BY l.id",
-    )?;
-    statement
-        .query_map(named_params! { ":id": id }, |row| {
+",
+            $predicate, " ORDER BY l.id")
+    };
+}
+
+const LINKS_BY_PROGRAM: &str = stored_link_sql!("", " WHERE l.kernel_prog_id = :program_id");
+const LINKS_WITH_TCX_PEERS: &str = stored_link_sql!(
+    "WITH selected AS MATERIALIZED (
+        SELECT id, kind FROM links WHERE kernel_prog_id = :program_id
+     ), scoped AS (
+        SELECT id FROM selected
+        UNION
+        SELECT peer.id FROM selected s
+        JOIN link_tcx_details target ON target.id = s.id
+        JOIN link_tcx_details peer ON peer.nsid = target.nsid
+            AND peer.ifindex = target.ifindex AND peer.direction = target.direction
+        WHERE s.kind = 'tcx'
+     ) ",
+    " WHERE l.id IN (SELECT id FROM scoped)"
+);
+
+pub(super) fn stored_links(
+    connection: &Connection,
+    id: Option<i64>,
+) -> rusqlite::Result<Vec<StoredLinkRow>> {
+    stored_link_rows(
+        connection,
+        stored_link_sql!("", " WHERE l.id BETWEEN :first AND :last"),
+        named_params! { ":first": id.unwrap_or(i64::MIN), ":last": id.unwrap_or(i64::MAX) },
+    )
+}
+
+pub(super) fn stored_links_by_program(
+    connection: &Connection,
+    id: NonZeroU32,
+) -> rusqlite::Result<Vec<StoredLinkRow>> {
+    stored_link_rows(
+        connection,
+        LINKS_BY_PROGRAM,
+        named_params! { ":program_id": id.get() },
+    )
+}
+
+pub(super) fn stored_links_with_tcx_peers(
+    connection: &Connection,
+    id: NonZeroU32,
+) -> rusqlite::Result<Vec<StoredLinkRow>> {
+    stored_link_rows(
+        connection,
+        LINKS_WITH_TCX_PEERS,
+        named_params! { ":program_id": id.get() },
+    )
+}
+
+fn stored_link_rows(
+    connection: &Connection,
+    sql: &str,
+    parameters: impl rusqlite::Params,
+) -> rusqlite::Result<Vec<StoredLinkRow>> {
+    connection
+        .prepare_cached(sql)?
+        .query_map(parameters, |row| {
             Ok(StoredLinkRow {
                 id: row.get("id")?,
                 kind: row.get("kind")?,
@@ -262,6 +318,18 @@ pub(super) fn links(connection: &Connection) -> rusqlite::Result<Vec<LinkRow>> {
         .collect()
 }
 
+pub(super) fn link_ids_by_program(
+    connection: &Connection,
+    id: NonZeroU32,
+) -> rusqlite::Result<Vec<i64>> {
+    connection
+        .prepare_cached("SELECT id FROM links WHERE kernel_prog_id = :program_id ORDER BY id")?
+        .query_map(named_params! { ":program_id": id.get() }, |row| {
+            row.get("id")
+        })?
+        .collect()
+}
+
 pub(super) fn summaries(connection: &Connection) -> rusqlite::Result<Vec<SummaryRow>> {
     // As in Go, summary queries include only programs with a concrete map set.
     connection
@@ -282,17 +350,39 @@ pub(super) fn summaries(connection: &Connection) -> rusqlite::Result<Vec<Summary
 }
 
 pub(super) fn programs(connection: &Connection) -> rusqlite::Result<Vec<ProgramRow>> {
-    connection
-        .prepare_cached(
-            "SELECT p.program_id, p.program_name, p.program_type, p.object_path,
+    program_rows(connection, None)
+}
+
+pub(super) fn program(
+    connection: &Connection,
+    id: NonZeroU32,
+) -> rusqlite::Result<Option<ProgramRow>> {
+    Ok(program_rows(connection, Some(id))?.pop())
+}
+
+pub(super) fn map_set_users(connection: &Connection, id: NonZeroU32) -> rusqlite::Result<Vec<i64>> {
+    connection.prepare_cached(
+        "SELECT program_id FROM managed_programs WHERE map_set_id = :map_set ORDER BY program_id"
+    )?.query_map(named_params! { ":map_set": id.get() }, |row| row.get("program_id"))?.collect()
+}
+
+const PROGRAM_ROWS: &str = "SELECT p.program_id, p.program_name, p.program_type, p.object_path,
                     p.source_path, p.pin_path, p.attach_func, p.global_data,
                     p.image_source, p.owner, p.description, p.license,
                     p.gpl_compatible, p.metadata_json, p.created_at, p.updated_at,
                     p.map_set_id, m.pin_path AS map_path
              FROM managed_programs p LEFT JOIN map_sets m ON m.id = p.map_set_id
-             ORDER BY p.program_id",
+             WHERE p.program_id BETWEEN :first AND :last ORDER BY p.program_id";
+
+fn program_rows(
+    connection: &Connection,
+    id: Option<NonZeroU32>,
+) -> rusqlite::Result<Vec<ProgramRow>> {
+    connection
+        .prepare_cached(
+            PROGRAM_ROWS,
         )?
-        .query_map([], |row| {
+        .query_map(named_params! { ":first": id.map_or(i64::MIN, |id| i64::from(id.get())), ":last": id.map_or(i64::MAX, |id| i64::from(id.get())) }, |row| {
             Ok(ProgramRow {
                 id: row.get("program_id")?,
                 name: row.get("program_name")?,

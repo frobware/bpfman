@@ -198,12 +198,18 @@ where
         )?;
         check(cancellation)?;
         let links = self
-            .list_link_records_with_cancellation(cancellation)
+            .list_links_with_cancellation(
+                &bpfman_core::LinkFilter {
+                    program_id: Some(id),
+                    ..Default::default()
+                },
+                cancellation,
+            )
             .map_err(Failure::from)?;
 
         // Store, kernel and pin observations are independent snapshots. Links
         // removed concurrently may be absent; never synthesize their presence.
-        for record in links.into_iter().filter(|record| record.program_id == id) {
+        for record in links {
             observed.links.push(
                 crate::link_observation::observe_record(
                     &self.kernel,
@@ -253,19 +259,10 @@ fn observe_cancellable<S: OpenStore, K: bpfman_kernel::ProgramObservations>(
     cancellation: &crate::Cancellation,
 ) -> Result<ObservedProgram, ObservationError> {
     check(cancellation)?;
-    let records = records(store)?;
+    let snapshot = store.reader().read_record(id).map_err(Failure::from)?;
     check(cancellation)?;
-    let index = records
-        .iter()
-        .position(|p| p.id == id)
-        .ok_or(Failure::Missing(id))?;
-    let record = records[index].clone();
-
-    let users = records
-        .iter()
-        .filter(|p| p.map_set == record.map_set)
-        .map(|p| p.id)
-        .collect();
+    let snapshot = snapshot.ok_or(Failure::Missing(id))?;
+    let record = snapshot.record;
     let pins = match view {
         View::Load => Vec::new(),
         View::Get => kernel
@@ -277,7 +274,7 @@ fn observe_cancellable<S: OpenStore, K: bpfman_kernel::ProgramObservations>(
         &mut CancellableKernel(kernel, cancellation),
         runtime.layout(),
         record,
-        users,
+        snapshot.map_users,
         pins,
         view,
     )

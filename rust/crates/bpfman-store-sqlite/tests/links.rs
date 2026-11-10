@@ -176,6 +176,93 @@ fn non_tracepoint_program_cannot_acquire_tracepoint_intent() -> Result {
 }
 
 #[test]
+fn targeted_links_include_pending_tcx_peers_without_decoding_other_hooks() -> Result {
+    scope(|writer, db, reader| {
+        db.execute_batch(
+            "UPDATE managed_programs SET program_type='tcx';
+             INSERT INTO managed_programs(program_id,program_name,program_type,object_path,pin_path,map_set_id,created_at)
+             SELECT 43,'peer',program_type,object_path,pin_path,map_set_id,created_at FROM managed_programs WHERE program_id=42;
+             INSERT INTO managed_programs(program_id,program_name,program_type,object_path,pin_path,map_set_id,created_at)
+             SELECT 44,'other',program_type,object_path,pin_path,map_set_id,created_at FROM managed_programs WHERE program_id=42;",
+        )?;
+        let mut ids = Vec::new();
+        for (program, direction, priority) in [
+            (43, bpfman_model::TcDirection::Ingress, 50),
+            (44, bpfman_model::TcDirection::Egress, 0),
+            (42, bpfman_model::TcDirection::Ingress, 50),
+        ] {
+            let target = bpfman_model::TcxLink {
+                key: bpfman_model::TcKey {
+                    nsid: NonZeroU64::MIN,
+                    ifindex: NonZeroU32::MIN,
+                    direction,
+                },
+                interface: "fake0".parse()?,
+                netns: Default::default(),
+                priority,
+                position: 0,
+            };
+            let (link, _) = Backend.create_pending_tcx(
+                writer,
+                bpfman_store::PendingTcx {
+                    program_id: NonZeroU32::new(program).expect("program"),
+                    target: &target,
+                    metadata: &BTreeMap::new(),
+                    created_at: "2026-10-04T12:00:00Z",
+                },
+            )?;
+            ids.push(link.id);
+        }
+        let program = NonZeroU32::new(42).expect("program");
+        let all = reader.read_links()?;
+        let selected = reader.read_links_by_program(program)?;
+        assert_eq!(
+            selected,
+            all.into_iter()
+                .filter(|link| link.program_id == program)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(selected.len(), 1);
+        assert!(
+            matches!(&selected[0].details, bpfman_model::LinkDetails::Tcx(link) if link.position == 1)
+        );
+        assert_eq!(selected[0].state, bpfman_model::LinkState::Pending);
+
+        db.execute(
+            "UPDATE links SET metadata_json='broken' WHERE id=?1",
+            [ids[1].get()],
+        )?;
+        assert!(reader.read_links().is_err());
+        assert_eq!(reader.read_links_by_program(program)?, selected);
+        db.execute(
+            "UPDATE links SET metadata_json='broken' WHERE id=?1",
+            [ids[0].get()],
+        )?;
+        assert!(
+            reader.read_links_by_program(program).is_err(),
+            "same-hook peer must be validated"
+        );
+        db.execute_batch("UPDATE links SET metadata_json='{}'")?;
+        db.execute(
+            "UPDATE link_tcx_details SET priority=60 WHERE id=?1",
+            [ids[0].get()],
+        )?;
+        let fresh = reader.read_links_by_program(program)?;
+        assert!(
+            matches!(&fresh[0].details, bpfman_model::LinkDetails::Tcx(link) if link.position == 0)
+        );
+        assert!(
+            reader
+                .read_links_by_program(NonZeroU32::new(999).expect("program"))?
+                .is_empty()
+        );
+        db.execute_batch("UPDATE goose_db_version SET version_id=99")?;
+        assert!(reader.read_links_by_program(program).is_err());
+        Ok(())
+    })
+}
+
+#[test]
 fn lsm_details_publish_atomically_and_validate_the_load_bound_hook() -> Result {
     scope(|writer, db, reader| {
         db.execute_batch("UPDATE managed_programs SET program_type='lsm', attach_func='file_open';

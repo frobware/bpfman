@@ -8447,3 +8447,99 @@ audits, `kind/profile-comparison.json`, per-function and nested-span distributio
 remains clean and ready on the release image. Go instrumentation and Rust
 telemetry remain uncommitted, and the user's operator edits and kubeconfig remain
 untouched.
+
+### SQL-scoped program observations (10 November 2026)
+
+The portable store contract now offers `read_record(program_id)` and
+`read_links_by_program(program_id)`. Get and load-response observation use the
+single-program snapshot; program-scoped link listing uses the targeted link read.
+SQL, prepared statements and persistence rows remain private to the SQLite
+adapter. No transport-specific optimization or dependency enters the runtime.
+
+The program read selects one primary-key record, its indexed link identities and
+its map-set user IDs in one transaction. It decodes only the selected full record,
+with compatibility checks on every fresh snapshot. Map-set membership is selected
+in SQL rather than by decoding every stored program. Selected corruption remains
+an error; unrelated record payloads need not decode. Whole-inventory reads retain
+full validation, and all reads continue to bypass the runtime writer lock.
+
+Link selection uses `idx_links_by_prog`. XDP and TC reads obtain and validate all
+members of each selected dispatcher before returning program matches, using the
+existing attach-point indexes. TCX includes peers on the selected namespace,
+interface and direction before deriving ranks, including pending intent. Fixed
+statement variants replace nullable-OR predicates for dispatcher-key/link-ID
+selection, letting SQLite use its indexes. All values remain bound parameters.
+TCX rank calculation uses sorted keys and partition points instead of repeated
+linear scans, reducing that step from O(T²) to O(T log T).
+
+Schema 2 remains unchanged. It has no map-set membership index or TCX hook index;
+those SQL selections still scan their relevant tables. This change eliminates
+whole-inventory payload decoding from single-program observation, not every scan
+or every dependency on inventory size. Additional indexes require coordinated
+schema work rather than implicit read-time mutation. Complete dispatcher and
+same-hook TCX validation still require their relevant context.
+
+Seven new regressions cover actual SQLite query plans, selected-record and
+relationship equivalence/freshness, schema rechecking, selected versus unrelated
+corruption, complete XDP/TC sibling validation, pending TCX peers, hook isolation,
+priority/ID ties and rank stability. Fault decorators forward the new operations
+through their existing failure points, retaining post-commit and cancellation
+coverage. The complete `make rust-check` gate passes in 337.837 seconds, including
+strict Clippy, userspace/fake/process/architecture contracts, all 92 native cases,
+normal fixture cleanup and warnings-denied documentation. Native time is 260.14
+seconds. Initial attempts caught test-only lint/category mistakes and a corruption
+fixture blocked by foreign-key enforcement; these are corrected in the passing
+gate, without weakening production validation or existing acceptance contracts.
+
+The standard development Dockerfile packages the release binary as
+`bpfman:rust-sql-observation`, image ID
+`sha256:c1761c96ff5c0bfcf728bb3cc52ade907f469bf57a986b57e3616d3898da09dc`.
+Build/package time is 23.098 seconds. The dedicated KIND deployment verifies that
+exact image ID, with the same Fedora base, operator/agent images and detailed
+logging as the preceding release control.
+
+The unchanged full operator suite passes all eleven tests in 285.532 seconds;
+final audits show empty programs, links, dispatchers, owned pins/artifacts, CSI
+volume mounts and application/state resources. The release daemon remains ready
+with CSI registered. Six application OCI digests, kernel tags, translated sizes
+and owner fields match the preceding release run, as do userspace digests across
+all eight workload namespaces. Initial 60-second counter deltas before/after are
+kprobe 820,461/826,549, TC/TCX/XDP packets 1,545/1,554 per hook, SIGUSR1 59/59 and
+uprobe 60/60. All application counters advance monotonically without captured
+map-read errors.
+
+| Metric | Previous release | SQL-scoped release |
+| --- | ---: | ---: |
+| Suite package time | 286.989 s | 285.532 s |
+| Completed RPCs | 2,040 | 1,927 |
+| Get calls | 1,847 | 1,726 |
+| Get median / p95 | 0.492 / 0.706 ms | 0.309 / 0.491 ms |
+| Get maximum | 1.771 ms | 4.074 ms |
+| Summed handler execution | 15.316 s | 14.618 s |
+| Load median / sum | 26.904 ms / 13.165 s | 27.936 ms / 12.732 s |
+| Successful Attach median | 12.805 ms | 14.577 ms |
+| Unload median | 16.319 ms | 16.728 ms |
+| Successful CSI publish median | 1.366 ms | 1.374 ms |
+
+Get median and p95 decrease in this sequential release comparison. Each of the
+six identical application functions also has a lower Get median: before
+0.455–0.554 ms, after 0.273–0.346 ms. The larger single Get outlier and varying
+request totals reinforce that this is deployment evidence, not a controlled
+scaling benchmark or a claim that every operation improved. Image preparation
+continues to dominate total handler execution. The more durable result is the
+query-plan and decoding-boundary proof, with preserved lifecycle behavior.
+
+The new run verifies all 1,927 request IDs and ancestry, successful local response
+enqueue and no observed cancellation. Statuses are 1,903 OK, 21 CSI NotFound and
+three cleanup-time Internal uprobe Attach outcomes after target disappearance,
+with zero unresolved cleanup effects. There are no other agent error messages.
+Queue delay peaks at 19.140 ms. Eight observation startup/deletion races are
+retained separately; final cleanup passes normally.
+
+Evidence is under `/tmp/bpfman-sql-observation/`, including source/patch provenance,
+all gate attempts and their results, `rust-check-4.log`, image build/deployment
+records, the full operator log, counter/image comparisons, RPC/per-function
+summaries and final audits. `verification.json` checks all 364 Rust input hashes
+remained stable, successful gate/deployment results, matching runtime base/logging
+and unchanged Go diagnostic files. No commits were made; the user's operator
+edits and kubeconfig remain untouched.
