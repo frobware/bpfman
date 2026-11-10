@@ -26,7 +26,10 @@ The subsequent OCI-referrers/Sigstore v0.3 implementation passes all ten unchang
 current-example scripts against Rust with unsigned images forbidden; Go still
 fails all ten because it discovers only legacy `.sig` tags. The appended
 OCI-referrers checkpoint records this capability difference and its evidence.
-Shared-store stress and Kubernetes deployment need fresh evidence before packaging
+Broader shared-store validation now passes three complete file/local-OCI passes:
+138 files in the four-slot shared phase plus nine standalone inventory controls,
+with empty final inventories/pins and normal unmount. Kubernetes deployment and
+the remaining broad Go comparison still need fresh evidence before packaging
 or entry-point changes. Physical-NIC/offload execution
 and the documented Aya/kernel XDP boundaries also remain outside the completed
 evidence. Historical "next" notes
@@ -2755,7 +2758,9 @@ wrong, change it here before broadening feature coverage.
   scheduling. Strict remote verification passes the pinned legacy signed release
   against both binaries and all ten current-example scripts against Rust through
   OCI-referrers/Sigstore v0.3 verification. Go still lacks the newer format.
-  Broader shared-store stress remains separate.
+  Broader shared-store validation now passes three complete file/local-OCI passes
+  using the existing runner, with nine inventory-sensitive contracts standalone
+  and the other 138 files in the four-slot phase. See the latest checkpoint.
 
 ### Phase 5: public surfaces and cutover
 
@@ -7546,3 +7551,139 @@ operator / CSI deployment acceptance and the remaining broad Go comparison
 boundaries. Physical-NIC/offload and previously documented Aya/kernel XDP limits
 remain separate. Completing this signature format does not authorize packaging
 or entry-point cutover by itself.
+
+## Broader shared-store validation (10 November 2026)
+
+This continuation uses the existing Go script runner, concurrency controls,
+`STRESS_COUNT`, local OCI broker and immutable `.bpfman` corpus. It adds no new
+runner, scheduling mechanism or production code. The normal Rust gate already
+runs scripts concurrently in isolated runtimes and overlaps four selected
+shared-runtime scripts. The additional evidence here concerns the broader
+shared Go/Rust corpus against one Rust SQLite runtime, not concurrency support
+in general.
+
+The shell's authoritative `!external,!rust-only` manifest selects 147 files /
+154 expanded cases. An initial file-source run put all of them in one fresh
+runtime at `PARALLEL=4`, retaining existing `serial` and `exclusive` pragmas.
+Seven scripts failed global inventory assertions while unrelated programs,
+links and dispatchers were present. Their expected counts cannot hold during
+unrelated concurrent mutations; suppressing those real objects would make the
+public API incorrect. This failed audit is retained under
+`/tmp/bpfman-shared-stress-kqkum5rs/`, including its exact selection/commands,
+per-script timeline, failure logs and final cleanup results. All 154 cases ran,
+four script processes overlapped, and final program/link/dispatcher inventories,
+owned pin/artifact checks and normal bpffs unmount passed despite the assertions.
+It is not a passing full-corpus stress result.
+
+The next three-pass file audit ran those seven contracts separately and the
+remaining 140 through the existing four-slot scheduler. Its global controls
+passed; the concurrent phase failed one `TestLink_Presentation` invocation
+because unscoped JSON snapshots changed between two independent CLI calls.
+Final cleanup again passed. This failed runner remains explicit under
+`/tmp/bpfman-shared-stress-ixmvexzb/`; individual successful cases from that failed
+runner are not substituted for a successful complete run. Review also identified
+`TestProgram_Presentation`'s application-column assertions as requiring a stable
+inventory, even though it did not fail in those observations.
+
+The final selection accounts for every original file, with these nine unchanged
+contracts run one at a time at `PARALLEL=1`:
+
+| Script | Why the shared inventory must remain stable |
+| --- | --- |
+| `TestProgramList_MetadataSelectors` | Negative/unscoped metadata selections assert complete managed counts and IDs |
+| `TestProgramDelete_Batch` | Requires an empty global dispatcher inventory after its own deletion |
+| `TestLinkList_Filters` | Requires exact global link counts and IDs, including unscoped selections |
+| `TestDispatcher_OutputAndFilters` | Requires exact global counts and equal whole-inventory snapshots |
+| `TestDispatcher_DeleteRecords` | Requires exact global dispatcher/link counts during record removal |
+| `TestUnload_Batch` | Requires an empty global dispatcher inventory after its own unload |
+| `TestDetach_Batch` | Requires an empty global dispatcher inventory after its own detach |
+| `TestLink_Presentation` | Compares unscoped snapshots and application-column visibility |
+| `TestProgram_Presentation` | Requires application-column visibility without unrelated application owners |
+
+The remaining 138 files / 145 expanded cases use `PARALLEL=4` in the same
+runtime. Their existing scheduling rules remain active: the two already marked
+`exclusive=true` do not overlap parallel work, and `serial=true` retains its
+existing mutex. No labels, scripts, assertions or API semantics change, and none
+of the nine stable-inventory contracts is omitted or counted as concurrent.
+
+Each source lane uses one fresh owned runtime, one SQLite store and one mounted
+bpffs across its standalone and concurrent phases. The existing `STRESS_COUNT=3`
+repeats each complete runner selection three times; `BPFMAN_E2E_SCRIPT_REPEATS=1`
+avoids overlapping separate copies of a script with fixed metadata or map names.
+This means all serial/exclusive contracts also execute three times. Each source
+therefore requires 462 real script-process completions: 27 standalone and 435
+in the broader shared-store phase. File and local-OCI lanes run sequentially,
+with separate fresh runtime/image-cache roots. The local registry uses the
+existing unsigned-fixture configuration; production signed-image acceptance
+remains the separate preceding checkpoint.
+
+Temporary audit orchestration enters a private mount namespace, supplies the
+owned runtime/cache paths to normal `make run-e2e-scripts`, and records the exact
+Make arguments and expected case multiset. It checks matching start/process/end
+markers for every expected case, successful process and runner exits, shared
+runtime scope and observed overlap. After both runner phases finish, public
+program/link/dispatcher JSON inventories must be empty; all owned map/link/
+dispatcher/shared-map/program/staging collections and program pins must be empty
+before normal bpffs unmount. Unmount never uses lazy or forced release. Audit
+cleanup runs even after a failing runner, and a cleanup failure fails the audit.
+These final checks supply shared-runtime ownership evidence that leaving
+`BPFMAN_E2E_ISOLATED_RUNTIME` unset alone does not provide.
+
+
+Final accepted evidence, on Linux `6.18.54` at `dadf2c531`, with the existing
+`aya-obj` development/test optimization-level-two override:
+
+| Source | Files | Expanded case executions | Complete passes | Maximum active scripts | Seconds | Result |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| File | 147 | 462 | 3 | 4 | 243.19 | Both runner phases and final cleanup pass |
+| Local OCI | 147 | 462 | 3 | 4 | 250.87 | Both runner phases and final cleanup pass |
+
+The file evidence is under `/tmp/bpfman-shared-stress-iiohyl4z/`; local OCI is
+under `/tmp/bpfman-shared-stress-l8yt8jrq/`. Each contains `spec.json` with the
+complete original manifest, phase membership/reasons, exact commands and
+expected case multiset; `command.txt`; `inventory-controls.log` and
+`concurrent.log`; `timeline.jsonl`; the three final public inventories;
+`cleanup.json`; and `summary.json`. Both summaries require all expected case
+starts/processes/ends, zero failures/skips, successful complete runner exits,
+shared runtime scope and clean final ownership checks. The authoritative shell
+manifest agrees with the complete 147-file selection. All 924 case executions
+pass; no script, label, scheduling rule or production source changed.
+
+The existing Make settings for this audit are:
+
+```text
+BPFMAN_E2E_IMPLEMENTATION=rust
+BPFMAN_STORE=sqlite
+BPFMAN_E2E_SCRIPT_SELECTOR=!external,!rust-only
+BPFMAN_E2E_ISOLATED_RUNTIME=0
+BPFMAN_E2E_SHARED_SCRIPTS=
+BPFMAN_E2E_SCRIPT_REPEATS=1
+STRESS_COUNT=3
+BPFMAN_E2E_CLSACT_RECLAIM=true
+BPFMAN_E2E_SCRIPT_TIMEOUT=5m
+```
+
+Use a fresh owned `BPFMAN_RUNTIME_DIR` per source and a `bpfman` wrapper selecting
+`rust/target/debug/bpfman` with its own `--image-cache-dir`. Set `BPFMAN_CONFIG`
+to `e2e/config/no-signature-verification.toml` for the local unsigned fixtures.
+Select `BPFMAN_E2E_BYTECODE_SOURCE=file` or `image`. Run the nine-file filter
+above at `PARALLEL=1`, then its exact complement at `PARALLEL=4`, retaining the
+same runtime across phases. The evidence's `command.txt` contains both complete
+filename filters, including Make-escaped dollar anchors; these are explicit
+filename selections, not changes to the scripts' labels or admission. Retain
+final cleanup verification around these commands: the ordinary shared runner
+does not own an externally supplied runtime on the caller's behalf.
+
+`direnv exec . make rust-build build-e2e-scripts` passes before these runs;
+log: `/tmp/bpfman-shared-stress-build.log`. The final file/image orchestration
+exits zero; log: `/tmp/bpfman-shared-stress-final.log`. Only the plan, README and
+Rust instructions change, so no new implementation tests or concurrency
+framework are introduced. `git diff --check` passes.
+
+This is bounded shared-store validation at four script slots, with explicit
+stable-inventory controls, not evidence that every unchanged acceptance contract
+can overlap arbitrary writers. The normal gate's isolated acceptance and small
+shared cohort remain unchanged. No fresh broad Go stress comparison is claimed;
+its previously recorded qdisc residue and policy-skip boundaries remain open.
+Next is Kubernetes/operator/CSI deployment acceptance and the remaining Go
+comparison before packaging or entry-point cutover.

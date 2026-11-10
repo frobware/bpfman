@@ -412,7 +412,15 @@ The architecture and compatibility goals are in
   pass inventory/artifact checks and normal unmount after all shared scripts finish.
   Keep this explicit concurrent-store coverage; normal Go Make runs remain shared
   by default.
-  Leave isolation unset for full-corpus shared-store stress. `BPFMAN_KERNEL_TIMINGS=1`
+  Reuse the existing runner and `STRESS_COUNT` for broader shared-store stress,
+  leaving isolation unset and supplying a fresh owned runtime. Contracts asserting
+  whole-inventory counts, application-column absence or equality of unscoped
+  snapshots need standalone execution; keep them in the full manifest without
+  changing their assertions or labels. The 10 November shared-store checkpoint
+  records nine such controls alongside 138 files in the four-slot phase. Do not
+  claim every file overlaps or substitute individual passes from a failed runner.
+  Verify final inventories, all owned pins/artifacts and normal bpffs unmount even
+  after script failure. `BPFMAN_KERNEL_TIMINGS=1`
   reports whole tests, runner batches and forwarding/broadcast phases. Whole-test
   start/end records include process ID and monotonic offsets from a per-process
   origin; pair them by process and test name to measure worker occupancy. Require

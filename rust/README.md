@@ -326,9 +326,21 @@ resolving a changed tag. Failed revalidation preserves the admitted generation.
 Existing acceptance scripts remain unchanged. Earlier acceptance corrected three legacy `probe` expectations to
 bpfman's distinct `kprobe`, `uprobe` and `uretprobe` metadata names. The label
 vocabulary is [documented independently of loading libraries](../docs/developer-guide/image-build.md#bytecode-program-labels).
-The normal gate now runs all 147 shared non-external scripts with file and local
-OCI bytecode. Local unsigned fixture policy is separate from signed remote-image
-acceptance. The earlier shared Go run passed 100 files / 107 cases with one
+The normal gate now runs all 147 non-external scripts shared by Go and Rust
+with file and local OCI bytecode, using isolated runtimes. Local unsigned fixture
+policy is separate from signed remote-image acceptance.
+
+Broader shared-store validation reuses the existing runner with isolation off
+and `STRESS_COUNT=3`: all 147 files pass three times with file sources and three
+times with local OCI sources (924 expanded case executions). Per source, 138
+files use the four-slot shared phase; nine contracts requiring stable global
+inventories run alone. Existing serial/exclusive rules remain active. Each
+source retains one SQLite runtime across its phases and passes final empty
+inventory/pin checks and normal bpffs unmount. No test assertions, labels or
+runner code change. The [shared-store checkpoint](../docs/design/rust-reimplementation.md#broader-shared-store-validation-10-november-2026)
+records the exact selection, earlier invalid-overlap failures and final evidence.
+
+The earlier shared Go run passed 100 files / 107 cases with one
 clsact-policy skip; the later broad Go audit recorded a foreign-ingress-qdisc
 residue failure. A shared shell null-comparison bug exposed by
 image provenance has been fixed in the evaluator and static checker without
