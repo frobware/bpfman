@@ -187,7 +187,7 @@ fn first_run_creates_go_compatible_state_and_lists_nothing()
             row.get(0)
         })?;
 
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let mode: String = connection.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
     assert_eq!(mode, "wal");
     for entry in std::fs::read_dir(runtime.join("db"))? {

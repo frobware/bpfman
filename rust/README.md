@@ -2,6 +2,9 @@
 
 This independent workspace implements the
 [Rust reimplementation design](../docs/design/rust-reimplementation.md).
+It creates Go SQLite schema 3 on a new runtime and requires schema 3 when
+opening an existing database. Go's writer migrates schema 2 to 3; Rust's
+existing-database path does not migrate it.
 The repository-root Cargo workspace is legacy reference material. Always name
 this workspace's manifest explicitly:
 

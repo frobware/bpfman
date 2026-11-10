@@ -3,9 +3,10 @@
 use rusqlite::Connection;
 
 // Include the migrations rather than maintaining a test-specific SQL schema.
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     include_str!("../../../platform/store/sqlite/migrations/00001_baseline.sql"),
     include_str!("../../../platform/store/sqlite/migrations/00002_add_lsm.sql"),
+    include_str!("../../../platform/store/sqlite/migrations/00003_index_observations.sql"),
 ];
 
 pub(super) fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
@@ -23,7 +24,7 @@ pub(super) fn initialize(connection: &mut Connection) -> rusqlite::Result<()> {
              version_id INTEGER NOT NULL, is_applied INTEGER NOT NULL,
              tstamp TIMESTAMP DEFAULT (datetime('now'))
          );
-         INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1), (1, 1), (2, 1);",
+         INSERT INTO goose_db_version (version_id, is_applied) VALUES (0, 1), (1, 1), (2, 1), (3, 1);",
     )?;
 
     tx.commit()

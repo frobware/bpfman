@@ -66,7 +66,7 @@ fn missing_database_is_not_created() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn refuses_old_and_new_schemas_without_migrating() -> Result<(), Box<dyn std::error::Error>> {
-    for version in [1, 3] {
+    for version in [2, 4] {
         let db = support::database()?;
         db.connection
             .execute("UPDATE goose_db_version SET version_id = ?1", [version])?;
@@ -202,9 +202,9 @@ fn reads_recheck_schema_after_opening_observation() -> Result<(), Box<dyn std::e
     let db = support::database()?;
     let mut store = Store::open(&db.path)?;
 
-    assert_eq!(store.schema_version(), 2);
+    assert_eq!(store.schema_version(), 3);
     db.connection
-        .execute("UPDATE goose_db_version SET version_id = 3", [])?;
+        .execute("UPDATE goose_db_version SET version_id = 4", [])?;
     assert_eq!(
         store.read_programs().expect_err("schema changed").kind(),
         ErrorKind::IncompatibleSchema

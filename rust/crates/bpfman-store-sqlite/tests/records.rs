@@ -150,7 +150,7 @@ fn full_reads_recheck_the_schema_on_the_open_handle() -> Result {
     let db = support::database()?;
     let mut store = Store::open(&db.path)?;
     db.connection
-        .execute("UPDATE goose_db_version SET version_id=3", [])?;
+        .execute("UPDATE goose_db_version SET version_id=4", [])?;
 
     assert_eq!(
         store.read_records().expect_err("changed schema").kind(),

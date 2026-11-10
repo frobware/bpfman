@@ -174,7 +174,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | XDP observations | Program/link get and list; dispatcher get/list with text and JSON output, default listing and key filters | Cutover validation and general reconciliation |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
-| Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
+| Persistence | Implicit SQLite with Go-compatible schema 3; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | Rust does not implicitly upgrade existing state |
 | Daemon and gRPC | Synchronous stock-protobuf service, production `serve`, socket ownership, independent reads, cancellation and restart persistence | Deployment and cutover evidence |
 | CSI | Operator startup, Identity/Node services, confined map volumes, fsGroup/read-only handling, consuming cleanup and restart idempotence; single-node KIND workloads and repeated strict container restarts | Multi-node/OpenShift deployment untested; operator mount configuration required |
 | Program and link inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact metadata pairs and Kubernetes label selectors, exact managed/coarse kernel type filtering; link identity/kind and owning-program type/metadata filters; text/quiet/JSON output, cancellation and lock-free reads | Cutover validation |
@@ -8544,3 +8544,31 @@ summaries and final audits. `verification.json` checks all 364 Rust input hashes
 remained stable, successful gate/deployment results, matching runtime base/logging
 and unchanged Go diagnostic files. No commits were made; the user's operator
 edits and kubeconfig remain untouched.
+
+### Schema 3 observation indexes (10 November 2026)
+
+Go migration `00003_index_observations.sql` adds an index on
+`managed_programs(map_set_id)` for map-set user reads and an index on
+`link_tcx_details(nsid, ifindex, direction, priority)` for same-hook TCX
+selection. The latter also orders links by priority and detail-table ID.
+Go's TCX interface query now orders by `td.id` after priority; the join
+equates it to the previously used `l.id`, so the result order is unchanged.
+Neither index changes stored rows or link identity.
+
+Go advances existing databases through Goose. Rust creates schema 3 for new
+databases and requires version 3 on every open/read; it does not upgrade an
+existing version-2 database. This version boundary is intentional for this
+migration.
+Tests cover a populated Go version-2 database migrating to version 3,
+retained rows, and query plans for map-set, TCX peer and Go TCX ordering;
+Rust fixtures use the authoritative Go migrations and check the new indexes.
+
+The complete `make rust-check` gate passes, including all 92 real-kernel cases.
+The gate now rebuilds its Go CLI helper so a stale schema-2 binary cannot be
+used for cross-implementation cases. The release image
+`bpfman:rust-schema3` has ID
+`sha256:7c28c9b17de0ce20d8f7e8acafee1433b1ed2df39b4cccbb7c37ac51b59f4f62`.
+An isolated KIND cluster runs this exact image and passes all eleven local
+operator integration tests. Final audit finds empty managed inventories,
+pins, CSI mounts and application resources, with daemon ready and CSI
+registered. Logs and audit output are under `/tmp/bpfman-schema3-kind/`.

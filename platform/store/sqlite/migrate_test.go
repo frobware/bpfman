@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -104,6 +105,71 @@ func TestMigrateFreshDatabaseLandsAtLatest(t *testing.T) {
 	db := openRaw(t, dbPath)
 	require.Equal(t, latestKnownVersion(t, db), recordedVersion(t, ctx, db))
 	require.True(t, tableExists(t, ctx, db, "managed_programs"), "schema should be present")
+}
+
+func TestMigrateSchemaTwoToThreeIndexesExistingRows(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "store.db")
+	lockPath := filepath.Join(dir, ".lock")
+	db := openRaw(t, dbPath)
+	sub, err := fs.Sub(migrationsFS, "migrations")
+	require.NoError(t, err)
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, sub, goose.WithLogger(goose.NopLogger()))
+	require.NoError(t, err)
+	_, err = provider.UpTo(ctx, 2)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO map_sets(id, pin_path, created_at) VALUES (1, '/maps/1', 'now');
+	`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO managed_programs(program_id, program_name, program_type, object_path, pin_path, map_set_id, created_at)
+		VALUES (42, 'tcx', 'tcx', '/tcx.o', '/prog/42', 1, 'now')
+	`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO links(id, kind, kernel_prog_id, created_at) VALUES (7, 'tcx', 42, 'now')
+	`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO link_tcx_details(id, interface, ifindex, direction, priority, nsid)
+		VALUES (7, 'eth0', 2, 'ingress', 100, 1)
+	`)
+	require.NoError(t, err)
+
+	require.NoError(t, db.Close())
+	require.NoError(t, openStore(ctx, dbPath, lockPath))
+	db = openRaw(t, dbPath)
+	require.Equal(t, int64(3), recordedVersion(t, ctx, db))
+	require.Equal(t, 1, countRows(t, ctx, db, "managed_programs"))
+	require.Equal(t, 1, countRows(t, ctx, db, "link_tcx_details"))
+
+	for _, tc := range []struct {
+		query string
+		args  []any
+		want  string
+	}{
+		{"SELECT program_id FROM managed_programs WHERE map_set_id = ? ORDER BY program_id", []any{1}, "USING COVERING INDEX idx_managed_programs_map_set"},
+		{"SELECT peer.id FROM link_tcx_details target JOIN link_tcx_details peer ON peer.nsid = target.nsid AND peer.ifindex = target.ifindex AND peer.direction = target.direction WHERE target.id = ?", []any{7}, "USING COVERING INDEX idx_link_tcx_by_hook_priority"},
+		{"SELECT l.id FROM links l JOIN link_tcx_details td ON l.id = td.id WHERE td.nsid = ? AND td.ifindex = ? AND td.direction = ? ORDER BY td.priority, td.id", []any{1, 2, "ingress"}, "USING COVERING INDEX idx_link_tcx_by_hook_priority"},
+	} {
+		rows, err := db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+tc.query, tc.args...)
+		require.NoError(t, err)
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+			details = append(details, detail)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.Contains(t, strings.Join(details, "\n"), tc.want)
+		require.NotContains(t, strings.Join(details, "\n"), "USE TEMP B-TREE")
+	}
 }
 
 // TestMigrateAdoptsExistingDatabaseWithoutWipe is the headline of this

@@ -1120,7 +1120,7 @@ rust-test-unit: $(RUST_DISPATCHER)
 	cargo test --manifest-path $(RUST_MANIFEST) --workspace --lib --bins --locked
 
 .PHONY: rust-test-userspace
-rust-test-userspace: rust-build $(RUST_TEST_INPUTS)
+rust-test-userspace: rust-build bpfman-compile $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) sh rust/test-userspace.sh $(RUST_MANIFEST) $(RUST_TEST_RUNNER)
 
 # Public lifecycle with the stateful fake kernel and real SQLite.

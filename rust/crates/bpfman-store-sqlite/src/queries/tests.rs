@@ -184,6 +184,16 @@ fn program_and_link_selection_use_existing_sqlite_indexes() -> Result {
             named_params! { ":program_id": 42 }.to_vec(),
             "idx_links_by_prog",
         ),
+        (
+            "SELECT program_id FROM managed_programs WHERE map_set_id = :map_set ORDER BY program_id",
+            named_params! { ":map_set": 42 }.to_vec(),
+            "USING COVERING INDEX idx_managed_programs_map_set",
+        ),
+        (
+            "SELECT peer.id FROM link_tcx_details target JOIN link_tcx_details peer ON peer.nsid = target.nsid AND peer.ifindex = target.ifindex AND peer.direction = target.direction WHERE target.id = :id",
+            named_params! { ":id": 1 }.to_vec(),
+            "USING COVERING INDEX idx_link_tcx_by_hook_priority",
+        ),
     ] {
         let plan = c
             .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?

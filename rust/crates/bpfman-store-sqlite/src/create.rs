@@ -6,7 +6,7 @@ use crate::{Error, error::Failure};
 
 // Go remains the schema authority. These files contain plain SQL plus Goose
 // comment directives; only the Up section is executed for a fresh database.
-const MIGRATIONS: [(i64, &str); 2] = [
+const MIGRATIONS: [(i64, &str); 3] = [
     (
         1,
         include_str!("../../../../platform/store/sqlite/migrations/00001_baseline.sql"),
@@ -14,6 +14,10 @@ const MIGRATIONS: [(i64, &str); 2] = [
     (
         2,
         include_str!("../../../../platform/store/sqlite/migrations/00002_add_lsm.sql"),
+    ),
+    (
+        3,
+        include_str!("../../../../platform/store/sqlite/migrations/00003_index_observations.sql"),
     ),
 ];
 

@@ -1,4 +1,4 @@
-//! Adapter for Go's SQLite schema, version 2.
+//! Adapter for Go's SQLite schema, version 3.
 //!
 //! Creation publishes missing databases but never migrates existing ones.
 //! Queries remain read-only; load persistence uses a separate atomic write API.
@@ -36,8 +36,8 @@ pub struct Backend;
 pub use create::create_if_missing;
 pub use error::{Error, ErrorKind};
 
-/// Schema version supported by this adapter, from Go's 00002_add_lsm.sql.
-pub const SCHEMA_VERSION: i64 = 2;
+/// Schema version supported by this adapter, from Go's 00003_index_observations.sql.
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// An opened read-only store; connection reuse stays inside the adapter.
 /// Clones share idle resources while concurrent reads use separate connections.
