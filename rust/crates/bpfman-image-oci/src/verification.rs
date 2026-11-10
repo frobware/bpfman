@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use sigstore_verify::{
     VerificationPolicy, Verifier,
     trust_root::TrustedRoot,
-    types::{Bundle, DerCertificate},
+    types::{Artifact, Bundle, DerCertificate, Sha256Hash, SignatureContent},
 };
 use std::sync::atomic::AtomicBool;
 
@@ -17,6 +17,8 @@ const SIGNATURE: &str = "dev.cosignproject.cosign/signature";
 const CERTIFICATE: &str = "dev.sigstore.cosign/certificate";
 const CHAIN: &str = "dev.sigstore.cosign/chain";
 const BUNDLE: &str = "dev.sigstore.cosign/bundle";
+const BUNDLE_V03: &str = "application/vnd.dev.sigstore.bundle.v0.3+json";
+const COSIGN_PREDICATE: &str = "https://sigstore.dev/cosign/sign/v1";
 const REKOR: &str = "https://rekor.sigstore.dev/api/v1/log/entries/retrieve";
 
 /// The admission decision made by an explicit signing policy.
@@ -77,29 +79,18 @@ pub(super) fn admit(
     };
     crate::reference::validate_digest(digest)?;
     let selector = format!("{}.sig", digest.replace(':', "-"));
-    let Some(manifest) = registry.signature_manifest(&selector)? else {
-        return if policy.allow_unsigned {
-            Ok(VerificationStatus::UnsignedAccepted)
-        } else {
-            Err(Error::invalid(
-                "image has no signatures and unsigned images are not allowed",
-            ))
-        };
+    let manifest = registry.signature_manifest(&selector)?;
+    let layers = match &manifest {
+        Some(manifest) => {
+            registry::require_image(manifest)?;
+            manifest.value["layers"]
+                .as_array()
+                .filter(|layers| layers.len() <= 64)
+                .ok_or_else(|| Error::invalid("invalid Cosign signature layer count"))?
+                .as_slice()
+        }
+        None => &[],
     };
-    registry::require_image(&manifest)?;
-    let layers = manifest.value["layers"]
-        .as_array()
-        .filter(|layers| layers.len() <= 64)
-        .ok_or_else(|| Error::invalid("invalid Cosign signature layer count"))?;
-    if layers.is_empty() {
-        return if policy.allow_unsigned {
-            Ok(VerificationStatus::UnsignedAccepted)
-        } else {
-            Err(Error::invalid(
-                "image has no signatures and unsigned images are not allowed",
-            ))
-        };
-    }
     let root = TrustedRoot::from_json(&policy.root)
         .map_err(|e| Error::caused("decode selected Sigstore trust root", e))?;
     let verifier =
@@ -121,10 +112,123 @@ pub(super) fn admit(
             Err(error) => last = Some(error),
         }
     }
-    Err(Error::caused(
-        "signature verification failed: no matching signatures",
-        last.ok_or_else(|| Error::invalid("missing signature verification result"))?,
-    ))
+    // A valid legacy signature already admitted above needs no newer registry
+    // capability. Otherwise inspect both formats before deciding unsigned.
+    for candidate in registry.referrers(digest)? {
+        if candidate["artifactType"] != BUNDLE_V03 {
+            continue;
+        }
+        check(registry.flag)?;
+        match verify_referrer(registry, &verifier, policy, digest, &candidate) {
+            Ok(()) => return Ok(VerificationStatus::Verified),
+            Err(error) if error.is_cancelled() => return Err(error),
+            Err(error) => last = Some(error),
+        }
+    }
+    match last {
+        Some(error) => Err(Error::caused(
+            "signature verification failed: no matching signatures",
+            error,
+        )),
+        None if policy.allow_unsigned => Ok(VerificationStatus::UnsignedAccepted),
+        None => Err(Error::invalid(
+            "image has no signatures and unsigned images are not allowed",
+        )),
+    }
+}
+
+fn verify_referrer(
+    registry: &mut Registry<'_>,
+    verifier: &Verifier,
+    policy: &Verification,
+    digest: &str,
+    candidate: &Value,
+) -> Result<(), Error> {
+    let descriptor = registry::descriptor(candidate)?;
+    if descriptor.media_type != "application/vnd.oci.image.manifest.v1+json" {
+        return Err(Error::invalid(
+            "Sigstore bundle requires an OCI image manifest",
+        ));
+    }
+    let manifest = registry.child(&descriptor)?;
+    if manifest.value["artifactType"] != BUNDLE_V03 || manifest.value["subject"]["digest"] != digest
+    {
+        return Err(Error::invalid(
+            "Sigstore bundle manifest does not bind the image subject",
+        ));
+    }
+    let layers = manifest.value["layers"]
+        .as_array()
+        .filter(|layers| layers.len() == 1)
+        .ok_or_else(|| Error::invalid("Sigstore bundle manifest must contain one layer"))?;
+    let descriptor = registry::descriptor(&layers[0])?;
+    if descriptor.media_type != BUNDLE_V03 {
+        return Err(Error::invalid(
+            "unsupported Sigstore bundle layer media type",
+        ));
+    }
+    let bytes = registry.blob(&descriptor, MANIFEST_LIMIT)?;
+    let bundle: Bundle =
+        serde_json::from_slice(&bytes).map_err(|e| Error::caused("decode Sigstore bundle", e))?;
+    if bundle.media_type.as_str() != BUNDLE_V03 {
+        return Err(Error::invalid("Sigstore bundle media type mismatch"));
+    }
+    let SignatureContent::DsseEnvelope(envelope) = &bundle.content else {
+        return Err(Error::invalid(
+            "image signature requires a DSSE Cosign signing statement",
+        ));
+    };
+    if envelope.payload_type != "application/vnd.in-toto+json" {
+        return Err(Error::invalid(
+            "unsupported image signature DSSE payload type",
+        ));
+    }
+    let statement: Value = serde_json::from_slice(envelope.payload.as_bytes())
+        .map_err(|e| Error::caused("decode Cosign signing statement", e))?;
+    if statement["_type"] != "https://in-toto.io/Statement/v1"
+        || statement["predicateType"] != COSIGN_PREDICATE
+        || !statement["subject"].as_array().is_some_and(|subjects| {
+            subjects.len() == 1
+                && subjects[0]["digest"]["sha256"] == digest.trim_start_matches("sha256:")
+        })
+    {
+        return Err(Error::invalid(
+            "Cosign signing statement does not bind the resolved image digest",
+        ));
+    }
+    let hash = Sha256Hash::from_hex(digest.trim_start_matches("sha256:"))
+        .map_err(|e| Error::caused("decode signed image digest", e))?;
+    check(registry.flag)?;
+    let result = verifier.verify(
+        Artifact::from_digest(hash),
+        &bundle,
+        &VerificationPolicy::any_identity(),
+    );
+    check(registry.flag)?;
+    let result = result.map_err(|e| Error::caused("verify Sigstore image bundle", e))?;
+    authorize(
+        policy,
+        result
+            .identity()
+            .map(|identity| identity.as_str())
+            .unwrap_or(""),
+        result.issuer().unwrap_or(""),
+    )
+}
+
+fn authorize(policy: &Verification, subject: &str, issuer: &str) -> Result<(), Error> {
+    if policy.identities.is_empty()
+        || policy
+            .identities
+            .iter()
+            .any(|rule| rule.matches(subject, issuer))
+    {
+        Ok(())
+    } else {
+        Err(Error::invalid(
+            "signing certificate identity or OIDC issuer is not trusted",
+        ))
+    }
 }
 
 fn annotation<'a>(layer: &'a Value, name: &str) -> Result<&'a str, Error> {
@@ -234,17 +338,7 @@ fn verify_layer(
                     .map(|identity| identity.as_str())
                     .unwrap_or("");
                 let issuer = result.issuer().unwrap_or("");
-                if policy.identities.is_empty()
-                    || policy
-                        .identities
-                        .iter()
-                        .any(|rule| rule.matches(subject, issuer))
-                {
-                    return Ok(());
-                }
-                return Err(Error::invalid(
-                    "signing certificate identity or OIDC issuer is not trusted",
-                ));
+                return authorize(policy, subject, issuer);
             }
             Err(error) => last = Some(error),
         }

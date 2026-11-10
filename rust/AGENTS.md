@@ -709,6 +709,17 @@ The architecture and compatibility goals are in
   targets, across stderr and timeline sinks. Keep application tracing available;
   adapters never install subscribers. Document the same requirement for embedders. Preserve caller reference and selected manifest
   digest in `ProgramSource`; SQLite retains schema 2 and its image-source column.
+- Preserve legacy Cosign admission and bounded OCI-referrers discovery with the
+  standard digest-tag fallback for unsupported APIs. Bind v0.3 DSSE in-toto v1
+  Cosign signing statements to the resolved index digest through the synchronous
+  verifier; attachment descriptors and annotations alone never authorize bytecode.
+  Require the configured signer/issuer policy, certificate/SCT, transparency and
+  timestamp checks. Confine pagination to the same registry/repository/subject,
+  reject cycles and bound pages, descriptors, headers and bodies. Discovery errors
+  and invalid bundles never become unsigned admission. Keep the captured modern
+  signing fixture offline; cover tampering, fallback/pagination, cache-policy
+  revalidation, caller cancellation and real INT/TERM during referrer/bundle reads.
+  Advance the verifier policy identity when admission semantics change.
 - Managed cache I/O belongs in `bpfman-fs`, under cache-root writer authority.
   Preserve one atomic envelope, descriptor confinement, lock-free reads, consuming
   stage receipts and failed cleanup retries. Cache artifacts survive program-load
@@ -736,8 +747,10 @@ The architecture and compatibility goals are in
   `signed=true` contract uses the immutable v0.5.6 release, an exact signer,
   fresh production TUF trust, empty public-registry credential configuration,
   rejection and cache reuse. The 10 November audit found the current examples
-  advertise OCI referrers with Sigstore v0.3 bundles, which neither loader yet
-  discovers; preserve that explicit failure until support exists. Go's TUF
+  advertise OCI referrers with Sigstore v0.3 bundles, which neither loader
+  discovered at that checkpoint. Rust now verifies these bundles and passes all
+  ten unchanged current-example scripts under strict policy; Go still fails the
+  newer format. Keep this capability difference explicit. Go's TUF
   cache contends across CLI processes, so use serial Go comparison for that lane;
   keep Rust parallel. Do not weaken scripts or disable verification to claim it.
 - Image building retains fully validated input bytes before registry effects.

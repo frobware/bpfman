@@ -22,6 +22,12 @@ pub(super) struct Registry {
     pub(super) digest: String,
     pub(super) requests: Arc<AtomicUsize>,
     pub(super) responses: Responses,
+    #[allow(dead_code)] // Discovery fault controls are used by referrer contracts.
+    pub(super) headers: Arc<Mutex<BTreeMap<String, String>>>,
+    #[allow(dead_code)]
+    pub(super) cancelled: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    pub(super) cancel_on: Arc<Mutex<Option<String>>>,
     stop: Arc<AtomicBool>,
     address: std::net::SocketAddr,
     thread: Option<JoinHandle<()>>,
@@ -67,7 +73,22 @@ impl Registry {
         ] {
             routes.insert(format!("/v2/test{path}"), (200, bytes));
         }
+        routes.insert(
+            format!("/v2/test/referrers/{top_digest}"),
+            (
+                200,
+                serde_json::to_vec(&json!({"schemaVersion":2,
+                "mediaType":"application/vnd.oci.image.index.v1+json", "manifests":[]}))
+                .expect("empty referrers"),
+            ),
+        );
         let responses = Arc::new(Mutex::new(routes));
+        let headers = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let cancel_on = Arc::new(Mutex::new(None::<String>));
+        let server_headers = headers.clone();
+        let server_cancelled = cancelled.clone();
+        let server_cancel_on = cancel_on.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicUsize::new(0));
         let bearer = Arc::new(AtomicBool::new(false));
@@ -133,10 +154,19 @@ impl Registry {
                     .and_then(|manifest| manifest["mediaType"].as_str())
                     .unwrap_or("application/octet-stream");
                 let header = format!(
-                    "HTTP/1.1 {status} result\r\n{challenge}Content-Length: {}\r\nContent-Type: {media_type}\r\nDocker-Content-Digest: {}\r\nConnection: close\r\n\r\n",
+                    "HTTP/1.1 {status} result\r\n{challenge}Content-Length: {}\r\nContent-Type: {media_type}\r\nDocker-Content-Digest: {}\r\nConnection: close\r\n{}\r\n",
                     body.len(),
-                    hash(&body)
+                    hash(&body),
+                    server_headers
+                        .lock()
+                        .expect("headers")
+                        .get(path)
+                        .map(String::as_str)
+                        .unwrap_or("")
                 );
+                if server_cancel_on.lock().expect("cancel request").as_deref() == Some(path) {
+                    server_cancelled.store(true, Ordering::Release);
+                }
                 let _ = stream.write_all(header.as_bytes());
                 if !request.starts_with("HEAD ") {
                     let _ = stream.write_all(&body);
@@ -149,10 +179,72 @@ impl Registry {
             digest: child_digest,
             requests,
             responses,
+            headers,
+            cancelled,
+            cancel_on,
             stop,
             address,
             thread: Some(thread),
         }
+    }
+
+    #[allow(dead_code)] // Shared also by tests that only need generated images.
+    pub(super) fn captured(capture: &str) -> Self {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut registry = Self::new(Vec::new(), false);
+        let captured: serde_json::Value = serde_json::from_str(capture).expect("capture");
+        let routes = captured["routes"].as_object().expect("routes");
+        let top: serde_json::Value = serde_json::from_slice(
+            &STANDARD
+                .decode(routes["/manifests/latest"].as_str().expect("index"))
+                .expect("index bytes"),
+        )
+        .expect("index");
+        let architecture = match std::env::consts::ARCH {
+            "x86_64" => "amd64",
+            "aarch64" => "arm64",
+            "powerpc64" if cfg!(target_endian = "little") => "ppc64le",
+            other => other,
+        };
+        registry.digest = top["manifests"]
+            .as_array()
+            .expect("platforms")
+            .iter()
+            .find(|child| child["platform"]["architecture"] == architecture)
+            .expect("host child")["digest"]
+            .as_str()
+            .expect("digest")
+            .into();
+        registry.bearer.store(true, Ordering::Relaxed);
+        let mut responses = registry.responses.lock().expect("routes");
+        responses.clear();
+        let digest = captured["digest"].as_str().expect("top digest");
+        responses.insert(
+            format!("/v2/test/referrers/{digest}"),
+            (
+                200,
+                serde_json::to_vec(&json!({"schemaVersion":2,
+                "mediaType":"application/vnd.oci.image.index.v1+json", "manifests":[]}))
+                .expect("empty referrers"),
+            ),
+        );
+        responses.insert(
+            format!("/v2/test/manifests/{}.sig", digest.replace(':', "-")),
+            (404, br#"{"errors":[{"code":"MANIFEST_UNKNOWN"}]}"#.to_vec()),
+        );
+        for (path, encoded) in routes {
+            responses.insert(
+                format!("/v2/test{path}"),
+                (
+                    200,
+                    STANDARD
+                        .decode(encoded.as_str().expect("base64"))
+                        .expect("fixture bytes"),
+                ),
+            );
+        }
+        drop(responses);
+        registry
     }
 }
 

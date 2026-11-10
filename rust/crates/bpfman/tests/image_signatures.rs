@@ -304,114 +304,118 @@ fn signals_during_signature_reads_reap_the_cli_without_cache_or_runtime_state() 
             let _ = self.0.wait();
         }
     }
-    let captured = signed_image::registry();
-    for signal in ["INT", "TERM"] {
-        for (load, local) in [(false, false), (true, false), (false, true), (true, true)] {
-            let temp = tempfile::tempdir()?;
-            let config = temp.path().join("config.toml");
-            let root = temp.path().join("trusted_root.json");
-            let trust = if local {
+    let modern =
+        fixture::Registry::captured(include_str!("../../../tests/fixtures/signed-xdp-v0.3.json"));
+    let modern_refs = "/v2/test/referrers/sha256:1c363a6bf1455f6a642dc7d8becb3b8b06888f338b848ef70de841a844d6d9fd";
+    let modern_blob =
+        "/v2/test/blobs/sha256:fea09200a151f37053088363e0a30aaae1fdddbecc84a35428e4b4fad23d0ced";
+    let legacy = signed_image::registry();
+    for (captured, signature_path) in [
+        (&legacy, signed_image::signature_path()),
+        (&modern, modern_refs.into()),
+        (&modern, modern_blob.into()),
+    ] {
+        for signal in ["INT", "TERM"] {
+            for (load, local) in [(false, false), (true, false), (false, true), (true, true)] {
+                let temp = tempfile::tempdir()?;
+                let config = temp.path().join("config.toml");
+                let root = temp.path().join("trusted_root.json");
+                let trust = if local {
+                    std::fs::write(
+                        &root,
+                        include_str!(
+                            "../../../../vendor/github.com/sigstore/sigstore/pkg/tuf/repository/targets/trusted_root.json"
+                        ),
+                    )?;
+                    format!("trusted_root = '{}'", root.display())
+                } else {
+                    "trust_source = 'bundled'".into()
+                };
                 std::fs::write(
-                    &root,
-                    include_str!(
-                        "../../../../vendor/github.com/sigstore/sigstore/pkg/tuf/repository/targets/trusted_root.json"
-                    ),
+                    &config,
+                    format!("[signing]\n{trust}\nallow_unsigned = false\n"),
                 )?;
-                format!("trusted_root = '{}'", root.display())
-            } else {
-                "trust_source = 'bundled'".into()
-            };
-            std::fs::write(
-                &config,
-                format!("[signing]\n{trust}\nallow_unsigned = false\n"),
-            )?;
-            let server = publisher::Registry::new();
-            let encoded = STANDARD.encode("private-user:private-password:with:colons");
-            let (waiting, wait) = mpsc::sync_channel(1);
-            let (resume, resumed) = mpsc::sync_channel(1);
-            {
-                let mut state = server.state.lock().expect("state");
-                state.bearer = true;
-                state.required_auth = Some(format!("Basic {encoded}"));
-                for (path, (_, body)) in captured.responses.lock().expect("routes").iter() {
-                    if let Some(selector) = path.strip_prefix("/v2/test/manifests/") {
-                        state.manifests.insert(selector.into(), body.clone());
+                let server = publisher::Registry::new();
+                let encoded = STANDARD.encode("private-user:private-password:with:colons");
+                let (waiting, wait) = mpsc::sync_channel(1);
+                let (resume, resumed) = mpsc::sync_channel(1);
+                {
+                    let mut state = server.state.lock().expect("state");
+                    state.bearer = true;
+                    state.required_auth = Some(format!("Basic {encoded}"));
+                    for (path, response) in captured.responses.lock().expect("routes").iter() {
+                        state
+                            .responses
+                            .insert(format!("GET {path}"), response.clone());
                     }
-                    if let Some(digest) = path.strip_prefix("/v2/test/blobs/") {
-                        state.blobs.insert(digest.into(), body.clone());
+                    state.pause = Some((format!("GET {signature_path}"), waiting, resumed));
+                }
+                let mut process = command(temp.path(), &config);
+                if load {
+                    process.args([
+                        "program",
+                        "load",
+                        "image",
+                        &server.reference,
+                        "--programs",
+                        "xdp:pass",
+                    ]);
+                } else {
+                    process.args(["image", "verify", &server.reference]);
+                }
+                let mut child = Process(
+                    process
+                        .env("BPFMAN_REGISTRY_AUTH", &encoded)
+                        .env("RUST_LOG", "trace,ureq_proto::util=trace,ureq::util=trace")
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::piped())
+                        .spawn()?,
+                );
+                let stderr = child.0.stderr.take().expect("stderr");
+                let (notified, notification) = mpsc::sync_channel(1);
+                let reader = std::thread::spawn(move || {
+                    let mut output = String::new();
+                    for line in BufReader::new(stderr).lines() {
+                        let line = line.expect("stderr line");
+                        if line.contains("shutdown requested") {
+                            let _ = notified.send(());
+                        }
+                        output.push_str(&line);
+                        output.push('\n');
                     }
-                }
-                state.pause = Some((
-                    format!("GET {}", signed_image::signature_path()),
-                    waiting,
-                    resumed,
-                ));
-            }
-            let mut process = command(temp.path(), &config);
-            if load {
-                process.args([
-                    "program",
-                    "load",
-                    "image",
-                    &server.reference,
-                    "--programs",
-                    "xdp:pass",
-                ]);
-            } else {
-                process.args(["image", "verify", &server.reference]);
-            }
-            let mut child = Process(
-                process
-                    .env("BPFMAN_REGISTRY_AUTH", &encoded)
-                    .env("RUST_LOG", "trace,ureq_proto::util=trace,ureq::util=trace")
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::piped())
-                    .spawn()?,
-            );
-            let stderr = child.0.stderr.take().expect("stderr");
-            let (notified, notification) = mpsc::sync_channel(1);
-            let reader = std::thread::spawn(move || {
-                let mut output = String::new();
-                for line in BufReader::new(stderr).lines() {
-                    let line = line.expect("stderr line");
-                    if line.contains("shutdown requested") {
-                        let _ = notified.send(());
+                    output
+                });
+                wait.recv_timeout(Duration::from_secs(5))?;
+                assert!(
+                    Command::new("kill")
+                        .arg(format!("-{signal}"))
+                        .arg(child.0.id().to_string())
+                        .status()?
+                        .success()
+                );
+                notification.recv_timeout(Duration::from_secs(5))?;
+                resume.send(())?;
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let status = loop {
+                    if let Some(status) = child.0.try_wait()? {
+                        break status;
                     }
-                    output.push_str(&line);
-                    output.push('\n');
+                    assert!(Instant::now() < deadline, "CLI did not finish cancellation");
+                    std::thread::sleep(Duration::from_millis(5));
+                };
+                let stderr = reader.join().expect("stderr reader");
+                assert_eq!(
+                    status.code(),
+                    Some(if signal == "INT" { 130 } else { 143 }),
+                    "{stderr}"
+                );
+                for secret in [&encoded, "private-password:with:colons", "publish-token"] {
+                    assert!(!stderr.contains(secret));
                 }
-                output
-            });
-            wait.recv_timeout(Duration::from_secs(5))?;
-            assert!(
-                Command::new("kill")
-                    .arg(format!("-{signal}"))
-                    .arg(child.0.id().to_string())
-                    .status()?
-                    .success()
-            );
-            notification.recv_timeout(Duration::from_secs(5))?;
-            resume.send(())?;
-            let deadline = Instant::now() + Duration::from_secs(5);
-            let status = loop {
-                if let Some(status) = child.0.try_wait()? {
-                    break status;
-                }
-                assert!(Instant::now() < deadline, "CLI did not finish cancellation");
-                std::thread::sleep(Duration::from_millis(5));
-            };
-            let stderr = reader.join().expect("stderr reader");
-            assert_eq!(
-                status.code(),
-                Some(if signal == "INT" { 130 } else { 143 }),
-                "{stderr}"
-            );
-            for secret in [&encoded, "private-password:with:colons", "publish-token"] {
-                assert!(!stderr.contains(secret));
+                assert!(!temp.path().join("cache").exists());
+                assert!(!temp.path().join("runtime").exists());
+                assert!(server.state.lock().expect("state").uploads.is_empty());
             }
-            assert!(!temp.path().join("cache").exists());
-            assert!(!temp.path().join("runtime").exists());
-            assert!(server.state.lock().expect("state").uploads.is_empty());
         }
     }
     Ok(())

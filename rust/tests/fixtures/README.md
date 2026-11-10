@@ -17,3 +17,27 @@ retrieved by posting that signature's hashedrekord body to
 Tests use the real Sigstore production trust root and the authenticated historical
 signing time, without replacing certificate validation or disabling SCT/Rekor
 checks. All fixture-based checks run without external network access.
+
+`signed-xdp-v0.3.json` captures unmodified public response bodies from
+`quay.io/bpfman-bytecode/go-xdp-counter:latest` on 10 November 2026. Its index is
+`sha256:1c363a6bf1455f6a642dc7d8becb3b8b06888f338b848ef70de841a844d6d9fd`.
+It includes all platform children/configs/bytecode, the OCI referrers index,
+three signature manifests and their Sigstore v0.3 bundle blobs. Bodies retain
+their original bytes through base64 encoding. Like the release fixture, these
+are public bpfman bytecode and public signing evidence, without credentials or
+private keys.
+
+The modern bundles contain DSSE in-toto v1 statements with predicate type
+`https://sigstore.dev/cosign/sign/v1`, each signing the index SHA256 digest.
+The certificate identity is
+`https://github.com/bpfman/bpfman/.github/workflows/image-build.yml@refs/heads/main`
+and its OIDC issuer is `https://token.actions.githubusercontent.com`. Tests use
+production trust and all normal certificate/SCT, timestamp and Rekor checks.
+Tampering cases recompute blob and manifest descriptors so cryptographic
+failures cannot be concealed by an earlier descriptor mismatch.
+
+Discovery follows the [Cosign bundle storage specification](https://github.com/sigstore/cosign/blob/main/specs/BUNDLE_SPEC.md)
+and [OCI referrers API and fallback](https://github.com/opencontainers/distribution-spec/blob/main/spec.md#listing-referrers).
+The local registry supplies a structured legacy `.sig` absence for the modern
+capture and an empty referrers index for the older release; those discovery
+responses are test setup, separate from the captured signed bytes.

@@ -243,11 +243,27 @@ impl<'a> Registry<'a> {
     }
 
     fn get_optional(&mut self, path: &str, limit: usize) -> Result<Option<Content>, Error> {
+        let response = self.authenticated_request(path)?;
+        self.content(response, limit)
+    }
+
+    fn authenticated_request(
+        &mut self,
+        path: &str,
+    ) -> Result<ureq::http::Response<ureq::Body>, Error> {
         let mut response = self.request(path)?;
         if response.status() == 401 && self.authorization.is_none() {
             self.authenticate(&response, "pull")?;
             response = self.request(path)?;
         }
+        Ok(response)
+    }
+
+    fn content(
+        &self,
+        response: ureq::http::Response<ureq::Body>,
+        limit: usize,
+    ) -> Result<Option<Content>, Error> {
         if response.status() == 404 {
             let bytes = read_body(response, MANIFEST_LIMIT, self.flag)?;
             let body: Value = serde_json::from_slice(&bytes)
@@ -286,6 +302,43 @@ impl<'a> Registry<'a> {
         Ok(Some((bytes, digest)))
     }
 
+    /// Discover a bounded complete list, including the OCI tag fallback. Only
+    /// the first API 404 denotes unsupported discovery; other failures are not
+    /// evidence that an image is unsigned.
+    pub(super) fn referrers(&mut self, digest: &str) -> Result<Vec<Value>, Error> {
+        validate_digest(digest)?;
+        let endpoint = format!("/referrers/{digest}");
+        let mut path = endpoint.clone();
+        let mut visited = std::collections::BTreeSet::new();
+        let mut descriptors = Vec::new();
+        for page in 0..16 {
+            check(self.flag)?;
+            if !visited.insert(path.clone()) {
+                return Err(Error::invalid("OCI referrers pagination cycle"));
+            }
+            let response = self.authenticated_request(&path)?;
+            if page == 0 && response.status() == 404 {
+                read_body(response, MANIFEST_LIMIT, self.flag)?;
+                let Some(index) = self.signature_manifest(&digest.replace(':', "-"))? else {
+                    return Ok(Vec::new());
+                };
+                append_referrers(&index, &mut descriptors)?;
+                return Ok(descriptors);
+            }
+            let next = referrers_next(&response, &self.reference.base(), &endpoint)?;
+            let (bytes, _) = self
+                .content(response, MANIFEST_LIMIT)?
+                .ok_or_else(|| Error::invalid("OCI referrers page disappeared"))?;
+            let index = Self::decode_manifest(&bytes)?;
+            append_referrers(&index, &mut descriptors)?;
+            match next {
+                Some(next) => path = next,
+                None => return Ok(descriptors),
+            }
+        }
+        Err(Error::invalid("OCI referrers page limit exceeded"))
+    }
+
     pub(super) fn signature_manifest(&mut self, selector: &str) -> Result<Option<Manifest>, Error> {
         let Some((bytes, _)) =
             self.get_optional(&format!("/manifests/{selector}"), MANIFEST_LIMIT)?
@@ -322,12 +375,20 @@ impl<'a> Registry<'a> {
 
     pub(super) fn child(&mut self, descriptor: &Descriptor) -> Result<Manifest, Error> {
         validate_digest(&descriptor.digest)?;
+        if descriptor.size > MANIFEST_LIMIT {
+            return Err(Error::invalid("OCI manifest descriptor exceeds size limit"));
+        }
         let (bytes, _) = self.get(&format!("/manifests/{}", descriptor.digest), MANIFEST_LIMIT)?;
         validate_descriptor(&bytes, descriptor)?;
         let value: Value = serde_json::from_slice(&bytes)
             .map_err(|e| Error::caused("decode platform manifest", e))?;
         if value["schemaVersion"] != 2 {
             return Err(Error::invalid("unsupported OCI manifest schema"));
+        }
+        if value["mediaType"] != descriptor.media_type {
+            return Err(Error::invalid(
+                "OCI manifest descriptor media type mismatch",
+            ));
         }
         Ok(Manifest {
             digest: descriptor.digest.clone(),
@@ -368,6 +429,89 @@ impl<'a> Registry<'a> {
         };
         Ok((decode("io.ebpf.programs")?, decode("io.ebpf.maps")?))
     }
+}
+
+fn append_referrers(index: &Manifest, descriptors: &mut Vec<Value>) -> Result<(), Error> {
+    if index.media_type != "application/vnd.oci.image.index.v1+json" {
+        return Err(Error::invalid(
+            "OCI referrers response must be an OCI index",
+        ));
+    }
+    let page = index.value["manifests"]
+        .as_array()
+        .ok_or_else(|| Error::invalid("OCI referrers response has no manifest list"))?;
+    if descriptors.len() + page.len() > 64 {
+        return Err(Error::invalid("OCI referrers descriptor limit exceeded"));
+    }
+    for value in page {
+        let descriptor = descriptor(value)?;
+        validate_digest(&descriptor.digest)?;
+        if descriptor.media_type.is_empty()
+            || value
+                .get("artifactType")
+                .is_some_and(|kind| kind.as_str().is_none_or(str::is_empty))
+        {
+            return Err(Error::invalid("invalid OCI referrers descriptor type"));
+        }
+    }
+    descriptors.extend_from_slice(page);
+    Ok(())
+}
+
+fn referrers_next(
+    response: &ureq::http::Response<ureq::Body>,
+    base: &str,
+    endpoint: &str,
+) -> Result<Option<String>, Error> {
+    let mut next = None;
+    let mut size = 0;
+    for header in response.headers().get_all("link") {
+        size += header.as_bytes().len();
+        if size > 8192 {
+            return Err(Error::invalid("OCI referrers Link header exceeds limit"));
+        }
+        let header = header
+            .to_str()
+            .map_err(|_| Error::invalid("invalid OCI referrers Link header"))?;
+        for link in header.split(',') {
+            let (target, parameters) = link
+                .trim()
+                .split_once('>')
+                .ok_or_else(|| Error::invalid("invalid OCI referrers Link header"))?;
+            let target = target
+                .strip_prefix('<')
+                .ok_or_else(|| Error::invalid("invalid OCI referrers Link target"))?;
+            if !parameters
+                .split(';')
+                .any(|parameter| matches!(parameter.trim(), "rel=\"next\"" | "rel=next"))
+            {
+                return Err(Error::invalid("unsupported OCI referrers Link relation"));
+            }
+            if next.is_some() {
+                return Err(Error::invalid("multiple OCI referrers next pages"));
+            }
+            next = Some(referrers_page_path(target, base, endpoint)?);
+        }
+    }
+    Ok(next)
+}
+
+fn referrers_page_path(target: &str, base: &str, endpoint: &str) -> Result<String, Error> {
+    let invalid = || Error::invalid("refuse OCI referrers pagination outside the subject endpoint");
+    let base: ureq::http::Uri = base.parse().map_err(|_| invalid())?;
+    let target: ureq::http::Uri = target.parse().map_err(|_| invalid())?;
+    if (target.scheme().is_some() || target.authority().is_some())
+        && (target.scheme() != base.scheme() || target.authority() != base.authority())
+    {
+        return Err(invalid());
+    }
+    if target.path() != format!("{}{endpoint}", base.path()) {
+        return Err(invalid());
+    }
+    Ok(match target.query() {
+        Some(query) => format!("{endpoint}?{query}"),
+        None => endpoint.to_owned(),
+    })
 }
 
 pub(super) fn read_body(

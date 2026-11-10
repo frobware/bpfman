@@ -187,7 +187,7 @@ impl SigningPolicy {
         canonical.sort_unstable();
         canonical.dedup();
         let policy = serde_json::to_vec(&(
-            "sigstore-verify-0.14.0-cosign-v1",
+            "sigstore-verify-0.14.0-cosign-v2-referrers",
             hash(verification.root.as_bytes()),
             verification.allow_unsigned,
             canonical,

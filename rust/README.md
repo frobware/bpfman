@@ -142,9 +142,17 @@ always enables verification. Its `--allow-unsigned`, `--certificate-identity`,
 Verification uses synchronous `sigstore-verify`, checking the signature,
 certificate chain, code-signing usage, SCT,
 authenticated signing time and Rekor evidence. Legacy Cosign `.sig` images and
-their embedded bundles match Go's currently enabled format. Missing bundles use
-bounded, redirect-free lookup at the public Rekor service. OCI 1.1 signature
-discovery remains unimplemented.
+their embedded bundles match Go's currently enabled format. Missing legacy bundles
+use bounded, redirect-free lookup at the public Rekor service. When no legacy
+signature admits the image, OCI 1.1 referrers and the digest-tag fallback discover
+Sigstore v0.3 bundles. These require a DSSE in-toto v1 Cosign signing statement
+binding the resolved top-level image digest; attached provenance alone does not
+authorize loading. Manifest and bundle descriptors are checked independently of
+signature verification. Discovery allows at most 16 pages and 64 descriptors,
+with 4 MiB bodies and 8 KiB Link headers per page. Pagination stays at the same
+registry, repository and image-subject endpoint; malformed, incomplete or failed
+discovery fails admission. Optional index annotations are hints, never authority.
+Legacy signatures still admit without requiring the newer registry API.
 
 The CLI defaults to `[signing] trust_source = "tuf"`. A pinned, self-signed
 Sigstore production TUF bootstrap authenticates sequential root rotations and
@@ -304,14 +312,18 @@ against Go and Rust. Select it with `external=true,image=true,signed=true` and
 `BPFMAN_UNDER_TEST` and `BPFMAN_E2E_IMPLEMENTATION` explicitly for Rust. Run Go
 serially because its TUF cache contends across CLI processes.
 
-The 10 November strict audit rejects all ten existing current-example scripts
-against both binaries. Their nine images advertise OCI referrers containing
-Sigstore v0.3 bundles, while both loaders currently discover legacy `.sig` tags
-only. The earlier passes with verification enabled also allowed unsigned images;
-they do not establish strict signature acceptance. OCI-referrers/bundle support
-is the next gap. See the [audit](../docs/design/rust-reimplementation.md#verified-remote-image-acceptance-audit-10-november-2026)
-for exact observed digests and evidence. Existing acceptance scripts remain
-unchanged. Earlier acceptance corrected three legacy `probe` expectations to
+The initial 10 November strict audit rejected all ten current-example scripts
+against both binaries because neither discovered their Sigstore v0.3 referrers.
+With referrer verification implemented, all ten unchanged scripts now pass against
+Rust using fresh production trust and `verify_enabled = true`,
+`allow_unsigned = false`. Go still fails all ten on the unsupported format.
+Earlier passes allowing unsigned images remain separate evidence. See the
+[referrer checkpoint](../docs/design/rust-reimplementation.md#oci-referrers-and-sigstore-v03-acceptance-10-november-2026)
+for the strict comparison and offline security contracts. The verifier policy
+identity has advanced: `Never` refuses admissions from the previous verifier;
+`IfNotPresent` can reverify the recorded digest under the current policy without
+resolving a changed tag. Failed revalidation preserves the admitted generation.
+Existing acceptance scripts remain unchanged. Earlier acceptance corrected three legacy `probe` expectations to
 bpfman's distinct `kprobe`, `uprobe` and `uretprobe` metadata names. The label
 vocabulary is [documented independently of loading libraries](../docs/developer-guide/image-build.md#bytecode-program-labels).
 The normal gate now runs all 147 shared non-external scripts with file and local

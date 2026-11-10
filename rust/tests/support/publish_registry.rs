@@ -17,6 +17,7 @@ pub(super) struct State {
     pub(super) requests: Vec<String>,
     pub(super) blobs: BTreeMap<String, Vec<u8>>,
     pub(super) manifests: BTreeMap<String, Vec<u8>>,
+    pub(super) responses: BTreeMap<String, (u16, Vec<u8>)>,
     pub(super) uploads: BTreeSet<String>,
     pub(super) faults: BTreeMap<String, u16>,
     pub(super) cancel_on: Option<String>,
@@ -181,6 +182,8 @@ impl Registry {
                     .map(|(_, status)| *status)
                 {
                     (status, Vec::new())
+                } else if let Some(response) = state.responses.get(&key) {
+                    response.clone()
                 } else if method == "POST" && path == "/v2/test/blobs/uploads/" {
                     let location = format!("/v2/test/blobs/uploads/{}", state.requests.len());
                     state.uploads.insert(location.clone());

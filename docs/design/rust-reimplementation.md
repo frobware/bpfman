@@ -21,13 +21,13 @@ the normal Rust gate with both file and local OCI bytecode. Use
 Cutover remains pending. The last broad Go comparison recorded a residue failure
 in `TestTC_RejectsAttachOverForeignIngressQdisc` and a production-policy skip for
 clsact reclamation; these are not green Go/Rust parity results. The 10 November
-remote-image audit proves strict signed-release acceptance against both binaries,
-but all ten current-example scripts fail signature enforcement: their nine images
-advertise OCI referrers with Sigstore v0.3 bundles, while both loaders discover
-only legacy `.sig` tags. Supporting that discovery/bundle format is the next
-capability gap; permissive unsigned admission does not close it. Shared-store
-stress and Kubernetes deployment also need fresh evidence before packaging or
-entry-point changes. Physical-NIC/offload execution
+remote-image audit proves strict signed-release acceptance against both binaries.
+The subsequent OCI-referrers/Sigstore v0.3 implementation passes all ten unchanged
+current-example scripts against Rust with unsigned images forbidden; Go still
+fails all ten because it discovers only legacy `.sig` tags. The appended
+OCI-referrers checkpoint records this capability difference and its evidence.
+Shared-store stress and Kubernetes deployment need fresh evidence before packaging
+or entry-point changes. Physical-NIC/offload execution
 and the documented Aya/kernel XDP boundaries also remain outside the completed
 evidence. Historical "next" notes
 below describe their checkpoint dates; this status and the latest appended
@@ -146,7 +146,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Surface | Implemented checkpoint | Remaining boundary |
 | --- | --- | --- |
 | Local program load | Atomic tracepoint/XDP/TC/TCX/kprobe/kretprobe/uprobe/uretprobe/fentry/fexit/LSM batches, private/shared maps including array/hash map-of-maps, named selection, compensation | Other program families |
-| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; legacy Cosign signature/identity policy, synchronous production TUF trust refresh, explicit local trust roots and trust-bound cache revalidation; strict signed-release acceptance | OCI-referrers/Sigstore v0.3 discovery for current published examples; cache eviction deferred outside Go parity |
+| OCI bytecode | Bare/tag/digest references, Linux platform selection, anonymous bearer auth, digest/size validation, bounded in-memory extraction, atomic cache, load provenance, existing program lifecycle; native single/multi-architecture build/push and build-argument generation; explicit private credentials, ambient credential files, configured helpers and identity-token exchange; legacy Cosign signature/identity policy, synchronous production TUF trust refresh, explicit local trust roots and trust-bound cache revalidation; bounded OCI-referrers discovery, tag fallback and Sigstore v0.3 DSSE verification; strict signed-release and current-example acceptance | Cache eviction deferred outside Go parity |
 | Kernel and user-space probe links | Entry/return selection from the loaded program; function and offset intent; host/container file or library-name targets through maps/cache lookup and the mount-namespace helper; pending attachment, observations, compensation, cancellation, detach and attached unload with SQLite | General reconciliation and lost-report recovery |
 | Function tracing links | Native fentry/fexit; load-time vmlinux/module BTF resolution and ELF family validation; pinned standalone lifecycle, observations, cancellation, compensation and reopened cleanup with SQLite | Other tracing families |
 | LSM hooks | Load-bound vmlinux BTF hook resolution, ELF validation, native pinned lifecycle, hook observations, cancellation, compensation and reopened detach/attached unload with SQLite | Other LSM attachment modes |
@@ -2752,9 +2752,10 @@ wrong, change it here before broadening feature coverage.
   file-bytecode, image-bytecode, parallel, and stress lanes. The full shared
   non-external corpus now has separate file/image cases in the normal gate;
   existing admitted and family-specific selections retain their labels and
-  scheduling. Strict remote verification passes the pinned legacy signed release;
-  current examples need OCI-referrers/Sigstore v0.3 bundle support. Broader
-  shared-store stress remains separate.
+  scheduling. Strict remote verification passes the pinned legacy signed release
+  against both binaries and all ten current-example scripts against Rust through
+  OCI-referrers/Sigstore v0.3 verification. Go still lacks the newer format.
+  Broader shared-store stress remains separate.
 
 ### Phase 5: public surfaces and cutover
 
@@ -7424,3 +7425,124 @@ Validation on Linux `6.18.54`, retaining the existing `aya-obj` dev/test
 Strict acceptance of current published examples remains incomplete until
 OCI-referrers/Sigstore v0.3 bundle support exists; shared-store stress and
 Kubernetes deployment remain separate cutover work.
+
+## OCI-referrers and Sigstore v0.3 acceptance (10 November 2026)
+
+Strict current-example acceptance now passes against Rust. All ten unchanged
+files selected by `external=true,image=true,!signed` pass with
+`verify_enabled = true` and `allow_unsigned = false`, fresh production TUF trust,
+empty registry credential files, isolated SQLite runtimes and 32 available runner
+slots. The same comparison still fails all ten against Go, run serially: its
+legacy `.sig` discovery does not find these signatures. This closes the Rust
+format gap identified by the preceding audit without redefining Go's behaviour
+or treating permissive unsigned admission as signature verification.
+
+`bpfman-image-oci` retains legacy Cosign verification first. A valid legacy
+signature admits without requiring the newer discovery API. Otherwise the
+synchronous registry client lists OCI referrers for the resolved top-level digest;
+an initial API 404 uses the standard `sha256-<digest>` index-tag fallback. Only
+recognized absence or a complete empty signature selection can count as unsigned.
+Authentication/transport failures, malformed responses, missing later pages and
+invalid recognized bundles fail admission even when `allow_unsigned` is true.
+Discovery is bounded to 16 pages, 64 descriptors, 4 MiB response bodies and 8 KiB
+Link headers per page. Next-page links must remain at the same registry,
+repository and subject endpoint; cycles and ambiguous links fail closed.
+
+For each v0.3 bundle candidate, independently check the referring manifest's
+size/hash/media type, its image subject, and the bundle layer's size/hash/media
+type. Require a DSSE in-toto v1 statement with predicate type
+`https://sigstore.dev/cosign/sign/v1` and the exact resolved index SHA256 digest.
+The existing synchronous verifier receives a typed precomputed image digest,
+checks DSSE cryptography, the certificate/code-signing usage/SCT, trusted signing
+time and transparency evidence, then applies the configured identity/issuer
+rules. Optional referrer annotations cannot authorize an image. Other attached
+provenance does not replace the Cosign signing statement. Platform selection
+still happens after index admission; program provenance retains the selected
+platform manifest. No dependencies, asynchronous code, Go behaviour or store
+schema changed.
+
+The canonical verifier policy identity advances for the new admission semantics.
+`Never` therefore refuses entries admitted by the preceding verifier without
+network access. `IfNotPresent` reverifies the recorded top-level digest before
+updating admission, rather than resolving a mutable tag. The existing atomic
+cache publication, concurrent-generation checks and preservation after failed
+revalidation remain in place.
+
+The public `signed-xdp-v0.3.json` fixture captures the current `go-xdp-counter`
+index, all children/configs/bytecode, three referrer manifests and their original
+bundle blobs. Its digest matches the preceding audit's XDP index. Exact main
+workflow identity/issuer checks pass against production trust without external
+network access. The six new adapter contracts cover:
+
+- Real DSSE/index verification, no-network cache reuse, and wrong-signer
+  revalidation preserving the previous admitted generation.
+- Tampered DSSE signatures/payloads, certificates, integrated times, Rekor
+  bodies/proofs/checkpoints, statement types/predicates/subjects, bundle versions
+  and manifest/layer types. Descriptors are recomputed where needed to reach
+  cryptographic verification. Both strict and unsigned-permitting policies reject.
+- A later valid candidate after an invalid one; untrusted annotation hints;
+  changed index digests with identical platform bytecode and relabelled referring
+  manifests still failing the signed subject check.
+- Referrer pagination and unsupported-API tag fallback using the same original
+  signing evidence.
+- Authentication/server errors, malformed/oversized indexes, excessive
+  descriptors/pages, foreign pagination targets, cycles and missing pages.
+- Caller cancellation during referrer, referring-manifest and bundle reads,
+  with no bytecode-cache creation.
+
+The existing real INT/TERM CLI contract now also pauses authenticated modern
+referrer and bundle reads, for both `image verify` and image load, with bundled
+and explicit-file trust. It preserves the original legacy cases, checks exit
+codes 130/143, reaps each process, checks credential redaction under trace
+logging, and requires absent runtime/cache state.
+
+Live evidence is under `/tmp/bpfman-referrers-acceptance-wsqvkbsh/`:
+`manifest.json` records the exact ten-file/nine-image selection,
+`{go,rust}/command.txt` records the commands, `{go,rust}/scripts.log` records the
+runner and cleanup results, and `summary.json` requires exactly one pass for
+every selected filename plus runner success. Rust passes all ten in 13.71
+seconds; Go fails all ten in 36.28 seconds with the unsupported signature format.
+The strict policy retains the default empty trusted-identity list for these
+existing examples; the modern offline fixture separately requires the exact
+main workflow identity and GitHub issuer.
+
+The pinned legacy `signed=true` release contract also passes again directly
+against both binaries with its exact v0.5.6 identity, fresh trust, rejection,
+cache reuse, XDP traffic and clean teardown: Go in 9.97 seconds, Rust in 8.96
+seconds. Evidence is under `/tmp/bpfman-referrers-acceptance-hxt6hor9/`. These
+remain external lanes; the normal gate uses captured signing evidence and local
+registries only. No existing `.bpfman` file or label changed.
+
+To select the current examples, use `make run-e2e-scripts` with
+`BPFMAN_E2E_SCRIPT_SELECTOR='external=true,image=true,!signed'`,
+`BPFMAN_E2E_BYTECODE_SOURCE=`, `BPFMAN_E2E_ISOLATED_RUNTIME=1`, repeats and
+`STRESS_COUNT` set to one, and an explicit `BPFMAN_CONFIG` containing the strict
+policy above. Select the Rust binary/implementation and `PARALLEL=32`, or Go and
+`PARALLEL=1`. For reproducible fresh public-registry admission, the recorded
+wrapper commands supply empty `DOCKER_CONFIG`/`REGISTRY_AUTH_FILE` configuration
+and per-implementation image/TUF paths, clearing ambient registry credentials.
+The signed-release selector remains self-contained as documented above.
+
+Validation on Linux `6.18.54`, retaining the existing `aya-obj` dev/test
+`opt-level = 2` override:
+
+- `direnv exec . make rust-check` exits zero. Formatting, all-target/all-feature
+  Clippy with warnings denied, all userspace/architecture/signature/TUF/process
+  contracts, doctests and warnings-denied Rustdoc pass. The kernel controller
+  discovers/selects/passes all 90 cases in 260.90 seconds: corpus 96.51 seconds,
+  global inventory 0.28, 73 SQLite cases on eight workers 154.38, and four Go
+  comparison cases 9.71. The unchanged corpus retains all 147 shared files in
+  both file and local-OCI modes. Owned fixture and residue cleanup passes. Log:
+  `/tmp/bpfman-referrers-check.log`.
+- The focused `direnv exec . make rust-test-image` also exits zero, including all
+  six new modern-bundle adapter contracts and five selected real-kernel image
+  cases. Log: `/tmp/bpfman-referrers-image.log`. The final full gate includes the
+  expanded modern INT/TERM cases added after that focused run.
+- Both external acceptance runners and their exact per-file pass checks complete
+  as recorded above. Fixture capture hashes and `git diff --check` pass.
+
+Next cutover evidence is broader shared-store stress, then fresh Kubernetes /
+operator / CSI deployment acceptance and the remaining broad Go comparison
+boundaries. Physical-NIC/offload and previously documented Aya/kernel XDP limits
+remain separate. Completing this signature format does not authorize packaging
+or entry-point cutover by itself.
