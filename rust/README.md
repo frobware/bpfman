@@ -16,6 +16,31 @@ all select it explicitly. `rust-fmt` checks formatting; to apply formatting,
 run `make rust-fmt-fix`. `make rust-lock` refreshes the new lockfile.
 Development conventions live in [AGENTS.md](AGENTS.md).
 
+Build a native-architecture daemon image from the new workspace with:
+
+```sh
+# Fast iteration: copy the host build into the image.
+direnv exec . make build-image-rust-dev BPFMAN_IMG=bpfman:rust-dev
+# Alternatively, compile the binary inside the image.
+direnv exec . make build-image-rust BPFMAN_IMG=bpfman:rust-dev
+```
+
+`Dockerfile.bpfman.rust` builds the shared dispatchers and locked Rust workspace
+in Fedora, then copies the release binary to Fedora Minimal at `/bpfman`.
+It needs no host Rust toolchain and includes CSI through `--csi-support`.
+Its build context excludes the legacy workspace and host build outputs. Cargo
+registry and target caches speed subsequent builds. This opt-in target leaves
+the default Go image pipeline unchanged. `FEDORA_VERSION` and `DEV_RUNTIME_IMAGE`
+select the builder release and runtime image; keep their libc versions compatible.
+For a host release build, use `make rust-build RUST_BUILD_PROFILE=release`.
+The `.dev` target depends on `rust-build` and packages its existing output without
+compiling inside the container. It defaults to `rust/target/debug/bpfman`;
+`RUST_BUILD_PROFILE=release` selects the release build. The image adjusts only
+its copied binary's ELF loader and removes host RPATHs, allowing a Nix-built
+binary to use Fedora's libraries. It checks `--version` during packaging so an
+incompatible host architecture or newer libc fails the build. Use a native
+GNU/Linux build and a runtime with compatible glibc and libgcc.
+
 `rust-test` runs all userspace unit, integration, and documentation tests before
 the process-isolated real-kernel suite. `make rust-test-userspace` selects that first stage,
 including the shared fake-kernel lifecycle tests. CLI integration targets are
@@ -3050,15 +3075,29 @@ capabilities and normal unmount; map references survive program unload while the
 volume remains published. CSI staging, controller operations, stats and expansion
 remain unsupported, matching Go's advertised capabilities.
 
+The operator mounts kubelet's plugin directory separately at `<runtime>/csi`;
+that named mount boundary is admitted while `csi/fs` remains confined to its
+filesystem. Read-only flags are set before publishing a bind so kubelet's mount
+peers inherit them and retries after container restart remain idempotent. The
+operator must prepare runtime bpffs outside the daemon's mount namespace. Its
+init helper mounts `/run/bpfman/fs` through a bidirectional runtime volume; the
+daemon receives that volume with `HostToContainer` propagation. This preserves
+program/map/link pins without propagating the daemon's nested CSI mounts back
+into the runtime volume.
+
 `make rust-test-csi` runs wire validation, daemon startup/shutdown tests and native
 CSI contracts. A single stock Go protobuf client exercises both production
 daemons. The full `rust-check` gate runs the Rust cases in the native process
 pool and the Go reference case in the existing Go stage, since Go metadata
 lookup enumerates kernel programs. Existing Go tests and script assertions are
 unchanged.
+The client's optional `-target-root` selects kubelet-visible publish targets for
+deployed restart checks; its native-contract default remains `<runtime>/targets`.
 
-Validation: `direnv exec . make rust-test-csi rust-check` passed all four focused
+At the 19 October checkpoint, `direnv exec . make rust-test-csi rust-check` passed all four focused
 CSI cases and all 83 discovered native cases, including the unchanged acceptance
 corpus. All 11 existing Go CSI e2e tests, existing CSI unit tests, Go/Makefile
 linters and explicit shared-client lint passed. Kubernetes cluster deployment
-was not exercised.
+was not exercised at that checkpoint. The subsequent
+[KIND deployment checkpoint](../docs/design/rust-reimplementation.md#kind-deployment-and-rust-images-10-november-2026)
+records the image builds, real deployment findings and mount-propagation regressions.

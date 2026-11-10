@@ -1,0 +1,6 @@
+# Include only Cargo's existing native binary, never the target cache or legacy binary.
+**
+!rust/
+!rust/target/
+!rust/target/*/
+!rust/target/*/bpfman

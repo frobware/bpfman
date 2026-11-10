@@ -45,6 +45,8 @@ BPFMAN_PB_DIR := server/pb
 DOC_PORT ?= 6060
 # Explicitly selects the independent workspace; the root manifest is legacy.
 RUST_MANIFEST := rust/Cargo.toml
+RUST_BUILD_PROFILE ?= dev
+RUST_BINARY ?= rust/target/$(if $(filter dev,$(RUST_BUILD_PROFILE)),debug,$(RUST_BUILD_PROFILE))/bpfman
 # Canonical bpfman-shell sources that should be formatter-owned. The
 # e2e corpus is the broad runnable script set; outside e2e, include
 # individual positive fixtures deliberately. Do not glob
@@ -597,7 +599,7 @@ LINT_MAKE_TARGETS := \
 	test test-e2e test-e2e-scripts \
 	test-bpfman-ns test-bpfman-ns-amd64 test-bpfman-ns-arm64 test-bpfman-ns-cross \
 	bpfman-compile \
-	build-image build-image-amd64 build-image-dev \
+	build-image build-image-amd64 build-image-dev build-image-rust build-image-rust-dev \
 	build-image-csi-sanity \
 	ci-build ci-check-fmt ci-check-goimports ci-check-vendor ci-check-vet ci-image ci-lint ci-test ci-test-e2e ci-test-e2e-grpc ci-test-e2e-scripts \
 	cosign-sign clean
@@ -608,6 +610,8 @@ LINT_MAKE_TARGETS := \
 LINT_DOCKERFILES := \
 	Dockerfile.bpfman.dev \
 	Dockerfile.bpfman \
+	Dockerfile.bpfman.rust \
+	Dockerfile.bpfman.rust.dev \
 	Dockerfile.ci \
 	Dockerfile.csi-sanity
 
@@ -683,6 +687,8 @@ help:
 	@echo "  build-image-{arch}          Cross-compile single-arch image (arch in amd64/arm64/ppc64le/s390x)"
 	@echo "  build-image-csi-sanity      Build csi-sanity container image"
 	@echo "  build-image-dev             Build current-arch image from host-built binary (fast dev iteration)"
+	@echo "  build-image-rust            Build the independent Rust daemon image (native architecture)"
+	@echo "  build-image-rust-dev        Package the current host Rust build for local development"
 	@echo "  build-image-nix             Pure-Nix OCI image (no Docker daemon at build time; debug toolkit baked in)"
 	@echo "  cosign-sign                 Sign a published image (requires BUILDX_METADATA_FILE)"
 	@echo ""
@@ -1080,7 +1086,7 @@ export BPFMAN_BUILD_OIDC_ISSUER = $(OIDC_ISSUER)
 rust-check: rust-fmt rust-lint rust-test rust-doc
 
 rust-build: $(RUST_DISPATCHER)
-	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked
+	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked --profile $(RUST_BUILD_PROFILE)
 
 # Build fixtures before entering the privileged test runner. Passwordless sudo
 # is required; unavailable privileges fail the gate rather than skipping tests.
@@ -1569,8 +1575,38 @@ clean-bpf:
 # Docker image builds.
 # ---------------------------------------------------------------------------
 
+# Opt-in image for the independent rust/ workspace. Build dispatchers and the
+# binary together inside Fedora so no host (including Nix) linkage enters it.
+.PHONY: build-image-rust
+build-image-rust:
+	$(OCI_BIN) build \
+		$(if $(filter-out 0,$(OCI_BIN_IS_PODMAN)),--ignorefile=Dockerfile.bpfman.rust.dockerignore) \
+		-t $(BPFMAN_IMG) \
+		--build-arg FEDORA_VERSION=$(FEDORA_VERSION) \
+		--build-arg RUNTIME_IMAGE=$(DEV_RUNTIME_IMAGE) \
+		--build-arg GIT_COMMIT="$(GIT_COMMIT)" \
+		--build-arg GIT_BRANCH="$(GIT_BRANCH)" \
+		--build-arg GIT_STATE="$(GIT_STATE)" \
+		--build-arg GIT_VERSION="$(GIT_VERSION)" \
+		--build-arg BUILD_DATE="$(BUILD_DATE)" \
+		--build-arg IMAGE_REF="$(BPFMAN_IMG)" \
+		--build-arg SIGNER_IDENTITY="$(SIGNER_IDENTITY)" \
+		--build-arg OIDC_ISSUER="$(OIDC_ISSUER)" \
+		-f Dockerfile.bpfman.rust \
+		$(EXTRA_DOCKER_BUILD_ARGS) .
+
 # Build bpfman image from the host-built binary. Intended for local
 # development and operator integration testing.
+.PHONY: build-image-rust-dev
+build-image-rust-dev: rust-build
+	$(OCI_BIN) build \
+		$(if $(filter-out 0,$(OCI_BIN_IS_PODMAN)),--ignorefile=Dockerfile.bpfman.rust.dev.dockerignore) \
+		-t $(BPFMAN_IMG) \
+		--build-arg RUNTIME_IMAGE=$(DEV_RUNTIME_IMAGE) \
+		--build-arg RUST_BINARY=$(RUST_BINARY) \
+		-f Dockerfile.bpfman.rust.dev \
+		$(EXTRA_DOCKER_BUILD_ARGS) .
+
 .PHONY: build-image-dev
 build-image-dev: bpfman-build
 	$(OCI_BIN) build \

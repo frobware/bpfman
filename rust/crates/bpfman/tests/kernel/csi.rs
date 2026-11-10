@@ -15,8 +15,85 @@ impl Drop for Daemon {
     }
 }
 
+struct RegistrationMount {
+    registration: PathBuf,
+    targets: PathBuf,
+    peer: PathBuf,
+}
+
+impl RegistrationMount {
+    fn new(c: &Context) -> Self {
+        let path = c
+            .layout
+            .csi_socket_path()
+            .parent()
+            .expect("CSI parent")
+            .to_owned();
+        let source = c
+            .layout
+            .root()
+            .parent()
+            .expect("parent")
+            .join("registration");
+        fs::create_dir_all(&path).expect("CSI mountpoint");
+        fs::create_dir(&source).expect("registration directory");
+        // The operator mounts kubelet's plugin directory separately at runtime/csi.
+        rustix::mount::mount_bind(&source, &path).expect("bind CSI registration");
+
+        // Only csi itself is an admitted collection boundary. An unexpected
+        // mount at csi/fs must still be refused without changing its contents.
+        let foreign = source.join("foreign");
+        let collection = path.join("fs");
+        fs::create_dir(&foreign).expect("foreign collection");
+        fs::write(foreign.join("sentinel"), b"foreign").expect("foreign sentinel");
+        fs::create_dir(&collection).expect("backing collection");
+        rustix::mount::mount_bind(&foreign, &collection).expect("bind foreign collection");
+        c.writer(|w| {
+            assert_eq!(
+                w.unpublish_volume("absent", &source.join("absent"))
+                    .expect_err("refuse mounted collection")
+                    .cause
+                    .kind(),
+                bpfman_fs::ErrorKind::UnsafeLayout
+            );
+        });
+        assert_eq!(
+            fs::read(foreign.join("sentinel")).expect("preserved"),
+            b"foreign"
+        );
+        rustix::mount::unmount(&collection, rustix::mount::UnmountFlags::empty())
+            .expect("normal foreign collection unmount");
+        // kubelet sees propagated bind mounts through another mount peer.
+        let targets = c.layout.root().join("targets");
+        let peer = source.join("target-peer");
+        fs::create_dir(&targets).expect("targets");
+        fs::create_dir(&peer).expect("target peer");
+        rustix::mount::mount_bind(&targets, &targets).expect("bind targets");
+        rustix::mount::mount_change(&targets, rustix::mount::MountPropagationFlags::SHARED)
+            .expect("share targets");
+        rustix::mount::mount_bind(&targets, &peer).expect("bind target peer");
+        Self {
+            registration: path,
+            targets,
+            peer,
+        }
+    }
+}
+
+impl Drop for RegistrationMount {
+    fn drop(&mut self) {
+        for path in [&self.peer, &self.targets, &self.registration] {
+            let result = rustix::mount::unmount(path, rustix::mount::UnmountFlags::empty());
+            if !std::thread::panicking() {
+                result.expect("normal CSI fixture unmount");
+            }
+        }
+    }
+}
+
 pub(super) fn wire(implementation: &str) {
     let c = Context::new();
+    let registration = (implementation == "rust").then(|| RegistrationMount::new(&c));
     let parent = c.layout.root().parent().expect("parent");
     let socket = parent.join("bpfman.sock");
     let config = parent.join("bpfman.toml");
@@ -115,6 +192,13 @@ pub(super) fn wire(implementation: &str) {
     let mut daemon = start();
     client("exercise");
     client("persist-create");
+    let peer_readonly = registration.as_ref().map(|mounts| {
+        rustix::fs::statfs(mounts.peer.join("persist"))
+            .expect("propagated target")
+            .f_flags
+            & 1
+            != 0
+    });
     stop(&mut daemon);
     if implementation == "rust" {
         assert!(!c.layout.csi_socket_path().exists());
@@ -122,12 +206,19 @@ pub(super) fn wire(implementation: &str) {
     let mut daemon = start();
     client("persist-read");
     stop(&mut daemon);
+    if implementation == "rust" {
+        assert!(names(&c.layout.csi_filesystem_path()).is_empty());
+    }
     c.no_artifacts();
     assert!(
         c.json(&rust(), &["program", "list", "-o", "json"])["programs"]
             .as_array()
             .expect("list")
             .is_empty()
+    );
+    assert!(
+        peer_readonly.unwrap_or(true),
+        "read-only publication must reach the mount peer"
     );
 }
 

@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+# Native-architecture image for the independent rust/Cargo.toml workspace.
+# Usage: direnv exec . make build-image-rust BPFMAN_IMG=bpfman:rust-dev
+ARG FEDORA_VERSION=43
+ARG RUNTIME_IMAGE=registry.fedoraproject.org/fedora-minimal:43
+
+FROM fedora:${FEDORA_VERSION} AS builder
+# Follow the selected Fedora release's updates, as the Go builder does.
+# hadolint ignore=DL3041
+RUN dnf install -y --setopt=install_weak_deps=False \
+      cargo clang cmake gcc gcc-c++ git kernel-headers libbpf-devel make \
+      pkgconf-pkg-config protobuf-compiler rust \
+    && dnf clean all
+
+WORKDIR /src
+COPY Makefile ./
+COPY rust/ rust/
+COPY proto/ proto/
+COPY dispatcher/bpf/ dispatcher/bpf/
+COPY platform/store/sqlite/migrations/ platform/store/sqlite/migrations/
+
+ARG GIT_COMMIT=
+ARG GIT_BRANCH=
+ARG GIT_STATE=
+ARG GIT_VERSION=
+ARG BUILD_DATE=
+ARG IMAGE_REF=
+ARG SIGNER_IDENTITY=
+ARG OIDC_ISSUER=
+
+RUN --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/src/rust/target \
+    make rust-build RUST_BUILD_PROFILE=release \
+      GIT_COMMIT="$GIT_COMMIT" GIT_BRANCH="$GIT_BRANCH" \
+      GIT_STATE="$GIT_STATE" GIT_VERSION="$GIT_VERSION" \
+      BUILD_DATE="$BUILD_DATE" IMAGE_REF="$IMAGE_REF" \
+      SIGNER_IDENTITY="$SIGNER_IDENTITY" OIDC_ISSUER="$OIDC_ISSUER" \
+    && install -D -m 0755 rust/target/release/bpfman /out/bpfman
+
+# hadolint ignore=DL3006
+FROM ${RUNTIME_IMAGE}
+COPY --from=builder /out/bpfman /bpfman
+ENTRYPOINT ["/bpfman"]

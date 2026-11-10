@@ -27,6 +27,7 @@ var socket = flag.String("socket", "", "bpfman socket")
 var csiSocket = flag.String("csi-socket", "", "CSI socket")
 var objects = flag.String("objects", "", "BPF fixtures")
 var root = flag.String("runtime", "", "runtime root")
+var targets = flag.String("target-root", "", "publish target parent (defaults to <runtime>/targets)")
 var backing = flag.String("backing", "", "per-volume bpffs root")
 var lane = flag.String("lane", "exercise", "exercise, persist-create, persist-read, identity")
 var label = flag.String("label", "", "unique test label")
@@ -256,8 +257,12 @@ func main() {
 	fmt.Println("CSI wire lifecycle contract passed")
 }
 func request(suffix string) *csi.NodePublishVolumeRequest {
+	targetRoot := *targets
+	if targetRoot == "" {
+		targetRoot = filepath.Join(*root, "targets")
+	}
 	return &csi.NodePublishVolumeRequest{
-		VolumeId: *label + "-" + suffix, TargetPath: filepath.Join(*root, "targets", suffix), Readonly: !strings.HasSuffix(suffix, "0"),
+		VolumeId: *label + "-" + suffix, TargetPath: filepath.Join(targetRoot, suffix), Readonly: !strings.HasSuffix(suffix, "0"),
 		VolumeContext:    map[string]string{"csi.bpfman.io/program": *label, "csi.bpfman.io/maps": "tracepoint_stats_map"},
 		VolumeCapability: &csi.VolumeCapability{AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}}, AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER}},
 	}

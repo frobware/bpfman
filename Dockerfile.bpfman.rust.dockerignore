@@ -1,0 +1,16 @@
+# Only the new workspace, shared protobufs, schema and dispatcher sources.
+**
+!Makefile
+!rust/
+!rust/**
+rust/target/
+!proto/
+!proto/**
+!dispatcher/
+!dispatcher/bpf/
+!dispatcher/bpf/**
+!platform/
+!platform/store/
+!platform/store/sqlite/
+!platform/store/sqlite/migrations/
+!platform/store/sqlite/migrations/**

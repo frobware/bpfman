@@ -185,11 +185,15 @@ impl VolumeDirectory {
     ) -> Result<Option<Box<Self>>, Error> {
         let mut parent = rustix::io::fcntl_dupfd_cloexec(&writer.runtime.root, 0)
             .map_err(|e| io("retain CSI runtime root", e))?;
-        for name in ["csi", "fs"] {
+        // The operator bind-mounts kubelet's plugin directory at runtime/csi.
+        // Admit that single named boundary, retaining no-symlink resolution and
+        // refusing further collection mounts beneath it. Per-volume bpffs mounts
+        // are adopted separately below, with their own identities and receipts.
+        for (name, resolve) in [("csi", BENEATH), ("fs", CONFINED)] {
             parent = if create {
-                ensure_directory(&parent, name, CONFINED)?
+                ensure_directory(&parent, name, resolve)?
             } else {
-                match openat2(&parent, name, DIRECTORY, Mode::empty(), CONFINED) {
+                match openat2(&parent, name, DIRECTORY, Mode::empty(), resolve) {
                     Ok(fd) => fd,
                     Err(rustix::io::Errno::NOENT) => return Ok(None),
                     Err(e) => return Err(io("adopt CSI collection", e)),
@@ -485,6 +489,21 @@ impl RuntimeWriter<'_> {
                 }
             }
             cancelled(cancel)?;
+            if request.readonly {
+                // Bind mounts propagate at creation; a later bind-remount does
+                // not update kubelet's peers. Set the source mount flags first
+                // so every published peer inherits the requested read-only mode.
+                rustix::mount::mount_remount(
+                    proc_path(backing.fd()?),
+                    rustix::mount::MountFlags::BIND
+                        | rustix::mount::MountFlags::RDONLY
+                        | rustix::mount::MountFlags::NOSUID
+                        | rustix::mount::MountFlags::NODEV
+                        | rustix::mount::MountFlags::NOEXEC,
+                    "",
+                )
+                .map_err(|e| io("prepare CSI volume read-only", e))?;
+            }
             owned.target = VolumeDirectory::adopt(request.target(), true)?;
             let target = owned
                 .target
@@ -498,14 +517,6 @@ impl RuntimeWriter<'_> {
                 .map_err(|e| io("bind CSI volume", e))?;
             target.mounted = true;
             target.refresh()?;
-            if request.readonly {
-                rustix::mount::mount_remount(
-                    proc_path(target.fd()?),
-                    rustix::mount::MountFlags::BIND | rustix::mount::MountFlags::RDONLY,
-                    "",
-                )
-                .map_err(|e| io("remount CSI volume read-only", e))?;
-            }
             cancelled(cancel)?;
             Ok(())
         })();

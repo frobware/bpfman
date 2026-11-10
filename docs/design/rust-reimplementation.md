@@ -28,9 +28,11 @@ fails all ten because it discovers only legacy `.sig` tags. The appended
 OCI-referrers checkpoint records this capability difference and its evidence.
 Broader shared-store validation now passes three complete file/local-OCI passes:
 138 files in the four-slot shared phase plus nine standalone inventory controls,
-with empty final inventories/pins and normal unmount. Kubernetes deployment and
-the remaining broad Go comparison still need fresh evidence before packaging
-or entry-point changes. Physical-NIC/offload execution
+with empty final inventories/pins and normal unmount. Single-node KIND deployment
+now passes the existing tracepoint/TC/TCX/XDP workloads and repeated strict CSI
+container-restart checks, with explicit operator mount-configuration fixes. Rust
+image targets remain opt-in. The remaining broad Go comparison still needs fresh
+evidence before production packaging or entry-point cutover. Physical-NIC/offload execution
 and the documented Aya/kernel XDP boundaries also remain outside the completed
 evidence. Historical "next" notes
 below describe their checkpoint dates; this status and the latest appended
@@ -161,7 +163,7 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
 | Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
 | Daemon and gRPC | Synchronous stock-protobuf service, production `serve`, socket ownership, independent reads, cancellation and restart persistence | Deployment and cutover evidence |
-| CSI | Operator startup, Identity/Node services, confined map volumes, fsGroup/read-only handling, consuming cleanup and restart idempotence | Kubernetes cluster deployment untested |
+| CSI | Operator startup, Identity/Node services, confined map volumes, fsGroup/read-only handling, consuming cleanup and restart idempotence; single-node KIND workloads and repeated strict container restarts | Multi-node/OpenShift deployment untested; operator mount configuration required |
 | Program and link inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact metadata pairs and Kubernetes label selectors, exact managed/coarse kernel type filtering; link identity/kind and owning-program type/metadata filters; text/quiet/JSON output, cancellation and lock-free reads | Cutover validation |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
@@ -2794,8 +2796,9 @@ wrong, change it here before broadening feature coverage.
   CLI compatibility checkpoint below for evidence and explicit boundaries.
   The subsequent daemon and CSI checkpoints complete `serve` and the operator
   `--csi-support` startup form, including socket ownership, cancellation,
-  restart persistence and the shared stock Go clients. Kubernetes cluster
-  deployment remains untested.
+  restart persistence and the shared stock Go clients. Single-node KIND deployment
+  now passes existing workloads and repeated strict CSI container-restart checks;
+  see the latest checkpoint for required operator mount configuration.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -7687,3 +7690,199 @@ shared cohort remain unchanged. No fresh broad Go stress comparison is claimed;
 its previously recorded qdisc residue and policy-skip boundaries remain open.
 Next is Kubernetes/operator/CSI deployment acceptance and the remaining Go
 comparison before packaging or entry-point cutover.
+
+## KIND deployment and Rust images (10 November 2026)
+
+The independent workspace now has two opt-in native-architecture image targets:
+
+```sh
+direnv exec . make build-image-rust BPFMAN_IMG=bpfman:rust-dev
+direnv exec . make build-image-rust-dev BPFMAN_IMG=bpfman:rust-dev
+```
+
+`Dockerfile.bpfman.rust` builds the shared dispatchers and the locked
+`rust/Cargo.toml` workspace in Fedora, using `rust-build RUST_BUILD_PROFILE=release`.
+The context includes only the new workspace, shared protobufs, schema migrations,
+Makefile and dispatcher sources. It excludes the legacy workspace and host
+outputs. The runtime contains the release binary at `/bpfman` on Fedora Minimal;
+CSI uses the existing `--csi-support` entry point. Cargo registry/target cache
+mounts retain incremental builds. The bundled transport's native build needs
+CMake and a C++ compiler, both included in the builder.
+
+`Dockerfile.bpfman.rust.dev` packages the current host build, with no compilation
+inside the image. Its Make target depends on `rust-build`, defaults to
+`rust/target/debug/bpfman`, and also supports `RUST_BUILD_PROFILE=release`.
+A preparation stage changes only the copied binary's ELF interpreter to the
+runtime's loader and removes host RPATHs. This lets this host's Nix-built binary
+use Fedora's glibc/libgcc without shipping its Nix closure. `--version` during
+packaging rejects an incompatible architecture/libc. The host binary remains
+unchanged. These targets leave Go's default image pipeline intact. This is native
+Linux/amd64 evidence, not a multi-architecture release qualification.
+
+Deployment uses the existing operator checkout at
+`~/src/github.com/bpfman/bpfman-operator/worktrees/go-bpfman`, revision `1e5dc2ba`,
+with its local Make/deployment changes retained. Builds and manifest patching run
+in `/tmp/bpfman-rust-kind-xw2mfi2h/operator`, a temporary copy excluding the user's
+`.envrc` and `.direnv`. Operator and agent images are built from that same source.
+The operator's existing `setup-kind`, `build-images`, `load-images-kind`, `deploy`
+and `test-integration-local` targets supply the workflow. The dedicated
+`bpfman-rust-acceptance` cluster uses Kubernetes 1.35.0 and the host's Linux
+6.18.54 with BTF. Every Kubernetes command uses the evidence directory's separate
+kubeconfig; the user's current OpenShift context is untouched.
+
+Actual deployment uncovered three gaps:
+
+- The operator separately bind-mounts kubelet's plugin directory at
+  `<runtime>/csi`. The filesystem adapter refused that boundary with EXDEV before
+  reaching the per-volume backing directory. It now admits exactly `csi` using
+  beneath/no-symlink resolution, retains no-cross-mount confinement at `csi/fs`,
+  and preserves per-volume identities and consuming cleanup receipts.
+- The operator did not provide a stable host-mounted runtime bpffs.
+  SQLite survived a container restart while the runtime bpffs and kernel program
+  pins disappeared. Simply making the daemon's entire runtime bidirectional
+  preserved pins but also propagated its nested CSI mount back into the runtime;
+  a repeated client after container restart detected overlapping mount layers.
+  The final operator manifest instead uses its existing init helper to mount both
+  `/sys/fs/bpf` and `/run/bpfman/fs`, with bidirectional runtime propagation only
+  in the init container. The daemon receives the runtime using `HostToContainer`.
+  Its existing CSI and kubelet-pod mounts remain bidirectional. This preserves
+  pins without exporting the daemon's nested CSI mount. Only
+  `config/bpfman-deployment/daemonset.yaml` changes in the operator checkout;
+  unrelated local edits remain intact. The operator fix is committed separately
+  as `ba6ae8e1` (`Preserve runtime bpffs across daemon container restarts`).
+- Remounting only the published target read-only after binding did not update
+  propagated mount peers. A restart then observed a writable target and correctly
+  rejected a read-only replay as AlreadyExists. Publication now marks the backing
+  mount read-only before binding, preserving nosuid/nodev/noexec, so the bind and
+  its peers inherit the requested flags at creation. Existing consuming normal
+  unmount handles rollback and teardown without a new cleanup path.
+
+The existing Rust native CSI wire contract now mounts a separate registration
+volume and a shared target-parent peer. It runs the unchanged stock Go protobuf
+client, observes the peer's read-only flag, and asserts that observation after
+normal lifecycle/restart cleanup. It also refuses a foreign mount at `csi/fs`
+without changing its sentinel and requires an empty backing collection. No shared
+Go client assertions, script contracts, scheduling or admission rules change.
+The stock client gains an optional `-target-root`, retaining its existing default
+of `<runtime>/targets`. Deployed restart checks select a directory under the
+daemon pod's kubelet-visible pod directory, so their targets survive container
+restart through the actual kubelet mount. A private runtime target is not a valid
+substitute for that deployment test. Focused Go/Rust CSI contracts also pass
+after the client extension, with the default behavior unchanged.
+The original CSI-boundary regression fails with EXDEV before the fix and passes
+after it. The mount-peer regression fails before the publication-order fix and
+passes after it; the accepted failing control finishes normal cleanup before its
+assertion. `rust-test-csi` then passes all four native contracts, including the Go
+reference, plus CSI wire validation and daemon contracts.
+
+Evidence lives under `/tmp/bpfman-rust-kind-xw2mfi2h/`. Diagnostic failures are
+retained separately: `integration-tracepoint.log` records the original mount
+failure and a failed test exit; `csi-regression-before.log` reproduces EXDEV;
+`csi-readonly-before-clean.log` records the read-only peer failure with successful
+cleanup. An earlier version of that negative test asserted before cleanup and
+left ordinary fixture files; its log remains `csi-readonly-before.log`. After
+confirming no mounts remained, only that exact owned fixture was removed. The
+accepted regression observes first, cleans normally, and asserts last.
+
+Before the final fresh-cluster run, the unchanged operator tests
+`TestTracepointGoCounter`, `TestTcGoCounter`, `TestTcxGoCounter` and
+`TestXdpGoCounter` passed against the development image, with their actual counter
+assertions. Logs: `integration-tracepoint-fixed.log` and `integration-network.log`.
+The stock CSI client's deployed lifecycle lane also passed. With the operator
+propagation fix, an actual kubelet-created tracepoint workload retained exact
+program/map/link state across a Rust container restart, kept increasing its
+counter, and accepted a replacement workload pod before deletion; see
+`workload-restart.log`. That run preceded the
+read-only publication-order fix and is not strict read-only restart evidence.
+Earlier diagnostic volumes were retained across repeated image/propagation
+changes; subsequent map-identity conflicts are not accepted rerun evidence.
+`fresh-restart-check.log` passed once with a bidirectional daemon runtime, but
+`fresh-restart-check-repeat.log` then caught the overlapping mount layers; that
+configuration is not accepted. The dedicated cluster was replaced again before
+final acceptance, keeping all prior logs and using init-mounted bpffs from initial
+deployment. `final-restart-check.log` and `final-restart-check-repeat.log` both
+pass: the unchanged lifecycle assertions, strict read-only duplicate publication,
+real Rust container restart, exact program/map identity and empty final program
+inventory. `propagated-before.json`, `propagated-after.json` and
+`propagated-restart.json` retain the last successful restart's observations.
+
+Final accepted deployment uses `bpfman:rust-kind-final`,
+`bpfman-operator:rust-kind-pins-fixed`, and
+`bpfman-agent:rust-kind-acceptance`. The final cluster is created by the existing
+`destroy-kind setup-kind` targets, with an unused task-specific registry name
+so cleanup cannot remove a user's registry. `final-kind.log` and
+`final-deploy.log` record setup, image loading and deployment. The final operator
+mount layout is in place before its first daemon starts. Both strict restart
+runs pass with the client target parent under
+`/var/lib/kubelet/pods/<daemon-pod-uid>/bpfman-contract`; the native client retains
+its original default target parent. The logs are `final-restart-check.log` and
+`final-restart-check-repeat.log`.
+
+The existing operator integration target then exits zero with all four unchanged
+workload tests and their counter assertions:
+
+| Existing test | Result | Test duration |
+| --- | --- | --- |
+| `TestTcGoCounter` | pass | 52.01 s |
+| `TestTcxGoCounter` | pass | 36.40 s |
+| `TestTracepointGoCounter` | pass | 23.25 s |
+| `TestXdpGoCounter` | pass | 38.97 s |
+
+The whole Go integration invocation takes 175.077 seconds, including setup and
+cleanup. It uses the existing Make recipe, with the regex quoted for its shell
+and dollar-escaped for Make:
+
+```sh
+export KUBECONFIG=/tmp/bpfman-rust-kind-xw2mfi2h/kubeconfig
+direnv exec . make -C /tmp/bpfman-rust-kind-xw2mfi2h/operator \
+  test-integration-local KIND=/home/aim/.nix-profile/bin/kind \
+  BPFMAN_IMG=bpfman:rust-kind-final \
+  BPFMAN_OPERATOR_IMG=bpfman-operator:rust-kind-pins-fixed \
+  BPFMAN_AGENT_IMG=bpfman-agent:rust-kind-acceptance \
+  'TEST="^Test(Tracepoint|Xdp|Tc|Tcx)GoCounter$$"'
+```
+
+`final-workload-restart.log` records a further successful check using the actual
+local tracepoint example manifests: an existing kubelet CSI consumer stays alive
+across a Rust container restart, its counter continues increasing, and the exact
+program/map/link inventory remains unchanged. A replacement consumer pod then
+publishes its own CSI volume successfully against those same objects. The
+workload and application are deleted normally. `workload-restart-result.json`,
+`workload-before-restart.json`, `workload-after-restart.json` and
+`workload-counter.log` retain the final observations.
+
+`final-audit.json` and `final-audit.log` record empty managed program/link/dispatcher
+inventories, all owned pin/artifact collections, CSI backing directories and
+application/state resources. No per-volume CSI bpffs mounts remain. The daemon
+is ready and `csi.bpfman.io` remains registered with kubelet. Its empty host runtime
+bpffs intentionally remains mounted for this running deployment; this is not a
+claim that the cluster was undeployed. All CSI test volume teardown uses normal
+unmount through the driver. The cluster is left running for inspection, with the
+separate kubeconfig above. `final-cluster.json` captures its final resources.
+
+Final verification:
+
+- Both opt-in image builds exit zero and their version commands pass. Logs:
+  `build-image-dev-final.log`, `build-image-source-final.log`,
+  `final-dev-version.txt`, `final-source-version.txt`. KIND acceptance uses the
+  development image; the source-built release image is build/smoke evidence.
+- `direnv exec . make rust-check lint-make lint-dockerfile` exits zero:
+  `rust-check-final.log`. All 90 discovered native cases run, the unchanged
+  file/local-OCI acceptance corpus passes, and normal real-kernel fixture cleanup
+  passes. Native wall time is 266.83 seconds. The gate includes the existing
+  aya-obj development/test optimization override at level two.
+- After extending the test client's target-parent selection, the focused CSI
+  target exits zero again with unchanged default client behavior against both
+  Go and Rust: `csi-target-root.log`. Its explicit Go lint reports zero issues:
+  `csi-client-lint.log`. No production Rust source changes after the full gate.
+- Both repository diffs pass `git diff --check`. Only the operator DaemonSet
+  manifest is changed by this task in that checkout; its pre-existing Make,
+  deployment image and environment changes are preserved.
+
+This is bounded single-node KIND acceptance, not a multi-node/OpenShift or
+physical-NIC/offload qualification. The operator's default signing configuration
+verifies signatures but permits unsigned images; the earlier strict remote-image
+checkpoint remains the evidence for forbidding unsigned admission. No Go daemon
+Kubernetes comparison is claimed here. The remaining broad Go semantic/residue
+comparison and those deployment boundaries remain cutover work. Default Go
+packaging and production entry points are unchanged.

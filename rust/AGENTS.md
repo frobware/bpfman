@@ -471,6 +471,16 @@ The architecture and compatibility goals are in
 - Make each vertical slice's supported command surface explicit. Unsupported
   commands and flags fail clearly; never invent successful observations for
   functionality not yet implemented.
+- CSI deployment bind-mounts kubelet's plugin directory at `<runtime>/csi`.
+  Admit only that named collection boundary with beneath/no-symlink resolution;
+  retain no-cross-mount confinement for `csi/fs`. Per-volume bpffs mounts retain
+  their own identities and consuming receipts. Keep the shared-client native
+  regression on a separately bind-mounted registration directory, including
+  refusal of a foreign `csi/fs` mount and normal cleanup after daemon restart.
+  Read-only publication must reach mount peers: set the backing mount read-only
+  before creating the bind, preserving nosuid/nodev/noexec. A later bind-remount
+  does not update propagated peers. Observe the peer's flags in the native
+  contract, finish normal cleanup, then assert the observation.
 
 ## Native TCX
 

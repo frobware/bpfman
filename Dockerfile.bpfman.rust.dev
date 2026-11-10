@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.7
+# Package the existing native GNU/Linux build; no compilation in this image.
+# Usage: direnv exec . make build-image-rust-dev BPFMAN_IMG=bpfman:rust-dev
+ARG RUNTIME_IMAGE=registry.fedoraproject.org/fedora-minimal:43
+
+# Match the runtime's loader even when the host binary was built with Nix.
+# Only this image's copy is patched. The original host binary is untouched.
+# hadolint ignore=DL3006
+FROM ${RUNTIME_IMAGE} AS prepare
+# hadolint ignore=DL3041
+RUN microdnf install -y patchelf && microdnf clean all
+ARG RUST_BINARY=rust/target/debug/bpfman
+COPY --chmod=0755 ${RUST_BINARY} /bpfman
+RUN patchelf --set-interpreter "$(patchelf --print-interpreter /bin/sh)" \
+      --remove-rpath /bpfman \
+    && /bpfman --version
+
+# hadolint ignore=DL3006
+FROM ${RUNTIME_IMAGE}
+COPY --from=prepare /bpfman /bpfman
+ENTRYPOINT ["/bpfman"]
