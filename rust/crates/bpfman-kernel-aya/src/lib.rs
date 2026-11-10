@@ -8,6 +8,7 @@ mod failure;
 mod function_tracing;
 mod image;
 mod kprobe;
+mod map_initializers;
 mod maps;
 mod netns;
 mod object;

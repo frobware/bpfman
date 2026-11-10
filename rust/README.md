@@ -2207,6 +2207,26 @@ stress the full corpus on one store. Backend batches still run sequentially.
 The old individual Rust script
 wrappers have been removed. `make rust-test-scripts` runs these batches directly;
 `rust-test-xdp-corpus` and `rust-test-observation` also select this acceptance gate.
+
+The normal gate additionally runs every shared non-external script against Rust
+twice, using the explicit `!external,!rust-only` selector: once with file bytecode
+and once with file loads routed through the local OCI build/load broker. Run
+these two cases separately with:
+
+```sh
+direnv exec . make rust-test-bytecode-corpus
+```
+
+Each batch discovers its expected scripts from the shell's selector output and
+requires a pass for every filename plus empty inventories/artifact collections.
+Both use isolated per-script runtimes and the existing Go runner's pooled
+interfaces, case scheduling and residue checks. The admitted corpus retains its
+additional concurrent shared-runtime cohort. All batches run in the serial corpus
+stage before independent native contracts; script labels and assertions are
+unchanged. Image mode uses the existing no-signature-verification configuration
+for the local fixture registry. These Rust runs do not establish verified remote
+image acceptance or a green comparison against Go: the broad Go audit's foreign
+ingress-qdisc residue failure remains recorded in the design document.
 Corpus parity takes priority over further Rust-specific packet scenarios.
 
 The first migration checkpoint passed `direnv exec . make rust-check`: formatting,
@@ -2567,16 +2587,41 @@ clean up after the final user. Native contracts cover failed outer creation,
 verifier rejection, partial acquisition, failed commits, cancellation, retained
 cleanup retries, descriptor release and externally held outer/inner lifetimes.
 
+Fresh private outer maps also support ELF `.values` initializers. The adapter
+checks the original `.maps` data relocations against BTF member offsets, exact
+map symbols and bounded pointer slots, then uses Aya's public map APIs to insert
+the referenced inner maps before verifying the selected program. Sparse array
+slots remain empty; hash indices are keys, so a key may exceed hash capacity.
+Original ELF/provenance bytes and Go schema 2 remain unchanged.
+
+Initialization of named or reused outer maps is explicitly unsupported. Named
+outer declarations are refused before runtime creation; explicit owner replay is
+refused before opening replacement sources. Go's collection loader replays
+initializers onto replacement maps, potentially overwriting live entries.
+Rust preserves those entries and its existing compensation guarantees until a
+separate mutation/rollback policy is established. This boundary does not affect
+the existing userspace-populated map-of-maps sharing scenarios.
+
+`TestMapOfMaps_Initializers` executes the same sparse array/hash counter scenario
+against Go and Rust with file and local OCI bytecode. Native contracts add
+partial insertion failure, verifier failure, failed commit, cancellation,
+blocked/cancelled/explicit cleanup retries, exact descriptor release, preserved
+operator updates on refused reuse, and reopened unload. These cases join
+`rust-test-map-sharing` and the full gate without changing existing scripts.
+
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
 `shared_map_pins`. Older artifacts without a map inventory retain
 conservative program-reference validation; broader orphan adoption is separate.
 
 `direnv exec . make rust-test-map-sharing` runs native identity/recovery contracts
-and these unchanged scripts once with SQLite:
+and these shared acceptance scripts with SQLite:
 
 - `TestKprobe_MapOwnerIDSharedCounter`
 - `TestProgramLoad_MapOwnerIDMustNameMapSet`
 - `TestTC_PinByNameMapSharing`
+- `TestMapOfMaps_MapOwner`
+- `TestMapOfMaps_PinByName`
+- `TestMapOfMaps_Initializers`
 
 The complete gate also runs shared store contracts and stateful-fake coverage for
 faults, cancellation, owner-first unload, reopened retries and authority transfer.

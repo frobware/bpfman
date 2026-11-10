@@ -133,6 +133,9 @@ impl ProgramLoad for Kernel {
         if owner.is_none() && shared.is_empty() {
             return crate::object::load(bytes, maps, globals, spec);
         }
+        // Refuse mutation of reused outer contents before entering the confined
+        // filesystem bridge, retaining the typed unsupported category.
+        crate::object::validate_initializer_reuse(bytes, spec, owner.is_some(), shared)?;
         w.with_load_maps(owner, maps, shared, |sources| {
             crate::object::load_with_maps(bytes, maps, globals, spec, sources).map_err(Into::into)
         })

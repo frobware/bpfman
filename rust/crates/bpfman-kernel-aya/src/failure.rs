@@ -6,6 +6,8 @@ pub(crate) enum LoadCause {
     Tracing(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("parse local ELF")]
     Parse(#[source] Box<aya_obj::ParseError>),
+    #[error("parse map-of-maps initializers")]
+    Initializers(#[source] std::io::Error),
     #[error("load ELF maps and relocations")]
     Kernel(#[source] Box<aya::EbpfError>),
     #[error("observe loaded map identity")]
@@ -27,9 +29,10 @@ pub(crate) enum LoadCause {
 impl From<LoadCause> for Error {
     fn from(cause: LoadCause) -> Self {
         let kind = match cause {
-            LoadCause::Invalid(_) | LoadCause::Parse(_) | LoadCause::MapReuse { .. } => {
-                ErrorKind::InvalidInput
-            }
+            LoadCause::Invalid(_)
+            | LoadCause::Parse(_)
+            | LoadCause::Initializers(_)
+            | LoadCause::MapReuse { .. } => ErrorKind::InvalidInput,
             LoadCause::Unsupported(_) => ErrorKind::Unsupported,
             _ => ErrorKind::Unavailable,
         };

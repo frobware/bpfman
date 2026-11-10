@@ -6,6 +6,10 @@ use bpfman_kernel::{Error, ErrorKind};
 
 mod foreign;
 
+pub(super) fn map_value_offsets(bytes: &[u8]) -> std::io::Result<BTreeMap<String, u32>> {
+    foreign::map_value_offsets(bytes)
+}
+
 /// Canonical bpfman image labels derived from bytecode.
 pub struct BytecodeMetadata {
     /// Program names and library-independent bpfman family names.

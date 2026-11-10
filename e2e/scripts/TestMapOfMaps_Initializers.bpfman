@@ -1,0 +1,46 @@
+# -*- mode: bpfman -*-
+# Both outer families receive sparse ELF .values before any userspace updates.
+import ../lib.bpfman
+
+def seed_count(id) {
+    guard dump <- bpftool map dump id $id -j
+    return $dump.stdout |> jq "fromjson | .[0].formatted.value | tonumber"
+}
+
+guard fn <- kfunc acquire
+defer kfunc release $fn
+
+guard loaded <- bpfman program load file testdata/bpf/map_of_maps_initializers.bpf.o --programs kprobe:mom_seed_counter
+let prog = $loaded.programs[0]
+defer bpfman program unload $prog --ignore-missing
+
+let directory = $prog.record.handles.map_pin_path
+guard a <- bpftool map show pinned "${directory}/mom_seed_a" -j
+guard b <- bpftool map show pinned "${directory}/mom_seed_b" -j
+let first = $a.stdout |> jq "fromjson | .id"
+let second = $b.stdout |> jq "fromjson | .id"
+assert $first != $second
+
+guard link <- bpfman link attach kprobe $prog $fn.name
+defer bpfman link detach $link --ignore-missing
+foreach inner in [$first $second] {
+    guard before <- seed_count $inner
+    kfunc fire $fn 5
+    guard after <- seed_count $inner
+    assert ($after - $before) == 10
+}
+
+# Independent private loads must initialize their own inner/outer identities.
+guard independent <- bpfman program load file testdata/bpf/map_of_maps_initializers.bpf.o --programs kprobe:mom_seed_counter
+let other = $independent.programs[0]
+defer bpfman program unload $other --ignore-missing
+guard other_a <- bpftool map show pinned "${other.record.handles.map_pin_path}/mom_seed_a" -j
+let other_first = $other_a.stdout |> jq "fromjson | .id"
+assert $first != $other_first
+guard untouched <- seed_count $other_first
+assert $untouched == 0
+
+bpfman program unload $other
+bpfman program unload $prog
+assert not path-exists "${directory}/mom_seed_array"
+assert not path-exists "${directory}/mom_seed_hash"

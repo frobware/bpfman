@@ -24,7 +24,10 @@ trap 'stop TERM 143' TERM
 failed=0
 while IFS= read -r name <&3; do
     output="$results/$name.log"
-    "$binary" --exact --test-threads=1 "$name" > "$output" 2>&1 3<&- &
+    diagnostics="$results/$name.stderr"
+    # Direct timing/tracing writes can interrupt libtest's partial status line.
+    # Validate its stdout independently, then retain all stderr diagnostics.
+    "$binary" --exact --test-threads=1 "$name" > "$output" 2> "$diagnostics" 3<&- &
     child=$!
     pid=$child
     if wait "$child"; then status=0; else status=$?; fi
@@ -39,6 +42,7 @@ while IFS= read -r name <&3; do
             status=1
         fi
     fi
+    cat "$diagnostics" >> "$output"
     printf '%s %s\n' "$status" "$pid" > "$results/$name.result"
     if [ "$status" -ne 0 ]; then failed=1; fi
 done 3< "$queue"

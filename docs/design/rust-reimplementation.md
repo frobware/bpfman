@@ -2,6 +2,30 @@
 
 ## Status
 
+The 10 November map-of-maps continuation adds sparse ELF `.values` initialization
+for fresh private array/hash outer maps, including checked relocation admission
+and normal consuming cleanup. Initializers targeting named or reused outer maps
+are explicitly unsupported: replaying them onto live maps needs a separate
+mutation/rollback policy. Existing userspace-populated outer-map sharing remains
+supported. See the latest checkpoint below for the precise boundary and evidence.
+
+Resumed on 9 November 2026 from `d4ecceaee` (19 October). The completed
+capability checkpoints include non-server CLI compatibility, synchronous gRPC,
+production `serve`, operator/CSI startup, and shared array/hash map-of-maps.
+The current continuation retains the full shared non-external script corpus in
+the normal Rust gate with both file and local OCI bytecode. Use
+`direnv exec . make rust-test-bytecode-corpus` for that focused matrix.
+
+Cutover remains pending. The last broad Go comparison recorded a residue failure
+in `TestTC_RejectsAttachOverForeignIngressQdisc` and a production-policy skip for
+clsact reclamation; these are not green Go/Rust parity results. Verified remote
+image acceptance, shared-store stress and Kubernetes deployment need fresh
+evidence before packaging/entry-point changes. Shared-outer `.values`
+initializers, physical-NIC/offload execution and the documented Aya/kernel XDP
+boundaries also remain outside the completed evidence. Historical "next" notes
+below describe their checkpoint dates; this status and the latest appended
+checkpoint identify the current continuation.
+
 SQLite is now the only Rust persistence adapter and is implicit in the CLI;
 `--store` and the `BPFMAN_STORE` binding are removed. The experimental JSON adapter
 and its dedicated snapshot publisher are retired. Store traits, consuming receipts,
@@ -11,7 +35,8 @@ below record validation performed when both adapters existed; they do not descri
 current backend availability. Go's backends are unchanged.
 
 Implementation is in progress in the independent `rust/` workspace. The latest
-capability checkpoint adds shared array/hash map-of-maps to explicit map-owner
+capability checkpoint adds private ELF map-of-maps initialization. The preceding
+checkpoint adds shared array/hash map-of-maps to explicit map-owner
 joins and PinByName sharing, with independent map-set/name-pin/inner-map lifetimes
 and consuming recovery through the implicit SQLite adapter.
 Native kprobe/kretprobe loading and standalone attachment, compensation and
@@ -121,11 +146,13 @@ ownership. Surviving managed link IDs and operator fields remain stable.
 | Tracepoint links | Pending intent, attach/detach, observations, attached-program unload | Broader attachment families |
 | XDP links | One to ten members per interface, current or explicit namespace, configurable drv/skb/hw requests with non-SKB fallback, replacement, last detach, attached-program unload | Actual hardware offload, physical NIC packet execution |
 | XDP replacement | Pure ordering/configuration; complete store publication; owned kernel switching/restoration; runtime recovery and explicit retries; fill/drain, chain-execution, driver/SKB multi-buffer, TX/direct-REDIRECT, DEVMAP and DEVMAP_HASH unicast, broadcast, and ingress exclusion acceptance; ordinary-frame DEVMAP egress and ordinary/multi-buffer DEVMAP_HASH egress PASS/DROP | Array DEVMAP multi-buffer egress blocked by Aya extension flags; kernel multi-buffer fan-out limitation |
-| XDP observations | Program/link get and list; dispatcher get/list with text and JSON output, default listing and key filters | Broader CLI compatibility |
+| XDP observations | Program/link get and list; dispatcher get/list with text and JSON output, default listing and key filters | Cutover validation and general reconciliation |
 | TC ingress/egress | One to ten members per interface/namespace/direction; complete revision replacement; stable managed link IDs and exact filter handle; signed continuation; borrowed/owned clsact; atomic publication, restoration, retirement, explicit retries, attached-program unload, missing-namespace dispatcher cleanup, dispatcher get/list | Outer-filter status and general orphan repair |
 | TCX | Native SCHED_CLS loading; pinned ingress/egress links; ascending priority with attachment-order ties; duplicate refusal, namespace attachment, observations, compensation and attached unload | Foreign chain reconciliation and recovery after losing in-memory reports |
 | Persistence | Implicit SQLite with Go-compatible schema 2; backend-neutral contracts, consuming receipts and generic lifecycle tests retained | No implicit upgrade or conversion of existing state |
-| Program and link inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact metadata pairs and Kubernetes label selectors, exact managed/coarse kernel type filtering; link identity/kind and owning-program type/metadata filters; text/quiet/JSON output, cancellation and lock-free reads | Broader CLI compatibility and cutover |
+| Daemon and gRPC | Synchronous stock-protobuf service, production `serve`, socket ownership, independent reads, cancellation and restart persistence | Deployment and cutover evidence |
+| CSI | Operator startup, Identity/Node services, confined map volumes, fsGroup/read-only handling, consuming cleanup and restart idempotence | Kubernetes cluster deployment untested |
+| Program and link inventory | Managed listing, `program list --all` with unmanaged kernel rows, active-link `--attached`/`--unattached` filtering, exact metadata pairs and Kubernetes label selectors, exact managed/coarse kernel type filtering; link identity/kind and owning-program type/metadata filters; text/quiet/JSON output, cancellation and lock-free reads | Cutover validation |
 | Kernel boundary | One injected backend across reads and lifecycle; real adapters and stateful fake use the same runtime interpreter | Additional attachment families |
 
 Attached XDP unload holds one writer scope and defers program teardown until every
@@ -2700,6 +2727,8 @@ wrong, change it here before broadening feature coverage.
 
 - Explicit map-owner sharing and PinByName coordination are implemented, including
   shared array/hash map-of-maps definitions and independent inner-map lifetimes.
+  Fresh private outer maps also support sparse ELF `.values` initializers;
+  named/reused outer initialization remains an explicit unsupported boundary.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
@@ -2713,11 +2742,15 @@ wrong, change it here before broadening feature coverage.
   than being inferred from this port.
 - The uprobe mount-namespace helper and synchronous CSI integration are implemented.
 - Grow the parity manifest to the full applicable `.bpfman` corpus, including
-  file-bytecode, image-bytecode, parallel, and stress lanes.
+  file-bytecode, image-bytecode, parallel, and stress lanes. The full shared
+  non-external corpus now has separate file/image cases in the normal gate;
+  existing admitted and family-specific selections retain their labels and
+  scheduling. Remote verification and broader shared-store stress remain separate.
 
 ### Phase 5: public surfaces and cutover
 
-- Complete gRPC and CLI compatibility. Hidden program/link cascading delete
+- gRPC, CLI, production `serve` and operator/CSI startup are implemented.
+  Hidden program/link cascading delete
   commands support shared-map dependant ordering, recursive expansion and program
   `--all` selection under one writer scope. Link delete unloads its owner only
   after its last link disappears. Outcomes retain original teardown progress and
@@ -2744,8 +2777,10 @@ wrong, change it here before broadening feature coverage.
   loads, `-n`, global logging and the accepted numeric/enum/boolean vocabulary.
   Command/flag discovery and shared behavior are covered independently; see the
   CLI compatibility checkpoint below for evidence and explicit boundaries.
-  `serve` and operator `--csi-support` startup are explicitly deferred until
-  after gRPC support, rather than being stubbed during this CLI pass.
+  The subsequent daemon and CSI checkpoints complete `serve` and the operator
+  `--csi-support` startup form, including socket ownership, cancellation,
+  restart persistence and the shared stock Go clients. Kubernetes cluster
+  deployment remains untested.
 - Run the full Go and Rust outside-in suites independently and compare their
   semantic results.
 - Switch packaging and production entry points only after the compatibility
@@ -7034,3 +7069,141 @@ One initial forced-image invocation overlapped another command's shared kernel
 module build and failed while a generated header was being replaced. The
 sequential rerun and final full gate passed; no test or build assertion was
 changed to accommodate that setup failure. `.envrc` remains untouched.
+
+## Full shared file/image corpus continuation (9 November 2026)
+
+Work resumes from `d4ecceaee`, the shared map-of-maps checkpoint. The preceding
+CLI, library gRPC, production daemon and CSI checkpoints are implemented; older
+notes deferring them are historical. The immediate continuation makes the broad
+file/image audit repeatable in the normal gate.
+
+Two native cases, `sqlite_file_bytecode_script_corpus` and
+`sqlite_image_bytecode_script_corpus`, discover the complete
+`!external,!rust-only` selection through the existing shell. There are currently
+145 shared non-external files, including both map-of-maps scripts. Each case
+requires every selected filename to report a real pass and requires the runner
+and final inventory/artifact checks to succeed. Image mode routes file loads
+through the existing local OCI broker and its explicit unsigned-fixture policy;
+this is independent of the signed external-registry lane.
+
+Both cases join the existing serial corpus stage, preserving all previously
+discovered cases and the independent eight-process native stage. The existing
+admitted corpus still overlaps its additional shared-runtime cohort. The new
+full shared batches use per-script isolated runtimes, unchanged script pragmas,
+pooled networks and normal bpffs unmount/residue checks. No existing Go code,
+script assertions, labels, dependency versions or persistence formats change.
+`make rust-test-scripts` includes the new cases; the focused command is:
+
+```sh
+direnv exec . make rust-test-bytecode-corpus
+```
+
+The first timed gate exposed a pre-existing runner bug: direct stderr telemetry
+interrupted libtest's partial stdout status line, so strict pass validation
+rejected successful cases. Workers now capture stdout and stderr separately,
+validate the original exact stdout witness and one-pass summary, then append all
+diagnostics to the case log. Scheduling, process isolation and failure joining
+are unchanged. Runner regressions cover telemetry between the name and status,
+retained diagnostics, and refusal of a forged pass marker on stderr, alongside
+the existing crash, empty-selection, ignored-case and signal contracts.
+
+These cases exercise Rust against shared contracts. They do not turn the broad
+Go audit green: its recorded foreign-ingress-qdisc residue failure and
+clsact-reclamation policy skip remain explicit. Remaining cutover work includes
+renewed broad Go/Rust comparison, verified external image acceptance,
+shared-store stress beyond the retained cohort, and deployment evidence. ELF
+map-of-maps `.values` initialization remains unproven by the userspace-populated
+outer-map scenarios. Actual offload and the documented Aya/kernel XDP limits
+remain separate boundaries.
+
+Validation on Linux 6.18.54, with the existing development/test `aya-obj`
+opt-level-two override:
+
+- The initial `direnv exec . make rust-check` exited zero with all 85 baseline
+  native cases and successful fake/real fixture cleanup.
+- The final `direnv exec . env BPFMAN_KERNEL_TIMINGS=1 make rust-check lint-make`
+  exited zero: formatting, strict Clippy, userspace/architecture/runner/fake
+  contracts, doctests, all 87 discovered/selected native cases, warnings-denied
+  Rustdoc and Makefile lint passed. Each full bytecode batch reported passes for
+  all 145 selected script files. Native stages took 255.97 seconds; fake and real
+  fixture residue checks passed. Definitive log:
+  `/tmp/bpfman-rust-resume-final-check2.log`.
+- Focused runner regressions, ShellCheck for both changed runner scripts, and
+  the focused Make recipe's undefined-variable probe passed. The initial timed
+  failure remains in `/tmp/bpfman-rust-resume-final-check.log`; no script assertion,
+  exact-case pass requirement or cleanup check was removed to resolve it.
+
+## Private map-of-maps ELF initializers (10 November 2026)
+
+Fresh private `ARRAY_OF_MAPS` and `HASH_OF_MAPS` now populate sparse `.values`
+references from the original ELF. Aya 0.14 parses inner templates and creates the
+outer maps but does not apply these data relocations. The adapter uses the
+existing checked ELF/BTF reader to obtain member offsets, validates each
+`R_BPF_64_ABS64` relocation against the containing map symbol and eight-byte slot,
+requires an exact inner-map symbol, and rejects malformed/duplicate/out-of-range
+references and nonzero definition bytes before runtime creation. It uses Aya's
+public array/hash map APIs to insert references before program verification.
+Empty array slots remain empty; hash indices are keys, independent of capacity.
+ELF/provenance bytes, Aya, dependency versions, architecture laws and Go schema 2
+are unchanged. No new unsafe boundary or program family is introduced.
+
+Named and reused outer initialization is explicitly unsupported. Named
+declarations fail during object admission; explicit owner replay is refused
+before entering the filesystem replacement-source bridge, preserving a typed
+unsupported error. Go's `populateDeferredMaps` applies `MapSpec.Contents` even
+to replacement maps, which can overwrite live entries. This slice does not copy
+that mutation into Rust without corresponding ownership and compensation policy.
+The native control deliberately changes an existing outer entry, attempts owner
+replay and proves the operator's replacement and the other map's entries survive.
+Ordinary userspace-populated outer-map sharing remains supported.
+
+`TestMapOfMaps_Initializers` is a new shared acceptance script. Both implementations
+load its sparse array/hash references, execute exact counters through a leased
+kprobe function, reopen state at every CLI call, establish independent private
+map identities, and remove all managed pins on unload. Go runs it with both file
+and local OCI bytecode in the existing serial reference stage. Rust runs it in
+the focused map-sharing corpus and both complete shared file/image batches.
+Existing Go source/tests, script assertions, labels and scheduling are unchanged.
+
+The new native case enters production application operations over generic store
+contracts and real SQLite. It covers incompatible inner insertion after partial
+population, verifier failure, failed commits, early/late cancellation, blocked
+cleanup, cancelled and explicit consuming retry, exact descriptor release,
+preserved live entries on refused reuse, sparse holes, hash keys beyond capacity,
+exact inner identities and reopened teardown. Admission integration tests mutate
+relocation alignment, extent, kind, target, data and duplicate offsets; a CLI
+contract proves named declarations fail before runtime creation. The native case
+joins the existing eight-process stage and the focused command remains:
+
+```sh
+direnv exec . make rust-test-map-sharing
+```
+
+The first full parallel gate passed the new initializer case but exposed an
+immediate-unload failure in the existing map-sharing native fixture. That fixture
+attached to slot zero while the concurrent function-tracing contract explicitly
+fired slot zero. Its final probe lifecycle now leases a slot from 2 through 127
+using the same `/run/bpfman-kfunc-pool/NN.lock` flock convention as the Go shell.
+The lease outlives its probes and excludes the tracing contract's hard-coded
+slots zero and one. No immediate-release assertion, cleanup check, scheduling
+placement or worker count is changed; no polling or inline retry is added.
+
+Validation on Linux 6.18.54 with the existing development/test `aya-obj`
+opt-level-two override:
+
+- `direnv exec . env BPFMAN_KERNEL_TIMINGS=1 make rust-check lint-make` exited
+  zero: formatting, strict Clippy, userspace/architecture/admission contracts,
+  doctests, all 88 discovered/selected native cases, warnings-denied Rustdoc and
+  Makefile lint passed. Both complete shared bytecode batches passed all 146
+  selected script files. Native stages took 254.11 seconds, with successful fake
+  and real fixture residue checks. Definitive log:
+  `/tmp/bpfman-mom-initializers-check2.log`.
+- `direnv exec . make rust-fmt-fix rust-test-map-sharing` exited zero for all
+  five focused cases, including the unchanged sharing recovery contract, the new
+  initializer recovery case and Go's new file/image comparison. Log:
+  `/tmp/bpfman-mom-initializers-focused3.log`.
+- The new script passed static checking and exact canonical-format comparison.
+  Earlier fixture/admission issues and the parallel shared-target failure were
+  corrected without removing an assertion or changing existing Go code/tests.
+  The first full gate's failure remains recorded in
+  `/tmp/bpfman-mom-initializers-check.log`.

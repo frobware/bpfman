@@ -10,6 +10,36 @@ use bpfman_runtime::{ActiveStore, Bpfman, KprobeAttach, PreparedProgram};
 use bpfman_store::*;
 use std::{collections::BTreeMap, num::NonZeroU32};
 
+fn isolated_probe_target() -> std::io::Result<(std::fs::File, String)> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let root = std::path::Path::new("/run/bpfman-kfunc-pool");
+    std::fs::create_dir_all(root)?;
+    // Match the Go shell's per-slot flock. Native tracing deliberately fires
+    // slots zero and one; an immediate-lifetime control must not share those.
+    for slot in 2..128 {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(root.join(format!("{slot:02}.lock")))?;
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::NonBlockingLockExclusive) {
+            Ok(()) => {
+                std::fs::metadata(format!("/sys/kernel/debug/bpfman_e2e/trigger_{slot:03}"))?;
+                return Ok((file, format!("bpfman_e2e_target_{slot}")));
+            }
+            Err(rustix::io::Errno::WOULDBLOCK) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::WouldBlock,
+        "no isolated kernel-function slot",
+    ))
+}
+
 fn prepared(object: &str, spec: ProgramSpec) -> PreparedProgram {
     PreparedProgram::new(
         &bpfman_kernel_aya::Kernel::default(),
@@ -251,6 +281,7 @@ where
 
     // Every public ELF map is pinned even if this selection references only
     // one. A different selection can join the same map set and unload last.
+    let (_target_lease, target) = isolated_probe_target().expect("isolated probe target");
     let owner = app.load(probe("mkp_a")).expect("owner");
     let runtime = RuntimeDirectory::open_existing(c.layout.clone())
         .expect("runtime")
@@ -265,7 +296,7 @@ where
         .expect("different selection joins");
     let attach = |program_id| KprobeAttach {
         program_id,
-        function: "bpfman_e2e_target_0".parse().expect("target"),
+        function: target.parse().expect("target"),
         offset: 0,
         metadata: Default::default(),
     };

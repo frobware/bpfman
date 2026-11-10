@@ -473,6 +473,18 @@ fn sqlite_script_corpus() {
 }
 
 #[test]
+fn sqlite_file_bytecode_script_corpus() {
+    let _timing = support::TestTiming::start("sqlite_file_bytecode_script_corpus");
+    cli::shared_bytecode_corpus("file");
+}
+
+#[test]
+fn sqlite_image_bytecode_script_corpus() {
+    let _timing = support::TestTiming::start("sqlite_image_bytecode_script_corpus");
+    cli::shared_bytecode_corpus("image");
+}
+
+#[test]
 fn sqlite_program_inventory_script_corpus() {
     let _timing = support::TestTiming::start("sqlite_program_inventory_script_corpus");
     cli::program_inventory_scripts();
@@ -552,6 +564,13 @@ fn sqlite_map_sharing_map_of_maps_recovery() {
 fn go_map_sharing_map_of_maps_contract() {
     cli::go_dsl("TestMapOfMaps_MapOwner");
     cli::go_dsl("TestMapOfMaps_PinByName");
+    cli::go_dsl("TestMapOfMaps_Initializers");
+    cli::go_dsl_source("TestMapOfMaps_Initializers", "image");
+}
+
+#[test]
+fn sqlite_map_sharing_map_of_maps_initializers() {
+    map_of_maps::initializers(bpfman_store_sqlite::Backend);
 }
 
 #[test]

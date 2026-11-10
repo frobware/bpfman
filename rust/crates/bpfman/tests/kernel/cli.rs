@@ -376,16 +376,26 @@ pub(super) fn effect_boundaries() {
 }
 
 pub(super) fn go_dsl(script: &str) {
+    go_dsl_source(script, "file");
+}
+
+pub(super) fn go_dsl_source(script: &str, source: &str) {
     let binary = std::env::var_os("BPFMAN_GO_BIN")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin/bpfman"));
-    run_dsl(Some(&[script]), &binary, false);
+    run_dsl_source(Some(&[script]), &binary, false, source);
 }
 
 pub(super) fn corpus() {
     // Both cohorts share one runner/pool. Four scripts additionally mutate one
     // owned writer/store while ordinary acceptance keeps per-case isolation.
     run_dsl(None, &rust(), true);
+}
+
+pub(super) fn shared_bytecode_corpus(source: &str) {
+    // Select the complete shared corpus without changing its admission labels.
+    // Rust-only capabilities retain their existing separate acceptance lane.
+    run_dsl_selection(None, &rust(), true, source, "!external,!rust-only");
 }
 
 pub(super) fn program_inventory_scripts() {
@@ -447,6 +457,22 @@ fn run_dsl_source(
     isolated: bool,
     source: &str,
 ) {
+    let selector = if scripts.is_some() {
+        "!external"
+    } else {
+        "rust=ok,!external"
+    };
+
+    run_dsl_selection(scripts, binary, isolated, source, selector);
+}
+
+fn run_dsl_selection(
+    scripts: Option<&[&str]>,
+    binary: &std::path::Path,
+    isolated: bool,
+    source: &str,
+    selector: &str,
+) {
     let c = Context::new();
     let runner = std::env::var_os("BPFMAN_DSL_TEST_BIN")
         .map(std::path::PathBuf::from)
@@ -454,11 +480,6 @@ fn run_dsl_source(
     let shell_dir = std::env::var_os("BPFMAN_SHELL_BIN_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin"));
-    let selector = if scripts.is_some() {
-        "!external"
-    } else {
-        "rust=ok,!external"
-    };
     let expected = if let Some(scripts) = scripts {
         scripts
             .iter()
@@ -513,7 +534,7 @@ fn run_dsl_source(
         "TestXDP_Lifecycle_Drv.bpfman",
         "TestTC_IngressLifecycle.bpfman",
     ];
-    let mixed = isolated && scripts.is_none();
+    let mixed = isolated && scripts.is_none() && selector == "rust=ok,!external";
     let mut command = Command::new("timeout");
     if source == "image" {
         command.env(
@@ -673,6 +694,7 @@ pub(super) fn map_sharing_scripts() {
             "TestTC_PinByNameMapSharing",
             "TestMapOfMaps_MapOwner",
             "TestMapOfMaps_PinByName",
+            "TestMapOfMaps_Initializers",
         ]),
         &rust(),
         true,

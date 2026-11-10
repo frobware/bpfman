@@ -73,7 +73,16 @@ if [ "$name" = "${FAKE_IGNORED:-never-match}" ]; then
     printf 'test %s ... ignored\ntest result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 8 filtered out; finished in 0.00s\n' "$name"
     exit
 fi
-printf 'test %s ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s\n' "$name"
+if [ "$name" = "${FAKE_STDERR_PASS:-never-match}" ]; then
+    printf 'test %s ... ok\n' "$name" >&2
+    printf 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s\n'
+    exit
+fi
+printf 'test %s ... ' "$name"
+if [ "${FAKE_DIAGNOSTICS:-0}" = 1 ]; then
+    printf 'kernel-test-start\t%s\t%s\t0.000000\n' "$$" "$name" >&2
+fi
+printf 'ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s\n'
 MOCK
 chmod +x "$root/kernel"
 cat > "$FAKE_TEST_LIST" <<'LIST'
@@ -108,6 +117,16 @@ for workers in 1 2 4 8 ''; do
     [ -z "$(ls -A "$TMPDIR")" ]
 done
 unset FAKE_ACTIVITY
+
+# Stderr telemetry between the test-name prefix and stdout's status must not
+# corrupt the exact success witness, and every diagnostic must remain visible.
+: > "$FAKE_KERNEL_LOG"
+FAKE_DIAGNOSTICS=1 BPFMAN_KERNEL_TEST_THREADS=2 BPFMAN_KERNEL_SUITE=all sh "$runner" "$root/kernel" > "$root/output"
+cut -d ' ' -f 1 "$FAKE_KERNEL_LOG" | sort > "$root/actual"
+cmp "$root/expected" "$root/actual"
+[ "$(grep -c '^kernel-test-start' "$root/output")" -eq 11 ]
+[ "$(grep -c '^test sqlite_.* \.\.\. ok$' "$root/output")" -eq 10 ]
+
 : > "$FAKE_KERNEL_LOG"
 BPFMAN_KERNEL_TEST_THREADS=2 BPFMAN_KERNEL_SUITE=contracts sh "$runner" "$root/kernel" > "$root/output"
 sed '/_script_corpus$/d' "$root/expected" > "$root/contracts"
@@ -139,7 +158,7 @@ cp "$root/original-list" "$FAKE_TEST_LIST"
 
 # Drain the complete current stage on failures, crashes, empty or ignored cases;
 # never report success or advance into the later Go stage.
-for failure in FAKE_FAILURE FAKE_CRASH FAKE_EMPTY FAKE_IGNORED; do
+for failure in FAKE_FAILURE FAKE_CRASH FAKE_EMPTY FAKE_IGNORED FAKE_STDERR_PASS; do
     : > "$FAKE_KERNEL_LOG"
     if env "$failure=sqlite_case" BPFMAN_KERNEL_TEST_THREADS=2 sh "$runner" "$root/kernel" > "$root/output" 2>&1; then exit 1; fi
     sed '/^go_case$/d' "$root/expected" > "$root/failed-expected"

@@ -1,4 +1,4 @@
-//! Metadata-only foreign-endian ELF/BTF interpretation. Original bytes are never
+//! Checked ELF/BTF metadata in either byte order. Original bytes are never
 //! rewritten. Every record, string reference and type reference is bounded.
 use super::BytecodeMetadata;
 use object::{Object, ObjectSection, ObjectSymbol};
@@ -267,6 +267,50 @@ impl<'a> Btf<'a> {
         }
         Ok(maps)
     }
+
+    fn value_offsets(&self) -> io::Result<BTreeMap<String, u32>> {
+        let mut offsets = BTreeMap::new();
+        for section in self
+            .records
+            .iter()
+            .filter(|r| r.kind == 15 && r.name == ".maps")
+        {
+            for entry in section.data.chunks_exact(12) {
+                let variable = self.get(self.order.word(entry, 0)?)?;
+                if variable.kind != 14 {
+                    return Err(invalid());
+                }
+                let definition = self.resolve(variable.ty)?;
+                if definition.kind != 4 {
+                    return Err(invalid());
+                }
+                for (index, member) in definition.data.chunks_exact(12).enumerate() {
+                    if self.string(self.order.word(member, 0)?)? != "values" {
+                        continue;
+                    }
+                    let bits = self.order.word(member, 8)?;
+                    if index + 1 != definition.data.len() / 12
+                        || bits % 64 != 0
+                        || bits / 8 > definition.ty
+                        || offsets.insert(variable.name.into(), bits / 8).is_some()
+                    {
+                        return Err(invalid());
+                    }
+                }
+            }
+        }
+        Ok(offsets)
+    }
+}
+
+pub(super) fn map_value_offsets(bytes: &[u8]) -> io::Result<BTreeMap<String, u32>> {
+    let file = object::File::parse(bytes).map_err(data_error)?;
+    let section = file.section_by_name(".BTF").ok_or_else(invalid)?;
+    Btf::parse(
+        section.data().map_err(data_error)?,
+        Order(file.is_little_endian()),
+    )?
+    .value_offsets()
 }
 
 pub(super) fn inspect(bytes: &[u8], little: bool) -> io::Result<BytecodeMetadata> {
