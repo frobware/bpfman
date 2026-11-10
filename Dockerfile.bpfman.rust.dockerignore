@@ -3,7 +3,6 @@
 !Makefile
 !rust/
 !rust/**
-rust/target/
 !proto/
 !proto/**
 !dispatcher/
@@ -14,3 +13,4 @@ rust/target/
 !platform/store/sqlite/
 !platform/store/sqlite/migrations/
 !platform/store/sqlite/migrations/**
+**/target

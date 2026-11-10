@@ -4,6 +4,7 @@
 # overlap with the in-container build outputs and could mask
 # "didn't rebuild" bugs.
 bin/
+**/target
 dispatcher/*.bpf.o
 dispatcher/*.bpf.d
 

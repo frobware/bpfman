@@ -4,6 +4,7 @@
 # the build context, get COPYed via `COPY . .`, and mask a
 # "didn't rebuild" bug.
 bin/
+**/target
 ci-e2e-bundle/
 dispatcher/*.bpf.o
 dispatcher/*.bpf.d
