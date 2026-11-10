@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"google.golang.org/grpc"
 
@@ -57,10 +58,17 @@ func (c cliManagement) run(ctx context.Context, args ...string) ([]cliProgram, e
 }
 
 func (c cliManagement) Load(ctx context.Context, req *pb.LoadRequest, _ ...grpc.CallOption) (*pb.LoadResponse, error) {
-	if len(req.Info) != 1 || req.Info[0].ProgramType != pb.BpfmanProgramType_TRACEPOINT || req.Bytecode.GetFile() == "" {
-		return nil, fmt.Errorf("CLI fixture requires one file-backed tracepoint")
+	if len(req.Info) == 0 || req.Bytecode.GetFile() == "" {
+		return nil, fmt.Errorf("CLI fixture requires file-backed tracepoints")
 	}
-	args := []string{"program", "load", "file", req.Bytecode.GetFile(), "--programs", "tracepoint:" + req.Info[0].Name, "--output=json"}
+	var selections []string
+	for _, info := range req.Info {
+		if info.ProgramType != pb.BpfmanProgramType_TRACEPOINT {
+			return nil, fmt.Errorf("CLI fixture requires tracepoints")
+		}
+		selections = append(selections, "tracepoint:"+info.Name)
+	}
+	args := []string{"program", "load", "file", req.Bytecode.GetFile(), "--programs", strings.Join(selections, ","), "--output=json"}
 	for key, value := range req.Metadata {
 		args = append(args, "--metadata", key+"="+value)
 	}

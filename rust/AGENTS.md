@@ -497,6 +497,14 @@ The architecture and compatibility goals are in
   before creating the bind, preserving nosuid/nodev/noexec. A later bind-remount
   does not update propagated peers. Observe the peer's flags in the native
   contract, finish normal cleanup, then assert the observation.
+- CSI publishes the selected program's public object map set, including maps
+  unused by that individual function. Validate full pin names and exact IDs
+  against confined load provenance; kernel `map_ids` alone is insufficient.
+  Keep the conservative used-map fallback only for artifacts without inventory,
+  and never fall back after invalid provenance or a recorded identity mismatch.
+  Preserve lowest-live-ID metadata selection. Keep the shared Go/Rust wire
+  regression and Go CSI e2e on the two-function public-map fixture, with explicit
+  assertions that each function uses only one of its two published maps.
 
 ## Native TCX
 

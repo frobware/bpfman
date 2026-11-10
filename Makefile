@@ -1100,6 +1100,7 @@ rust-build-csi: $(RUST_DISPATCHER)
 RUST_TEST_INPUTS = e2e/testdata/bpf/fentry_counter.bpf.o e2e/testdata/bpf/fentry_kmod_exact.bpf.o e2e/testdata/bpf/fexit_kmod_exact.bpf.o e2e/testdata/bpf/multi_prog_fentry_kmod_counter.bpf.o e2e/testdata/bpf/multi_prog_fexit_kmod_counter.bpf.o e2e/testdata/bpf/uprobe_exact.bpf.o e2e/testdata/bpf/uprobe_counter.bpf.o e2e/testdata/bpf/multi_prog_uprobe_counter.bpf.o e2e/testdata/bpf/shared_map_contract.bpf.o e2e/testdata/bpf/tc_counter_pinned.bpf.o e2e/testdata/bpf/kprobe_counter.bpf.o e2e/testdata/bpf/multi_prog_kprobe_kmod_counter.bpf.o e2e/testdata/bpf/tcx_counter.bpf.o e2e/testdata/bpf/tc_ingress.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_hash.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_hash.bpf.o e2e/testdata/bpf/xdp_devmap_hash_frags.bpf.o e2e/testdata/bpf/xdp_devmap_egress.bpf.o e2e/testdata/bpf/xdp_devmap_egress_frags.bpf.o e2e/testdata/bpf/xdp_redirect_error.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast.bpf.o e2e/testdata/bpf/xdp_devmap_broadcast_frags.bpf.o e2e/testdata/bpf/xdp_delivery_frags.bpf.o e2e/testdata/bpf/xdp_devmap_frags.bpf.o $(BIN_DIR)/xdp-delivery-probe e2e/testdata/bpf/xdp_devmap.bpf.o e2e/testdata/bpf/xdp_delivery.bpf.o e2e/testdata/bpf/xdp_frags_probe.bpf.o e2e/testdata/bpf/xdp_counter.bpf.o e2e/testdata/bpf/xdp_frags_pass.bpf.o e2e/testdata/bpf/multi_prog_one_bad.bpf.o e2e/testdata/bpf/multi_prog_tracepoint_kmod_counter.bpf.o e2e/testdata/bpf/tracepoint_batch_bad.bpf.o $(BIN_DIR)/bpfman $(BIN_DIR)/bpfman-shell $(E2E_SCRIPTS_TEST_BIN) e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/tracepoint_counter_pinned.bpf.o e2e/testdata/bpf/xdp_pass.bpf.o
 RUST_TEST_ENV = BPFMAN_GO_BIN="$(abspath $(BIN_DIR))/bpfman" BPFMAN_DSL_TEST_BIN="$(abspath $(E2E_SCRIPTS_TEST_BIN))" BPFMAN_SHELL_BIN_DIR="$(abspath $(BIN_DIR))"
 RUST_TEST_INPUTS += e2e/testdata/bpf/xdp_pass_be.bpf.o
+RUST_TEST_INPUTS += e2e/testdata/bpf/csi_public_maps.bpf.o
 # Prerequisites expand when Make reads a target, so declare shared client inputs
 # before every Rust test target, including rust-test-userspace and rust-check.
 RUST_TEST_INPUTS += $(BIN_DIR)/grpc-contract $(BIN_DIR)/e2e-grpc.test $(BIN_DIR)/csi-contract
@@ -2131,7 +2132,7 @@ rust-test-serve: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_serve_grpc -- --nocapture
 
 # One stock CSI client exercises both production daemon implementations.
-$(BIN_DIR)/csi-contract: e2e/testdata/csi-contract/main.go e2e/testdata/csi-contract/cli.go server/pb/bpfman.pb.go server/pb/bpfman_grpc.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi_grpc.pb.go go.mod go.sum | $(BIN_DIR)
+$(BIN_DIR)/csi-contract: e2e/testdata/csi-contract/main.go e2e/testdata/csi-contract/cli.go e2e/testdata/csi-contract/maps.go server/pb/bpfman.pb.go server/pb/bpfman_grpc.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi.pb.go vendor/github.com/container-storage-interface/spec/lib/go/csi/csi_grpc.pb.go go.mod go.sum | $(BIN_DIR)
 	$(Q)$(MAKE) build-csi-contract
 
 # Go owns source freshness here. The CSI-only rehearsal uses the checked-in Go
@@ -2147,6 +2148,6 @@ rust-test-csi: rust-build $(RUST_TEST_INPUTS)
 
 # This selection needs no management server, including for program preparation.
 .PHONY: rust-test-csi-only
-rust-test-csi-only: rust-build-csi build-csi-contract e2e/testdata/bpf/tracepoint_counter.bpf.o
+rust-test-csi-only: rust-build-csi build-csi-contract e2e/testdata/bpf/tracepoint_counter.bpf.o e2e/testdata/bpf/csi_public_maps.bpf.o
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --no-default-features --test csi --test csi_only --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --no-default-features --test kernel --locked $(RUST_TEST_RUNNER) -- sqlite_csi_only_wire_contract --exact --nocapture

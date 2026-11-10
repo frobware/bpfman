@@ -115,6 +115,10 @@ func main() {
 		fmt.Println("CSI restart cleanup contract passed")
 		return
 	}
+	if *lane == "exercise" {
+		check(publishedMaps(ctx, b, node))
+		fmt.Println("CSI public object maps contract passed")
+	}
 	load := func() uint32 {
 		r, e := b.Load(ctx, &pb.LoadRequest{
 			Bytecode: &pb.BytecodeLocation{Location: &pb.BytecodeLocation_File{File: filepath.Join(*objects, "tracepoint_counter.bpf.o")}},

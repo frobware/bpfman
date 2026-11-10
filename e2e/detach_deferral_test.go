@@ -34,6 +34,8 @@ import (
 // matters. If a probe at +T sees a counter delta, the program was
 // still hooked at offset T.
 func TestDebug_DetachDeferral_Kretprobe(t *testing.T) {
+	t.Parallel()
+
 	RequireRoot(t)
 	RequireKmodTargets(t)
 

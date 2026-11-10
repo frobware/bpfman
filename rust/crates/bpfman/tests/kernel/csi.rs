@@ -91,6 +91,221 @@ impl Drop for RegistrationMount {
     }
 }
 
+pub(super) fn published_maps() {
+    use bpfman_kernel::ProgramObservations;
+    use bpfman_model::ProgramSpec;
+    use bpfman_runtime::{
+        ActiveStore, Bpfman, Cancellation, MapVolumes, PreparedProgram, VolumeErrorKind,
+    };
+    use std::sync::Arc;
+
+    let c = Context::new();
+    let app = Arc::new(Bpfman::new(
+        ActiveStore::open(bpfman_store_sqlite::Backend, &c.layout, TIMEOUT).expect("store"),
+        bpfman_kernel_aya::Kernel::default(),
+        TIMEOUT,
+    ));
+    let label = [("bpfman.io/ProgramName".into(), "public-maps".into())].into();
+    let prepared = PreparedProgram::new(
+        &bpfman_kernel_aya::Kernel::default(),
+        &fixture("csi_public_maps.bpf.o"),
+        ProgramSpec::Tracepoint("csi_first".try_into().expect("symbol")),
+        label,
+    )
+    .expect("prepare")
+    .with_additional_programs(
+        &bpfman_kernel_aya::Kernel::default(),
+        vec![ProgramSpec::Tracepoint(
+            "csi_second".try_into().expect("symbol"),
+        )],
+    )
+    .expect("batch");
+    let programs = app.load_batch(prepared).expect("load");
+    let first = programs[0].record.id;
+    let pins = c.layout.map_directory_path(first);
+    let map_id = |name: &str| {
+        aya::maps::MapInfo::from_pin(pins.join(name))
+            .expect("map")
+            .id()
+    };
+    let first_map = map_id("csi_first_map");
+    let second_map = map_id("csi_second_map");
+    let used = bpfman_kernel_aya::Kernel::default()
+        .program(first)
+        .expect("live")
+        .0
+        .map_ids
+        .expect("map IDs");
+    assert!(used.contains(&first_map));
+    assert!(
+        !used.contains(&second_map),
+        "fixture must expose a published map unused by the selected function"
+    );
+
+    let volumes = MapVolumes::new(app.clone());
+    let target = c.layout.root().join("public-target");
+    let attempt = |maps: &str| {
+        let request = bpfman_fs::VolumeRequest::new("public-maps", &target, maps, true, None)
+            .expect("request");
+        let result = volumes.publish("public-maps", &request, &Cancellation::new());
+        let observed = result.as_ref().ok().map(|()| {
+            request
+                .maps()
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        aya::maps::MapInfo::from_pin(target.join(name))
+                            .expect("published map")
+                            .id(),
+                    )
+                })
+                .collect::<std::collections::BTreeMap<_, _>>()
+        });
+        volumes
+            .unpublish(request.volume(), &target, &Cancellation::new())
+            .expect("normal unpublish");
+        assert!(!target.exists());
+        assert!(names(&c.layout.csi_filesystem_path()).is_empty());
+        result.map(|()| observed.expect("successful observation"))
+    };
+    let published =
+        attempt("csi_first_map,csi_second_map").expect("publish the complete public map set");
+    assert_eq!(published["csi_first_map"], first_map);
+    assert_eq!(published["csi_second_map"], second_map);
+
+    // A later metadata match cannot supply a map absent from the selected set.
+    let shadow = app
+        .load(
+            PreparedProgram::new(
+                &bpfman_kernel_aya::Kernel::default(),
+                &fixture("tracepoint_counter.bpf.o"),
+                ProgramSpec::Tracepoint(NAME.try_into().expect("symbol")),
+                [("bpfman.io/ProgramName".into(), "public-maps".into())].into(),
+            )
+            .expect("shadow prepare"),
+        )
+        .expect("shadow load")
+        .record
+        .id;
+    assert_eq!(
+        attempt("tracepoint_stats_map")
+            .expect_err("no fallback to a later program")
+            .kind(),
+        VolumeErrorKind::NotFound
+    );
+
+    let saved = c.layout.root().join("fs/csi-saved");
+    let source = pins.join("csi_second_map");
+    fs::rename(&source, &saved).expect("save missing map");
+    let result = attempt("csi_second_map");
+    fs::rename(&saved, &source).expect("restore missing map");
+    assert_eq!(
+        result.expect_err("missing map").kind(),
+        VolumeErrorKind::NotFound
+    );
+
+    let replacement = aya::maps::MapData::from_pin(pins.join("csi_first_map")).expect("other map");
+    fs::rename(&source, &saved).expect("save replaced map");
+    replacement.pin(&source).expect("replace alias");
+    let result = attempt("csi_second_map");
+    // Remove only the test-injected alias before restoring the original pin.
+    #[allow(clippy::disallowed_methods)]
+    fs::remove_file(&source).expect("remove replacement alias");
+    fs::rename(&saved, &source).expect("restore exact identity");
+    assert_eq!(
+        result.expect_err("replaced map ID").kind(),
+        VolumeErrorKind::FailedPrecondition
+    );
+
+    replacement
+        .pin(pins.join("unrecorded_map"))
+        .expect("inject unrecorded alias");
+    let result = attempt("unrecorded_map");
+    #[allow(clippy::disallowed_methods)]
+    fs::remove_file(pins.join("unrecorded_map")).expect("remove injected alias");
+    assert_eq!(
+        result
+            .expect_err("unrecorded name with a live map ID")
+            .kind(),
+        VolumeErrorKind::NotFound
+    );
+    drop(replacement);
+
+    let provenance = c
+        .layout
+        .root()
+        .join(format!("programs/{first}/provenance.json"));
+    let original = fs::read(&provenance).expect("provenance");
+    for (field, bad_value) in [
+        ("program_id", serde_json::json!(shadow.get())),
+        ("map_set", serde_json::json!(shadow.get())),
+        ("map_inventory", serde_json::json!({"csi_first_map": 0})),
+        ("map_inventory", serde_json::Value::Null),
+    ] {
+        let mut value: serde_json::Value = serde_json::from_slice(&original).expect("JSON");
+        value[field] = bad_value;
+        fs::write(&provenance, serde_json::to_vec(&value).expect("JSON"))
+            .expect("invalid provenance");
+        let result = attempt("csi_first_map");
+        fs::write(&provenance, &original).expect("restore provenance");
+        assert_eq!(
+            result
+                .expect_err("invalid provenance cannot fall back to kernel membership")
+                .kind(),
+            VolumeErrorKind::Internal
+        );
+    }
+    fs::write(&provenance, b"not JSON").expect("malformed provenance");
+    let result = attempt("csi_first_map");
+    fs::write(&provenance, &original).expect("restore provenance");
+    assert_eq!(
+        result.expect_err("malformed provenance").kind(),
+        VolumeErrorKind::Internal
+    );
+
+    // Older artifacts without inventory retain the conservative used-map rule.
+    let mut value: serde_json::Value = serde_json::from_slice(&original).expect("JSON");
+    value
+        .as_object_mut()
+        .expect("object")
+        .remove("map_inventory");
+    fs::write(&provenance, serde_json::to_vec(&value).expect("JSON")).expect("old provenance");
+    let known = attempt("csi_first_map");
+    let unused = attempt("csi_second_map");
+    fs::write(&provenance, &original).expect("restore provenance");
+    assert_eq!(
+        known.expect("legacy live-map evidence")["csi_first_map"],
+        first_map
+    );
+    assert_eq!(
+        unused
+            .expect_err("legacy unused map has no identity evidence")
+            .kind(),
+        VolumeErrorKind::NotFound
+    );
+
+    let saved = provenance.with_file_name("saved-provenance");
+    fs::rename(&provenance, &saved).expect("save older artifact without provenance");
+    let known = attempt("csi_first_map");
+    let unused = attempt("csi_second_map");
+    fs::rename(&saved, &provenance).expect("restore provenance");
+    assert_eq!(
+        known.expect("legacy used map without provenance")["csi_first_map"],
+        first_map
+    );
+    assert_eq!(
+        unused.expect_err("no provenance for unused map").kind(),
+        VolumeErrorKind::NotFound
+    );
+
+    for program in programs.iter().map(|p| p.record.id).chain([shadow]) {
+        assert_eq!(app.unload(program).expect("unload").unresolved(), 0);
+    }
+    assert!(volumes.take_recovery().is_empty());
+    c.no_artifacts();
+}
+
 pub(super) fn wire(implementation: &str) {
     let standalone = implementation == "rust-csi";
     let is_rust = implementation.starts_with("rust");

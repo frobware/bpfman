@@ -28,6 +28,15 @@ impl ProgramObservations for Kernel {
     ) -> Result<Vec<ObservedMapPin>, Error> {
         runtime.read_map_pins(self, map_set).map_err(filesystem)
     }
+
+    fn published_map_inventory(
+        &self,
+        writer: &bpfman_fs::RuntimeWriter<'_>,
+        program: NonZeroU32,
+        map_set: NonZeroU32,
+    ) -> Result<Option<std::collections::BTreeMap<String, u32>>, Error> {
+        crate::maps::inventory(writer, program, map_set)
+    }
 }
 
 impl bpfman_kernel::ProgramInventory for Kernel {

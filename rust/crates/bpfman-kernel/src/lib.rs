@@ -24,9 +24,12 @@ pub use lifecycle::{
 };
 pub use xdp_replace::{XdpDispatcherArtifacts, XdpReplacement};
 
-use bpfman_fs::{ObservedMapPin, RuntimeDirectory};
+use bpfman_fs::{ObservedMapPin, RuntimeDirectory, RuntimeWriter};
 use bpfman_model::{KernelLink, KernelMap, KernelProgram, ProgramStats, XdpLink};
-use std::num::{NonZeroU32, NonZeroU64};
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64},
+};
 
 /// Program and map observations, independent of the kernel implementation.
 pub trait ProgramObservations {
@@ -43,6 +46,18 @@ pub trait ProgramObservations {
         runtime: &RuntimeDirectory,
         map_set: NonZeroU32,
     ) -> Result<Vec<ObservedMapPin>, Error>;
+
+    /// Read the public map names and exact IDs retained when a program loaded.
+    /// None means older artifacts or a backend without this evidence. Invalid
+    /// provenance must fail rather than fall back to weaker observations.
+    fn published_map_inventory(
+        &self,
+        _writer: &RuntimeWriter<'_>,
+        _program: NonZeroU32,
+        _map_set: NonZeroU32,
+    ) -> Result<Option<BTreeMap<String, u32>>, Error> {
+        Ok(None)
+    }
 }
 
 /// Read-only kernel program enumeration, separate from managed-ID observations.

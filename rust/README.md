@@ -3104,6 +3104,13 @@ capabilities and normal unmount; map references survive program unload while the
 volume remains published. CSI staging, controller operations, stats and expansion
 remain unsupported, matching Go's advertised capabilities.
 
+CSI selects the lowest-ID live metadata match and publishes its public map set,
+including maps unused by that individual BPF function. Exact map identities come
+from the load's confined provenance and must match the observed pins. Missing
+maps, unrecorded names and replaced identities are refused. Older artifacts
+without map inventory retain the conservative kernel-membership check; invalid
+provenance never triggers that fallback.
+
 The operator mounts kubelet's plugin directory separately at `<runtime>/csi`;
 that named mount boundary is admitted while `csi/fs` remains confined to its
 filesystem. Read-only flags are set before publishing a bind so kubelet's mount
@@ -3118,8 +3125,14 @@ into the runtime volume.
 CSI contracts. A single stock Go protobuf client exercises both production
 daemons. The full `rust-check` gate runs the Rust cases in the native process
 pool and the Go reference case in the existing Go stage, since Go metadata
-lookup enumerates kernel programs. Existing Go tests and script assertions are
-unchanged.
+lookup enumerates kernel programs. Existing CSI and script assertions are retained.
+The shared client includes a two-function ELF with two public maps, each used by
+only one function, and verifies publication of both exact map identities. It runs
+against Go, combined Rust and standalone Rust CSI. Focused runtime unit tests and
+a native CSI case cover admission, identity replacement, invalid provenance,
+legacy evidence and selection without falling through to later matching programs.
+The Go e2e suite also includes
+`TestCSIDriver_PublishesObjectMapsUnusedBySelectedFunction` using that same ELF.
 The client's optional `-target-root` selects kubelet-visible publish targets for
 deployed restart checks; its native-contract default remains `<runtime>/targets`.
 

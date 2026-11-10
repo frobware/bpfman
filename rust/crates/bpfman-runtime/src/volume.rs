@@ -1,8 +1,8 @@
 use crate::{Bpfman, Cancellation};
-use bpfman_fs::{MapReopening, VolumeFailure, VolumeRequest, VolumeState};
+use bpfman_fs::{MapReopening, ObservedMapPin, VolumeFailure, VolumeRequest, VolumeState};
 use bpfman_store::{OpenStore, ProgramReader};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -292,6 +292,55 @@ fn check(cancellation: &Cancellation) -> Result<(), VolumeError> {
     }
 }
 
+fn admit_maps(
+    program: &str,
+    requested: &[String],
+    pins: &[ObservedMapPin],
+    published: Option<&BTreeMap<String, u32>>,
+    used: Option<&[u32]>,
+) -> Result<(), VolumeError> {
+    enum Evidence<'a> {
+        Published(&'a BTreeMap<String, u32>),
+        LegacyKernel(&'a [u32]),
+    }
+
+    let evidence = match published {
+        Some(inventory) => Evidence::Published(inventory),
+        None => Evidence::LegacyKernel(used.ok_or_else(|| {
+            error(
+                VolumeErrorKind::Internal,
+                "kernel map membership is unavailable",
+            )
+        })?),
+    };
+    for name in requested {
+        let missing = || {
+            error(
+                VolumeErrorKind::NotFound,
+                format!("map {name:?} is not published by program {program:?}"),
+            )
+        };
+        let pin = pins
+            .iter()
+            .find(|pin| &pin.name == name)
+            .ok_or_else(missing)?;
+        match &evidence {
+            Evidence::Published(inventory) => {
+                let expected = inventory.get(name).ok_or_else(missing)?;
+                if pin.id != *expected {
+                    return Err(error(
+                        VolumeErrorKind::FailedPrecondition,
+                        format!("published map {name:?} has a different kernel identity"),
+                    ));
+                }
+            }
+            Evidence::LegacyKernel(ids) if !ids.contains(&pin.id) => return Err(missing()),
+            Evidence::LegacyKernel(_) => (),
+        }
+    }
+    Ok(())
+}
+
 impl<S: OpenStore, K: bpfman_kernel::ProgramObservations + MapReopening> MapVolumes<S, K> {
     /// Resolve metadata against live managed programs under the writer lock,
     /// then pin the requested maps and publish a durable mount.
@@ -352,23 +401,18 @@ impl<S: OpenStore, K: bpfman_kernel::ProgramObservations + MapReopening> MapVolu
                         .kernel
                         .map_pins(writer.directory(), record.map_set)
                         .map_err(backend)?;
-                    let map_ids = live.map_ids.as_ref().ok_or_else(|| {
-                        error(
-                            VolumeErrorKind::Internal,
-                            "kernel map membership is unavailable",
-                        )
-                    })?;
-                    for name in request.maps() {
-                        if !pins
-                            .iter()
-                            .any(|p| &p.name == name && map_ids.contains(&p.id))
-                        {
-                            return Err(error(
-                                VolumeErrorKind::NotFound,
-                                format!("map {name:?} is not published by program {program:?}"),
-                            ));
-                        }
-                    }
+                    let inventory = self
+                        .app
+                        .kernel
+                        .published_map_inventory(&writer, record.id, record.map_set)
+                        .map_err(backend)?;
+                    admit_maps(
+                        program,
+                        request.maps(),
+                        &pins,
+                        inventory.as_ref(),
+                        live.map_ids.as_deref(),
+                    )?;
                     let result = writer.publish_volume(
                         request,
                         record.map_set,
@@ -381,3 +425,6 @@ impl<S: OpenStore, K: bpfman_kernel::ProgramObservations + MapReopening> MapVolu
             .map_err(filesystem)?
     }
 }
+
+#[cfg(test)]
+mod tests;

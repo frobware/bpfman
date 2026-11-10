@@ -737,6 +737,12 @@ fn sqlite_csi_admission_and_explicit_recovery() {
 }
 
 #[test]
+fn sqlite_csi_published_map_identity() {
+    let _timing = support::TestTiming::start("sqlite_csi_published_map_identity");
+    csi::published_maps();
+}
+
+#[test]
 fn go_csi_wire_contract() {
     let _timing = support::TestTiming::start("go_csi_wire_contract");
     csi::wire("go");

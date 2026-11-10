@@ -8030,3 +8030,148 @@ and application states, with the daemon ready and CSI registered. Its empty
 runtime bpffs remains mounted for the running deployment. This is single-node
 KIND evidence; the management-free variant is qualified by the native removal
 rehearsal, not a management-free deployment of the current Go agent.
+
+## Full operator local integration run (10 November 2026)
+
+The operator's unchanged `test-integration-local` target was run without a test
+filter against `bpfman:rust-csi-separated`, containing the production changes
+committed as `874cedbd5`. It uses the same temporary operator checkout, dedicated
+`bpfman-rust-acceptance` KIND cluster, explicit task kubeconfig, operator image
+`bpfman-operator:rust-kind-pins-fixed` and agent image
+`bpfman-agent:rust-kind-acceptance` as above. The temporary checkout's test sources
+match the user's operator checkout. No image rebuild was necessary after the
+commit because the deployed image already contains those source changes.
+
+Ten of eleven tests pass: the kprobe, TC, TCX, tracepoint, uprobe and XDP counters;
+all three TC/TCX/XDP link-priority tests; and the same-name application test across
+two namespaces. The priority tests execute the existing hidden `bpfman get link`
+alias inside the Rust container and parse its text output successfully. Rust
+already provides both hidden `get link` and `get program` aliases, routed through
+the ordinary noun-first implementations; no compatibility shim is needed.
+
+`TestApplicationGoCounter` fails after 308.51 seconds waiting for its userspace
+pod. All six BPF programs load and attach successfully, but CSI rejects
+`tracepoint_stats_map` for `app-counter`. The lowest-ID live matching program is
+`kprobe_counter`. Its map directory and durable `map_inventory` contain all six
+public shared maps, while its kernel `map_ids` reports only the maps used by that
+function. `MapVolumes::publish` incorrectly requires every requested public map
+to occur in that function's kernel membership. Go selects the same lowest-ID
+program but publishes requested pins from its map directory without that
+membership restriction. This is a Rust CSI compatibility gap, separate from CLI
+alias support. The next fix should admit legitimate published maps while retaining
+exact map identity checks and conservative handling of older provenance; it
+should preserve lowest-ID selection rather than search other matching programs.
+
+The legacy Rust implementation confirms this map-publication contract.
+`bpfman-api/src/bin/rpc/storage.rs` takes the first live program matching
+`bpfman.io/ProgramName`, reads its `map_pin_path`, and opens/re-pins each requested
+map directly from that directory. It does not check the selected function's
+kernel map IDs. The legacy batch loader uses one loaded ELF object for its
+programs, and `bpfman/src/lib.rs` pins all eligible object maps for each map owner,
+not just maps referenced by the selected function. The new CSI membership
+restriction therefore diverges from both Go and legacy Rust. Preserve the new
+idempotent publication and consuming cleanup behavior when correcting it; the
+legacy CSI handler does not supply those guarantees.
+
+The full Go test invocation takes 591.416 seconds and exits nonzero; this is
+diagnostic evidence, not an accepted full-suite result. Production sources and
+test assertions remain unchanged. Evidence is under
+`/tmp/bpfman-operator-local-hboy_v0m/`: `command.json`, `integration.log`,
+`result.json`, `tests.json`, `programs.txt`, `app-state.txt` and
+`selected-provenance.json`. Normal suite cleanup completes. `audit.log` and
+`final-audit.json` confirm empty program/link/dispatcher inventories, owned pins,
+artifacts, CSI volume mounts and application states; the daemon remains ready
+and CSI registered. The user's source changes and default kubeconfig are retained.
+
+## CSI public map acceptance and regression coverage (10 November 2026)
+
+The map-publication regression above is corrected in `MapVolumes`. The selected
+program's confined load provenance supplies its public map names and exact kernel
+IDs, independently of which maps that function uses. Observed source pins must
+match those names and identities. Missing or unrecorded names return NotFound;
+replaced identities return FailedPrecondition. Invalid provenance remains a backend
+error rather than triggering fallback. Older artifacts without a map inventory
+retain the previous conservative live-kernel-membership rule. Selection still
+uses the lowest-ID live metadata match; later matches never supply missing maps.
+The Aya adapter reuses its existing provenance decoder through an optional kernel
+observation capability. No persistence format, load semantics, mount interpreter,
+CSI idempotency, cleanup/retry policy or frontend dependency changes are needed.
+
+Coverage previously missed the composition: `.bpfman` scripts exercise map
+loading/sharing without CSI publication; the CSI frontend test uses a backend
+stub; and the shared wire and native admission tests use a one-function,
+one-map tracepoint fixture. Loading that fixture twice checks metadata selection
+without distinguishing public maps from per-function use. Earlier operator
+acceptance explicitly selected four individual counter tests and omitted the
+combined application. Those passes did not establish combined-application CSI
+compatibility.
+
+The new local `csi_public_maps.bpf.c` fixture contains two functions and two public
+PinByName maps. Each function uses exactly one map, while both maps are published
+with each selected program. New tests explicitly establish that difference
+before testing CSI, so a future fixture change cannot erase the regression:
+
+- Five runtime unit tests cover public-map admission, unavailable kernel map
+  membership with valid inventory, replacement, missing/unrecorded names, an
+  authoritative empty inventory and conservative legacy evidence.
+- `sqlite_csi_published_map_identity` uses real SQLite, provenance, maps, pins
+  and mounts. It covers both exact published identities, no selection fallback,
+  missing/replaced/injected aliases, malformed or mismatched provenance, and
+  artifacts with either old provenance or no provenance. Test-injected aliases
+  are removed and original evidence restored before assertions; normal unpublish
+  and unload prove empty owned artifacts.
+- The shared Go wire client exercises the same publication and duplicate-mount
+  assertions against Go, combined Rust and standalone Rust CSI. CLI fixture
+  management now accepts a batch of file-backed tracepoints. Cleanup runs before
+  returning a failed assertion, including the pre-fix control.
+- Go's own e2e suite adds
+  `TestCSIDriver_PublishesObjectMapsUnusedBySelectedFunction` using the same ELF.
+  It verifies lowest-ID selection, distinct per-function membership, both exact
+  published IDs, duplicate publication and normal mount/directory cleanup.
+
+The shared regression passes against Go and fails against both Rust daemon forms
+before the fix (`before-fix.log`). The accepted focused run passes all six CSI
+native cases and normal fixture cleanup (`focused-final.log`), and all 12 Go CSI
+e2e tests pass (`go-csi.log`). No existing `.bpfman` assertions or labels change.
+Evidence is under `/tmp/bpfman-csi-public-maps-rg3eyqm6/`, with command/result JSON
+beside each log. Intermediate compiler/lint failures are diagnostic only.
+Go lint of the changed sources reports zero issues (`go-lint-changes.log`). The
+initial full e2e package lint found a pre-existing missing `t.Parallel()` in
+`TestDebug_DetachDeferral_Kretprobe` (`go-lint.log`). That diagnostic now declares
+parallel execution: it reserves a private kernel-module slot and uses scope-local
+runtime assertions. Full e2e/shared-client lint reports zero issues
+(`go-lint-final.log`). All 14 selected CSI, detach-diagnostic and kprobe lifecycle
+tests pass three repetitions with four parallel slots and the race detector
+(`go-parallel.log`). The diagnostic's timing observations and assertions are retained.
+
+Final `direnv exec . make rust-test-csi-only rust-check lint-make` exits zero
+(`full-check.log`). The management-free build and shared CSI regression pass;
+the subsequent default build passes all userspace/architecture/fault/process
+contracts, strict all-feature Clippy, formatting, warnings-denied documentation,
+and all 92 discovered/selected native cases. The native suite takes 274.30 seconds
+with the existing aya-obj development/test optimization at level two, and both
+owned fixture cleanup checks pass. Production code remains unchanged after this
+gate.
+
+The normal Fedora development image target packages the corrected host build as
+`bpfman:rust-csi-public-maps` (`image.log`), image ID
+`sha256:302ba95321e778a860f1eab3bb7fc08fce402917b5b3a72e76b68c217b6814aa`.
+The existing operator image-loading target and supported Config select it in the
+dedicated KIND cluster, restoring the paused operator/daemon (`deploy.log`).
+`image.json` and `deployed-pod.json` record matching local and deployed image IDs.
+The operator's unchanged `test-integration-local` target then passes all eleven
+tests without a filter in 307.124 seconds (`operator-integration.log`,
+`operator-tests.json`). The formerly failing combined application passes in
+25.53 seconds with actual nonzero kprobe, TC, TCX, tracepoint, uprobe and XDP
+counter assertions. All three priority tests retain their hidden `get link`
+checks.
+
+`kind-restart.log` additionally passes the shared CSI client, including the new
+public-map fixture, strict read-only duplicate publication and an actual Rust
+container restart with exact program/map identity retained. The task-owned
+cluster remains deployed with the corrected image. The separate kubeconfig and
+the user's unrelated operator source edits remain untouched.
+`final-audit.log` confirms empty managed program/link/dispatcher inventories,
+owned pins/artifacts, CSI volume mounts and application states, with the daemon
+ready and CSI registered. Its empty runtime bpffs remains mounted for the live
+deployment. This is bounded single-node KIND acceptance.
