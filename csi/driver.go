@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/bpfman/bpfman"
+	"github.com/bpfman/bpfman/internal/rpctelemetry"
 	"github.com/bpfman/bpfman/kernel"
 )
 
@@ -121,7 +122,7 @@ func (d *Driver) Run() error {
 		return fmt.Errorf("failed to listen on %s://%s: %w", scheme, addr, err)
 	}
 
-	d.server = grpc.NewServer()
+	d.server = grpc.NewServer(grpc.UnaryInterceptor(rpctelemetry.Unary(d.logger)))
 
 	csi.RegisterIdentityServer(d.server, d)
 	csi.RegisterNodeServer(d.server, d)

@@ -8288,7 +8288,7 @@ pod startup or after deletion are retained separately (four Go, five Rust).
 `application-bytecode-comparison.json`, counter/test/RPC summaries and both final
 audits provide the machine-checked evidence.
 
-### Uncommitted Go timing diagnostic (10 November 2026)
+### Go timing diagnostic (10 November 2026)
 
 The follow-up adds a small shared unary timing interceptor in
 `internal/rpctelemetry`, wired into both Go management and CSI. It emits a
@@ -8296,8 +8296,9 @@ process-wide request ID, method, status, fractional-millisecond execution time a
 observed context cancellation on every completion at INFO. Existing management
 operation IDs and status/error behavior remain intact; request/response bodies and
 free-form errors are absent from the new records. Go has no application worker
-queue at this boundary, so no queue/delivery observation is fabricated. The Go
-changes remain uncommitted as requested, separately captured in
+queue at this boundary, so no queue/delivery observation is fabricated. The
+original comparison left the Go changes uncommitted; they are now retained in a separate
+commit from the Rust work. The original patch is captured in
 `/tmp/bpfman-go-rpc-timing/go-instrumentation.patch`.
 
 Race-enabled focused tests, the full ordinary `make test RACE=1` target and lint
@@ -8444,9 +8445,9 @@ Evidence is under `/tmp/bpfman-rust-release-timing/`: build commands/results,
 362 unchanged Rust source fingerprints, both full suite/counter logs and cleanup
 audits, `kind/profile-comparison.json`, per-function and nested-span distributions,
 `kind/comparison-verification.json` and `verification.json`. The task-owned cluster
-remains clean and ready on the release image. Go instrumentation and Rust
-telemetry remain uncommitted, and the user's operator edits and kubeconfig remain
-untouched.
+remains clean and ready on the release image. At that checkpoint, Go
+instrumentation and Rust telemetry remained uncommitted; the user's operator
+edits and kubeconfig remain untouched.
 
 ### SQL-scoped program observations (10 November 2026)
 

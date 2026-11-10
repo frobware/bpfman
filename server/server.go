@@ -19,6 +19,7 @@ import (
 	driver "github.com/bpfman/bpfman/csi"
 	"github.com/bpfman/bpfman/fs"
 	"github.com/bpfman/bpfman/internal/bpfman/runtimestate"
+	"github.com/bpfman/bpfman/internal/rpctelemetry"
 	"github.com/bpfman/bpfman/lock"
 	"github.com/bpfman/bpfman/manager"
 	"github.com/bpfman/bpfman/ns/netns"
@@ -271,12 +272,13 @@ func (s *Server) serve(ctx context.Context, socketPath string) error {
 // caller hangs up) drop to DEBUG so they remain visible when needed
 // but do not pollute the default INFO-level stream.
 func (s *Server) rpcInterceptor() grpc.UnaryServerInterceptor {
+	timed := rpctelemetry.Unary(s.logger)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo,
 		handler grpc.UnaryHandler) (any, error) {
 		opID := s.opCounter.Add(1)
 		ctx = manager.ContextWithOpID(ctx, opID)
 
-		resp, err := handler(ctx, req)
+		resp, err := timed(ctx, req, info, handler)
 		if err != nil {
 			code := status.Code(err)
 			switch code {
