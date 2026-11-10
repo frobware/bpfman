@@ -267,6 +267,10 @@ dependencies = [
  "bpfman-store",
  "grpcuds",
  "prost",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -831,6 +835,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4c024bcdec0509d67cd07087e862f1722a010a2abf9dad7f8c8670ddc51f006"
 dependencies = [
  "grpcuds-core",
+ "grpcuds-sys",
  "libc",
 ]
 

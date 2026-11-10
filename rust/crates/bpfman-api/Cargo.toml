@@ -25,3 +25,10 @@ bpfman-kernel.workspace = true
 bpfman-store.workspace = true
 prost.workspace = true
 grpcuds.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+grpcuds = { workspace = true, features = ["client"] }
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

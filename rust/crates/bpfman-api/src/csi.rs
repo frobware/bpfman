@@ -153,6 +153,8 @@ impl<V: Volumes> Handler for CsiService<V> {
                     group,
                 )
                 .map_err(|e| Status::invalid_argument(e.to_string()))?;
+                tracing::Span::current().record("volume_id", req.volume_id.as_str());
+                tracing::debug!(volume_id = req.volume_id, "Publish volume");
                 self.volumes.publish(program, &request, cancellation)?;
                 pb::NodePublishVolumeResponse::default().encode_to_vec()
             }
@@ -160,6 +162,8 @@ impl<V: Volumes> Handler for CsiService<V> {
                 let req: pb::NodeUnpublishVolumeRequest = decode(bytes)?;
                 VolumeRequest::validate_target(&req.volume_id, Path::new(&req.target_path))
                     .map_err(|e| Status::invalid_argument(e.to_string()))?;
+                tracing::Span::current().record("volume_id", req.volume_id.as_str());
+                tracing::debug!(volume_id = req.volume_id, "Unpublish volume");
                 self.volumes.unpublish(
                     &req.volume_id,
                     Path::new(&req.target_path),

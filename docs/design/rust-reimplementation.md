@@ -8183,3 +8183,267 @@ the user's unrelated operator source edits remain untouched.
 owned pins/artifacts, CSI volume mounts and application states, with the daemon
 ready and CSI registered. Its empty runtime bpffs remains mounted for the live
 deployment. This is bounded single-node KIND acceptance.
+
+## Request-correlated RPC telemetry (10 November 2026)
+
+The shared synchronous transport now owns request correlation for both temporary
+management RPCs and permanent CSI. It assigns a process-wide monotonic request ID,
+method and execution-class span at admission, and carries the span and the
+embedding caller's tracing dispatcher into operation workers and the cancellation
+monitor. Downstream runtime/store/kernel/lock spans inherit that request. No
+correlation fields enter domain requests, persistence or protobufs. Subscriber
+ownership stays in the CLI; CSI gains no async runtime or management dependency.
+
+Successful mutations and teardown log at INFO; reads/probes, admission/rejection,
+expected statuses and deduplicated cancellation reasons log at DEBUG. Unexpected
+Internal/Unknown/DataLoss completions log at ERROR, as does unresolved management
+cleanup ownership with its recovery kind. Completion events retain explicit
+method/request IDs when DEBUG read spans are filtered. Program and link IDs and
+validated CSI volume IDs connect related calls. New transport/adapter telemetry
+does not render request bodies, metadata/context, target paths, credentials or
+free-form status messages. The CLI's existing HTTP TRACE ceiling is unchanged.
+
+Completion events separate queue delay, execution and total server time, preserve
+the handler's actual status when cancellation races success, and record whether
+the local response/status enqueue succeeded. Enqueue success does not prove
+client receipt. Cancellation reasons reflect the transport's first observation:
+deadline, client disconnect or shutdown. IDs reset on process restart; distributed
+trace propagation is outside this slice. `--log=info,server=debug,manager=debug,lock=trace`
+selects these events through the existing CLI policy; `server` maps to
+`bpfman_api`, including CSI and shared transport.
+
+Six real Unix-socket tests cover overlapping worker ancestry and distinct IDs,
+queue saturation with independent reads, size rejection, unexpected and expected
+error levels, payload/status redaction, deadlines, shutdown, disconnected clients,
+filtered read errors and CSI volume identity/context/secret redaction. The tests
+bind under a local subscriber and serve on an uninstrumented thread, so they
+detect missing dispatcher propagation that a global test subscriber would hide.
+
+`direnv exec . make rust-check` exits zero in 326.294 seconds, including strict
+all-target/all-feature Clippy, formatting, userspace/architecture/fault/process
+contracts, warnings-denied documentation and all 92 native cases. Native execution
+takes 257.09 seconds with the existing aya-obj optimization at level two, and
+normal fixture cleanup passes. `make rust-test-csi-only` also exits zero, including
+native standalone CSI lifecycle/restart and normal cleanup without management
+support. The deliberately blocked teardown in that CSI contract now produces a
+correlated Internal completion; it remains an expected test scenario.
+
+Evidence is under `/tmp/bpfman-rpc-telemetry/`, with commands, logs and result JSON.
+The initial gate stopped on two test-only Clippy findings, corrected before the
+successful full gate. The Fedora development image packages the default-feature
+host build as `bpfman:rust-rpc-telemetry`, image ID
+`sha256:6404db89412ef63e8a8e5c17ea40baa8724c3d80ae4ba6307337d626af46845e`.
+
+The dedicated KIND cluster repeats the unchanged complete operator suite using
+the preceding Go comparison image, then that Rust image; the operator and agent
+images remain the same. Both images pass all eleven tests and subsequent audits
+for empty program/link/dispatcher inventories, owned pins/artifacts, CSI volume
+mounts and application states. The daemon remains ready with CSI registered.
+`kind/{go,rust}/deployed-pod.json` and `image.json` record matching local/deployed
+image IDs. The separate kubeconfig and user's operator source edits are preserved.
+Rust enables `info,bpfman_api=debug,bpfman_runtime=debug,bpfman_lock=trace` for the
+diagnostic capture; Go retains INFO. This is deployment acceptance and diagnostic
+evidence, not a controlled performance benchmark.
+
+Package times are Go 544.367 seconds and Rust 581.853 seconds (6.9% longer).
+Test bodies total 429.15 and 456.74 seconds; setup/global cleanup account for
+the remaining 115.217 and 125.113 seconds. The preceding comparison measured
+392.243/507.377 seconds; even the Go baseline changes substantially between these
+single sequential runs. A stable performance ratio or attribution to the Rust
+server is not established by these suite timings.
+
+`kind/rpc-summary.json` verifies 1,808 admissions, execution starts and completions
+with consistent method/request ancestry. Statuses are 1,784 OK, 21 expected
+NotFound observations and three cleanup-time Internal Attach failures. Both Go
+and Rust observe those three uprobe attach retries after the userspace target
+disappears during global cleanup; Rust correlates the runtime failures with the
+completion/program IDs and reports zero unresolved cleanup effects. All local
+response enqueues succeed; this workload does not trigger cancellation or queue
+rejection. Those branches remain covered by the six socket regressions.
+
+Summed handler execution is 18.729 seconds, including 14.320 seconds in 24 Loads
+and 2.872 seconds in 1,600 Gets. The longest handler is a Load at 2.626 seconds.
+Timestamp-derived handler intervals overlap, with a peak of two in this workload;
+the overlapping-worker socket test independently verifies concurrency with an
+explicit synchronized release. Queue maxima are 1.088 ms for Load, 1.988 ms for Get and
+0.273 ms for Attach. Unload reaches 19.730 ms and CSI unpublish 19.678 ms,
+consistent with the existing 20 ms queue polling. Workers release the receiver
+mutex before calling handlers; runtime mutations still serialize under writer
+authority, while reads bypass it. Most suite wall time lies outside handler
+execution, and observed queue delay is small. Queue scheduling is unchanged.
+Correlated downstream captures include 9,745 runtime and 670 lock events, plus
+program/link/volume identity fields.
+
+The new live inventory confirms owner `bpfman` for all six application functions
+through both images, closing the deployment check for the preceding attribution
+fix. All six OCI digests, kernel tags and translated sizes match. Matched initial
+60-second deltas are Go/Rust: kprobe 704,059/712,646, TC/TCX/XDP packets
+1,278/1,533 per hook, SIGUSR1 59/60 and uprobe 60/60. Within each run all three
+network-hook deltas agree; all application counters are monotonic and advancing.
+Userspace image digests match across all eight workload namespaces, and captured
+counter logs contain no map-read errors. Full logs retain later cumulative/shared
+map counters; those are not exact equality assertions. Observation races before
+pod startup or after deletion are retained separately (four Go, five Rust).
+`kind/comparison-verification.json`, `reported-owner-comparison.json`,
+`application-bytecode-comparison.json`, counter/test/RPC summaries and both final
+audits provide the machine-checked evidence.
+
+### Uncommitted Go timing diagnostic (10 November 2026)
+
+The follow-up adds a small shared unary timing interceptor in
+`internal/rpctelemetry`, wired into both Go management and CSI. It emits a
+process-wide request ID, method, status, fractional-millisecond execution time and
+observed context cancellation on every completion at INFO. Existing management
+operation IDs and status/error behavior remain intact; request/response bodies and
+free-form errors are absent from the new records. Go has no application worker
+queue at this boundary, so no queue/delivery observation is fabricated. The Go
+changes remain uncommitted as requested, separately captured in
+`/tmp/bpfman-go-rpc-timing/go-instrumentation.patch`.
+
+Race-enabled focused tests, the full ordinary `make test RACE=1` target and lint
+of all changed Go packages pass. Deterministic clock tests verify duration,
+concurrent execution and distinct IDs across listener instances, redaction, and
+preservation of both successful and failed results when cancellation races them.
+The standard static Fedora source build produces `bpfman:go-rpc-timing`, image ID
+`sha256:ddc125687710203c29b53f6cfaad1dc9c999b5b62465439e7b18c38c58e53fab`,
+from a tracked-source snapshot plus only the Go timing patch. The Rust image
+remains the same `6404db89412e...` build above, with no Rust implementation changes.
+
+A fresh paired KIND run passes all eleven operator tests for both images, their
+normal teardown audits, matching userspace/bytecode image identities and kernel
+tags, owner attribution and advancing counter checks. Successful management work
+matches exactly: 24 Loads, 27 Attaches, 30 Unloads and one Detach. Additional
+cleanup-time uprobe attach retries differ (two Go, one Rust), with target absence
+in both cases and no final residue. The logs account for contiguous request IDs
+on all 1,875 Go and 2,001 Rust completions. Go observes 1,857 OK, 16 CSI NotFound
+retries and two Internal Attach outcomes; Rust observes 1,979 OK, 21 CSI NotFound
+retries and one Internal Attach outcome. Neither lane observes cancellation in
+this deployment workload; Rust accepts every local response enqueue.
+
+| Metric | Go | Rust |
+| --- | ---: | ---: |
+| Suite package time | 307.713 s | 298.496 s |
+| Completed RPCs | 1,875 | 2,001 |
+| Summed handler execution | 13.501 s | 20.150 s |
+| Get calls | 1,691 | 1,803 |
+| Get median / p95 | 0.739 / 1.100 ms | 2.514 / 3.554 ms |
+| Load median / sum | 26.073 ms / 10.803 s | 42.325 ms / 13.716 s |
+| Successful Attach median | 7.516 ms | 22.372 ms |
+| Unload median execution | 7.914 ms | 29.155 ms |
+| Successful CSI publish median | 22.642 ms | 3.342 ms |
+
+The aggregate handler difference is 6.649 seconds: Get contributes 3.248 seconds,
+Load 2.913 seconds, with smaller differences elsewhere, including 0.515 seconds
+less CSI publish execution in Rust. Get medians for each of the six identical
+application functions also differ consistently: 0.705–0.757 ms in Go and
+2.371–2.486 ms in Rust. This avoids interpreting a differing program mix as the
+entire Get gap. Rust's maximum observed application queue delay is 20.149 ms.
+The reversed suite-time ordering, despite more Rust handler time, reinforces that
+these operator timings do not establish a stable daemon performance ratio.
+
+Existing Rust spans narrow the Get follow-up: all 1,803 Gets include a
+`link.list_records` scope averaging 1.123 ms (2.024 seconds summed). The runtime
+reads/decodes all link records and dispatcher groups, then filters by program;
+Go queries links by program ID. Both implementations scan program records for map
+membership. The link path is a concrete profiling/query-shape candidate, not a
+proven explanation for the whole difference. Load stages show 10.227 of Go's
+10.803 seconds between correlated image-resolution/pull logs. Rust's runtime load
+batch scopes sum to 0.806 seconds; 12.910 seconds lie outside them, including image
+preparation/validation and response projection. Those scopes do not isolate
+network time from preparation.
+
+These are current-build diagnostic observations. Go's unary interceptor measures
+after protobuf decoding and before encoding/sending; Rust includes protobuf
+conversion and local response enqueue. Go is optimized; Rust is the development
+profile with aya-obj at level two and detailed runtime/lock logging. Rust span
+timings also include instrumentation overhead. Release/profile and logging
+controls are needed before attributing a latency gap to architecture or selecting
+an optimization. Queue scheduling, runtime behavior and Rust implementation are
+unchanged by this diagnostic.
+
+Full evidence is under `/tmp/bpfman-go-rpc-timing/`, including commands/results,
+source snapshot/patch, `kind/rpc-comparison.json`, per-function Get distributions,
+`rust-get-span-summary.json`, `load-stage-summary.json`, both full suite logs and
+final inventory/mount audits. The task-owned cluster remains clean and ready on
+the same Rust image; the user's separate operator edits and kubeconfig remain
+untouched.
+
+### Rust debug/release control (10 November 2026)
+
+A fresh debug control and a release build use identical Rust source, Fedora base
+layers, container configuration, operator/agent images and logging:
+`info,bpfman_api=debug,bpfman_runtime=debug,bpfman_lock=trace`. The debug image is
+the existing `6404db89412e...` binary under a fresh tag to restart its process;
+the release image is `bpfman:rust-rpc-release`, ID
+`sha256:09b75b145a3529efb405c436658b2c495e57dc593d3ef4e2914f547d69ca966b`.
+The normal `build-image-rust-dev RUST_BUILD_PROFILE=release` target builds the
+host workspace once with Cargo release defaults, then copies and patches the
+binary's loader inside the development Dockerfile. Image build time is 94.067
+seconds. The debug profile retains its existing aya-obj opt-level=2 exception.
+Source fingerprints and the preceding debug-image patch verify identical Rust
+implementation inputs; no implementation changes or commits accompany this run.
+
+Both profiles pass all eleven unchanged operator tests and subsequent cleanup
+audits. Successful management work matches: 24 Loads, 27 Attaches, 30 Unloads and
+one Detach. All six application OCI digests, kernel tags, translated sizes and
+owner fields match, as do userspace image digests in all eight workload namespaces.
+All application counters advance monotonically, without captured map-read errors.
+Matched initial 60-second deltas are debug/release: kprobe 858,129/820,461,
+TC/TCX/XDP packets 1,644/1,545 per hook, SIGUSR1 59/59 and uprobe 60/60.
+
+| Metric | Fresh debug | Release | Previous Go reference |
+| --- | ---: | ---: | ---: |
+| Suite package time | 286.319 s | 286.989 s | 307.713 s |
+| Completed RPCs | 1,905 | 2,040 | 1,875 |
+| Summed handler execution | 17.235 s | 15.316 s | 13.501 s |
+| Get median / p95 | 1.775 / 2.403 ms | 0.492 / 0.706 ms | 0.739 / 1.100 ms |
+| Load median / sum | 32.877 ms / 12.562 s | 26.904 ms / 13.165 s | 26.073 ms / 10.803 s |
+| Successful Attach median | 18.358 ms | 12.805 ms | 7.516 ms |
+| Unload median execution | 23.527 ms | 16.319 ms | 7.914 ms |
+| Successful CSI publish median | 2.338 ms | 1.366 ms | 22.642 ms |
+
+Release reduces median Get execution by about 3.6 times in this paired control.
+The improvement holds for each of the six application functions: debug medians
+range from 1.652 to 1.828 ms, release from 0.455 to 0.554 ms. Nested
+`link.list_records` median span time falls from 0.758 to 0.188 ms; `program.get`
+falls from 1.542 to 0.452 ms. The earlier debug-versus-optimized-Go Get gap is
+therefore not evidence of a fundamental architecture problem. Go remains a
+previous-run reference with a different protobuf/response timing boundary;
+these observations do not establish an overall language performance ranking.
+Load totals remain variable and dominate aggregate execution. Suite wall time
+does not track the substantial improvement in per-call Get execution.
+
+Both fresh Rust logs verify contiguous process-local request IDs, matching
+admission/start/completion ancestry, runtime/lock DEBUG/TRACE coverage, successful
+local response enqueue and no observed cancellation. Queue maxima are 19.505 ms
+in debug and 19.986 ms in release. Debug reports 1,882 OK, 20 CSI NotFound and
+three Internal Attach completions; release reports 2,018 OK, 20 CSI NotFound and
+two Internal Attach completions. The Attach failures again follow userspace
+target disappearance during cleanup, with zero unresolved cleanup effects.
+Release also logs one operator finalizer resource-version conflict; subsequent
+cleanup removes all application/state resources. Observation startup/deletion
+races are retained separately (seven debug, three release). Both final audits
+verify empty program/link/dispatcher inventories, owned pins/artifacts and CSI
+volumes, with the release daemon ready and CSI registered.
+
+Small-cluster latency does not establish scalability. Rust Get currently reads
+all program records for selection/map membership and all link records before
+filtering by program, including dispatcher decoding, grouping and sorting. Go's
+link selection uses the existing `links(kernel_prog_id)` index, with an expected
+lookup shape of O(log L + K) for L stored links and K matches; Go still scans
+program records for map membership. Rust's `bpfman_model::tcx_positions` also
+computes each TCX rank by scanning the complete TCX list, making that step O(T²)
+for T TCX links. This is concrete implementation work to address, even though
+release removes the measured Get disadvantage at this inventory size. A follow-up
+should measure increasing inventories, derive ranks without repeated scans, and
+introduce backend-independent targeted reads. Preserve full dispatcher validation,
+same-hook TCX ordering, fresh-snapshot semantics and cancellation; filtering rows
+before those checks must not silently weaken observation or recovery contracts.
+
+Evidence is under `/tmp/bpfman-rust-release-timing/`: build commands/results,
+362 unchanged Rust source fingerprints, both full suite/counter logs and cleanup
+audits, `kind/profile-comparison.json`, per-function and nested-span distributions,
+`kind/comparison-verification.json` and `verification.json`. The task-owned cluster
+remains clean and ready on the release image. Go instrumentation and Rust
+telemetry remain uncommitted, and the user's operator edits and kubeconfig remain
+untouched.

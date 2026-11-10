@@ -228,6 +228,15 @@ where
     }
 
     fn retain(&self, failure: Recovery<S, K>) {
+        let recovery_kind = match &failure {
+            Recovery::Load(_) => "load",
+            Recovery::Link(_) => "link",
+            Recovery::Xdp(_) => "xdp",
+            Recovery::Tc(_) => "tc",
+            Recovery::Unload(_) => "unload",
+            Recovery::UnloadReport(_) => "unload_report",
+        };
+        tracing::error!(recovery_kind, "RPC retained unresolved cleanup ownership");
         self.recovery
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -359,6 +368,9 @@ where
             .app
             .load_batch_with_cancellation(prepared, cancellation)
             .map_err(|e| self.load_error(e))?;
+        for program in &loaded {
+            tracing::info!(program_id = program.record.id.get(), "Program loaded");
+        }
         Ok(pb::LoadResponse {
             programs: loaded
                 .into_iter()
@@ -460,6 +472,8 @@ where
         request: pb::GetRequest,
         cancellation: &Cancellation,
     ) -> Result<pb::GetResponse, Status> {
+        tracing::Span::current().record("program_id", request.id);
+        tracing::debug!(program_id = request.id, "Get program");
         let id =
             NonZeroU32::new(request.id).ok_or_else(|| Status::not_found("program 0 not found"))?;
         let program = self
@@ -477,6 +491,8 @@ where
     }
 
     fn unload(&self, id: u32, cancellation: &Cancellation) -> Result<(), Status> {
+        tracing::Span::current().record("program_id", id);
+        tracing::debug!(program_id = id, "Unload program");
         let id = NonZeroU32::new(id).ok_or_else(|| Status::not_found("program 0 not found"))?;
         match self.app.unload_with_cancellation(id, cancellation) {
             Ok(report) => {
@@ -502,6 +518,8 @@ where
     }
 
     fn detach(&self, id: u32, cancellation: &Cancellation) -> Result<(), Status> {
+        tracing::Span::current().record("link_id", id);
+        tracing::debug!(link_id = id, "Detach link");
         let id =
             NonZeroU64::new(u64::from(id)).ok_or_else(|| Status::not_found("link 0 not found"))?;
         let outcomes = self

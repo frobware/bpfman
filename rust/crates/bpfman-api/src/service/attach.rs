@@ -22,6 +22,8 @@ where
         cancellation: &Cancellation,
     ) -> Result<pb::AttachResponse, Status> {
         use pb::attach_info::Info;
+        tracing::Span::current().record("program_id", request.id);
+        tracing::debug!(program_id = request.id, "Attach program");
         let attach = request
             .attach
             .ok_or_else(|| Status::invalid_argument("attach info is required"))?;
@@ -182,6 +184,12 @@ where
             Info::FexitAttachInfo(_) => self.tracing(id, TracingKind::Fexit, cancellation)?,
             Info::LsmAttachInfo(_) => self.tracing(id, TracingKind::Lsm, cancellation)?,
         };
+        tracing::Span::current().record("link_id", record.id.get());
+        tracing::info!(
+            program_id = request.id,
+            link_id = record.id.get(),
+            "Link attached"
+        );
         Ok(pb::AttachResponse {
             link_id: record.id.get() as u32,
         })

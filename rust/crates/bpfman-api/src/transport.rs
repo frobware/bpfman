@@ -10,6 +10,9 @@ use std::{
     time::Duration,
 };
 
+mod telemetry;
+use telemetry::Request;
+
 /// Bounded synchronous execution resources, independent of writer serialization.
 #[derive(Clone, Copy, Debug)]
 pub struct ServerOptions {
@@ -34,6 +37,17 @@ impl Default for ServerOptions {
 struct Call {
     writer: ServerWriter,
     cancellation: Cancellation,
+    request: Request,
+}
+
+impl Call {
+    fn cancel(&self, reason: &'static str) {
+        tracing::dispatcher::with_default(&self.request.dispatch, || {
+            let _span = self.request.span.enter();
+            self.request.cancel(reason);
+            self.cancellation.cancel();
+        });
+    }
 }
 
 struct Job {
@@ -113,15 +127,23 @@ impl<H: Handler> RpcServer<H> {
                 Execution::Mutation => sender.clone(),
             };
             let active = active.clone();
+            let dispatch = tracing::dispatcher::get_default(Clone::clone);
             // Deferred single-response completion lets ordinary operation
             // threads serve unary calls without blocking the transport loop.
             builder = builder.add_server_streaming(method, move |bytes, writer| {
+                let _dispatch = tracing::dispatcher::set_default(&dispatch);
+                let request = Request::new(method, execution);
+                let _span = request.span.clone().entered();
                 if bytes.len() > 4 * 1024 * 1024 {
-                    return Status::resource_exhausted("request exceeds 4 MiB");
+                    return request.reject(
+                        Status::resource_exhausted("request exceeds 4 MiB"),
+                        "request_size",
+                    );
                 }
                 let call = Arc::new(Call {
                     writer: writer.clone(),
                     cancellation: Cancellation::new(),
+                    request,
                 });
                 let job = Job {
                     method,
@@ -130,18 +152,20 @@ impl<H: Handler> RpcServer<H> {
                 };
                 match sender.try_send(job) {
                     Ok(()) => {
+                        tracing::debug!("RPC admitted");
                         active
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .push(call);
                         Status::ok()
                     }
-                    Err(mpsc::TrySendError::Full(_)) => {
-                        Status::resource_exhausted("gRPC worker queue is full")
-                    }
-                    Err(mpsc::TrySendError::Disconnected(_)) => {
-                        Status::unavailable("gRPC server is stopping")
-                    }
+                    Err(mpsc::TrySendError::Full(_)) => call.request.reject(
+                        Status::resource_exhausted("gRPC worker queue is full"),
+                        "queue_full",
+                    ),
+                    Err(mpsc::TrySendError::Disconnected(_)) => call
+                        .request
+                        .reject(Status::unavailable("gRPC server is stopping"), "stopping"),
                 }
             });
         }
@@ -217,19 +241,24 @@ impl<H: Handler> RpcServer<H> {
                                 }
                                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                             };
-                            if stopping.load(Ordering::Acquire) {
-                                job.call.cancellation.cancel();
-                            }
-                            let outcome =
-                                service.handle(job.method, &job.bytes, &job.call.cancellation);
-                            let status = match outcome {
-                                Ok(bytes) => {
-                                    let _ = job.call.writer.write_owned(bytes);
-                                    Status::ok()
+                            tracing::dispatcher::with_default(&job.call.request.dispatch, || {
+                                let _span = job.call.request.span.enter();
+                                let queued = job.call.request.start();
+                                if stopping.load(Ordering::Acquire) {
+                                    job.call.cancel("shutdown");
                                 }
-                                Err(status) => status,
-                            };
-                            let _ = job.call.writer.finish(status);
+                                let outcome =
+                                    service.handle(job.method, &job.bytes, &job.call.cancellation);
+                                let (status, written) = match outcome {
+                                    Ok(bytes) => {
+                                        (Status::ok(), job.call.writer.write_owned(bytes).is_ok())
+                                    }
+                                    Err(status) => (status, true),
+                                };
+                                let code = status.code();
+                                let finished = job.call.writer.finish(status).is_ok();
+                                job.call.request.finish(code, queued, written && finished);
+                            });
                         }
                     });
                 match handle {
@@ -249,14 +278,16 @@ impl<H: Handler> RpcServer<H> {
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
                             calls.retain(|call| {
-                                if shutdown.load(Ordering::Acquire)
-                                    || call.writer.is_cancelled()
-                                    || call.writer.time_remaining().is_some_and(|d| d.is_zero())
-                                {
-                                    call.cancellation.cancel();
-                                }
                                 if call.writer.is_finished() {
                                     return false;
+                                }
+                                if shutdown.load(Ordering::Acquire) {
+                                    call.cancel("shutdown");
+                                } else if call.writer.time_remaining().is_some_and(|d| d.is_zero())
+                                {
+                                    call.cancel("deadline");
+                                } else if call.writer.is_cancelled() {
+                                    call.cancel("client_disconnect");
                                 }
                                 // grpcuds 0.1 reports a vanished stream when a queued
                                 // operation bounces. Reapplying its default queue
@@ -272,7 +303,9 @@ impl<H: Handler> RpcServer<H> {
                         .unwrap_or_else(std::sync::PoisonError::into_inner)
                         .iter()
                     {
-                        call.cancellation.cancel();
+                        if !call.writer.is_finished() {
+                            call.cancel("shutdown");
+                        }
                     }
                 });
             let monitor = match monitor {

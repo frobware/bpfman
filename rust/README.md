@@ -559,7 +559,7 @@ Effectful crates emit `tracing` spans; the CLI owns collection. Set `RUST_LOG` t
 enable structured JSON events on stderr. Command output remains on stdout.
 Ordinary CLI logging defaults to warning level. `--log` / `BPFMAN_LOG` accepts
 Go's base/component specifications, including `warning` and `err` aliases;
-`manager`, `store`, `kernel`, `fs`, `setup`, `lock` and `image` select the
+`manager`, `store`, `kernel`, `fs`, `setup`, `lock`, `image` and `server` select the
 corresponding Rust targets. The explicit CLI setting overrides the environment,
 and either takes precedence over the Rust-specific `RUST_LOG` extension.
 Configuration selects text or JSON logging. `RUST_LOG` retains structured JSON
@@ -590,6 +590,32 @@ are logged. Model/core crates remain uninstrumented and pure.
 SQLite dispatcher/link/unload writer openings emit `store.connection.open_writer`.
 These spans separate adapter work from existing writer wait/ownership and kernel
 operation spans; nested span durations must not be blindly added together.
+
+The shared management/CSI transport assigns process-wide monotonic `request_id`
+values and `rpc.request` spans with `rpc_method` and `execution` class. It carries
+both the span and tracing dispatcher onto operation and cancellation threads, so
+runtime/store/kernel/lock spans keep their request ancestry. Mutations and teardown
+spans and successful completions are INFO; reads/probes, admission/rejection,
+expected statuses and deduplicated cancellation observations are DEBUG. Internal,
+Unknown and DataLoss completions are ERROR. Completion events repeat the method
+and request ID even when a DEBUG read span is filtered out. Unexpected retained
+management cleanup ownership emits an ERROR with its recovery kind.
+
+`RPC completed` records `grpc_status`, `queue_ms`, `execution_ms`, `total_ms`,
+`cancellation_requested` and `response_queued`. The last field means the local
+transport accepted the response/status; it does not acknowledge client receipt.
+Cancellation reason is `deadline`, `client_disconnect` or `shutdown`, as observed
+by the transport. Actual operation status is retained if cancellation races a
+completed mutation. These are server observations, not distributed trace IDs;
+request IDs reset on process restart. Program/link IDs and validated CSI volume
+IDs connect related calls without logging protobuf bodies, metadata/context,
+target paths, credentials or free-form status messages.
+
+Use `--log=info,server=debug,manager=debug,lock=trace` to include request admission,
+reads and nested runtime/lock timings. `RUST_LOG=info,bpfman_api=debug,bpfman_runtime=debug,bpfman_lock=trace`
+enables the same targets with JSON output. Subscriber/filter/timeline policy
+remains in the CLI; the permanent CSI service keeps this transport instrumentation
+when the optional management API is disabled or removed.
 
 ## CLI parity harness
 

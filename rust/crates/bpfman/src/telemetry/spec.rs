@@ -31,6 +31,7 @@ pub(super) fn directive(spec: &str) -> anyhow::Result<String> {
             "fs" | "setup" => &["bpfman_fs"],
             "lock" => &["bpfman_lock"],
             "image" => &["bpfman_image_oci"],
+            "server" => &["bpfman_api"],
             other => &[other],
         };
         for target in targets {
@@ -70,6 +71,7 @@ mod tests {
         );
         assert_eq!(directive("")?, "warn");
         assert_eq!(directive("store=debug")?, "warn,bpfman_store_sqlite=debug");
+        assert_eq!(directive("server=debug")?, "warn,bpfman_api=debug");
         for invalid in ["off", "info,debug", "info,=debug", "manager=nope"] {
             assert!(directive(invalid).is_err(), "{invalid}");
         }
