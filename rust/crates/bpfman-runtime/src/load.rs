@@ -38,12 +38,20 @@ impl PreparedProgram {
         let object = LocalObject::from_bytes(kernel, bytes, &spec)?;
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         Ok(Self {
+            owner: String::new(),
             map_owner: None,
             object,
             source,
             spec,
             metadata,
         })
+    }
+
+    /// Attribute every program in this load to the caller-selected owner label.
+    /// The default is unassigned; this is independent of map-set ownership.
+    pub fn with_owner(mut self, owner: impl Into<String>) -> Self {
+        self.owner = owner.into();
+        self
     }
 
     /// Join an existing map set. Validation and reuse happen under the writer lock.
@@ -131,6 +139,7 @@ impl PreparedProgram {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
 
         Ok(Self {
+            owner: String::new(),
             map_owner: None,
             object,
             source: bpfman_model::ProgramSource::File(Some(source_text.into())),
@@ -192,6 +201,7 @@ impl<
     ) -> Result<(ObservedProgram, Vec<ObservedProgram>), LoadError<K>> {
         cancellation.check().map_err(|_| LoadCause::Cancelled)?;
         let PreparedProgram {
+            owner,
             map_owner,
             object,
             source,
@@ -219,6 +229,7 @@ impl<
                     let remaining: Vec<_> = remaining
                         .iter()
                         .map(|spec| Inputs {
+                            owner: &owner,
                             cancellation,
                             map_owner,
                             object: &object,
@@ -232,6 +243,7 @@ impl<
                         &writer,
                         &mut Effects(store, &self.kernel),
                         &Inputs {
+                            owner: &owner,
                             cancellation,
                             map_owner,
                             object: &object,

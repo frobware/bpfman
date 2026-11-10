@@ -65,6 +65,20 @@ impl Images for ImagePolicy {
 
 pub(super) fn exercise() {
     let c = Context::new();
+    let go = std::env::var_os("BPFMAN_GO_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repository().join("bin/bpfman"));
+    for binary in [rust(), go.clone()] {
+        let loaded = c.load_cli(&binary);
+        assert_eq!(loaded["record"]["meta"]["owner"], "");
+        assert_owner(&c, &go, "");
+        c.run(
+            &binary,
+            &["program", "unload", &id(&loaded).to_string()],
+            true,
+        );
+        c.no_artifacts();
+    }
     let parent = c.layout.root().parent().expect("parent");
     let socket = parent.join("grpc.sock");
     let cache = RuntimeLayout::try_from(parent.join("image-cache")).expect("cache");
@@ -145,6 +159,7 @@ pub(super) fn exercise() {
         service.take_recovery().is_empty(),
         "unexpected cleanup receipts"
     );
+    assert_owner(&c, &go, "bpfman");
     drop(service);
     let reopened = Arc::new(Service::new(
         Bpfman::new(
@@ -191,9 +206,6 @@ pub(super) fn exercise() {
     // The same client and assertions run against the unchanged Go server.
     let config = parent.join("go-grpc.toml");
     fs::write(&config, "[signing]\nverify_enabled = false\n").expect("Go config");
-    let go = std::env::var_os("BPFMAN_GO_BIN")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| repository().join("bin/bpfman"));
     let log = tempfile::tempfile().expect("daemon log");
     let child = Command::new(&go)
         .arg("--runtime-dir")
@@ -255,6 +267,9 @@ pub(super) fn exercise() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        if lane == "persist-create" {
+            assert_owner(&c, &go, "bpfman");
+        }
     }
     let _ = Command::new("kill")
         .arg("-TERM")
@@ -263,6 +278,15 @@ pub(super) fn exercise() {
     let _ = daemon.0.wait();
     c.no_artifacts();
     assert!(!socket.exists(), "socket cleanup after joined shutdown");
+}
+
+fn assert_owner(c: &Context, go: &std::path::Path, owner: &str) {
+    for binary in [rust(), go.to_owned()] {
+        let observed = c.json(&binary, &["program", "list", "-o", "json"]);
+        let programs = observed["programs"].as_array().expect("programs");
+        assert_eq!(programs.len(), 1);
+        assert_eq!(programs[0]["record"]["meta"]["owner"], owner);
+    }
 }
 
 struct Daemon(std::process::Child);

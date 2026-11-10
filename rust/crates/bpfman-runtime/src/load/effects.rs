@@ -7,6 +7,7 @@ use bpfman_model::Symbol;
 use std::{collections::BTreeMap, num::NonZeroU32};
 
 pub(crate) struct Inputs<'a> {
+    pub(super) owner: &'a str,
     pub(super) cancellation: &'a crate::Cancellation,
     pub(super) map_owner: Option<NonZeroU32>,
     pub(super) object: &'a LocalObject,

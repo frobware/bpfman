@@ -345,6 +345,7 @@ where
             None => return Err(Status::invalid_argument("invalid bytecode location")),
         }
         .map_err(|e| self.load_error(e))?
+        .with_owner("bpfman")
         .with_globals(&self.inspector, request.global_data.clone())
         .map_err(|e| self.load_error(e))?;
         let prepared = match request.map_owner_id.and_then(NonZeroU32::new) {

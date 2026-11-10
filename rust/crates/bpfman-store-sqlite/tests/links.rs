@@ -30,6 +30,7 @@ fn scope(test: impl FnOnce(&RuntimeWriter<'_>, &Connection, &mut Store) -> Resul
             Backend.commit_program(
                 &w,
                 LoadRecord {
+                    owner: "",
                     map_owner: None,
                     shared_maps: &[],
                     globals: &Default::default(),

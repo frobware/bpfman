@@ -33,6 +33,7 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
         .commit_program(
             writer,
             LoadRecord {
+                owner: "",
                 map_owner: None,
                 shared_maps: &[],
                 globals: &Default::default(),
@@ -370,6 +371,7 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        owner: "",
                         map_owner: None,
                         shared_maps: &[],
                         id: id(42),
@@ -501,6 +503,7 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        owner: "",
                         map_owner: None,
                         shared_maps: &[],
                         globals: &Default::default(),
@@ -674,6 +677,7 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        owner: "",
                         map_owner: None,
                         shared_maps: &[],
                         id: id(42),
@@ -832,6 +836,7 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        owner: "",
                         map_owner: None,
                         shared_maps: &[],
                         id: id(42),

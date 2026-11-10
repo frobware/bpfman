@@ -23,14 +23,42 @@ impl Images for NoImages {
         Err(Status::unimplemented("image pulling not configured"))
     }
 }
-struct Fixture {
+struct FixtureImages;
+
+impl Images for FixtureImages {
+    fn pull(
+        &self,
+        image: &pb::BytecodeImage,
+        _: &Cancellation,
+        validate: &dyn Fn(&[u8]) -> Result<(), bpfman_kernel::Error>,
+    ) -> Result<(Vec<u8>, bpfman_model::ProgramSource), Status> {
+        let bytes = b"fake object".to_vec();
+        validate(&bytes).map_err(|e| Status::invalid_argument(e.to_string()))?;
+        Ok((
+            bytes,
+            bpfman_model::ProgramSource::Image {
+                url: image.url.clone(),
+                digest: format!("sha256:{}", "0".repeat(64)),
+                pull_policy: bpfman_model::ImagePullPolicy::Always,
+            },
+        ))
+    }
+}
+
+struct Fixture<I = NoImages> {
     _temporary: tempfile::TempDir,
     object: String,
     kernel: FakeKernel,
-    service: Service<bpfman_store_sqlite::Backend, FakeKernel, NoImages>,
+    service: Service<bpfman_store_sqlite::Backend, FakeKernel, I>,
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_images(NoImages)
+    }
+}
+
+impl<I: Images> Fixture<I> {
+    fn with_images(images: I) -> Self {
         let temporary = tempfile::tempdir().expect("fixture");
         let layout = RuntimeLayout::try_from(temporary.path().join("runtime")).expect("layout");
         let runtime = RuntimeDirectory::open_or_create(layout.clone()).expect("runtime");
@@ -42,7 +70,7 @@ impl Fixture {
         )
         .expect("store");
         let app = Bpfman::new(store, kernel.clone(), Duration::from_secs(1));
-        let service = Service::new(app, kernel.clone(), NoImages, Default::default());
+        let service = Service::new(app, kernel.clone(), images, Default::default());
         let path = temporary.path().join("fixture.o");
         std::fs::write(&path, b"fake object").expect("object");
         Self {
@@ -107,6 +135,63 @@ impl Fixture {
             .expect("unload");
         self.kernel.assert_empty();
     }
+}
+
+fn load_owner_survives_reopen(image: bool) {
+    let f = Fixture::with_images(FixtureImages);
+    let mut request = f.request();
+    request.info.push(request.info[0].clone());
+    request.metadata.insert("owner".into(), "user label".into());
+    if image {
+        request.bytecode = Some(pb::BytecodeLocation {
+            location: Some(pb::bytecode_location::Location::Image(pb::BytecodeImage {
+                url: "registry.invalid/counter:test".into(),
+                ..Default::default()
+            })),
+        });
+    }
+    let response: pb::LoadResponse = f
+        .call("Load", request, &Cancellation::new())
+        .expect("batch load");
+    assert_eq!(response.programs.len(), 2);
+
+    let layout = RuntimeLayout::try_from(f._temporary.path().join("runtime")).expect("layout");
+    let store = ActiveStore::open(
+        bpfman_store_sqlite::Backend,
+        &layout,
+        Duration::from_secs(1),
+    )
+    .expect("reopen");
+    let reopened = Bpfman::new(store, f.kernel.clone(), Duration::from_secs(1));
+    for program in response.programs {
+        let id = program.kernel_info.expect("kernel").id;
+        let record = reopened
+            .get(std::num::NonZeroU32::new(id).expect("id"))
+            .expect("committed program")
+            .record;
+        assert_eq!(
+            record.owner, "bpfman",
+            "every RPC batch member retains its owner"
+        );
+        assert_eq!(
+            record.metadata.get("owner").map(String::as_str),
+            Some("user label")
+        );
+        let _: pb::UnloadResponse = f
+            .call("Unload", pb::UnloadRequest { id }, &Cancellation::new())
+            .expect("unload");
+    }
+    f.kernel.assert_empty();
+}
+
+#[test]
+fn file_load_owner_survives_reopen() {
+    load_owner_survives_reopen(false);
+}
+
+#[test]
+fn image_load_owner_survives_reopen() {
+    load_owner_survives_reopen(true);
 }
 
 #[test]

@@ -34,6 +34,7 @@ fn scope(
             Backend.commit_program(
                 &w,
                 LoadRecord {
+                    owner: "",
                     map_owner: None,
                     shared_maps: &[],
                     id: id(42),

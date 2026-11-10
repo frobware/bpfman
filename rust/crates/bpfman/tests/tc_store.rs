@@ -102,6 +102,7 @@ fn contract<S: OpenStore + CommitLoad + TcStore + Clone>(
             .commit_program(
                 w,
                 LoadRecord {
+                    owner: "",
                     map_owner: None,
                     shared_maps: &[],
                     id: n(42),

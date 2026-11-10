@@ -70,6 +70,7 @@ where
             .commit_program(
                 w,
                 LoadRecord {
+                    owner: "",
                     map_owner: None,
                     shared_maps: &[],
                     id: n(42),
@@ -229,6 +230,7 @@ where
                     .commit_program(
                         w,
                         LoadRecord {
+                            owner: "",
                             map_owner: None,
                             shared_maps: &[],
                             id: n(id),
@@ -553,6 +555,7 @@ where
                 .commit_program(
                     w,
                     LoadRecord {
+                        owner: "",
                         map_owner: None,
                         shared_maps: &[],
                         id: n(program),

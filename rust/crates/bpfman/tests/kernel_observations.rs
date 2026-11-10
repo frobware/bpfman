@@ -156,6 +156,7 @@ fn inventory<S: OpenStore + CommitLoad + Copy>(backend: S) {
                     .commit_program(
                         &writer,
                         LoadRecord {
+                            owner: "",
                             map_owner: None,
                             shared_maps: &[],
                             id: record.id,
@@ -349,6 +350,7 @@ where
                     .commit_program(
                         &writer,
                         LoadRecord {
+                            owner: "",
                             map_owner: None,
                             shared_maps: &[],
                             id,
@@ -750,6 +752,7 @@ fn xdp_observations<S: OpenStore + CommitLoad + bpfman_store::XdpReplacementStor
                     .commit_program(
                         &writer,
                         LoadRecord {
+                            owner: "",
                             map_owner: None,
                             shared_maps: &[],
                             id,

@@ -24,6 +24,7 @@ fn commit<S: CommitLoad>(store: &S, writer: &RuntimeWriter<'_>, raw: u32) {
         .commit_program(
             writer,
             LoadRecord {
+                owner: "",
                 map_owner: None,
                 shared_maps: &[],
                 globals: &BTreeMap::from([
@@ -143,6 +144,7 @@ fn batch_contract<S: OpenStore + CommitLoad>(backend: S) {
     let spec = bpfman_model::ProgramSpec::Tracepoint(name.clone());
     let source = bpfman_model::ProgramSource::File(Some("/source.o".into()));
     let record = |id| LoadRecord {
+        owner: "",
         map_owner: None,
         shared_maps: &[],
         id: NonZeroU32::new(id).expect("id"),
@@ -215,6 +217,7 @@ fn program_kinds<S: OpenStore + CommitLoad + bpfman_store::LinkStore>(backend: S
     let globals = BTreeMap::new();
     let source = bpfman_model::ProgramSource::File(Some("source.o".into()));
     let record = |id, spec| LoadRecord {
+        owner: "",
         map_owner: None,
         shared_maps: &[],
         id: NonZeroU32::new(id).expect("id"),
@@ -344,6 +347,7 @@ fn image_provenance<S: OpenStore + CommitLoad>(backend: S) {
             };
             let id = NonZeroU32::new(index as u32 + 42).expect("id");
             let record = |id| LoadRecord {
+                owner: "",
                 map_owner: None,
                 shared_maps: &[],
                 id,

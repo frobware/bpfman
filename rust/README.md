@@ -2956,6 +2956,13 @@ root supplies the ELF inspector and image policy; no concrete store or Aya
 implementation enters the frontend's normal dependencies. Image credentials
 are normalized at the frontend and never enter runtime/store requests.
 
+Management Load assigns the owner label `bpfman`, matching Go, and carries it
+through the shared runtime into every batch member's stored record. Ordinary CLI
+loads remain unassigned; runtime callers can supply a different owner explicitly.
+Attribution is separate from user metadata and map-set ownership. File/image
+batch regressions reopen real stores, and the native wire contract checks both
+CLIs' owner output for Go and Rust RPC loads and ordinary CLI loads.
+
 The Unix-socket transport pins grpcuds 0.1.0 with its bundled nghttp2 backend,
 without its optional Tokio integration. It uses a synchronous poll loop, eight
 mutation workers, two reserved read workers and separate bounded queues.

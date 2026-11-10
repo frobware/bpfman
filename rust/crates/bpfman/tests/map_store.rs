@@ -35,6 +35,7 @@ fn exercise<S: OpenStore + CommitLoad + UnloadStore + Copy>(backend: S) {
     let names = vec!["counter".to_owned()];
     let source = bpfman_model::ProgramSource::File(Some("source.o".into()));
     let record = |raw, owner: Option<u32>| LoadRecord {
+        owner: "",
         id: id(raw),
         spec: &spec,
         map_owner: owner.map(id),

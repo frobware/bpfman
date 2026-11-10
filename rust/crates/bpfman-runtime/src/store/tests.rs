@@ -89,6 +89,7 @@ fn seed<S: CommitLoad>(store: &Faults<S>, writer: &RuntimeWriter<'_>) {
         .commit_program(
             writer,
             LoadRecord {
+                owner: "",
                 map_owner: None,
                 shared_maps: &[],
                 globals: &Default::default(),

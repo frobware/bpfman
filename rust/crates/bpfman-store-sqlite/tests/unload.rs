@@ -21,6 +21,7 @@ fn seed(writer: &RuntimeWriter<'_>, id: NonZeroU32) -> Result {
     persist_program(
         writer,
         LoadRecord {
+            owner: "",
             map_owner: None,
             shared_maps: &[],
             globals: &Default::default(),

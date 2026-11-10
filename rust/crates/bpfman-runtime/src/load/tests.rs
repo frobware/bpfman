@@ -516,6 +516,7 @@ fn invoke_cancellable<F: LoadEffects>(
         writer,
         fake,
         &Inputs {
+            owner: "",
             map_owner: None,
             cancellation,
             object: &LocalObject {

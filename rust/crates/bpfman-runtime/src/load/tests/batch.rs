@@ -204,6 +204,7 @@ fn invoke_batch(
     let source = bpfman_model::ProgramSource::File(Some("source.o".into()));
     let inputs: Vec<_> = (0..3)
         .map(|_| Inputs {
+            owner: "",
             map_owner: None,
             cancellation: &cancellation,
             object: &object,

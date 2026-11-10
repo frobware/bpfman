@@ -37,6 +37,9 @@ mod delete;
 #[path = "lifecycle/dispatcher_delete.rs"]
 mod dispatcher_delete;
 
+#[path = "lifecycle/load_owner.rs"]
+mod load_owner;
+
 use bpfman_fs::{RuntimeDirectory, RuntimeLayout};
 use bpfman_model::{ProgramSpec, Symbol};
 use bpfman_runtime::{
@@ -1120,4 +1123,9 @@ fn sqlite_cascading_delete_observations() {
 #[test]
 fn sqlite_dispatcher_record_deletion() {
     dispatcher_delete::exercise(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_load_owner_attribution() {
+    load_owner::exercise(bpfman_store_sqlite::Backend);
 }

@@ -6793,6 +6793,14 @@ credential bounds or diagnostic redaction.
 
 ## Library gRPC compatibility checkpoint (19 October 2026)
 
+The 10 November operator comparison exposed a load-attribution gap: Go's
+management Load records owner `bpfman`, while Rust omitted that column entirely.
+The frontend now supplies the same label through a generic runtime load owner
+and the existing schema-2 owner column. CLI loads retain Go's unassigned default;
+no existing rows are rewritten. File/image batch regressions reproduced the empty
+owner before the fix and verify persistence through reopened stores. The native
+wire comparison also checks Go and Rust CLI views of both servers' attribution.
+
 The seven existing bpfman.v1 RPCs are implemented in `bpfman-api`, with prost
 messages generated from the unchanged shared protobuf in `bpfman-proto`.
 Runtime operations and stores remain generic; frontend normal dependencies

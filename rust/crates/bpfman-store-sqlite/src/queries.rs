@@ -395,12 +395,13 @@ pub(super) fn insert_program(
     tx.prepare_cached(
         "INSERT INTO managed_programs
          (program_id, program_name, program_type, object_path, source_path, pin_path,
-          map_set_id, license, gpl_compatible, metadata_json, created_at, global_data, attach_func, image_source)
+          map_set_id, license, gpl_compatible, metadata_json, created_at, global_data, attach_func, image_source, owner)
          VALUES (:program_id, :name, :kind, :object_path, :source_path, :pin_path,
-                 :map_set, :license, :gpl_compatible, :metadata, :created_at, :globals, :attach_func, :image_source)",
+                 :map_set, :license, :gpl_compatible, :metadata, :created_at, :globals, :attach_func, :image_source, :owner)",
     )?
     .execute(named_params! {
         ":program_id": record.id.get(),
+        ":owner": record.owner,
         ":map_set": record.map_owner.unwrap_or(record.id).get(),
         ":name": record.spec.name().as_str(),
         ":kind": record.spec.kind().as_str(),

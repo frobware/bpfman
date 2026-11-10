@@ -73,6 +73,8 @@ pub trait ProgramReader {
 /// Inputs for committing one local program and its map relationships.
 /// Managed paths are derived from writer authority, never supplied as targets.
 pub struct LoadRecord<'a> {
+    /// Caller-selected attribution label, independent of map-set ownership.
+    pub owner: &'a str,
     /// Existing map set to join; absence creates a private map set.
     pub map_owner: Option<NonZeroU32>,
     /// PinByName maps referenced by this load, for durable lifetime coordination.

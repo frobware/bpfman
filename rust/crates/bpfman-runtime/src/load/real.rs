@@ -303,6 +303,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
             .iter()
             .zip(&shared)
             .map(|((id, input), shared)| bpfman_store::LoadRecord {
+                owner: input.owner,
                 map_owner: input.map_owner,
                 shared_maps: shared,
                 id: *id,

@@ -103,6 +103,7 @@ pub struct Cancellation {
 /// }
 /// ```
 pub struct PreparedProgram {
+    owner: String,
     map_owner: Option<std::num::NonZeroU32>,
     object: kernel::LocalObject,
     source: bpfman_model::ProgramSource,

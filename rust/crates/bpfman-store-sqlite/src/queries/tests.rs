@@ -18,6 +18,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
     let mut expected = Vec::new();
 
     for (id, license, gpl) in [(first, "GPL", true), (second, "MIT", false)] {
+        let owner = if id == first { "" } else { "alice's label ☃" };
         let name = Symbol::try_from(format!("trace_{}", id.get()).as_str())?;
         let source = format!("source-{}'; DELETE FROM managed_programs; --.o", id.get());
         let object_path = format!("/bytecode/{id}/object.o");
@@ -27,6 +28,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
         let metadata = BTreeMap::from([("label".into(), format!("quoted '{id}' ☃"))]);
         let metadata_json = serde_json::to_string(&metadata)?;
         let record = LoadRecord {
+            owner,
             map_owner: None,
             shared_maps: &[],
             globals: &Default::default(),
@@ -84,6 +86,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
             metadata_json,
             license,
             gpl,
+            owner,
         ));
     }
 
@@ -93,8 +96,10 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
     assert_eq!(summaries.len(), 2);
     assert!(links(&tx)?.is_empty());
 
-    for ((row, summary), (id, name, source, object, pin, map, created, metadata, license, gpl)) in
-        rows.into_iter().zip(summaries).zip(expected)
+    for (
+        (row, summary),
+        (id, name, source, object, pin, map, created, metadata, license, gpl, owner),
+    ) in rows.into_iter().zip(summaries).zip(expected)
     {
         assert_eq!(row.id, i64::from(id.get()));
         assert_eq!(row.name, name.as_str());
@@ -105,6 +110,7 @@ fn cached_statements_rebind_after_errors_and_keep_record_fields_distinct() -> Re
         assert_eq!(row.map_set, i64::from(id.get()));
         assert_eq!(row.created_at, created);
         assert_eq!(row.license.as_deref(), Some(license));
+        assert_eq!(row.owner.as_deref(), Some(owner));
         assert_eq!(row.gpl_compatible != 0, gpl);
         assert_eq!(row.metadata.as_deref(), Some(metadata.as_str()));
         assert!(row.updated_at.is_none());
