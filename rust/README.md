@@ -295,16 +295,30 @@ preserve the previous or newer complete generation respectively.
 contracts, fixed signed-release verification, offline Go/Rust public/private auth
 comparison, TUF rotation/rollback/expiry/concurrency, cache revalidation races and
 real signal cancellation during signature reads and trust-writer waits. The normal
-`rust-check` includes these contracts without external network access. All ten
-remote-image scripts selected by `external=true,image=true` and six image-build
-scripts pass against both implementations with verification enabled. Go's external
-comparison runs serially to avoid its existing TUF cache contention; Rust also
-passes the remote-image lane with 32 slots. Earlier acceptance corrected three legacy `probe` expectations to
+`rust-check` includes these contracts without external network access.
+`TestPublishedImage_SignedRelease.bpfman` separately proves live registry
+verification with unsigned admission forbidden, the exact v0.5.6 GitHub signer,
+fresh production TUF trust, signer rejection, cache reuse, XDP traffic and cleanup
+against Go and Rust. Select it with `external=true,image=true,signed=true` and
+`BPFMAN_E2E_ISOLATED_RUNTIME=1` through `make run-e2e-scripts`; set
+`BPFMAN_UNDER_TEST` and `BPFMAN_E2E_IMPLEMENTATION` explicitly for Rust. Run Go
+serially because its TUF cache contends across CLI processes.
+
+The 10 November strict audit rejects all ten existing current-example scripts
+against both binaries. Their nine images advertise OCI referrers containing
+Sigstore v0.3 bundles, while both loaders currently discover legacy `.sig` tags
+only. The earlier passes with verification enabled also allowed unsigned images;
+they do not establish strict signature acceptance. OCI-referrers/bundle support
+is the next gap. See the [audit](../docs/design/rust-reimplementation.md#verified-remote-image-acceptance-audit-10-november-2026)
+for exact observed digests and evidence. Existing acceptance scripts remain
+unchanged. Earlier acceptance corrected three legacy `probe` expectations to
 bpfman's distinct `kprobe`, `uprobe` and `uretprobe` metadata names. The label
 vocabulary is [documented independently of loading libraries](../docs/developer-guide/image-build.md#bytecode-program-labels).
-Image mode passes all 134 admitted Rust files / 188 cases using Rust directly,
-with verification enabled. The earlier shared Go run passes 100 files / 107 cases, with
-one existing clsact-policy skip. A shared shell null-comparison bug exposed by
+The normal gate now runs all 147 shared non-external scripts with file and local
+OCI bytecode. Local unsigned fixture policy is separate from signed remote-image
+acceptance. The earlier shared Go run passed 100 files / 107 cases with one
+clsact-policy skip; the later broad Go audit recorded a foreign-ingress-qdisc
+residue failure. A shared shell null-comparison bug exposed by
 image provenance has been fixed in the evaluator and static checker without
 changing the lifecycle script or disabling checking. Native image building now
 removes that fixture-publisher dependency; see below. See the

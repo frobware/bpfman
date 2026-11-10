@@ -1,0 +1,77 @@
+# -*- mode: bpfman -*-
+#pragma labels={"external":"true","image":"true","signed":"true","program":"xdp"}
+# Given: the immutable, signed v0.5.6 XDP release and its GitHub Actions identity
+# When: verification, load, cached reuse and attachment run with unsigned admission forbidden
+# Then: the expected signer succeeds, a different signer fails, and teardown leaves no managed state
+
+import ../lib.bpfman
+
+let image = "quay.io/bpfman-bytecode/xdp_pass@sha256:89728a806e0cccfaf6491e560a2624dc8f4b070547196fd9e9ce64c44afdf01b"
+let subject = "https://github.com/bpfman/bpfman/.github/workflows/image-build.yml@refs/tags/v0.5.6"
+let issuer = "https://token.actions.githubusercontent.com"
+
+guard wd <- tempdir signed-release
+defer exec rm -rf $wd.path
+let config = "${wd.path}/required.toml"
+let wrong = "${wd.path}/wrong-signer.toml"
+let cache = "${wd.path}/images"
+let credentials = "${wd.path}/credentials"
+let trust = "${wd.path}/trust"
+guard _ <- exec mkdir $cache $credentials
+guard _ <- exec sh -c 'printf "{\"auths\":{}}\n" > "$1/config.json"' sh $credentials
+
+guard _ <- exec sh -c 'printf "[signing]\nverify_enabled = true\nallow_unsigned = false\n[[signing.trusted_identities]]\ncertificate_identity = \"%s\"\ncertificate_oidc_issuer = \"%s\"\n" "$2" "$3" > "$1"' sh $config $subject $issuer
+guard _ <- exec sh -c 'printf "[signing]\nverify_enabled = true\nallow_unsigned = false\n[[signing.trusted_identities]]\ncertificate_identity = \"https://example.invalid/untrusted\"\ncertificate_oidc_issuer = \"%s\"\n" "$2" > "$1"' sh $wrong $issuer
+
+def load_release(image config cache policy credentials trust) {
+    guard output <- exec env "DOCKER_CONFIG=${credentials}" "REGISTRY_AUTH_FILE=${credentials}/config.json" "TUF_ROOT=${trust}" "BPFMAN_SIGSTORE_CACHE_DIR=${trust}" bpfman --config $config --image-cache-dir $cache program load image $image --pull-policy $policy --programs xdp:pass -o json
+    let loaded = $output.stdout |> jq "fromjson"
+    return $loaded.programs[0]
+}
+
+# Raw exec preserves the verify command's text output and selects the same CLI
+# as the typed bridge. These explicit configs also prevent a permissive runner
+# config from turning this signed acceptance into unsigned-image acceptance.
+# Each run starts with fresh production trust and an empty public-registry
+# credential configuration, independent of workstation helpers and trust caches.
+guard verified <- exec env "DOCKER_CONFIG=${credentials}" "REGISTRY_AUTH_FILE=${credentials}/config.json" "TUF_ROOT=${trust}" "BPFMAN_SIGSTORE_CACHE_DIR=${trust}" bpfman --config $config --image-cache-dir $cache image verify $image
+assert $verified.stdout == "Image ${image}: signature verified\n"
+assert fail exec env "DOCKER_CONFIG=${credentials}" "REGISTRY_AUTH_FILE=${credentials}/config.json" "TUF_ROOT=${trust}" "BPFMAN_SIGSTORE_CACHE_DIR=${trust}" bpfman --config $wrong --image-cache-dir $cache image verify $image
+guard after_verify <- exec ls -A $cache
+assert $after_verify.stdout == ""
+
+# A rejected fresh load must not publish cache admission. Later rejected reuse
+# must preserve the admission established by the correct identity.
+assert fail load_release $image $wrong $cache Always $credentials $trust
+guard after_rejection <- exec ls -A $cache
+assert $after_rejection.stdout == ""
+
+guard published <- inspect_published_image $image pass
+assert $published.inspected.digest == "sha256:89728a806e0cccfaf6491e560a2624dc8f4b070547196fd9e9ce64c44afdf01b"
+assert $published.manifest.programs.pass == xdp
+
+guard prog <- load_release $image $config $cache Always $credentials $trust
+defer bpfman program unload $prog.record.program_id
+expect_program_load $prog xdp extension pass
+expect_loaded_image_source $prog $image $published.inspected
+
+guard pair <- net veth-pair
+defer net release $pair
+require_host_route_to_peer $pair
+guard link <- bpfman link attach xdp $prog.record.program_id $pair.host_link --priority 50
+defer bpfman link detach $link
+expect_pinned_link_identity $link
+assert $link.status.kernel_seen
+guard _ <- net exec $pair ping -c 5 -i 0.05 -W 1 $pair.host_addr
+
+assert fail load_release $image $wrong $cache Never $credentials $trust
+assert fail load_release $image $wrong $cache IfNotPresent $credentials $trust
+
+guard cached <- load_release $image $config $cache Never $credentials $trust
+defer bpfman program unload $cached.record.program_id
+expect_loaded_image_source $cached $image $published.inspected
+guard reused <- load_release $image $config $cache IfNotPresent $credentials $trust
+defer bpfman program unload $reused.record.program_id
+expect_loaded_image_source $reused $image $published.inspected
+
+print "signed release: verified expected signer, rejected wrong signer, attached, and reused Always/Never/IfNotPresent admissions"

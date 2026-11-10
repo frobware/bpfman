@@ -730,7 +730,14 @@ The architecture and compatibility goals are in
   partial-progress persistence, stage-cleanup retries and real trust-lock signal tests.
   Include signed release fixtures, offline Go/Rust public/private verification,
   cache policy changes/races and real SIGINT/SIGTERM signature-read cancellation.
-  Run the remote-image selector additionally with verification enabled. Go's TUF
+  Run the remote-image selector additionally with `verify_enabled = true` and
+  `allow_unsigned = false`. Enabled verification with unsigned admission allowed
+  is not evidence that signatures exist or were verified. The external
+  `signed=true` contract uses the immutable v0.5.6 release, an exact signer,
+  fresh production TUF trust, empty public-registry credential configuration,
+  rejection and cache reuse. The 10 November audit found the current examples
+  advertise OCI referrers with Sigstore v0.3 bundles, which neither loader yet
+  discovers; preserve that explicit failure until support exists. Go's TUF
   cache contends across CLI processes, so use serial Go comparison for that lane;
   keep Rust parallel. Do not weaken scripts or disable verification to claim it.
 - Image building retains fully validated input bytes before registry effects.
