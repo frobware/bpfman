@@ -129,17 +129,19 @@ impl ProgramLoad for Kernel {
         spec: &ProgramSpec,
         owner: Option<NonZeroU32>,
         shared: &[String],
+        new_shared: &[MapPin],
     ) -> Result<LoadedObject, Error> {
         if owner.is_none() && shared.is_empty() {
             return crate::object::load(bytes, maps, globals, spec);
         }
-        // Refuse mutation of reused outer contents before entering the confined
-        // filesystem bridge, retaining the typed unsupported category.
-        crate::object::validate_initializer_reuse(bytes, spec, owner.is_some(), shared)?;
-        w.with_load_maps(owner, maps, shared, |sources| {
-            crate::object::load_with_maps(bytes, maps, globals, spec, sources).map_err(Into::into)
+        // Keep kernel classifications inside the callback result. Only failures
+        // opening confined sources belong to the filesystem error boundary.
+        w.with_load_maps(owner, maps, shared, new_shared, |sources, fresh| {
+            Ok(crate::object::load_with_maps(
+                bytes, maps, globals, spec, sources, fresh,
+            ))
         })
-        .map_err(filesystem)
+        .map_err(filesystem)?
     }
 
     fn shared_map_names(

@@ -1,0 +1,51 @@
+# -*- mode: bpfman -*-
+# Matching initializer replay shares the map set and survives owner-first unload.
+import ../lib.bpfman
+
+def initialized_count(id) {
+    guard dump <- bpftool map dump id $id -j
+    return $dump.stdout |> jq "fromjson | .[0].formatted.value | tonumber"
+}
+
+guard fn <- kfunc acquire
+defer kfunc release $fn
+
+guard loaded <- bpfman program load file testdata/bpf/map_of_maps_initializers.bpf.o --programs kprobe:mom_seed_counter
+let owner = $loaded.programs[0]
+defer bpfman program unload $owner --ignore-missing
+
+guard joined <- bpfman program load file testdata/bpf/map_of_maps_initializers.bpf.o --programs kprobe:mom_seed_counter --map-owner-id $owner.record.program_id
+let dependent = $joined.programs[0]
+defer bpfman program unload $dependent --ignore-missing
+assert $owner.record.program_id != $dependent.record.program_id
+assert $owner.record.handles.map_pin_path == $dependent.record.handles.map_pin_path
+
+let directory = $owner.record.handles.map_pin_path
+guard inner_a <- bpftool map show pinned "${directory}/mom_seed_a" -j
+guard inner_b <- bpftool map show pinned "${directory}/mom_seed_b" -j
+let first_inner = $inner_a.stdout |> jq "fromjson | .id"
+let second_inner = $inner_b.stdout |> jq "fromjson | .id"
+assert $first_inner != $second_inner
+
+guard owner_link <- bpfman link attach kprobe $owner $fn.name
+guard dependent_link <- bpfman link attach kprobe $dependent $fn.name
+foreach inner in [$first_inner $second_inner] {
+    guard before <- initialized_count $inner
+    kfunc fire $fn 5
+    guard after <- initialized_count $inner
+    assert ($after - $before) == 20
+}
+
+bpfman program unload $owner
+assert path-exists "${directory}/mom_seed_array"
+assert path-exists "${directory}/mom_seed_hash"
+foreach inner in [$first_inner $second_inner] {
+    guard before <- initialized_count $inner
+    kfunc fire $fn 5
+    guard after <- initialized_count $inner
+    assert ($after - $before) == 10
+}
+
+bpfman program unload $dependent
+assert not path-exists "${directory}/mom_seed_array"
+assert not path-exists "${directory}/mom_seed_hash"

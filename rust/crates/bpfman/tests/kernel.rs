@@ -555,6 +555,9 @@ fn sqlite_map_sharing_native_recovery() {
 #[path = "kernel/map_of_maps.rs"]
 mod map_of_maps;
 
+#[path = "kernel/map_initializers.rs"]
+mod map_initializers;
+
 #[test]
 fn sqlite_map_sharing_map_of_maps_recovery() {
     map_of_maps::exercise(bpfman_store_sqlite::Backend);
@@ -566,11 +569,23 @@ fn go_map_sharing_map_of_maps_contract() {
     cli::go_dsl("TestMapOfMaps_PinByName");
     cli::go_dsl("TestMapOfMaps_Initializers");
     cli::go_dsl_source("TestMapOfMaps_Initializers", "image");
+    cli::go_dsl("TestMapOfMaps_InitializerOwner");
+    cli::go_dsl_source("TestMapOfMaps_InitializerOwner", "image");
+}
+
+#[test]
+fn go_map_sharing_initializer_policy() {
+    map_initializers::go_initializers();
 }
 
 #[test]
 fn sqlite_map_sharing_map_of_maps_initializers() {
-    map_of_maps::initializers(bpfman_store_sqlite::Backend);
+    map_initializers::initializers(bpfman_store_sqlite::Backend);
+}
+
+#[test]
+fn sqlite_map_sharing_shared_initializers() {
+    map_initializers::shared_initializers(bpfman_store_sqlite::Backend);
 }
 
 #[test]

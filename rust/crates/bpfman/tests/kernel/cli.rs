@@ -695,6 +695,7 @@ pub(super) fn map_sharing_scripts() {
             "TestMapOfMaps_MapOwner",
             "TestMapOfMaps_PinByName",
             "TestMapOfMaps_Initializers",
+            "TestMapOfMaps_InitializerOwner",
         ]),
         &rust(),
         true,

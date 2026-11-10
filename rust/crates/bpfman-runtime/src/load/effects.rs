@@ -66,6 +66,7 @@ pub(crate) trait LoadEffects: CleanupEffects {
         &mut self,
         writer: &RuntimeWriter<'_>,
         input: &Inputs<'_>,
+        new_shared: &[Self::MapPin],
     ) -> Result<Self::Kernel, Self::Error>;
 
     fn pin_program(

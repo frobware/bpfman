@@ -23,15 +23,6 @@ impl LocalObject {
         validate_selection(&object, spec)?;
         let initializers =
             crate::map_initializers::parse(&bytes, &object).map_err(LoadCause::Initializers)?;
-        for entry in &initializers {
-            if object
-                .maps
-                .get(&entry.outer)
-                .is_some_and(|map| matches!(map.pinning(), PinningType::ByName))
-            {
-                return Err(LoadCause::Unsupported("PinByName map-of-maps initializers"));
-            }
-        }
 
         let mut maps = Vec::new();
         let mut shared_maps = Vec::new();
@@ -78,14 +69,8 @@ impl LocalObject {
         &self,
         spec: &ProgramSpec,
         sources: &[(String, bpfman_fs::PinSource<'_>)],
+        fresh: &[String],
     ) -> Result<LoadedObject, LoadCause> {
-        if self
-            .initializers
-            .iter()
-            .any(|entry| sources.iter().any(|(name, _)| name == &entry.outer))
-        {
-            return Err(LoadCause::Unsupported("reused map-of-maps initializers"));
-        }
         let object = Object::parse(&self.bytes).map_err(|e| LoadCause::Parse(Box::new(e)))?;
         for name in &self.shared_maps {
             if !sources.iter().any(|(n, _)| n == name) {
@@ -153,8 +138,7 @@ impl LocalObject {
         let mut bpf = loader
             .load(&self.bytes)
             .map_err(|e| LoadCause::Kernel(Box::new(e)))?;
-        crate::map_initializers::populate(&mut bpf, &self.initializers)
-            .map_err(|e| LoadCause::Map(Box::new(e)))?;
+        crate::map_initializers::populate(&mut bpf, &self.initializers, sources, fresh)?;
         let program = bpf
             .program_mut(spec.name().as_str())
             .ok_or_else(|| LoadCause::Invalid("selected program disappeared during load".into()))?;
@@ -358,7 +342,7 @@ pub(super) fn load(
     globals: &BTreeMap<String, Vec<u8>>,
     spec: &ProgramSpec,
 ) -> Result<LoadedObject, Error> {
-    load_with_maps(bytes, maps, globals, spec, &[])
+    load_with_maps(bytes, maps, globals, spec, &[], &[])
 }
 
 pub(super) fn load_with_maps(
@@ -367,28 +351,12 @@ pub(super) fn load_with_maps(
     globals: &BTreeMap<String, Vec<u8>>,
     spec: &ProgramSpec,
     sources: &[(String, bpfman_fs::PinSource<'_>)],
+    fresh: &[String],
 ) -> Result<LoadedObject, Error> {
     let mut object = LocalObject::parse(bytes.to_vec(), spec)?;
     object.maps = maps.to_vec();
     object.globals = globals.clone();
-    object.load(spec, sources).map_err(Into::into)
-}
-
-pub(super) fn validate_initializer_reuse(
-    bytes: &[u8],
-    spec: &ProgramSpec,
-    has_owner: bool,
-    shared: &[String],
-) -> Result<(), Error> {
-    let object = LocalObject::parse(bytes.to_vec(), spec)?;
-    if object
-        .initializers
-        .iter()
-        .any(|entry| has_owner || shared.contains(&entry.outer))
-    {
-        return Err(LoadCause::Unsupported("reused map-of-maps initializers").into());
-    }
-    Ok(())
+    object.load(spec, sources, fresh).map_err(Into::into)
 }
 
 pub(super) fn xdp_frags(bytes: &[u8], name: &str) -> Result<bool, LoadCause> {

@@ -2,12 +2,14 @@
 
 ## Status
 
-The 10 November map-of-maps continuation adds sparse ELF `.values` initialization
-for fresh private array/hash outer maps, including checked relocation admission
-and normal consuming cleanup. Initializers targeting named or reused outer maps
-are explicitly unsupported: replaying them onto live maps needs a separate
-mutation/rollback policy. Existing userspace-populated outer-map sharing remains
-supported. See the latest checkpoint below for the precise boundary and evidence.
+The 10 November map-of-maps continuation supports sparse ELF `.values`
+initializers on private and newly owned named array/hash outer maps. Reused
+outers are observation-only: initializer entries must already reference the exact
+expected inner-map IDs. Conflicting or missing entries fail without writes;
+matching explicit-owner and PinByName replay succeeds. New shared-pin receipts
+authorize fresh initialization and retain normal consuming compensation. This
+preservation policy deliberately differs from Go's overwrite-on-replay behaviour.
+See the latest checkpoint below for the policy and evidence.
 
 Resumed on 9 November 2026 from `d4ecceaee` (19 October). The completed
 capability checkpoints include non-server CLI compatibility, synchronous gRPC,
@@ -20,9 +22,9 @@ Cutover remains pending. The last broad Go comparison recorded a residue failure
 in `TestTC_RejectsAttachOverForeignIngressQdisc` and a production-policy skip for
 clsact reclamation; these are not green Go/Rust parity results. Verified remote
 image acceptance, shared-store stress and Kubernetes deployment need fresh
-evidence before packaging/entry-point changes. Shared-outer `.values`
-initializers, physical-NIC/offload execution and the documented Aya/kernel XDP
-boundaries also remain outside the completed evidence. Historical "next" notes
+evidence before packaging/entry-point changes. Physical-NIC/offload execution
+and the documented Aya/kernel XDP boundaries also remain outside the completed
+evidence. Historical "next" notes
 below describe their checkpoint dates; this status and the latest appended
 checkpoint identify the current continuation.
 
@@ -2727,8 +2729,8 @@ wrong, change it here before broadening feature coverage.
 
 - Explicit map-owner sharing and PinByName coordination are implemented, including
   shared array/hash map-of-maps definitions and independent inner-map lifetimes.
-  Fresh private outer maps also support sparse ELF `.values` initializers;
-  named/reused outer initialization remains an explicit unsupported boundary.
+  Private and newly owned named outers support sparse ELF `.values` initializers.
+  Reused outers require matching inner identities and never replay writes.
 - Kprobe/kretprobe, host/container uprobe/uretprobe, native fentry/fexit and
   LSM lifecycle are implemented; other attachment types remain pending.
 - OCI pull/cache, native image build/push, anonymous bearer authentication and
@@ -7207,3 +7209,92 @@ opt-level-two override:
   corrected without removing an assertion or changing existing Go code/tests.
   The first full gate's failure remains recorded in
   `/tmp/bpfman-mom-initializers-check.log`.
+
+
+## Shared map-of-maps initializer policy (10 November 2026)
+
+This checkpoint supersedes the previous shared-initializer refusal. Initialization
+now follows ownership: fresh private outers and fresh PinByName outers receive
+sparse ELF entries, while reused outers are observation-only. For each reused
+initializer slot, the live entry must reference the exact inner map selected by
+the current load. A missing slot or a different inner ID yields `InvalidInput`.
+Every reused slot is checked before populating any fresh outer. Non-initializer
+slots are neither checked nor modified. There is no implicit repair or force flag.
+
+Explicit map-owner replay succeeds when the original map set still matches its
+initializer references. Independent PinByName loads succeed when referenced
+inner maps also retain shared identities. A fresh named outer may refer to private
+inners, but a subsequent independent load creates different inners and therefore
+fails intact; joining the original explicit map set remains supported.
+
+The runtime lends its newly acquired shared-pin receipts to the kernel load
+operation. The filesystem adapter checks their original writer/root/parent/inode
+evidence against the actual opened sources before identifying them as fresh.
+
+Admission also correlates requested shared names with every durable user's map-set
+aliases. Missing canonical pins and compatible-but-different map identities fail
+before new acquisitions. A mixed-acquisition test exposed the existing name-only
+cleanup adoption guard: after external canonical-pin removal, it could preserve a
+fresh replacement simply because an older user retained the name. Refusing that
+inconsistent state before creation avoids inventing repair/adoption authority;
+the original aliased maps remain intact. External pins without durable users can
+still be borrowed after ordinary compatibility checks.
+
+Neither an empty borrowed outer nor a new pin inode for the same kernel map grants
+initialization authority. This avoids inferring mutation permission from emptiness,
+map shape, shared names, or kernel IDs alone. Kernel errors are returned as a
+nested callback result through the confined filesystem bridge, retaining their
+backend-neutral classification without downcasting.
+
+Only newly owned outers are mutated, so existing consuming pin compensation covers
+partial population, verifier failure, cancellation and store failure. Reused maps
+acquire no cleanup receipts. Failed cleanup retains existing explicit retry
+semantics, primary errors and attempt history. This policy avoids retaining and
+replaying previous live values after commit failure: BPF map updates offer no
+compare-and-swap on the previous inner identity, and restoration could overwrite
+an external writer. The managed writer lock coordinates managed operations only;
+matching observations do not freeze later external entry changes.
+
+A durable Go-only real-kernel characterization records the differences:
+
+- Fresh PinByName outer creation fails while resolving ELF string references in
+  standalone `NewMap`; no shared outer pin is published by that failed fixture.
+- Explicit-owner collection loading succeeds and replays `.values` on replacements,
+  overwriting operator changes in both outer families.
+- Verifier failure precedes deferred population and preserves those changes.
+- Pre-existing named outers bypass standalone creation; successful loading replaces
+  their entries with the new load's private inner-map identities.
+
+Rust deliberately supports fresh named graphs and rejects conflicting replay.
+The new `TestMapOfMaps_InitializerOwner` compares matching owner replay, sparse
+array/hash counter execution and owner-first teardown against Go and Rust with
+file and local OCI sources. Existing acceptance scripts and labels remain unchanged.
+Native scenarios remain generic over the real store backend, selected as SQLite
+at the test composition root. They cover fresh named graphs, idempotent named and
+owner reuse, conflicting/missing slots, extra operator slots, mixed fresh/borrowed
+acquisition, missing/replaced durable shared pins, inode replacement, partial insertion, verifier rejection, failed
+commit, cancellation, blocked/cancelled/explicit cleanup retries, descriptor
+release and reopened unload. SQLite remains schema 2; no dependency or Aya fork
+is introduced.
+
+
+Validation on Linux `6.18.54` (the existing `aya-obj` dev/test profile override
+remains `opt-level = 2`):
+
+- `direnv exec . make rust-fmt-fix rust-test-map-sharing rust-check lint-make`
+  exited successfully after the seven focused map-sharing cases and the complete
+  gate. The kernel
+  runner selected all 90 discovered cases and checked residue after the pass.
+  The shared non-external corpus passed all 147 scripts in file mode and all
+  147 in local OCI mode. The kernel suite completed in 289.09 seconds. Userspace,
+  architecture, admission, doctest, strict Clippy and Rustdoc checks passed.
+  Full output: `/tmp/bpfman-mom-shared-check6.log`.
+- `TestMapOfMaps_InitializerOwner` passed identical assertions against Go in
+  file and OCI modes and against Rust in both full shared-corpus modes. Its
+  static shell check and canonical-format comparison also passed.
+- Descriptor accounting warms both shared and private unload paths before
+  measurement. Diagnostic snapshots identified one retained SQLite descriptor
+  when the private control was first introduced; BPF descriptor counts were
+  unchanged. The final scenarios retain strict total-descriptor equality after
+  failures and cleanup, without polling, allowances for extra descriptors, or
+  weakened lifetime assertions.

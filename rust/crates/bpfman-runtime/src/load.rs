@@ -440,7 +440,7 @@ fn acquire<F: LoadEffects>(
         }
     }
     let mut kernel = match cancellation_cause(effects, input)
-        .and_then(|()| effects.load_kernel(writer, input))
+        .and_then(|()| effects.load_kernel(writer, input, &pins))
     {
         Ok(kernel) => kernel,
         Err(cause) => {

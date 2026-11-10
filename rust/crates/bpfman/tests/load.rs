@@ -7,22 +7,6 @@ use std::{
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-#[test]
-fn named_outer_initializers_are_refused_before_runtime_creation() -> Result {
-    let temporary = tempfile::tempdir()?;
-    let runtime = temporary.path().join("runtime");
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../e2e/testdata/bpf/map_of_maps_initializers_shared.bpf.o");
-    let output = command(&runtime)
-        .arg("file")
-        .arg(source)
-        .args(["--programs", "kprobe:mom_seed_counter"])
-        .output()?;
-    assert_failure(output, 1, "PinByName map-of-maps initializers")?;
-    assert!(!runtime.exists());
-    Ok(())
-}
-
 fn command(runtime: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman"));
     command.env(

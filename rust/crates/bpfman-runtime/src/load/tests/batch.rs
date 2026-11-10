@@ -103,10 +103,15 @@ impl LoadEffects for Batch {
         self.members[0].prepare(w)
     }
 
-    fn load_kernel(&mut self, w: &RuntimeWriter<'_>, i: &Inputs<'_>) -> Result<Kernel, TestError> {
+    fn load_kernel(
+        &mut self,
+        w: &RuntimeWriter<'_>,
+        i: &Inputs<'_>,
+        new_shared: &[Map],
+    ) -> Result<Kernel, TestError> {
         self.current = self.next;
         self.next += 1;
-        self.members[self.current].load_kernel(w, i)
+        self.members[self.current].load_kernel(w, i, new_shared)
     }
 
     fn pin_program(

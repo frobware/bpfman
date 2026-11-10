@@ -715,6 +715,7 @@ impl ProgramLoad for FakeKernel {
         spec: &ProgramSpec,
         owner: Option<NonZeroU32>,
         shared: &[String],
+        _new_shared: &[Self::MapPin],
     ) -> Result<Loaded, Error> {
         if owner.is_none() && shared.is_empty() {
             return self.load_program(w, bytes, maps, globals, spec);

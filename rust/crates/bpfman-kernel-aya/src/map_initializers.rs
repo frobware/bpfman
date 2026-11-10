@@ -6,7 +6,7 @@ use object::{Object, ObjectSection, ObjectSymbol};
 use std::{collections::BTreeSet, io, os::fd::AsFd};
 
 pub(super) struct Entry {
-    pub(super) outer: String,
+    outer: String,
     inner: String,
     key: u32,
 }
@@ -116,29 +116,74 @@ pub(super) fn parse(bytes: &[u8], parsed: &aya_obj::Object) -> io::Result<Vec<En
     Ok(entries)
 }
 
-pub(super) fn populate(bpf: &mut aya::Ebpf, entries: &[Entry]) -> Result<(), MapError> {
-    for entry in entries {
+/// Reused outers are observation-only. Check every initializer before writing
+/// any newly owned outer, so conflicts cannot partially replay live entries.
+pub(super) fn populate(
+    bpf: &mut aya::Ebpf,
+    entries: &[Entry],
+    sources: &[(String, bpfman_fs::PinSource<'_>)],
+    fresh: &[String],
+) -> Result<(), crate::failure::LoadCause> {
+    use crate::failure::LoadCause;
+
+    let reused = |name: &str| {
+        sources.iter().any(|(source, _)| source == name) && !fresh.iter().any(|n| n == name)
+    };
+    let map_error = |e| LoadCause::Map(Box::new(e));
+    let get_map = |name: &str| {
+        bpf.map(name)
+            .ok_or_else(|| LoadCause::Invalid("initializer map disappeared".into()))
+    };
+    for entry in entries.iter().filter(|entry| reused(&entry.outer)) {
+        let expected = crate::object::map_id(get_map(&entry.inner)?)?;
+        let outer = get_map(&entry.outer)?;
+        let current = match outer {
+            Map::ArrayOfMaps(_) => {
+                let array: ArrayOfMaps<_, MapData> = outer.try_into().map_err(map_error)?;
+                array.get(&entry.key, 0)
+            }
+            Map::HashOfMaps(_) => {
+                let hash: HashOfMaps<_, u32, MapData> = outer.try_into().map_err(map_error)?;
+                hash.get(&entry.key, 0)
+            }
+            _ => return Err(LoadCause::Invalid("initializer outer type changed".into())),
+        };
+        let matches = match current {
+            Ok(inner) => inner.info().map_err(map_error)?.id() == expected,
+            Err(MapError::KeyNotFound) => false,
+            Err(e) => return Err(map_error(e)),
+        };
+        if !matches {
+            return Err(LoadCause::InitializerConflict {
+                outer: entry.outer.clone(),
+                key: entry.key,
+            });
+        }
+    }
+
+    for entry in entries.iter().filter(|entry| !reused(&entry.outer)) {
         let inner = bpf
             .map(&entry.inner)
-            .ok_or_else(|| MapError::IoError(invalid()))?;
+            .ok_or_else(|| map_error(MapError::IoError(invalid())))?;
         let fd = crate::object::map_data(inner)
             .fd()
             .as_fd()
-            .try_clone_to_owned()?;
-        let inner = MapData::from_fd(fd)?;
+            .try_clone_to_owned()
+            .map_err(|e| map_error(MapError::IoError(e)))?;
+        let inner = MapData::from_fd(fd).map_err(map_error)?;
         let outer = bpf
             .map_mut(&entry.outer)
-            .ok_or_else(|| MapError::IoError(invalid()))?;
+            .ok_or_else(|| map_error(MapError::IoError(invalid())))?;
         match outer {
             Map::ArrayOfMaps(_) => {
-                let mut array: ArrayOfMaps<_, MapData> = outer.try_into()?;
-                array.set(entry.key, &inner, 0)?;
+                let mut array: ArrayOfMaps<_, MapData> = outer.try_into().map_err(map_error)?;
+                array.set(entry.key, &inner, 0).map_err(map_error)?;
             }
             Map::HashOfMaps(_) => {
-                let mut hash: HashOfMaps<_, u32, MapData> = outer.try_into()?;
-                hash.insert(entry.key, &inner, 0)?;
+                let mut hash: HashOfMaps<_, u32, MapData> = outer.try_into().map_err(map_error)?;
+                hash.insert(entry.key, &inner, 0).map_err(map_error)?;
             }
-            _ => return Err(MapError::IoError(invalid())),
+            _ => return Err(map_error(MapError::IoError(invalid()))),
         }
     }
     Ok(())

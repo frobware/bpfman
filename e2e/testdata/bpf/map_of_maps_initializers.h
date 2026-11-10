@@ -14,16 +14,32 @@ struct mom_seed_inner {
   __uint(max_entries, 1);
 };
 
-struct mom_seed_inner mom_seed_a SEC(".maps");
-#ifdef MOM_INVALID_INNER
-struct {
-  __uint(type, BPF_MAP_TYPE_ARRAY);
-  __type(key, __u32);
-  __type(value, __u64);
-  __uint(max_entries, 2);
-} mom_seed_b SEC(".maps");
+// Keep the anonymous outer template unpinned. Named inner instances have the
+// same kernel shape but separate BTF definitions carrying their pin policy.
+#ifdef MOM_NAMED_INNERS
+#define MOM_SEED_MAP(name, capacity)                                           \
+  struct {                                                                     \
+    __uint(type, BPF_MAP_TYPE_ARRAY);                                          \
+    __type(key, __u32);                                                        \
+    __type(value, __u64);                                                      \
+    __uint(max_entries, capacity);                                             \
+    __uint(pinning, LIBBPF_PIN_BY_NAME);                                       \
+  } name SEC(".maps")
 #else
-struct mom_seed_inner mom_seed_b SEC(".maps");
+#define MOM_SEED_MAP(name, capacity)                                           \
+  struct {                                                                     \
+    __uint(type, BPF_MAP_TYPE_ARRAY);                                          \
+    __type(key, __u32);                                                        \
+    __type(value, __u64);                                                      \
+    __uint(max_entries, capacity);                                             \
+  } name SEC(".maps")
+#endif
+
+MOM_SEED_MAP(mom_seed_a, 1);
+#ifdef MOM_INVALID_INNER
+MOM_SEED_MAP(mom_seed_b, 2);
+#else
+MOM_SEED_MAP(mom_seed_b, 1);
 #endif
 
 struct {
@@ -33,7 +49,8 @@ struct {
   __uint(pinning, MOM_INITIAL_PINNING);
   __array(values, struct mom_seed_inner);
 } mom_seed_array SEC(".maps") = {
-    .values = {[1] = &mom_seed_a, [3] = (struct mom_seed_inner *)&mom_seed_b},
+    .values = {[1] = (struct mom_seed_inner *)&mom_seed_a,
+               [3] = (struct mom_seed_inner *)&mom_seed_b},
 };
 
 struct {
@@ -43,7 +60,8 @@ struct {
   __uint(pinning, MOM_INITIAL_PINNING);
   __array(values, struct mom_seed_inner);
 } mom_seed_hash SEC(".maps") = {
-    .values = {[1] = &mom_seed_a, [3] = (struct mom_seed_inner *)&mom_seed_b},
+    .values = {[1] = (struct mom_seed_inner *)&mom_seed_a,
+               [3] = (struct mom_seed_inner *)&mom_seed_b},
 };
 
 static __always_inline void increment(void *outer, __u32 key) {

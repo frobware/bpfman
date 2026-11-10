@@ -330,6 +330,7 @@ impl LoadEffects for Fake {
         &mut self,
         writer: &RuntimeWriter<'_>,
         input: &Inputs<'_>,
+        _new_shared: &[Map],
     ) -> Result<Kernel, TestError> {
         self.enter(writer, Event::LoadKernel)?;
 

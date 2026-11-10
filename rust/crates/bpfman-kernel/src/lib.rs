@@ -127,7 +127,7 @@ pub trait LinkObservations {
 /// Portable classification of a kernel operation failure.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ErrorKind {
-    /// Invalid input before kernel acquisition.
+    /// The object, request, or requested map reuse is invalid.
     InvalidInput,
     /// Capability outside the implemented slice.
     Unsupported,

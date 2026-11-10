@@ -99,8 +99,13 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad> LoadEffects for Stor
         self.fake.prepare(w).map_err(Into::into)
     }
 
-    fn load_kernel(&mut self, w: &RuntimeWriter<'_>, i: &Inputs<'_>) -> Result<Kernel, Error> {
-        self.fake.load_kernel(w, i).map_err(Into::into)
+    fn load_kernel(
+        &mut self,
+        w: &RuntimeWriter<'_>,
+        i: &Inputs<'_>,
+        new_shared: &[Map],
+    ) -> Result<Kernel, Error> {
+        self.fake.load_kernel(w, i, new_shared).map_err(Into::into)
     }
 
     fn pin_program(

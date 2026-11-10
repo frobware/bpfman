@@ -2,7 +2,7 @@
 use crate::MapPinning;
 use crate::{
     Error, MapPin, PinSource, PinTarget, PreparedLoad, RuntimeWriter,
-    artifacts::{entry, proc_path, validate_map_name},
+    artifacts::{entry, identity, proc_path, validate_map_name},
     directory::{CONFINED, DIRECTORY, ensure_directory},
     error::{Failure, io},
     observe::observe,
@@ -99,15 +99,18 @@ impl RuntimeWriter<'_> {
 
     /// Open every reused map by descriptor beneath the current runtime. Only
     /// existing pins can reach the callback; no caller-selected paths are accepted.
+    /// The callback also receives names proven to match newly owned shared pins.
     pub fn with_load_maps<T>(
         &self,
         owner: Option<NonZeroU32>,
         maps: &[String],
         shared: &[String],
-        action: impl FnOnce(&[(String, PinSource<'_>)]) -> crate::KernelResult<T>,
+        new_shared: &[MapPin],
+        action: impl FnOnce(&[(String, PinSource<'_>)], &[String]) -> crate::KernelResult<T>,
     ) -> Result<T, Error> {
         let bpffs = self.prepare_load()?;
         let mut sources = Vec::<(String, OwnedFd, PathBuf)>::new();
+        let mut fresh = Vec::new();
         for name in maps {
             if owner.is_none() && !shared.contains(name) {
                 continue;
@@ -134,6 +137,18 @@ impl RuntimeWriter<'_> {
             let receipt = observe(self, &parent, &parent_path, name, false)?
                 .ok_or(Failure::Unsafe("required shared map pin is missing"))?;
             let fd = open_owned(&receipt)?;
+            if owner.is_none() {
+                for pin in new_shared
+                    .iter()
+                    .filter(|pin| pin.shared_name() == Some(name))
+                {
+                    pin.validate(self)?;
+                    if Some(identity(&fd)?) != pin.entry.identity {
+                        return Err(Failure::Unsafe("new shared map source was replaced").into());
+                    }
+                    fresh.push(name.clone());
+                }
+            }
             let path = proc_path(&fd);
             sources.push((name.clone(), fd, path));
         }
@@ -141,7 +156,7 @@ impl RuntimeWriter<'_> {
             .iter()
             .map(|(name, _, path)| (name.clone(), PinSource(path)))
             .collect();
-        action(&pins).map_err(|e| Failure::Kernel(e).into())
+        action(&pins, &fresh).map_err(|e| Failure::Kernel(e).into())
     }
 }
 

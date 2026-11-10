@@ -11,7 +11,7 @@ use bpfman_store::{
 };
 use std::{fs, os::fd::AsFd};
 
-fn prepared(object: &str, program: &str) -> PreparedProgram {
+pub(super) fn prepared(object: &str, program: &str) -> PreparedProgram {
     PreparedProgram::new(
         &bpfman_kernel_aya::Kernel::default(),
         &fixture(object),
@@ -25,176 +25,13 @@ fn shared() -> PreparedProgram {
     prepared("map_of_maps_shared.bpf.o", "mom_counter")
 }
 
-fn descriptors() -> usize {
+pub(super) fn descriptors() -> usize {
     fs::read_dir("/proc/self/fd").expect("descriptors").count()
 }
 
 fn value(inner: MapData) -> u64 {
     let values: Array<_, u64> = Map::Array(inner).try_into().expect("inner array");
     values.get(&0, 0).expect("inner value")
-}
-
-pub(super) fn initializers<S>(backend: S)
-where
-    S: OpenStore + CommitLoad + UnloadStore + LinkStore + TcStore + XdpReplacementStore + Clone,
-    S::Reader: LinkReader,
-{
-    let c = Context::new();
-    let store = Faults::new(backend.clone());
-    let app = Bpfman::new(
-        ActiveStore::open(store.clone(), &c.layout, TIMEOUT).expect("store"),
-        bpfman_kernel_aya::Kernel::default(),
-        TIMEOUT,
-    );
-    let request = || prepared("map_of_maps_initializers.bpf.o", "mom_seed_counter");
-    let warm = app.load(request()).expect("warm initialization");
-    assert_eq!(
-        app.unload(warm.record.id)
-            .expect("warm unload")
-            .unresolved(),
-        0
-    );
-    c.no_artifacts();
-    let baseline = descriptors();
-
-    for (object, selection) in [
-        ("map_of_maps_initializers_invalid.bpf.o", "mom_seed_counter"),
-        ("map_of_maps_initializers.bpf.o", "mom_seed_bad"),
-    ] {
-        let failure = app
-            .load(prepared(object, selection))
-            .expect_err("kernel refusal");
-        assert_eq!(failure.unresolved(), 0);
-        drop(failure);
-        c.no_artifacts();
-        assert_eq!(descriptors(), baseline, "partly populated map leaked");
-    }
-
-    let cancelled = Cancellation::new();
-    cancelled.cancel();
-    let failure = app
-        .load_with_cancellation(request(), &cancelled)
-        .expect_err("cancelled admission");
-    assert_eq!(failure.kind(), bpfman_runtime::LoadErrorKind::Cancelled);
-    assert_eq!(failure.unresolved(), 0);
-    drop(failure);
-
-    let late = Cancellation::new();
-    store.cancel_at(Point::Commit, &late);
-    store.set(Some(Point::Commit));
-    let failure = app
-        .load_with_cancellation(request(), &late)
-        .expect_err("commit failure");
-    assert!(late.is_cancelled());
-    assert_eq!(failure.unresolved(), 0);
-    drop(failure);
-    store.set(None);
-    c.no_artifacts();
-    assert_eq!(descriptors(), baseline);
-
-    store.set(Some(Point::CommitWithBlockedCleanup));
-    let failure = app.load(request()).expect_err("blocked compensation");
-    let pending = failure.unresolved();
-    assert!(pending > 0);
-    let failure = app.retry_load_cleanup_with_cancellation(failure, &cancelled);
-    assert_eq!(failure.unresolved(), pending);
-    let bytecode = c.layout.bytecode_path(store.blocked_bytecode());
-    let directory = bytecode.parent().expect("bytecode directory");
-    fs::rename(directory, c.layout.root().join("rejected-bytecode-link"))
-        .expect("save blocked link");
-    fs::rename(c.layout.root().join("saved-bytecode"), directory).expect("restore bytecode");
-    store.set(None);
-    let failure = app.retry_load_cleanup(failure);
-    assert_eq!(failure.unresolved(), 0);
-    drop(failure);
-    c.no_artifacts();
-    assert_eq!(descriptors(), baseline);
-
-    let owner = app.load(request()).expect("initialized private maps");
-    let directory = c.layout.map_directory_path(owner.record.id);
-    {
-        let a = MapData::from_pin(directory.join("mom_seed_a")).expect("first inner");
-        let b = MapData::from_pin(directory.join("mom_seed_b")).expect("second inner");
-        let a_id = a.info().expect("identity").id();
-        let b_id = b.info().expect("identity").id();
-        assert_ne!(a_id, b_id);
-        let mut array: ArrayOfMaps<_, MapData> =
-            Map::ArrayOfMaps(MapData::from_pin(directory.join("mom_seed_array")).expect("array"))
-                .try_into()
-                .expect("array of maps");
-        let hash: HashOfMaps<_, u32, MapData> =
-            Map::HashOfMaps(MapData::from_pin(directory.join("mom_seed_hash")).expect("hash"))
-                .try_into()
-                .expect("hash of maps");
-        for (key, expected) in [(1, a_id), (3, b_id)] {
-            assert_eq!(
-                array
-                    .get(&key, 0)
-                    .expect("array seed")
-                    .info()
-                    .expect("identity")
-                    .id(),
-                expected
-            );
-            assert_eq!(
-                hash.get(&key, 0)
-                    .expect("hash seed")
-                    .info()
-                    .expect("identity")
-                    .id(),
-                expected
-            );
-        }
-        assert!(array.get(&0, 0).is_err());
-        assert!(array.get(&2, 0).is_err());
-        assert!(hash.get(&0, 0).is_err());
-        let mut keys = hash.keys().collect::<Result<Vec<_>, _>>().expect("keys");
-        keys.sort();
-        assert_eq!(keys, [1, 3]);
-
-        // Refuse initializer replay onto live shared outers, retaining an
-        // operator's deliberate replacement and every original map identity.
-        array.set(1, &b, 0).expect("operator update");
-        let failure = app
-            .load(request().with_map_owner(owner.record.id))
-            .expect_err("initializer replay refusal");
-        assert_eq!(failure.kind(), bpfman_runtime::LoadErrorKind::Unsupported);
-        assert_eq!(failure.unresolved(), 0);
-        drop(failure);
-        assert_eq!(
-            array
-                .get(&1, 0)
-                .expect("preserved update")
-                .info()
-                .expect("identity")
-                .id(),
-            b_id
-        );
-        assert_eq!(
-            hash.get(&1, 0)
-                .expect("preserved hash")
-                .info()
-                .expect("identity")
-                .id(),
-            a_id
-        );
-    }
-    drop(app);
-    let reopened = Bpfman::new(
-        ActiveStore::open(backend, &c.layout, TIMEOUT).expect("reopen"),
-        bpfman_kernel_aya::Kernel::default(),
-        TIMEOUT,
-    );
-    assert_eq!(
-        reopened
-            .unload(owner.record.id)
-            .expect("reopened unload")
-            .unresolved(),
-        0
-    );
-    c.absent(owner.record.id);
-    c.no_artifacts();
-    assert_eq!(descriptors(), baseline);
 }
 
 pub(super) fn exercise<S>(backend: S)

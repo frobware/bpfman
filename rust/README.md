@@ -2587,27 +2587,52 @@ clean up after the final user. Native contracts cover failed outer creation,
 verifier rejection, partial acquisition, failed commits, cancellation, retained
 cleanup retries, descriptor release and externally held outer/inner lifetimes.
 
-Fresh private outer maps also support ELF `.values` initializers. The adapter
-checks the original `.maps` data relocations against BTF member offsets, exact
-map symbols and bounded pointer slots, then uses Aya's public map APIs to insert
-the referenced inner maps before verifying the selected program. Sparse array
-slots remain empty; hash indices are keys, so a key may exceed hash capacity.
+Private and newly owned PinByName outer maps support ELF `.values` initializers.
+The adapter checks original `.maps` data relocations against BTF member offsets,
+exact map symbols and bounded pointer slots, then uses Aya's public map APIs to
+insert the referenced inner maps before verifying the selected program. Sparse
+array slots remain empty; hash indices are keys, so a key may exceed hash capacity.
 Original ELF/provenance bytes and Go schema 2 remain unchanged.
 
-Initialization of named or reused outer maps is explicitly unsupported. Named
-outer declarations are refused before runtime creation; explicit owner replay is
-refused before opening replacement sources. Go's collection loader replays
-initializers onto replacement maps, potentially overwriting live entries.
-Rust preserves those entries and its existing compensation guarantees until a
-separate mutation/rollback policy is established. This boundary does not affect
-the existing userspace-populated map-of-maps sharing scenarios.
+Reused outers follow an observation-only policy. Every initializer slot must
+already contain the exact referenced inner-map ID; a different ID or a missing
+entry fails with `InvalidInput`, without updating any reused outer. Slots absent
+from the initializer remain operator-owned. All reused entries are checked before
+any fresh outer receives entries. Newly acquired shared-pin receipts travel from
+the runtime into the confined loader; root, parent and inode evidence must match
+the opened sources before those outers may be initialized. Existing consuming
+cleanup owns those new pins if insertion, verification, cancellation or commit
+fails. Reused pins confer no cleanup authority.
 
-`TestMapOfMaps_Initializers` executes the same sparse array/hash counter scenario
-against Go and Rust with file and local OCI bytecode. Native contracts add
-partial insertion failure, verifier failure, failed commit, cancellation,
-blocked/cancelled/explicit cleanup retries, exact descriptor release, preserved
-operator updates on refused reuse, and reopened unload. These cases join
-`rust-test-map-sharing` and the full gate without changing existing scripts.
+Before acquisition, requested shared names with durable users must still resolve
+to those users' exact map identities. Missing or replaced canonical pins fail
+admission; loading does not create replacement identities under existing users.
+
+Explicit owner replay succeeds while the initializer identities match. Repeated
+PinByName loading also succeeds when its referenced inner maps share the same
+identities. Named outers with private inners initialize on their first load; a
+later independent load requests different inner identities and is refused. An
+explicit owner can join the original set instead. Rust does not repair missing
+slots or overwrite operator changes during load. These checks run under the
+managed writer lock, but do not freeze entries against external writers after
+observation.
+
+This is a deliberate compatibility difference. Real-kernel Go reference tests
+show that successful owner replay overwrites live entries, verifier rejection
+precedes replay, and a fresh named outer with ELF references fails standalone
+map creation. Go can initialize pre-existing named outers, replacing their entries
+with new private inners. Rust supports fresh named initialization and preserves
+live entries on reuse, avoiding mutations whose rollback would race external
+writers.
+
+`TestMapOfMaps_Initializers` and `TestMapOfMaps_InitializerOwner` run the same
+sparse array/hash counter and owner-first teardown assertions against Go and Rust
+with file and local OCI bytecode. Native contracts cover fresh named graphs,
+matching and conflicting reuse, missing slots, mixed fresh/borrowed acquisitions,
+pin replacement, partial insertion, verifier failure, failed commit, cancellation,
+blocked/cancelled/explicit cleanup retries, descriptor release and reopened unload.
+These cases join `rust-test-map-sharing` and the full gate without changing
+existing scripts.
 
 SQLite keeps Go schema 2 and uses `map_sets`, `managed_programs.map_set_id` and
 `shared_map_pins`. Older artifacts without a map inventory retain
@@ -2622,6 +2647,7 @@ and these shared acceptance scripts with SQLite:
 - `TestMapOfMaps_MapOwner`
 - `TestMapOfMaps_PinByName`
 - `TestMapOfMaps_Initializers`
+- `TestMapOfMaps_InitializerOwner`
 
 The complete gate also runs shared store contracts and stateful-fake coverage for
 faults, cancellation, owner-first unload, reopened retries and authority transfer.

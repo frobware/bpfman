@@ -171,6 +171,8 @@ pub trait ProgramLoad: ObjectLoader + ProgramResources {
     }
 
     /// Load using validated existing map pins under the runtime writer scope.
+    /// Newly acquired shared-pin receipts authorize initialization of those maps;
+    /// borrowed pins confer no mutation or compensation authority.
     #[allow(clippy::too_many_arguments)]
     fn load_program_with_maps(
         &self,
@@ -181,6 +183,7 @@ pub trait ProgramLoad: ObjectLoader + ProgramResources {
         spec: &ProgramSpec,
         owner: Option<NonZeroU32>,
         shared: &[String],
+        _new_shared: &[Self::MapPin],
     ) -> Result<Self::Loaded, Error> {
         if owner.is_some() || !shared.is_empty() {
             return Err(Error::new(

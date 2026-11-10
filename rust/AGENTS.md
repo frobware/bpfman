@@ -526,11 +526,25 @@ The architecture and compatibility goals are in
   section sizes and symbol offsets. Its unsupported-DATASEC struct fallback
   cannot represent padded multi-variable read-only layouts. Keep the native
   padded-section creation/BTF-identity/teardown regression in the map-sharing gate.
+- Before acquiring requested PinByName maps, correlate existing durable users'
+  map-set aliases with canonical shared pins by exact map ID. Missing/replaced
+  canonical pins fail admission; never create replacement identities under those
+  existing users or infer adoption from a shared name alone.
 - New name pins acquire consuming receipts before program loading. Reused pins
   never confer compensation authority. Check cancellation between acquisitions.
 - Validate root/parent/inode evidence before cleanup retries. If new durable users
   adopt an unchanged pin/set, relinquish cleanup authority and preserve their
   resources. The last user owns removal; independent failures retain receipts.
+- ELF map-of-maps `.values` may initialize fresh private outers and named outers
+  proven fresh by newly acquired shared-pin receipts. Match the receipt's root,
+  parent and inode to the opened source; emptiness or matching map IDs alone is
+  not initialization authority. Keep these receipts in normal load compensation.
+- Reused outers are observation-only: require every initializer slot to reference
+  the exact selected inner ID before populating any fresh outer. Missing or
+  conflicting slots are typed invalid input; preserve extra operator slots.
+  Never repair or overwrite reused entries implicitly. This deliberate Go
+  compatibility difference has a real-kernel reference contract. The writer lock
+  does not freeze entries against external writers after observation.
 - SQLite keeps schema 2.
   `rust-test-map-sharing` selects the three unchanged sharing scripts and native
   recovery contracts with SQLite. Native immediate program-lifetime assertions

@@ -8,6 +8,8 @@ pub(crate) enum LoadCause {
     Parse(#[source] Box<aya_obj::ParseError>),
     #[error("parse map-of-maps initializers")]
     Initializers(#[source] std::io::Error),
+    #[error("reused map-of-maps initializer conflicts with live entry {outer}[{key}]")]
+    InitializerConflict { outer: String, key: u32 },
     #[error("load ELF maps and relocations")]
     Kernel(#[source] Box<aya::EbpfError>),
     #[error("observe loaded map identity")]
@@ -31,6 +33,7 @@ impl From<LoadCause> for Error {
         let kind = match cause {
             LoadCause::Invalid(_)
             | LoadCause::Parse(_)
+            | LoadCause::InitializerConflict { .. }
             | LoadCause::Initializers(_)
             | LoadCause::MapReuse { .. } => ErrorKind::InvalidInput,
             LoadCause::Unsupported(_) => ErrorKind::Unsupported,

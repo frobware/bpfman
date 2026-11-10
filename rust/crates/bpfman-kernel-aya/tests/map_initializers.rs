@@ -24,14 +24,13 @@ fn validate(bytes: &[u8]) -> std::result::Result<bpfman_kernel::ObjectInfo, bpfm
 }
 
 #[test]
-fn sparse_initializers_are_validated_and_named_outer_maps_are_explicitly_unsupported() -> Result {
+fn sparse_initializers_and_named_outer_maps_are_validated() -> Result {
     let info = validate(&fixture("map_of_maps_initializers.bpf.o")?)?;
     assert_eq!(info.maps.len(), 4);
     assert!(info.shared_maps.is_empty());
-    let failure = validate(&fixture("map_of_maps_initializers_shared.bpf.o")?)
-        .err()
-        .ok_or("expected refusal")?;
-    assert_eq!(failure.kind(), ErrorKind::Unsupported);
+    let shared = validate(&fixture("map_of_maps_initializers_shared.bpf.o")?)?;
+    assert_eq!(shared.maps.len(), 4);
+    assert_eq!(shared.shared_maps, ["mom_seed_array", "mom_seed_hash"]);
     Ok(())
 }
 

@@ -108,6 +108,42 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
             if !reader.read_map_sets()?.contains(&owner) {
                 return Err(LoadCause::MapOwnerNotFound(owner));
             }
+        } else {
+            // A missing or replaced canonical pin is inconsistent with existing
+            // durable users. Do not create a new identity under their name and
+            // later mistake those users for adoption of the replacement.
+            let shared = reader.read_shared_maps()?;
+            let requested: Vec<_> = input
+                .object
+                .shared_maps
+                .iter()
+                .filter_map(|name| shared.get(name).map(|users| (name, users)))
+                .collect();
+            if !requested.is_empty() {
+                let records = reader.read_records()?;
+                let mut observed = std::collections::BTreeMap::new();
+                for (name, users) in requested {
+                    for user in users {
+                        let record = records
+                            .iter()
+                            .find(|record| record.id == *user)
+                            .ok_or_else(|| {
+                                LoadCause::Invalid("shared-map user has no program record".into())
+                            })?;
+                        let names = match observed.entry(record.map_set) {
+                            std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                            std::collections::btree_map::Entry::Vacant(entry) => {
+                                entry.insert(self.1.shared_map_names(writer, record.map_set)?)
+                            }
+                        };
+                        if !names.contains(name) {
+                            return Err(LoadCause::Invalid(format!(
+                                "shared map {name} no longer matches durable user {user}"
+                            )));
+                        }
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -138,6 +174,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
         &mut self,
         writer: &RuntimeWriter<'_>,
         input: &Inputs<'_>,
+        new_shared: &[K::MapPin],
     ) -> Result<Self::Kernel, LoadCause> {
         self.1
             .load_program_with_maps(
@@ -148,6 +185,7 @@ impl<S: bpfman_store::OpenStore + bpfman_store::CommitLoad, K: bpfman_kernel::Pr
                 input.spec,
                 input.map_owner,
                 &input.object.shared_maps,
+                new_shared,
             )
             .map_err(Into::into)
     }
