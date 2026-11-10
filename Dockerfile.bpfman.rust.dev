@@ -5,6 +5,8 @@ ARG RUNTIME_IMAGE=registry.fedoraproject.org/fedora-minimal:43
 
 # Match the runtime's loader even when the host binary was built with Nix.
 # Only this image's copy is patched. The original host binary is untouched.
+# Libraries need compatible ABIs, not identical versions. patchelf only changes
+# loader/search paths; the version check below rejects missing startup symbols.
 # hadolint ignore=DL3006
 FROM ${RUNTIME_IMAGE} AS prepare
 # hadolint ignore=DL3041

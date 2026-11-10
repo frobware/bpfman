@@ -37,9 +37,13 @@ The `.dev` target depends on `rust-build` and packages its existing output witho
 compiling inside the container. It defaults to `rust/target/debug/bpfman`;
 `RUST_BUILD_PROFILE=release` selects the release build. The image adjusts only
 its copied binary's ELF loader and removes host RPATHs, allowing a Nix-built
-binary to use Fedora's libraries. It checks `--version` during packaging so an
-incompatible host architecture or newer libc fails the build. Use a native
-GNU/Linux build and a runtime with compatible glibc and libgcc.
+binary to use Fedora's libraries. The original host executable is unchanged.
+This remains a dynamically linked binary: patchelf changes loader/search paths,
+so Fedora's glibc and libgcc must satisfy the binary's ABI requirements. Identical
+library versions or Nix store paths are unnecessary. The image checks `--version`
+during packaging to reject missing startup dependencies; deployed acceptance
+qualifies the exercised runtime paths. Use a native GNU/Linux build and keep
+`DEV_RUNTIME_IMAGE` compatible with it.
 
 `rust-test` runs all userspace unit, integration, and documentation tests before
 the process-isolated real-kernel suite. `make rust-test-userspace` selects that first stage,

@@ -7886,3 +7886,44 @@ checkpoint remains the evidence for forbidding unsigned admission. No Go daemon
 Kubernetes comparison is claimed here. The remaining broad Go semantic/residue
 comparison and those deployment boundaries remain cutover work. Default Go
 packaging and production entry points are unchanged.
+
+## Development image runtime decision (10 November 2026)
+
+Retain Fedora Minimal with patchelf for `build-image-rust-dev`. The host binary
+needs compatible glibc/libgcc ABIs, not identical Nix store paths or library
+versions. The inspected host executable requires glibc symbols through
+`GLIBC_2.39`; the tested Fedora runtime provides glibc 2.42. Only the image's copy
+has its interpreter changed and host RPATH removed. The host executable remains
+unchanged, and packaging does not compile Rust again. The binary remains
+dynamically linked; patchelf does not make an incompatible ABI compatible.
+
+A Nix runtime experiment used the same locked nixpkgs as the development shell.
+It preserved the executable byte for byte and passed the full Rust gate and KIND
+CSI restart/cleanup acceptance. Evidence remains under
+`/tmp/bpfman-rust-nix-dev-j7850v3u/`; its full gate selected all 90 native cases,
+completed the native suite in 264.62 seconds and passed normal fixture cleanup,
+with the existing aya-obj development/test optimization override at level two.
+That base supported the repository's pinned shell, not arbitrary prebuilt Nix
+binaries. It added a separate image build/load without a demonstrated need for
+an exact dependency closure in this local development workflow. Its uncommitted
+Dockerfile, Make and flake changes are removed; no Nix Rust runtime package or
+additional runtime target is retained.
+
+Keep the Fedora runtime configurable through `DEV_RUNTIME_IMAGE` and execute
+`--version` during packaging. That startup check catches missing loader/library
+requirements but does not qualify every runtime path; the deployed CSI and
+workload acceptance above remain the behavior evidence for the tested image.
+
+The retained Fedora path is rebuilt as `bpfman:rust-fedora-dev` and requalified
+in the existing single-node KIND cluster. Evidence is under
+`/tmp/bpfman-rust-fedora-dev-oel0f68s/`. `build-and-lint.log` records successful
+packaging, Make lint and Dockerfile lint. `binary-check.json` and
+`runtime-check.log` confirm the host keeps its Nix loader, the container uses
+`/lib64/ld-linux-x86-64.so.2` and Fedora libraries, and the container executable
+has no RPATH/RUNPATH or Nix runtime dependency. The operator's existing image-load
+workflow and supported Config select this image; `restart-check.log` records
+unchanged CSI lifecycle/read-only duplicate-publication assertions, a real daemon
+container restart, retained exact program/map identity and normal cleanup.
+No Rust implementation changes follow the successful full gate recorded above.
+`final-audit.log` confirms empty managed inventories, pins, artifacts, CSI volumes
+and application states, with the Fedora daemon ready and CSI registered.
