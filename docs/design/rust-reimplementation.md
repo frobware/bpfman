@@ -52,6 +52,13 @@ entire crates.
 Keep their handlers and wire conversion separate, with application operations in
 `Bpfman` and `MapVolumes` rather than either protocol frontend.
 
+The Go `bpfman-shell` is still the script harness for this daemon/CLI migration.
+Its own Rust replacement is specified separately in
+[rust-shell-reimplementation.md](rust-shell-reimplementation.md), preserving the
+language phases and tests. Shell acceptance must run both Go and Rust shells
+against both Go and Rust `bpfman` binaries; a same-language pair alone cannot
+establish either side's compatibility.
+
 SQLite is now the only Rust persistence adapter and is implicit in the CLI;
 `--store` and the `BPFMAN_STORE` binding are removed. The experimental JSON adapter
 and its dedicated snapshot publisher are retired. Store traits, consuming receipts,

@@ -390,6 +390,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bpfman-shell-source"
+version = "0.1.0"
+
+[[package]]
 name = "bpfman-store"
 version = "0.1.0"
 dependencies = [

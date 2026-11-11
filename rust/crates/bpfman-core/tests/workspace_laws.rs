@@ -8,6 +8,7 @@ use std::{collections::HashSet, path::Path, process::Command, sync::OnceLock};
 use serde_json::Value;
 
 const TIERS: &[(&str, u64)] = &[
+    ("bpfman-shell-source", 0),
     ("bpfman-model", 0),
     ("bpfman-core", 1),
     ("bpfman-lock", 1),

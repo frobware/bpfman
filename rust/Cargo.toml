@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/bpfman-proto", "crates/bpfman-api", "crates/bpfman-image-oci", "crates/bpfman-kernel-aya", "crates/bpfman-store", "crates/bpfman-kernel", "crates/bpfman-model", "crates/bpfman-core", "crates/bpfman-lock", "crates/bpfman-fs", "crates/bpfman-store-sqlite", "crates/bpfman-runtime", "crates/bpfman"]
+members = ["crates/bpfman-proto", "crates/bpfman-api", "crates/bpfman-image-oci", "crates/bpfman-kernel-aya", "crates/bpfman-store", "crates/bpfman-kernel", "crates/bpfman-model", "crates/bpfman-core", "crates/bpfman-lock", "crates/bpfman-fs", "crates/bpfman-store-sqlite", "crates/bpfman-runtime", "crates/bpfman", "crates/bpfman-shell-source"]
 resolver = "3"
 
 [workspace.package]
