@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use bpfman_shell_semantics::{CommandArity, command_arity, pure_literal_issue};
+use bpfman_shell_semantics::{CommandArity, command_arity, kill_flag_issue, pure_literal_issue};
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax::{
     AssertionClause, Command, Expression, ExpressionKind, InterpolatedPart, MatchPattern,
@@ -117,6 +117,13 @@ impl Analysis {
             self.def_arity(name, command.arguments().len(), command.span());
             if !self.definitions.contains_key(name) {
                 self.builtin_arity(name, command);
+                if name == "kill" {
+                    for argument in command.arguments() {
+                        if let Some(message) = kill_flag_issue(argument) {
+                            self.issue(argument.span(), message);
+                        }
+                    }
+                }
             }
             if let Some(target) = bind_target {
                 if !self.definitions.contains_key(name) && PureBuiltin::from_name(name).is_some() {
@@ -138,10 +145,7 @@ impl Analysis {
         let got = command
             .arguments()
             .iter()
-            .filter(|argument| {
-                !(name == "kill"
-                    && matches!(argument.kind(), ExpressionKind::Word(text) | ExpressionKind::Quoted(text) if text.starts_with("--signal=") || text.starts_with("--grace=")))
-            })
+            .filter(|argument| name != "kill" || !recognized_kill_flag(argument))
             .count();
         let message = match arity {
             CommandArity::AtLeastOne | CommandArity::One if got == 0 => Some(format!(
@@ -248,6 +252,18 @@ impl Analysis {
             }
         }
     }
+}
+
+fn recognized_kill_flag(argument: &Expression) -> bool {
+    let prefix = match argument.kind() {
+        ExpressionKind::Word(text) | ExpressionKind::Quoted(text) => text.as_str(),
+        ExpressionKind::Interpolated(parts) => match parts.first() {
+            Some(InterpolatedPart::Literal(text)) => text.as_str(),
+            _ => return false,
+        },
+        _ => return false,
+    };
+    prefix.starts_with("--signal=") || prefix.starts_with("--grace=")
 }
 
 #[cfg(test)]
@@ -384,6 +400,39 @@ mod tests {
             vec!["kill: expected at most 1 argument(s), got 2".to_owned()]
         );
         assert!(messages("start --hello").is_empty());
+        assert!(messages("kill \"--signal=${name}\" $job").is_empty());
+    }
+
+    #[test]
+    fn kill_literal_flags_follow_signal_and_duration_contracts() {
+        assert!(messages(
+            "kill --signal=SIGUSR1 $job\nkill --signal=usr1 $job\nkill '--signal= TERM ' $job\nkill --grace=2s $job\nkill --grace=500ms $job\nkill --grace=0 $job\nkill --grace=1m30s $job"
+        ).is_empty());
+        let found = messages(
+            "kill --signal=BLAH $job\nkill --signal= $job\nkill --grace=banana $job\nkill --grace=-1s $job",
+        );
+        assert_eq!(found.len(), 4);
+        assert_eq!(found[0], "kill --signal: unknown signal \"BLAH\"");
+        assert_eq!(found[1], "kill --signal: unknown signal \"\"");
+        assert_eq!(found[2], "kill --grace: time: invalid duration \"banana\"");
+        assert!(found[3].contains("duration must not be negative"));
+    }
+
+    #[test]
+    fn kill_flag_checks_skip_definitions_and_computed_values() {
+        assert!(messages("def kill(a) { print $a }\nkill --signal=BLAH").is_empty());
+        assert!(
+            messages("kill $flag $job")
+                .iter()
+                .all(|message| !message.contains("--signal"))
+        );
+        let parsed =
+            parse("kill.bpfman", "kill --signal=BOGUS $job").unwrap_or_else(|_| unreachable!());
+        let plan = prepare_imports(parsed, Path::new(".")).unwrap_or_else(|_| unreachable!());
+        let expanded = expand_imports(plan, &BTreeMap::new()).unwrap_or_else(|_| unreachable!());
+        let issues = analyze_calls(&expanded);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].span.start().column(), 6);
     }
 
     #[test]

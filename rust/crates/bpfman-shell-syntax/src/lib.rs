@@ -26,7 +26,7 @@ pub use ast::{
     LoopBindings, MatchEntry, MatchPattern, MatchPredicate, MatchesBlock, Parameter, ParameterType,
     ParsedProgram, PureBuiltin, RecordField, Statement, StatementKind, ThreadCall,
 };
-pub use duration::PositiveDuration;
+pub use duration::{PositiveDuration, parse_go_duration};
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};
 
 pub use token::{

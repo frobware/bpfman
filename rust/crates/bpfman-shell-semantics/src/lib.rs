@@ -6,7 +6,38 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use bpfman_shell_syntax::{Command, Expression, ExpressionKind, PureBuiltin};
+use bpfman_shell_syntax::{Command, Expression, ExpressionKind, PureBuiltin, parse_go_duration};
+
+/// Validate the literal value of a `kill` flag. Computed arguments remain
+/// runtime checked. A definition named `kill` must be resolved before calling.
+#[must_use]
+pub fn kill_flag_issue(argument: &Expression) -> Option<String> {
+    let text = match argument.kind() {
+        ExpressionKind::Word(text) | ExpressionKind::Quoted(text) => text.as_str(),
+        _ => return None,
+    };
+    if let Some(name) = text.strip_prefix("--signal=") {
+        let normalized = name.trim().to_ascii_uppercase();
+        let normalized = normalized.strip_prefix("SIG").unwrap_or(&normalized);
+        if !matches!(
+            normalized,
+            "TERM" | "KILL" | "INT" | "QUIT" | "HUP" | "USR1" | "USR2" | "STOP" | "CONT"
+        ) {
+            return Some(format!("kill --signal: unknown signal {name:?}"));
+        }
+    } else if let Some(duration) = text.strip_prefix("--grace=") {
+        match parse_go_duration(duration) {
+            None => return Some(format!("kill --grace: time: invalid duration {duration:?}")),
+            Some(nanos) if nanos < 0 => {
+                return Some(format!(
+                    "kill --grace: duration must not be negative (got {duration})"
+                ));
+            }
+            Some(_) => {}
+        }
+    }
+    None
+}
 
 /// Static positional contract for a native command. The driver validates the
 /// complete command, including any dynamic flags, when it executes.
