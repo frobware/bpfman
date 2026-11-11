@@ -128,6 +128,10 @@ the same accepted vocabulary. The call pass also applies the semantics crate's
 narrow literal contracts for `u32le`, `u64le`, and `range`; nonliteral arguments
 remain runtime checked. It preserves Go's base-prefix and leading-zero integer
 forms for quoted literal arguments and reports the argument span.
+The call pass checks the native job commands' positional arity after resolving
+user definitions. For `kill`, it excludes only literal `--signal=` and
+`--grace=` arguments. Go's checker excludes every `--` word, which can miss a
+flag typo that the Go runtime then treats as an extra positional argument.
 The semantics crate now holds an origin and structural-shape vocabulary. A
 separate pure shape pass in the checker propagates proved record, list, native
 bind, and bind-collect shapes through lexical bindings and reports invalid

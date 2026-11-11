@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use bpfman_shell_semantics::pure_literal_issue;
+use bpfman_shell_semantics::{CommandArity, command_arity, pure_literal_issue};
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax::{
     AssertionClause, Command, Expression, ExpressionKind, InterpolatedPart, MatchPattern,
@@ -115,6 +115,9 @@ impl Analysis {
     fn command(&mut self, command: &Command, bind_target: Option<&str>) {
         if let ExpressionKind::Word(name) = command.head().kind() {
             self.def_arity(name, command.arguments().len(), command.span());
+            if !self.definitions.contains_key(name) {
+                self.builtin_arity(name, command);
+            }
             if let Some(target) = bind_target {
                 if !self.definitions.contains_key(name) && PureBuiltin::from_name(name).is_some() {
                     let target = if target == "_" { "x" } else { target };
@@ -125,6 +128,35 @@ impl Analysis {
         self.expression(command.head());
         for argument in command.arguments() {
             self.expression(argument);
+        }
+    }
+
+    fn builtin_arity(&mut self, name: &str, command: &Command) {
+        let Some(arity) = command_arity(name) else {
+            return;
+        };
+        let got = command
+            .arguments()
+            .iter()
+            .filter(|argument| {
+                !(name == "kill"
+                    && matches!(argument.kind(), ExpressionKind::Word(text) | ExpressionKind::Quoted(text) if text.starts_with("--signal=") || text.starts_with("--grace=")))
+            })
+            .count();
+        let message = match arity {
+            CommandArity::AtLeastOne | CommandArity::One if got == 0 => Some(format!(
+                "{name}: expected at least 1 argument(s), got {got}"
+            )),
+            CommandArity::Zero if got > 0 => {
+                Some(format!("{name}: expected at most 0 argument(s), got {got}"))
+            }
+            CommandArity::One if got > 1 => {
+                Some(format!("{name}: expected at most 1 argument(s), got {got}"))
+            }
+            _ => None,
+        };
+        if let Some(message) = message {
+            self.issue(command.span(), message);
         }
     }
 
@@ -317,6 +349,41 @@ mod tests {
             "range: bound 2147483648 exceeds the maximum of 2147483647"
         );
         assert_eq!(issues[1].message, "u32le: empty argument");
+    }
+
+    #[test]
+    fn native_job_command_arity_matches_go_positional_rules() {
+        let found = messages(
+            "start\nfire\nwait\nkill --signal=USR1\njobs extra\nreap extra\nwait one two\nkill --grace=2s one two",
+        );
+        assert_eq!(found.len(), 8);
+        assert_eq!(found[0], "start: expected at least 1 argument(s), got 0");
+        assert_eq!(found[1], "fire: expected at least 1 argument(s), got 0");
+        assert_eq!(found[2], "wait: expected at least 1 argument(s), got 0");
+        assert_eq!(found[3], "kill: expected at least 1 argument(s), got 0");
+        assert_eq!(found[4], "jobs: expected at most 0 argument(s), got 1");
+        assert_eq!(found[5], "reap: expected at most 0 argument(s), got 1");
+        assert_eq!(found[6], "wait: expected at most 1 argument(s), got 2");
+        assert_eq!(found[7], "kill: expected at most 1 argument(s), got 2");
+    }
+
+    #[test]
+    fn native_command_checks_respect_def_precedence_and_dynamic_heads() {
+        assert!(messages("def start() { print ok }\nstart").is_empty());
+        assert!(messages("def kill(a) { print $a }\nkill --signal=BAD").is_empty());
+        assert!(
+            messages("let x <- ($command) one two\nstart sleep 1\nkill --signal=USR1 $job")
+                .is_empty()
+        );
+        assert_eq!(
+            messages("jobs '--flag'"),
+            vec!["jobs: expected at most 0 argument(s), got 1".to_owned()]
+        );
+        assert_eq!(
+            messages("kill --signa=USR1 $job"),
+            vec!["kill: expected at most 1 argument(s), got 2".to_owned()]
+        );
+        assert!(messages("start --hello").is_empty());
     }
 
     #[test]

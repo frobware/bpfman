@@ -8,6 +8,30 @@ use std::fmt;
 
 use bpfman_shell_syntax::{Command, Expression, ExpressionKind, PureBuiltin};
 
+/// Static positional contract for a native command. The driver validates the
+/// complete command, including any dynamic flags, when it executes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandArity {
+    /// No positional arguments.
+    Zero,
+    /// Exactly one positional argument.
+    One,
+    /// At least one positional argument.
+    AtLeastOne,
+}
+
+/// Return the native job-control command's positional contract, when known.
+/// A caller must resolve user definitions before applying this rule.
+#[must_use]
+pub fn command_arity(name: &str) -> Option<CommandArity> {
+    Some(match name {
+        "start" | "fire" => CommandArity::AtLeastOne,
+        "wait" | "kill" => CommandArity::One,
+        "jobs" | "reap" => CommandArity::Zero,
+        _ => return None,
+    })
+}
+
 /// Check the narrow literal contract of a pure expression builtin. Dynamic
 /// arguments are checked when the builtin executes, not inferred here.
 #[must_use]
