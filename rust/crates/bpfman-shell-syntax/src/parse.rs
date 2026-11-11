@@ -82,7 +82,7 @@ impl From<LexError> for SyntaxError {
 ///
 /// This parser slice accepts command statements, core expressions, and the
 /// simple `let`, `guard`, `defer`, `return`, `break`, `continue`, `if`, and
-/// `foreach` forms. Other forms may return
+/// `foreach`, and `def` forms. Other forms may return
 /// [`SyntaxErrorKind::Unimplemented`], including forms whose validity has not
 /// yet been checked.
 pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, SyntaxError> {

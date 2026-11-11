@@ -2,7 +2,10 @@
 
 use bpfman_shell_source::Span;
 
-use crate::ast::{Identifier, IfBranch, LoopBindings, Statement, StatementKind};
+use crate::ast::{
+    Definition, Identifier, IfBranch, LoopBindings, Parameter, ParameterType, Statement,
+    StatementKind,
+};
 use crate::expr::parse_expression;
 use crate::parse::{SyntaxError, invalid, parse_statement};
 use crate::token::{Token, TokenKind};
@@ -50,6 +53,8 @@ impl StatementCursor<'_> {
                 self.if_statement()?
             } else if self.at("foreach") {
                 self.foreach_statement()?
+            } else if self.at("def") {
+                self.definition_statement()?
             } else {
                 self.simple_statement()?
             };
@@ -158,6 +163,134 @@ impl StatementCursor<'_> {
             },
             extent,
         ))
+    }
+
+    fn definition_statement(&mut self) -> Result<Statement, SyntaxError> {
+        let keyword = self.tokens[self.pos].clone();
+        self.pos += 1;
+        let Some(name_token) = self.peek() else {
+            return Err(invalid(
+                &keyword.span,
+                "def requires: def <name>(<params>) { ... }",
+            ));
+        };
+        if self.at("(") {
+            return Err(invalid(&keyword.span, "def requires a name before '('"));
+        }
+        let TokenKind::Word(text) = &name_token.kind else {
+            return Err(invalid(&name_token.span, "def requires a name"));
+        };
+        let name = Identifier::new(text.clone(), name_token.span.clone())
+            .ok_or_else(|| invalid(&name_token.span, format!("invalid def name: {text:?}")))?;
+        if reserved_definition_name(name.text()) {
+            return Err(invalid(
+                &name_token.span,
+                format!("cannot use reserved word {text:?} as a def name"),
+            ));
+        }
+        self.pos += 1;
+        if !self.at("(") {
+            return Err(invalid(&keyword.span, "def requires '(' after the name"));
+        }
+        self.pos += 1;
+        let parameters = self.definition_parameters(&keyword.span)?;
+        self.skip_separators();
+        let (body, close) = self.block()?;
+        let extent = span(&keyword.span, &close)?;
+        Ok(Statement::new(
+            StatementKind::Definition(Definition::new(name, parameters, body)),
+            extent,
+        ))
+    }
+
+    fn definition_parameters(&mut self, keyword: &Span) -> Result<Vec<Parameter>, SyntaxError> {
+        let mut parameters = Vec::new();
+        loop {
+            self.skip_separators();
+            let Some(token) = self.peek().cloned() else {
+                return Err(invalid(
+                    keyword,
+                    "def: unterminated parameter list (missing ')')",
+                ));
+            };
+            if self.at(")") {
+                self.pos += 1;
+                return Ok(parameters);
+            }
+            let TokenKind::Word(text) = &token.kind else {
+                return Err(invalid(&token.span, "def: expected parameter name"));
+            };
+            if text.contains(',') {
+                return Err(invalid(
+                    &token.span,
+                    "def: comma is not a parameter separator",
+                ));
+            }
+            let annotated = text.contains(':');
+            if annotated
+                && (!text.ends_with(':') || text.bytes().filter(|byte| *byte == b':').count() != 1)
+            {
+                return Err(invalid(
+                    &token.span,
+                    "def: parameter annotation needs a space after the colon",
+                ));
+            }
+            let name_text = text.strip_suffix(':').unwrap_or(text);
+            let name =
+                Identifier::new(name_text.to_owned(), token.span.clone()).ok_or_else(|| {
+                    invalid(
+                        &token.span,
+                        format!("def: invalid parameter name {name_text:?}"),
+                    )
+                })?;
+            if name.text() == "_" {
+                return Err(invalid(&token.span, "def parameters cannot bind '_'"));
+            }
+            if parameters
+                .iter()
+                .any(|param: &Parameter| param.name().text() == name.text())
+            {
+                return Err(invalid(
+                    &token.span,
+                    format!("def: duplicate parameter name {name_text:?}"),
+                ));
+            }
+            self.pos += 1;
+            let annotation = if annotated {
+                self.skip_separators();
+                let Some(type_token) = self.peek() else {
+                    return Err(invalid(
+                        &token.span,
+                        format!("def: parameter {name_text:?}: annotation requires a type"),
+                    ));
+                };
+                let kind = match &type_token.kind {
+                    TokenKind::Word(word) if word == "number" => ParameterType::Number,
+                    TokenKind::Word(word) if word == "string" => ParameterType::String,
+                    TokenKind::Word(word) if word == "bool" => ParameterType::Bool,
+                    TokenKind::Word(word) if word == ")" => {
+                        return Err(invalid(
+                            &token.span,
+                            format!("def: parameter {name_text:?}: annotation requires a type"),
+                        ));
+                    }
+                    TokenKind::Word(word) => {
+                        return Err(invalid(
+                            &type_token.span,
+                            format!(
+                                "def: parameter {name_text:?}: unknown parameter type {word:?} (expected one of: number, string, bool)"
+                            ),
+                        ));
+                    }
+                    _ => return Err(invalid(&type_token.span, "def: annotation requires a type")),
+                };
+                self.pos += 1;
+                Some(kind)
+            } else {
+                None
+            };
+            parameters.push(Parameter::new(name, annotation));
+        }
     }
 
     fn loop_bindings(&mut self, keyword: &Span) -> Result<LoopBindings, SyntaxError> {
@@ -272,6 +405,34 @@ fn loop_name(token: &Token) -> Result<Identifier, SyntaxError> {
         .ok_or_else(|| invalid(&token.span, format!("invalid variable name: {text:?}")))
 }
 
+fn reserved_definition_name(name: &str) -> bool {
+    matches!(
+        name,
+        "def"
+            | "defer"
+            | "let"
+            | "guard"
+            | "if"
+            | "elif"
+            | "else"
+            | "foreach"
+            | "in"
+            | "retry"
+            | "poll"
+            | "return"
+            | "break"
+            | "continue"
+            | "assert"
+            | "require"
+            | "and"
+            | "or"
+            | "not"
+            | "matches"
+            | "true"
+            | "false"
+    )
+}
+
 fn span(start: &Span, end: &Span) -> Result<Span, SyntaxError> {
     Span::new(start.start().clone(), end.end().clone())
         .map_err(|_| invalid(start, "source span overflow"))
@@ -279,7 +440,7 @@ fn span(start: &Span, end: &Span) -> Result<Span, SyntaxError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{ExpressionKind, StatementKind};
+    use crate::ast::{ExpressionKind, ParameterType, StatementKind};
     use crate::parse::{SyntaxErrorKind, parse};
 
     #[test]
@@ -446,6 +607,70 @@ mod tests {
                 "{source}"
             );
             assert_eq!(program.statements().len(), 2, "{source}");
+        }
+    }
+
+    #[test]
+    fn definitions_parse_typed_parameters_and_nested_bodies() {
+        let source = "def greet(name: string count: number enabled: bool extra) {\n if $enabled { print $name }\n return $count\n}\ngreet alice 2 true x";
+        let program = parse("blocks.bpfman", source).unwrap_or_else(|_| unreachable!());
+        let [definition, call] = program.statements() else {
+            unreachable!()
+        };
+        let StatementKind::Definition(definition) = definition.kind() else {
+            unreachable!()
+        };
+        assert_eq!(definition.name().text(), "greet");
+        assert_eq!(definition.parameters().len(), 4);
+        assert_eq!(
+            definition.parameters()[0].annotation(),
+            Some(ParameterType::String)
+        );
+        assert_eq!(
+            definition.parameters()[1].annotation(),
+            Some(ParameterType::Number)
+        );
+        assert_eq!(
+            definition.parameters()[2].annotation(),
+            Some(ParameterType::Bool)
+        );
+        assert_eq!(definition.parameters()[3].annotation(), None);
+        assert!(matches!(
+            definition.body()[0].kind(),
+            StatementKind::If { .. }
+        ));
+        assert!(matches!(
+            definition.body()[1].kind(),
+            StatementKind::Return(_)
+        ));
+        assert!(matches!(call.kind(), StatementKind::Command(_)));
+        assert_eq!(program.statements()[0].span().end().line(), 4);
+
+        let empty = parse("blocks.bpfman", "def f() {}").unwrap_or_else(|_| unreachable!());
+        assert!(
+            matches!(empty.statements()[0].kind(), StatementKind::Definition(definition) if definition.parameters().is_empty() && definition.body().is_empty())
+        );
+    }
+
+    #[test]
+    fn definition_parameter_errors_match_go_contracts() {
+        for (source, message) in [
+            ("def (x) {}", "name before '('"),
+            ("def if() {}", "reserved word"),
+            ("def f x {}", "requires '('"),
+            ("def f(a:number) {}", "space after the colon"),
+            ("def f(a:) {}", "annotation requires a type"),
+            ("def f(a: integer) {}", "unknown parameter type"),
+            ("def f(a a) {}", "duplicate parameter name"),
+            ("def f(_ a) {}", "cannot bind '_'"),
+            ("def f(a, b) {}", "comma is not a parameter separator"),
+            ("def f(a b", "unterminated parameter list"),
+        ] {
+            let error = parse("blocks.bpfman", source)
+                .err()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(error.kind(), SyntaxErrorKind::Invalid, "{source}");
+            assert!(error.message().contains(message), "{source}: {error}");
         }
     }
 }

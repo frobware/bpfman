@@ -69,7 +69,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
 | `bpfman-shell-source` | 0 | Byte-based source positions and validated half-open spans for the Rust shell phases |
-| `bpfman-shell-syntax` | 1 | Argv-first lexer and typed AST; `parse(name, text)` covers core expressions, simple statements, `if` and `foreach`, with explicit incomplete errors for remaining forms |
+| `bpfman-shell-syntax` | 1 | Argv-first lexer and typed AST; `parse(name, text)` covers core expressions, simple statements, blocks, and definitions, with explicit incomplete errors for remaining forms |
 | `bpfman-model` | 0 | Pure program specifications, stored records, kernel observations, and bounded XDP configuration |
 | `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, unload continuations, and XDP replacement planning |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |

@@ -381,6 +381,78 @@ pub struct LoopBindings {
     destructured: bool,
 }
 
+/// A parameter type checked when a definition is called.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParameterType {
+    /// JSON number.
+    Number,
+    /// Text string.
+    String,
+    /// Boolean value.
+    Bool,
+}
+
+/// One validated definition parameter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Parameter {
+    name: Identifier,
+    annotation: Option<ParameterType>,
+}
+
+impl Parameter {
+    pub(crate) fn new(name: Identifier, annotation: Option<ParameterType>) -> Self {
+        Self { name, annotation }
+    }
+
+    /// Binding name.
+    #[must_use]
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    /// Optional type annotation.
+    #[must_use]
+    pub fn annotation(&self) -> Option<ParameterType> {
+        self.annotation
+    }
+}
+
+/// A user-defined command with an eagerly parsed body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Definition {
+    name: Identifier,
+    parameters: Vec<Parameter>,
+    body: Vec<Statement>,
+}
+
+impl Definition {
+    pub(crate) fn new(name: Identifier, parameters: Vec<Parameter>, body: Vec<Statement>) -> Self {
+        Self {
+            name,
+            parameters,
+            body,
+        }
+    }
+
+    /// Name used for command dispatch.
+    #[must_use]
+    pub fn name(&self) -> &Identifier {
+        &self.name
+    }
+
+    /// Parameters in declaration order.
+    #[must_use]
+    pub fn parameters(&self) -> &[Parameter] {
+        &self.parameters
+    }
+
+    /// Parsed body statements.
+    #[must_use]
+    pub fn body(&self) -> &[Statement] {
+        &self.body
+    }
+}
+
 impl LoopBindings {
     pub(crate) fn single(name: Identifier) -> Self {
         Self {
@@ -419,6 +491,8 @@ pub enum StatementKind {
     Command(Command),
     /// Evaluate an expression in statement position and discard its value.
     Expression(Expression),
+    /// User-defined command declaration.
+    Definition(Definition),
     /// Conditional chain with an optional final else body.
     If {
         /// Primary condition and body.

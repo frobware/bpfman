@@ -2,7 +2,7 @@
 //!
 //! The caller supplies a source name and text; the crate manages tokenisation,
 //! parsing, and source spans. The parser covers core expressions, simple
-//! statements, `if`, and `foreach`; remaining forms report incomplete coverage.
+//! statements, `if`, `foreach`, and definitions; remaining forms report incomplete coverage.
 //!
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -19,9 +19,9 @@ mod parse;
 mod token;
 
 pub use ast::{
-    BinaryOperator, BindMode, Command, Expression, ExpressionKind, Identifier, IfBranch,
-    InterpolatedPart, LogicalOperator, LoopBindings, ParsedProgram, PureBuiltin, Statement,
-    StatementKind, ThreadCall,
+    BinaryOperator, BindMode, Command, Definition, Expression, ExpressionKind, Identifier,
+    IfBranch, InterpolatedPart, LogicalOperator, LoopBindings, Parameter, ParameterType,
+    ParsedProgram, PureBuiltin, Statement, StatementKind, ThreadCall,
 };
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};
 
