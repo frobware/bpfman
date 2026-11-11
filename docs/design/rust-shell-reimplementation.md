@@ -124,7 +124,10 @@ The next independent call pass uses hoisted definitions to check command and
 thread argument counts, while keeping dynamic heads open. It rejects pure
 builtin names on `<-` binds unless a definition shadows that name. The syntax
 crate exposes one builtin-name and arity lookup so parsing and this pass share
-the same accepted vocabulary.
+the same accepted vocabulary. The call pass also applies the semantics crate's
+narrow literal contracts for `u32le`, `u64le`, and `range`; nonliteral arguments
+remain runtime checked. It preserves Go's base-prefix and leading-zero integer
+forms for quoted literal arguments and reports the argument span.
 The semantics crate now holds an origin and structural-shape vocabulary. A
 separate pure shape pass in the checker propagates proved record, list, native
 bind, and bind-collect shapes through lexical bindings and reports invalid

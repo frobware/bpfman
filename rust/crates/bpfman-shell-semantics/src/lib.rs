@@ -6,7 +6,110 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use bpfman_shell_syntax::{Command, ExpressionKind, PureBuiltin};
+use bpfman_shell_syntax::{Command, Expression, ExpressionKind, PureBuiltin};
+
+/// Check the narrow literal contract of a pure expression builtin. Dynamic
+/// arguments are checked when the builtin executes, not inferred here.
+#[must_use]
+pub fn pure_literal_issue(builtin: PureBuiltin, argument: &Expression) -> Option<String> {
+    let (name, max, kind) = match builtin {
+        PureBuiltin::U32Le => ("u32le", u64::from(u32::MAX), LiteralKind::Unsigned(32)),
+        PureBuiltin::U64Le => ("u64le", u64::MAX, LiteralKind::Unsigned(64)),
+        PureBuiltin::Range => ("range", i32::MAX as u64, LiteralKind::RangeBound),
+        _ => return None,
+    };
+    let text = match argument.kind() {
+        ExpressionKind::Word(text) | ExpressionKind::Quoted(text) => text.clone(),
+        ExpressionKind::Negate(inner) => match inner.kind() {
+            ExpressionKind::Word(text) | ExpressionKind::Quoted(text) => format!("-{text}"),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return Some(format!("{name}: empty argument"));
+    }
+    if text.starts_with('-') {
+        return Some(match kind {
+            LiteralKind::Unsigned(_) => {
+                format!("{name}: negative values are not representable (got {text:?})")
+            }
+            LiteralKind::RangeBound => {
+                format!("{name}: negative bound is not allowed (got {text:?})")
+            }
+        });
+    }
+    let Some(value) = parse_go_unsigned(text) else {
+        return Some(format!("{name}: invalid integer {text:?}"));
+    };
+    if value > max {
+        return Some(match kind {
+            LiteralKind::Unsigned(bits) => {
+                format!("{name}: value {value} does not fit in {bits} bits")
+            }
+            LiteralKind::RangeBound => {
+                format!("{name}: bound {value} exceeds the maximum of {max}")
+            }
+        });
+    }
+    None
+}
+
+#[derive(Clone, Copy)]
+enum LiteralKind {
+    Unsigned(u8),
+    RangeBound,
+}
+
+// Go's strconv.ParseUint(text, 0, 64): base prefixes and legacy leading-zero
+// octal syntax are part of the current shell's literal contract.
+fn parse_go_unsigned(text: &str) -> Option<u64> {
+    if text.starts_with('+') {
+        return None;
+    }
+    let unsigned = text;
+    let (radix, digits, prefixed) = if let Some(rest) = unsigned
+        .strip_prefix("0x")
+        .or_else(|| unsigned.strip_prefix("0X"))
+    {
+        (16, rest, true)
+    } else if let Some(rest) = unsigned
+        .strip_prefix("0b")
+        .or_else(|| unsigned.strip_prefix("0B"))
+    {
+        (2, rest, true)
+    } else if let Some(rest) = unsigned
+        .strip_prefix("0o")
+        .or_else(|| unsigned.strip_prefix("0O"))
+    {
+        (8, rest, true)
+    } else if unsigned.starts_with('0') && unsigned.len() > 1 {
+        (8, &unsigned[1..], true)
+    } else {
+        (10, unsigned, false)
+    };
+    if digits.is_empty() {
+        return if unsigned == "0" { Some(0) } else { None };
+    }
+    let bytes = digits.as_bytes();
+    let mut cleaned = String::with_capacity(digits.len());
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'_' {
+            if !(prefixed && index == 0 || index > 0 && bytes[index - 1] != b'_')
+                || bytes
+                    .get(index + 1)
+                    .is_none_or(|next| !next.is_ascii_hexdigit())
+            {
+                return None;
+            }
+        } else {
+            char::from(*byte).to_digit(radix)?;
+            cleaned.push(char::from(*byte));
+        }
+    }
+    u64::from_str_radix(&cleaned, radix).ok()
+}
 
 /// The declared origin of a shell value.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

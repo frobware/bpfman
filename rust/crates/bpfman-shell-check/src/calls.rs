@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use bpfman_shell_semantics::pure_literal_issue;
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax::{
     AssertionClause, Command, Expression, ExpressionKind, InterpolatedPart, MatchPattern,
@@ -168,7 +169,17 @@ impl Analysis {
                 self.expression(value);
                 self.thread(command);
             }
-            ExpressionKind::PureCall { arguments, .. } | ExpressionKind::List(arguments) => {
+            ExpressionKind::PureCall { builtin, arguments } => {
+                if let [argument] = arguments.as_slice() {
+                    if let Some(message) = pure_literal_issue(*builtin, argument) {
+                        self.issue(argument.span(), message);
+                    }
+                }
+                for argument in arguments {
+                    self.expression(argument);
+                }
+            }
+            ExpressionKind::List(arguments) => {
                 for argument in arguments {
                     self.expression(argument);
                 }
@@ -258,6 +269,54 @@ mod tests {
     #[test]
     fn dynamic_command_heads_stay_open() {
         assert!(messages("let x <- ($command) 3\ndefer ($command) 1").is_empty());
+    }
+
+    #[test]
+    fn pure_builtin_literals_follow_the_go_checker_contract() {
+        let found = messages(
+            "let a = u32le (-1)\nlet b = u32le 4294967296\nlet c = u64le (-1)\nlet d = range (-1)\nlet e = range 2147483648",
+        );
+        assert_eq!(found.len(), 5);
+        assert!(found[0].contains("u32le: negative values are not representable"));
+        assert_eq!(found[1], "u32le: value 4294967296 does not fit in 32 bits");
+        assert!(found[2].contains("u64le: negative values are not representable"));
+        assert!(found[3].contains("range: negative bound is not allowed"));
+        assert_eq!(
+            found[4],
+            "range: bound 2147483648 exceeds the maximum of 2147483647"
+        );
+    }
+
+    #[test]
+    fn pure_builtin_literal_checks_preserve_open_and_valid_inputs() {
+        assert!(messages(
+            "let a = u32le '0xffffffff'\nlet b = u64le '18446744073709551615'\nlet c = range '0b101'\nlet d = range $n\nlet e = u32le (1 + 2)\nlet f = range '0_7'"
+        ).is_empty());
+        let found = messages(
+            "let a = u32le '0xGG'\nlet b = range '08'\nlet c = u64le '18446744073709551616'\nlet d = range '+1'",
+        );
+        assert_eq!(found.len(), 4);
+        assert!(
+            found
+                .iter()
+                .all(|message| message.contains("invalid integer"))
+        );
+    }
+
+    #[test]
+    fn pure_literal_issues_point_to_the_argument_even_when_nested() {
+        let parsed = parse("nested.bpfman", "let x = [range 2147483648 u32le '']")
+            .unwrap_or_else(|_| unreachable!());
+        let plan = prepare_imports(parsed, Path::new(".")).unwrap_or_else(|_| unreachable!());
+        let expanded = expand_imports(plan, &BTreeMap::new()).unwrap_or_else(|_| unreachable!());
+        let issues = analyze_calls(&expanded);
+        assert_eq!(issues.len(), 2);
+        assert_eq!(issues[0].span.start().column(), 16);
+        assert_eq!(
+            issues[0].message,
+            "range: bound 2147483648 exceeds the maximum of 2147483647"
+        );
+        assert_eq!(issues[1].message, "u32le: empty argument");
     }
 
     #[test]
