@@ -642,6 +642,13 @@ pub enum StatementKind {
         /// Value expression.
         value: Expression,
     },
+    /// Destructure a list value into at least two slots, with a real binding.
+    LetDestructure {
+        /// Names in positional order; `_` discards its slot.
+        names: Vec<Identifier>,
+        /// Expression expected to produce a matching list at runtime.
+        value: Expression,
+    },
     /// `let NAME <- COMMAND` or `guard NAME <- COMMAND`.
     Bind {
         /// Outcome or guard binding.

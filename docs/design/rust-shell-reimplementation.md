@@ -105,10 +105,11 @@ poll durations. Assertions now retain expression versus command-status clauses
 as distinct AST variants. Record fields, matches rows (value, predicate, or
 nested block), and bind-collect loops now have typed AST forms. Bind-collect
 requires a final producer command in its foreach body at parse time, matching
-the Go syntax phase.
-Other recognised language forms return a distinct incomplete-port error until
-their parser and AST contracts land. Do not wire this partial parser into the
-shell driver or checker as if the complete language were available.
+the Go syntax phase. `let` destructuring now validates positional name lists,
+including discard slots. The accepted Go statement forms have Rust AST variants;
+parser error and formatting parity remain test work. The separate checker is
+being built as incremental pure analyses. None of these analyses yet produces
+the `Checked` state or authorizes execution.
 
 ## Typestate and internal invariants
 

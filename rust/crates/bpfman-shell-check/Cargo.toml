@@ -1,0 +1,16 @@
+[package]
+name = "bpfman-shell-check"
+description = "Pure static checks for the Rust bpfman-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+bpfman-shell-source = { path = "../bpfman-shell-source" }
+bpfman-shell-syntax = { path = "../bpfman-shell-syntax" }
+
+[lints]
+workspace = true

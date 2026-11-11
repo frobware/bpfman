@@ -3,7 +3,7 @@
 //! The caller supplies a source name and text; the crate manages tokenisation,
 //! parsing, and source spans. The parser covers core expressions, simple
 //! statements, blocks, records, matches, bind-collect loops, definitions, and assertions.
-//! Remaining forms report incomplete coverage.
+//! Semantic validation belongs to the later checker phase.
 //!
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -20,8 +20,6 @@ pub enum SyntaxErrorKind {
     Lexical,
     /// A fully implemented form has invalid syntax.
     Invalid,
-    /// This parser slice has not classified the form yet.
-    Unimplemented,
 }
 
 /// A located syntax failure.
@@ -86,9 +84,8 @@ impl From<LexError> for SyntaxError {
 /// This parser slice accepts command statements, core expressions, and the
 /// `let`, `guard`, `defer`, `return`, `break`, `continue`, `if`, `foreach`,
 /// `def`, `poll`, `retry`, `assert`, `require`, record literals, matches blocks,
-/// and bind-collect loops. Other forms may return
-/// [`SyntaxErrorKind::Unimplemented`], including forms whose validity has not
-/// yet been checked.
+/// and bind-collect loops. Syntax acceptance does not imply the program has
+/// passed semantic checking.
 pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, SyntaxError> {
     let name = name.into();
     let origin = Position::origin(name.clone());
@@ -176,7 +173,7 @@ fn parse_let(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
         ));
     };
     if matches!(&name_token.kind, TokenKind::Word(word) if word == "(") {
-        return Err(unimplemented(&name_token.span, "let destructuring"));
+        return parse_let_destructure(tokens);
     }
     let name = identifier(name_token)?;
     let Some(operator) = tokens.get(2) else {
@@ -221,6 +218,87 @@ fn parse_let(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
         _ => Err(invalid(
             &operator.span,
             "let requires '=' or '<-' after the name",
+        )),
+    }
+}
+
+fn parse_let_destructure(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
+    let open = &tokens[1];
+    let mut names: Vec<Identifier> = Vec::new();
+    let mut pos = 2usize;
+    loop {
+        while matches!(
+            tokens.get(pos).map(|t| &t.kind),
+            Some(TokenKind::Separator(_))
+        ) {
+            pos += 1;
+        }
+        let Some(token) = tokens.get(pos) else {
+            return Err(invalid(
+                &open.span,
+                "let: unterminated name list (missing ')')",
+            ));
+        };
+        if matches!(&token.kind, TokenKind::Word(word) if word == ")") {
+            pos += 1;
+            break;
+        }
+        let TokenKind::Word(text) = &token.kind else {
+            return Err(invalid(&token.span, "let: expected name"));
+        };
+        if text.contains(',') {
+            return Err(invalid(
+                &token.span,
+                "let: comma is not a separator; use whitespace",
+            ));
+        }
+        let name = Identifier::new(text.clone(), token.span.clone())
+            .ok_or_else(|| invalid(&token.span, format!("let: invalid name {text:?}")))?;
+        if name.text() != "_" && names.iter().any(|old| old.text() == name.text()) {
+            return Err(invalid(
+                &token.span,
+                format!("let: duplicate name {text:?}"),
+            ));
+        }
+        names.push(name);
+        pos += 1;
+    }
+    if names.len() < 2 {
+        return Err(invalid(
+            &open.span,
+            "let: parenthesised name list requires at least two names",
+        ));
+    }
+    let Some(operator) = tokens.get(pos) else {
+        return Err(invalid(
+            &open.span,
+            "let: expected '=' or '<-' after name list",
+        ));
+    };
+    match operator.kind {
+        TokenKind::Bind => Err(invalid(
+            &open.span,
+            "tuple bind after '<-' is no longer supported",
+        )),
+        TokenKind::Assign => {
+            if names.iter().all(|name| name.text() == "_") {
+                return Err(invalid(
+                    &open.span,
+                    "let: all destructure slots are '_'; at least one must bind",
+                ));
+            }
+            if tokens.len() == pos + 1 {
+                return Err(invalid(
+                    &tokens[0].span,
+                    "let requires: let (<names>) = <value...>",
+                ));
+            }
+            let value = parse_expression(&tokens[pos + 1..], &operator.span)?;
+            Ok(StatementKind::LetDestructure { names, value })
+        }
+        _ => Err(invalid(
+            &operator.span,
+            "let: expected '=' or '<-' after name list",
         )),
     }
 }
@@ -393,17 +471,6 @@ pub(crate) fn invalid(span: &Span, message: impl Into<String>) -> SyntaxError {
     SyntaxError::new(SyntaxErrorKind::Invalid, span.clone(), message)
 }
 
-pub(crate) fn unimplemented(span: &Span, feature: impl Into<String>) -> SyntaxError {
-    SyntaxError::new(
-        SyntaxErrorKind::Unimplemented,
-        span.clone(),
-        format!(
-            "{} is not implemented in the Rust parser yet",
-            feature.into()
-        ),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{SyntaxErrorKind, parse};
@@ -411,6 +478,43 @@ mod tests {
         AssertionClause, AssertionMode, BindMode, CommandOutcome, ExpressionKind, PureBuiltin,
         StatementKind,
     };
+
+    #[test]
+    fn let_destructure_matches_go_name_list_contract() {
+        for (source, names) in [
+            ("let (a b) = $xs", &["a", "b"][..]),
+            ("let (a _ c) = $xs", &["a", "_", "c"][..]),
+            ("let (a\n b\n c) = [1 2 3]", &["a", "b", "c"][..]),
+        ] {
+            let program = parse("destructure.bpfman", source).unwrap_or_else(|_| unreachable!());
+            let StatementKind::LetDestructure { names: actual, .. } =
+                program.statements()[0].kind()
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                actual
+                    .iter()
+                    .map(crate::ast::Identifier::text)
+                    .collect::<Vec<_>>(),
+                names
+            );
+        }
+        for (source, message) in [
+            ("let (x) = $xs", "at least two names"),
+            ("let (_ _) = $xs", "at least one must bind"),
+            ("let (a a) = $xs", "duplicate name"),
+            ("let (a, b) = $xs", "comma is not a separator"),
+            ("let (a b) <- cmd", "tuple bind after '<-'"),
+            ("let (a b) =", "requires"),
+        ] {
+            let error = parse("destructure.bpfman", source)
+                .err()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(error.kind(), SyntaxErrorKind::Invalid);
+            assert!(error.message().contains(message), "{source}: {error}");
+        }
+    }
 
     #[test]
     fn empty_source_has_a_valid_program_and_no_statements() {
