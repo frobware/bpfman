@@ -5,7 +5,10 @@ use std::fmt;
 
 use bpfman_shell_source::{Position, SourceName, Span};
 
-use crate::ast::{BindMode, Command, Identifier, ParsedProgram, Statement, StatementKind};
+use crate::ast::{
+    AssertionClause, AssertionMode, BindMode, Command, CommandOutcome, Identifier, ParsedProgram,
+    Statement, StatementKind,
+};
 use crate::compound::parse_statements;
 use crate::expr::{parse_command_args, parse_expression};
 use crate::token::{LexError, Token, TokenKind, tokenise_at};
@@ -82,7 +85,7 @@ impl From<LexError> for SyntaxError {
 ///
 /// This parser slice accepts command statements, core expressions, and the
 /// simple `let`, `guard`, `defer`, `return`, `break`, `continue`, `if`, and
-/// `foreach`, `def`, `poll`, and `retry` forms. Other forms may return
+/// `foreach`, `def`, `poll`, `retry`, `assert`, and `require` forms. Other forms may return
 /// [`SyntaxErrorKind::Unimplemented`], including forms whose validity has not
 /// yet been checked.
 pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, SyntaxError> {
@@ -113,6 +116,8 @@ pub(crate) fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError
             "guard" => parse_guard(tokens)?,
             "defer" => StatementKind::Defer(parse_command(&tokens[1..], &first.span)?),
             "retry" => parse_retry(tokens)?,
+            "assert" => parse_assertion(tokens, AssertionMode::Assert)?,
+            "require" => parse_assertion(tokens, AssertionMode::Require)?,
             "return" => {
                 if tokens.len() == 1 {
                     return Err(invalid(
@@ -130,7 +135,7 @@ pub(crate) fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError
                 no_arguments(tokens, "continue")?;
                 StatementKind::Continue
             }
-            "if" | "elif" | "else" | "foreach" | "poll" | "def" | "assert" | "require" => {
+            "if" | "elif" | "else" | "foreach" | "poll" | "def" => {
                 return Err(unimplemented(&first.span, format!("{head} statement")));
             }
             "{" | "}" => {
@@ -285,6 +290,45 @@ fn parse_retry(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
     Ok(StatementKind::Retry { message, unless })
 }
 
+fn parse_assertion(tokens: &[Token], mode: AssertionMode) -> Result<StatementKind, SyntaxError> {
+    let keyword = &tokens[0];
+    let target = &tokens[1..];
+    if target.is_empty() {
+        return Err(invalid(&keyword.span, "assertion requires a target"));
+    }
+    if let Some(assign) = target
+        .iter()
+        .find(|token| matches!(token.kind, TokenKind::Assign))
+    {
+        return Err(invalid(
+            &assign.span,
+            "unexpected '='; use let for assignment",
+        ));
+    }
+    let negated = matches!(&target[0].kind, TokenKind::Word(word) if word == "not");
+    let body = if negated { &target[1..] } else { target };
+    if body.is_empty() {
+        return Err(invalid(&target[0].span, "expected a form after 'not'"));
+    }
+    let clause = match &body[0].kind {
+        TokenKind::Word(word) if word == "ok" || word == "fail" => {
+            let outcome = if word == "ok" {
+                CommandOutcome::Ok
+            } else {
+                CommandOutcome::Fail
+            };
+            AssertionClause::CommandStatus {
+                outcome,
+                head_span: body[0].span.clone(),
+                arguments: parse_command_args(&body[1..])?,
+                negated,
+            }
+        }
+        _ => AssertionClause::Expression(parse_expression(target, &keyword.span)?),
+    };
+    Ok(StatementKind::Assertion { mode, clause })
+}
+
 fn identifier(token: &Token) -> Result<Identifier, SyntaxError> {
     let TokenKind::Word(text) = &token.kind else {
         return Err(invalid(&token.span, "expected an identifier"));
@@ -356,7 +400,10 @@ pub(crate) fn unimplemented(span: &Span, feature: impl Into<String>) -> SyntaxEr
 #[cfg(test)]
 mod tests {
     use super::{SyntaxErrorKind, parse};
-    use crate::ast::{BindMode, ExpressionKind, StatementKind};
+    use crate::ast::{
+        AssertionClause, AssertionMode, BindMode, CommandOutcome, ExpressionKind, PureBuiltin,
+        StatementKind,
+    };
 
     #[test]
     fn empty_source_has_a_valid_program_and_no_statements() {
@@ -486,5 +533,54 @@ mod tests {
         assert_eq!(error.kind(), SyntaxErrorKind::Lexical);
         assert_eq!(error.span().start().name().as_str(), "main.bpfman");
         assert!(error.message().contains("expected identifier after '.'"));
+    }
+
+    #[test]
+    fn assertions_distinguish_boolean_and_command_status_clauses() {
+        let program = parse("main.bpfman", "assert contains $rc.stderr 'boom'\nassert not $ok\nassert not ok exec false\nrequire fail exec true")
+            .unwrap_or_else(|_| unreachable!());
+        let [first, second, third, fourth] = program.statements() else {
+            unreachable!()
+        };
+        assert!(
+            matches!(first.kind(), StatementKind::Assertion { mode: AssertionMode::Assert, clause: AssertionClause::Expression(value) } if matches!(value.kind(), ExpressionKind::PureCall { builtin: PureBuiltin::Contains, .. }))
+        );
+        assert!(
+            matches!(second.kind(), StatementKind::Assertion { clause: AssertionClause::Expression(value), .. } if matches!(value.kind(), ExpressionKind::Not(_)))
+        );
+        assert!(
+            matches!(third.kind(), StatementKind::Assertion { clause: AssertionClause::CommandStatus { outcome: CommandOutcome::Ok, negated: true, arguments, head_span }, .. } if arguments.len() == 2 && head_span.start().column() == 12)
+        );
+        assert!(matches!(
+            fourth.kind(),
+            StatementKind::Assertion {
+                mode: AssertionMode::Require,
+                clause: AssertionClause::CommandStatus {
+                    outcome: CommandOutcome::Fail,
+                    negated: false,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn assertion_syntax_keeps_checker_responsibilities_separate() {
+        let program = parse("main.bpfman", "assert ok").unwrap_or_else(|_| unreachable!());
+        assert!(
+            matches!(program.statements()[0].kind(), StatementKind::Assertion { clause: AssertionClause::CommandStatus { arguments, .. }, .. } if arguments.is_empty())
+        );
+        for (source, message) in [
+            ("assert", "requires a target"),
+            ("require not", "expected a form after 'not'"),
+            ("assert nil", "nil has been removed"),
+            ("assert $a = $b", "unexpected '='"),
+        ] {
+            let error = parse("main.bpfman", source)
+                .err()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(error.kind(), SyntaxErrorKind::Invalid, "{source}");
+            assert!(error.message().contains(message), "{source}: {error}");
+        }
     }
 }

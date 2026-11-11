@@ -426,6 +426,42 @@ pub struct Definition {
     body: Vec<Statement>,
 }
 
+/// Whether a failed assertion is fatal to script execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AssertionMode {
+    /// Report a failure and continue according to assertion policy.
+    Assert,
+    /// Halt on failure.
+    Require,
+}
+
+/// Expected command status for a command-shaped assertion.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandOutcome {
+    /// The command should succeed.
+    Ok,
+    /// The command should fail.
+    Fail,
+}
+
+/// One parsed assertion target.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum AssertionClause {
+    /// Expression whose boolean value decides the assertion.
+    Expression(Expression),
+    /// Transitional command-status form, such as `assert not ok CMD`.
+    CommandStatus {
+        /// Expected command outcome.
+        outcome: CommandOutcome,
+        /// The `ok` or `fail` token's source span.
+        head_span: Span,
+        /// Command head and arguments. An empty list is diagnosed by the checker.
+        arguments: Vec<Expression>,
+        /// Whether a leading `not` reverses the status test.
+        negated: bool,
+    },
+}
+
 impl Definition {
     pub(crate) fn new(name: Identifier, parameters: Vec<Parameter>, body: Vec<Statement>) -> Self {
         Self {
@@ -494,6 +530,13 @@ pub enum StatementKind {
     Expression(Expression),
     /// User-defined command declaration.
     Definition(Definition),
+    /// `assert` or `require` with one syntax-owned clause.
+    Assertion {
+        /// Failure behavior.
+        mode: AssertionMode,
+        /// Expression or command-status target.
+        clause: AssertionClause,
+    },
     /// Conditional chain with an optional final else body.
     If {
         /// Primary condition and body.

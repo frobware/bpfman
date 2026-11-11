@@ -2,7 +2,7 @@
 //!
 //! The caller supplies a source name and text; the crate manages tokenisation,
 //! parsing, and source spans. The parser covers core expressions, simple
-//! statements, `if`, `foreach`, definitions, and poll/retry; remaining forms
+//! statements, `if`, `foreach`, definitions, poll/retry, and assertions; remaining forms
 //! report incomplete coverage.
 //!
 //! ```
@@ -21,9 +21,10 @@ mod parse;
 mod token;
 
 pub use ast::{
-    BinaryOperator, BindMode, Command, Definition, Expression, ExpressionKind, Identifier,
-    IfBranch, InterpolatedPart, LogicalOperator, LoopBindings, Parameter, ParameterType,
-    ParsedProgram, PureBuiltin, Statement, StatementKind, ThreadCall,
+    AssertionClause, AssertionMode, BinaryOperator, BindMode, Command, CommandOutcome, Definition,
+    Expression, ExpressionKind, Identifier, IfBranch, InterpolatedPart, LogicalOperator,
+    LoopBindings, Parameter, ParameterType, ParsedProgram, PureBuiltin, Statement, StatementKind,
+    ThreadCall,
 };
 pub use duration::PositiveDuration;
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};

@@ -101,8 +101,9 @@ typed heads that may be computed, matching Go's dynamic head resolution. Express
 statements are parsed through the same grammar. Recursive blocks now cover
 `if`/`elif`/`else`, `foreach`, definitions, and poll/retry, including nested bodies,
 destructured loop bindings, typed definition parameters, and positive Go-range
-poll durations. `matches` blocks, record literals, assertions,
-and bind-collect loops remain pending.
+poll durations. Assertions now retain expression versus command-status clauses
+as distinct AST variants. `matches` blocks, record literals, and bind-collect
+loops remain pending.
 Other recognised language forms return a distinct incomplete-port error until
 their parser and AST contracts land. Do not wire this partial parser into the
 shell driver or checker as if the complete language were available.
