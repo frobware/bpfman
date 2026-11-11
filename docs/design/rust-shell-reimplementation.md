@@ -111,6 +111,16 @@ parser error and formatting parity remain test work. The separate checker is
 being built as incremental pure analyses. None of these analyses yet produces
 the `Checked` state or authorizes execution.
 
+The import boundary now has a pure two-step API in the checker crate:
+`prepare_imports(parsed, base_dir)` validates all import sites and returns the
+resolved direct paths to gather; the driver supplies their source text to
+`expand_imports(plan, gathered)`. Expansion parses each library, requires
+top-level definitions, rejects duplicate visible definitions, and splices
+those definitions in source order while retaining library source spans.
+`ExpandedProgram` is a distinct type but remains unchecked. The scope pass can
+inspect either parsed or expanded statements; full semantic preflight and the
+`Checked` constructor are still pending.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and

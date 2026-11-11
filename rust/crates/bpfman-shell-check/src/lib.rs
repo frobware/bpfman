@@ -12,6 +12,12 @@ use bpfman_shell_syntax::{
     MatchPattern, MatchesBlock, ParsedProgram, Statement, StatementKind,
 };
 
+mod imports;
+
+pub use imports::{
+    ExpandedProgram, ImportError, ImportPlan, ImportRequest, expand_imports, prepare_imports,
+};
+
 /// One static finding at its original source extent.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Issue {
@@ -39,9 +45,20 @@ impl fmt::Display for Issue {
 /// This is a pure partial pass: an empty result does not authorize execution.
 #[must_use]
 pub fn analyze_scopes(program: &ParsedProgram) -> Vec<Issue> {
+    analyze_statements(program.statements())
+}
+
+/// Run the same partial scope analysis on a program after direct-import
+/// expansion. Imported definitions retain their library source locations.
+#[must_use]
+pub fn analyze_expanded_scopes(program: &ExpandedProgram) -> Vec<Issue> {
+    analyze_statements(program.statements())
+}
+
+fn analyze_statements(statements: &[Statement]) -> Vec<Issue> {
     let mut analysis = Analysis::new();
-    analysis.prescan_defs(program.statements());
-    analysis.statements(program.statements());
+    analysis.prescan_defs(statements);
+    analysis.statements(statements);
     analysis.issues
 }
 
