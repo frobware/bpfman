@@ -82,7 +82,7 @@ impl From<LexError> for SyntaxError {
 ///
 /// This parser slice accepts command statements, core expressions, and the
 /// simple `let`, `guard`, `defer`, `return`, `break`, `continue`, `if`, and
-/// `foreach`, and `def` forms. Other forms may return
+/// `foreach`, `def`, `poll`, and `retry` forms. Other forms may return
 /// [`SyntaxErrorKind::Unimplemented`], including forms whose validity has not
 /// yet been checked.
 pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, SyntaxError> {
@@ -112,6 +112,7 @@ pub(crate) fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError
             "let" => parse_let(tokens)?,
             "guard" => parse_guard(tokens)?,
             "defer" => StatementKind::Defer(parse_command(&tokens[1..], &first.span)?),
+            "retry" => parse_retry(tokens)?,
             "return" => {
                 if tokens.len() == 1 {
                     return Err(invalid(
@@ -129,8 +130,7 @@ pub(crate) fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError
                 no_arguments(tokens, "continue")?;
                 StatementKind::Continue
             }
-            "if" | "elif" | "else" | "foreach" | "poll" | "retry" | "def" | "assert"
-            | "require" => {
+            "if" | "elif" | "else" | "foreach" | "poll" | "def" | "assert" | "require" => {
                 return Err(unimplemented(&first.span, format!("{head} statement")));
             }
             "{" | "}" => {
@@ -254,6 +254,35 @@ fn parse_guard(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
         name,
         command,
     })
+}
+
+fn parse_retry(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
+    let keyword = &tokens[0];
+    let tail = &tokens[1..];
+    let split = tail
+        .iter()
+        .position(|token| matches!(&token.kind, TokenKind::Word(word) if word == "unless"));
+    let (message_tokens, unless_tokens) = if let Some(index) = split {
+        (&tail[..index], Some(&tail[index + 1..]))
+    } else {
+        (tail, None)
+    };
+    let message = if message_tokens.is_empty() {
+        None
+    } else {
+        Some(parse_expression(message_tokens, &keyword.span)?)
+    };
+    let unless = match unless_tokens {
+        Some([]) => {
+            return Err(invalid(
+                &keyword.span,
+                "retry unless requires a condition expression",
+            ));
+        }
+        Some(tokens) => Some(parse_expression(tokens, &keyword.span)?),
+        None => None,
+    };
+    Ok(StatementKind::Retry { message, unless })
 }
 
 fn identifier(token: &Token) -> Result<Identifier, SyntaxError> {

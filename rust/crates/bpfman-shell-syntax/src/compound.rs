@@ -6,6 +6,7 @@ use crate::ast::{
     Definition, Identifier, IfBranch, LoopBindings, Parameter, ParameterType, Statement,
     StatementKind,
 };
+use crate::duration::{PositiveDuration, parse_positive_duration};
 use crate::expr::parse_expression;
 use crate::parse::{SyntaxError, invalid, parse_statement};
 use crate::token::{Token, TokenKind};
@@ -55,6 +56,8 @@ impl StatementCursor<'_> {
                 self.foreach_statement()?
             } else if self.at("def") {
                 self.definition_statement()?
+            } else if self.at("poll") {
+                self.poll_statement()?
             } else {
                 self.simple_statement()?
             };
@@ -201,6 +204,64 @@ impl StatementCursor<'_> {
             StatementKind::Definition(Definition::new(name, parameters, body)),
             extent,
         ))
+    }
+
+    fn poll_statement(&mut self) -> Result<Statement, SyntaxError> {
+        let keyword = self.tokens[self.pos].clone();
+        self.pos += 1;
+        if !self.at("timeout") {
+            return Err(invalid(
+                &keyword.span,
+                "poll requires 'timeout DUR every DUR'",
+            ));
+        }
+        self.pos += 1;
+        let timeout = self.duration_word(&keyword.span, "timeout")?;
+        if !self.at("every") {
+            return Err(invalid(
+                &keyword.span,
+                "poll requires 'every DUR' after timeout",
+            ));
+        }
+        self.pos += 1;
+        let every = self.duration_word(&keyword.span, "every")?;
+        let (body, close) = self.block()?;
+        let extent = span(&keyword.span, &close)?;
+        Ok(Statement::new(
+            StatementKind::Poll {
+                timeout,
+                every,
+                body,
+            },
+            extent,
+        ))
+    }
+
+    fn duration_word(
+        &mut self,
+        keyword: &Span,
+        clause: &str,
+    ) -> Result<PositiveDuration, SyntaxError> {
+        let Some(token) = self.peek() else {
+            return Err(invalid(
+                keyword,
+                format!("poll {clause} requires a duration literal"),
+            ));
+        };
+        let TokenKind::Word(text) = &token.kind else {
+            return Err(invalid(
+                keyword,
+                format!("poll {clause} requires a duration literal"),
+            ));
+        };
+        let duration = parse_positive_duration(text).ok_or_else(|| {
+            invalid(
+                &token.span,
+                format!("poll {clause}: invalid or nonpositive duration {text:?}"),
+            )
+        })?;
+        self.pos += 1;
+        Ok(duration)
     }
 
     fn definition_parameters(&mut self, keyword: &Span) -> Result<Vec<Parameter>, SyntaxError> {
@@ -665,6 +726,83 @@ mod tests {
             ("def f(_ a) {}", "cannot bind '_'"),
             ("def f(a, b) {}", "comma is not a parameter separator"),
             ("def f(a b", "unterminated parameter list"),
+        ] {
+            let error = parse("blocks.bpfman", source)
+                .err()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(error.kind(), SyntaxErrorKind::Invalid, "{source}");
+            assert!(error.message().contains(message), "{source}: {error}");
+        }
+    }
+
+    #[test]
+    fn poll_and_retry_keep_timing_and_optional_clauses_typed() {
+        let source = "poll timeout 5s every 100ms {\n retry\n retry 'waiting'\n retry unless $ok\n retry 'waiting' unless $ok\n}";
+        let program = parse("blocks.bpfman", source).unwrap_or_else(|_| unreachable!());
+        let StatementKind::Poll {
+            timeout,
+            every,
+            body,
+        } = program.statements()[0].kind()
+        else {
+            unreachable!()
+        };
+        assert_eq!(timeout.as_nanos(), 5_000_000_000);
+        assert_eq!(every.as_nanos(), 100_000_000);
+        assert_eq!(body.len(), 4);
+        assert!(matches!(
+            body[0].kind(),
+            StatementKind::Retry {
+                message: None,
+                unless: None
+            }
+        ));
+        assert!(matches!(
+            body[1].kind(),
+            StatementKind::Retry {
+                message: Some(_),
+                unless: None
+            }
+        ));
+        assert!(matches!(
+            body[2].kind(),
+            StatementKind::Retry {
+                message: None,
+                unless: Some(_)
+            }
+        ));
+        assert!(matches!(
+            body[3].kind(),
+            StatementKind::Retry {
+                message: Some(_),
+                unless: Some(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn poll_rejects_missing_or_nonpositive_durations() {
+        for (source, message) in [
+            ("poll every 1s {}", "requires 'timeout"),
+            ("poll timeout 5s {}", "requires 'every"),
+            (
+                "poll timeout 0 every 1s {}",
+                "invalid or nonpositive duration",
+            ),
+            (
+                "poll timeout 0.1ns every 1s {}",
+                "invalid or nonpositive duration",
+            ),
+            (
+                "poll timeout 1s every -1s {}",
+                "invalid or nonpositive duration",
+            ),
+            (
+                "poll timeout 1s every 1day {}",
+                "invalid or nonpositive duration",
+            ),
+            ("poll timeout 1s every 1s {", "unterminated block"),
+            ("retry unless", "condition expression"),
         ] {
             let error = parse("blocks.bpfman", source)
                 .err()

@@ -2,6 +2,7 @@
 
 use bpfman_shell_source::{Position, SourceName, Span};
 
+use crate::duration::PositiveDuration;
 use crate::token::VariableRef;
 
 /// A parsed source unit with immutable statements and source identity.
@@ -510,6 +511,22 @@ pub enum StatementKind {
         list: Expression,
         /// Statements executed for each element.
         body: Vec<Statement>,
+    },
+    /// Retry a block until it finishes or exhausts its time budget.
+    Poll {
+        /// Total positive time budget.
+        timeout: PositiveDuration,
+        /// Positive delay between attempts.
+        every: PositiveDuration,
+        /// Statements executed on each attempt.
+        body: Vec<Statement>,
+    },
+    /// Ask the enclosing poll to run another attempt.
+    Retry {
+        /// Optional diagnostic when the poll budget is exhausted.
+        message: Option<Expression>,
+        /// Optional condition suppressing this retry when true.
+        unless: Option<Expression>,
     },
     /// `let NAME = EXPR`.
     Let {
