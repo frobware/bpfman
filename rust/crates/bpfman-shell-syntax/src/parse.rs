@@ -84,8 +84,9 @@ impl From<LexError> for SyntaxError {
 /// Parse one source unit. The caller supplies only its name and UTF-8 text.
 ///
 /// This parser slice accepts command statements, core expressions, and the
-/// simple `let`, `guard`, `defer`, `return`, `break`, `continue`, `if`, and
-/// `foreach`, `def`, `poll`, `retry`, `assert`, and `require` forms. Other forms may return
+/// `let`, `guard`, `defer`, `return`, `break`, `continue`, `if`, `foreach`,
+/// `def`, `poll`, `retry`, `assert`, `require`, record literals, matches blocks,
+/// and bind-collect loops. Other forms may return
 /// [`SyntaxErrorKind::Unimplemented`], including forms whose validity has not
 /// yet been checked.
 pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, SyntaxError> {
@@ -136,7 +137,7 @@ pub(crate) fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError
                 StatementKind::Continue
             }
             "if" | "elif" | "else" | "foreach" | "poll" | "def" => {
-                return Err(unimplemented(&first.span, format!("{head} statement")));
+                return Err(invalid(&first.span, format!("incomplete {head} statement")));
             }
             "{" | "}" => {
                 return Err(invalid(
@@ -204,7 +205,10 @@ fn parse_let(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
         TokenKind::Bind => {
             if matches!(tokens.get(3).map(|token| &token.kind), Some(TokenKind::Word(word)) if word == "foreach")
             {
-                return Err(unimplemented(&tokens[3].span, "bind-collect foreach"));
+                return Err(invalid(
+                    &tokens[3].span,
+                    "bind-collect requires a foreach body",
+                ));
             }
             validate_bind_rhs(&tokens[3..], &operator.span)?;
             let command = parse_command(&tokens[3..], &operator.span)?;
@@ -250,7 +254,10 @@ fn parse_guard(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
     }
     if matches!(tokens.get(3).map(|token| &token.kind), Some(TokenKind::Word(word)) if word == "foreach")
     {
-        return Err(unimplemented(&tokens[3].span, "bind-collect foreach"));
+        return Err(invalid(
+            &tokens[3].span,
+            "bind-collect requires a foreach body",
+        ));
     }
     validate_bind_rhs(&tokens[3..], &operator.span)?;
     let command = parse_command(&tokens[3..], &operator.span)?;
@@ -509,19 +516,15 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_language_constructs_are_never_reinterpreted_as_commands() {
+    fn malformed_compound_expressions_are_never_reinterpreted_as_commands() {
         for source in [
             "let xs <- foreach n in $items {",
-            "let result = $x matches { item: true }",
+            "let result = $x matches { item: true",
         ] {
             let error = parse("main.bpfman", source)
                 .err()
                 .unwrap_or_else(|| unreachable!());
-            assert_eq!(
-                error.kind(),
-                SyntaxErrorKind::Unimplemented,
-                "{source}: {error}"
-            );
+            assert_eq!(error.kind(), SyntaxErrorKind::Invalid, "{source}: {error}");
         }
     }
 

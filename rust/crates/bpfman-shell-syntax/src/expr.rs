@@ -3,20 +3,29 @@
 use bpfman_shell_source::{Position, SourceText, Span};
 
 use crate::ast::{
-    BinaryOperator, Expression, ExpressionKind, InterpolatedPart, LogicalOperator, PureBuiltin,
-    ThreadCall,
+    BinaryOperator, Expression, ExpressionKind, Identifier, InterpolatedPart, LogicalOperator,
+    MatchEntry, MatchPattern, MatchPredicate, MatchesBlock, PureBuiltin, RecordField, ThreadCall,
 };
-use crate::parse::{SyntaxError, invalid, unimplemented};
+use crate::parse::{SyntaxError, invalid};
 use crate::token::{Segment, Token, TokenKind, tokenise, tokenise_at};
 
 pub(crate) fn parse_expression(
     tokens: &[Token],
     location: &Span,
 ) -> Result<Expression, SyntaxError> {
+    let mut brace_depth = 0usize;
     let tokens = tokens
         .iter()
-        .filter(|token| !matches!(token.kind, TokenKind::Separator(_)))
-        .cloned()
+        .filter_map(|token| {
+            let keep = brace_depth > 0 || !matches!(token.kind, TokenKind::Separator(_));
+            if word(token, "{") {
+                brace_depth += 1;
+            }
+            if word(token, "}") {
+                brace_depth = brace_depth.saturating_sub(1);
+            }
+            keep.then(|| token.clone())
+        })
         .collect::<Vec<_>>();
     if tokens.is_empty() {
         return Err(invalid(location, "expected an expression"));
@@ -270,6 +279,21 @@ impl Cursor<'_> {
         self.peek().is_some_and(|token| word(token, text))
     }
 
+    fn skip_newlines(&mut self) {
+        while matches!(
+            self.peek().map(|t| &t.kind),
+            Some(TokenKind::Separator('\n'))
+        ) {
+            self.pos += 1;
+        }
+    }
+
+    fn skip_record_separators(&mut self) {
+        while matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Separator(_))) {
+            self.pos += 1;
+        }
+    }
+
     fn or(&mut self) -> Result<Expression, SyntaxError> {
         let mut lhs = self.and()?;
         while self.at("or") {
@@ -327,7 +351,21 @@ impl Cursor<'_> {
             let token = self
                 .take()
                 .ok_or_else(|| invalid(&self.tokens[0].span, "unexpected end of input"))?;
-            return Err(unimplemented(&token.span, "matches expression"));
+            let exhaustive = if self.at("exhaustive") {
+                self.take();
+                true
+            } else {
+                false
+            };
+            let block = self.matches_block(&token.span, exhaustive)?;
+            let extent = span(lhs.span(), &block.span)?;
+            return Ok(Expression::new(
+                ExpressionKind::Matches {
+                    target: Box::new(lhs),
+                    block,
+                },
+                extent,
+            ));
         }
         let Some(
             operator @ (BinaryOperator::Equal
@@ -492,7 +530,7 @@ impl Cursor<'_> {
             return self.list();
         }
         if word(token, "record") {
-            return Err(unimplemented(&token.span, "record literal"));
+            return self.record();
         }
         if let Some((builtin, arity)) = builtin(token) {
             if builtin != PureBuiltin::Null
@@ -546,6 +584,7 @@ impl Cursor<'_> {
             .ok_or_else(|| invalid(&self.tokens[0].span, "unexpected end of input"))?;
         let mut elements = Vec::new();
         loop {
+            self.skip_newlines();
             let Some(token) = self.peek() else {
                 return Err(invalid(&open.span, "missing ']' to close list literal"));
             };
@@ -576,6 +615,301 @@ impl Cursor<'_> {
             }
             elements.push(self.term()?);
         }
+    }
+
+    fn record(&mut self) -> Result<Expression, SyntaxError> {
+        let keyword = self
+            .take()
+            .ok_or_else(|| invalid(&self.tokens[0].span, "expected record"))?;
+        self.skip_record_separators();
+        if !self.at("{") {
+            return Err(invalid(&keyword.span, "record literal requires '{'"));
+        }
+        let open = self
+            .take()
+            .ok_or_else(|| invalid(&keyword.span, "expected '{'"))?;
+        let mut fields: Vec<RecordField> = Vec::new();
+        loop {
+            self.skip_record_separators();
+            let Some(token) = self.peek().cloned() else {
+                return Err(invalid(&open.span, "missing '}' to close record literal"));
+            };
+            if word(&token, "}") {
+                self.take();
+                return Ok(Expression::new(
+                    ExpressionKind::Record(fields),
+                    span(&keyword.span, &token.span)?,
+                ));
+            }
+            let TokenKind::Word(text) = &token.kind else {
+                return Err(invalid(
+                    &token.span,
+                    "record field must be written as name:",
+                ));
+            };
+            if text.contains(',') {
+                return Err(invalid(
+                    &token.span,
+                    "record fields are whitespace-separated; commas are not record separators",
+                ));
+            }
+            let Some(name_text) = text.strip_suffix(':') else {
+                return Err(invalid(
+                    &token.span,
+                    "record field must be written as name:",
+                ));
+            };
+            let name =
+                Identifier::new(name_text.to_owned(), token.span.clone()).ok_or_else(|| {
+                    invalid(
+                        &token.span,
+                        format!("invalid record field name {name_text:?}"),
+                    )
+                })?;
+            if fields.iter().any(|field| field.name.text() == name_text) {
+                return Err(invalid(
+                    &token.span,
+                    format!("duplicate record field {name_text:?}"),
+                ));
+            }
+            self.take();
+            let Some(next) = self.peek() else {
+                return Err(invalid(
+                    &token.span,
+                    format!("record field {name_text:?} requires a value"),
+                ));
+            };
+            if word(next, "}") || matches!(next.kind, TokenKind::Separator(_)) {
+                return Err(invalid(
+                    &token.span,
+                    format!("record field {name_text:?} requires a value"),
+                ));
+            }
+            let value = self.term()?;
+            fields.push(RecordField {
+                name,
+                span: span(&token.span, value.span())?,
+                value,
+            });
+        }
+    }
+
+    fn matches_block(
+        &mut self,
+        keyword: &Span,
+        exhaustive: bool,
+    ) -> Result<MatchesBlock, SyntaxError> {
+        if !self.at("{") {
+            return Err(invalid(
+                keyword,
+                "matches requires a block: matches { ... }",
+            ));
+        }
+        let open = self
+            .take()
+            .ok_or_else(|| invalid(keyword, "expected '{'"))?;
+        let mut entries = Vec::new();
+        loop {
+            self.skip_newlines();
+            let Some(token) = self.peek().cloned() else {
+                return Err(invalid(
+                    &open.span,
+                    "unterminated matches block: missing '}'",
+                ));
+            };
+            if word(&token, "}") {
+                self.take();
+                return Ok(MatchesBlock {
+                    entries,
+                    exhaustive,
+                    span: span(&open.span, &token.span)?,
+                });
+            }
+            if matches!(token.kind, TokenKind::Separator(';')) {
+                return Err(invalid(
+                    &token.span,
+                    "matches: ';' is not a valid entry separator; entries are separated by newlines",
+                ));
+            }
+            if word(&token, ",") {
+                return Err(invalid(
+                    &token.span,
+                    "matches: ',' is not a valid entry separator; entries are separated by newlines",
+                ));
+            }
+            let (path, path_span, leading_pattern) = self.match_path()?;
+            if exhaustive && (path.contains('.') || path.contains('[')) {
+                return Err(invalid(
+                    &path_span,
+                    "matches exhaustive: dotted or indexed path is not allowed; use a nested matches block",
+                ));
+            }
+            let Some(next) = leading_pattern.clone().or_else(|| self.peek().cloned()) else {
+                return Err(invalid(
+                    &path_span,
+                    "matches entry: missing pattern after ':'",
+                ));
+            };
+            let pattern = if word(&next, "matches") {
+                if leading_pattern.is_none() {
+                    self.take();
+                }
+                let nested_exhaustive = if self.at("exhaustive") {
+                    self.take();
+                    true
+                } else {
+                    false
+                };
+                MatchPattern::Nested(self.matches_block(&next.span, nested_exhaustive)?)
+            } else {
+                let start = self.pos;
+                while let Some(t) = self.peek() {
+                    if matches!(t.kind, TokenKind::Separator('\n')) || word(t, "}") {
+                        break;
+                    }
+                    if matches!(t.kind, TokenKind::Separator(';')) {
+                        return Err(invalid(
+                            &t.span,
+                            "matches: ';' is not a valid entry separator; entries are separated by newlines",
+                        ));
+                    }
+                    if let TokenKind::Word(text) = &t.kind {
+                        if text.contains(',') {
+                            return Err(invalid(
+                                &t.span,
+                                "matches: ',' is not a valid entry separator; entries are separated by newlines",
+                            ));
+                        }
+                    }
+                    self.pos += 1;
+                }
+                let mut tokens = Vec::new();
+                if let Some(token) = leading_pattern {
+                    tokens.push(token);
+                }
+                tokens.extend_from_slice(&self.tokens[start..self.pos]);
+                if tokens.is_empty() {
+                    return Err(invalid(
+                        &path_span,
+                        "matches entry: missing pattern after ':'",
+                    ));
+                }
+                match tokens.as_slice() {
+                    [
+                        Token {
+                            kind: TokenKind::Word(text),
+                            ..
+                        },
+                    ] if matches!(text.as_str(), "not-empty" | "null" | "empty") => {
+                        MatchPattern::Predicate(match text.as_str() {
+                            "not-empty" => MatchPredicate::NotEmpty,
+                            "null" => MatchPredicate::Null,
+                            _ => MatchPredicate::Empty,
+                        })
+                    }
+                    _ => MatchPattern::Value(parse_expression(&tokens, &path_span)?),
+                }
+            };
+            let end = &self.tokens[self.pos - 1].span;
+            entries.push(MatchEntry {
+                path,
+                pattern,
+                span: span(&path_span, end)?,
+            });
+        }
+    }
+
+    fn match_path(&mut self) -> Result<(String, Span, Option<Token>), SyntaxError> {
+        let first = self
+            .peek()
+            .cloned()
+            .ok_or_else(|| invalid(&self.tokens[0].span, "matches entry: missing path"))?;
+        let TokenKind::Word(text) = &first.kind else {
+            return Err(invalid(&first.span, "matches entry: path must be a word"));
+        };
+        if text.starts_with(':') {
+            return Err(invalid(
+                &first.span,
+                "matches entry: missing path before ':'",
+            ));
+        }
+        let mut path = text.clone();
+        self.pos += 1;
+        let mut colon = path.ends_with(':');
+        let mut leading_pattern = None;
+        if colon {
+            path.pop();
+        }
+        while !colon {
+            let Some(next) = self.peek() else {
+                break;
+            };
+            let TokenKind::Word(word) = &next.kind else {
+                break;
+            };
+            if word == ":" {
+                self.pos += 1;
+                colon = true;
+            } else if let Some(rest) = word.strip_prefix(':') {
+                if !rest.is_empty() {
+                    let mut token = next.clone();
+                    token.kind = TokenKind::Word(rest.to_owned());
+                    let column = next
+                        .span
+                        .start()
+                        .column()
+                        .checked_add(1)
+                        .ok_or_else(|| invalid(&next.span, "source position overflow"))?;
+                    let start = Position::new(
+                        next.span.start().name().clone(),
+                        next.span.start().line(),
+                        column,
+                    )
+                    .ok_or_else(|| invalid(&next.span, "source position overflow"))?;
+                    token.span = Span::new(start, next.span.end().clone())
+                        .map_err(|_| invalid(&next.span, "source span overflow"))?;
+                    leading_pattern = Some(token);
+                }
+                self.pos += 1;
+                colon = true;
+            } else if word == "[" {
+                self.pos += 1;
+                let index = self
+                    .peek()
+                    .ok_or_else(|| invalid(&first.span, "matches entry: invalid index"))?;
+                let TokenKind::Word(digits) = &index.kind else {
+                    return Err(invalid(&index.span, "matches entry: invalid index"));
+                };
+                path.push('[');
+                path.push_str(digits);
+                self.pos += 1;
+                if !self.at("]") {
+                    return Err(invalid(&first.span, "matches entry: invalid index"));
+                }
+                self.pos += 1;
+                path.push(']');
+            } else if word.starts_with('.') {
+                let part = word.trim_end_matches(':');
+                path.push_str(part);
+                colon = word.ends_with(':');
+                self.pos += 1;
+            } else {
+                break;
+            }
+        }
+        if !colon {
+            return Err(invalid(
+                &first.span,
+                "matches entry: missing ':' between path and pattern",
+            ));
+        }
+        if !valid_path(&path) {
+            return Err(invalid(
+                &first.span,
+                format!("matches entry: invalid path {path:?}"),
+            ));
+        }
+        Ok((path, first.span, leading_pattern))
     }
 
     fn call_arg(&mut self, call: &Span) -> Result<Expression, SyntaxError> {
@@ -626,6 +960,44 @@ fn can_start_arg(token: &Token) -> bool {
         ),
         _ => false,
     }
+}
+
+fn valid_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    let mut pos = 0;
+    let mut steps = 0;
+    while pos < bytes.len() {
+        if bytes[pos] == b'.' {
+            pos += 1;
+            if pos == bytes.len() {
+                break;
+            }
+        }
+        if bytes[pos] == b'[' {
+            pos += 1;
+            let start = pos;
+            while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+                pos += 1;
+            }
+            if pos == start
+                || bytes.get(pos) != Some(&b']')
+                || path[start..pos].parse::<usize>().is_err()
+            {
+                return false;
+            }
+            pos += 1;
+        } else {
+            let start = pos;
+            while pos < bytes.len() && bytes[pos] != b'.' && bytes[pos] != b'[' {
+                pos += 1;
+            }
+            if pos == start {
+                return false;
+            }
+        }
+        steps += 1;
+    }
+    steps > 0
 }
 
 #[cfg(test)]
@@ -811,19 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_and_invalid_forms_remain_distinct() {
-        for source in [
-            "let value = record { x: 1 }",
-            "let value = $x matches { x: 1 }",
-        ] {
-            assert_eq!(
-                parse("expr.bpfman", source)
-                    .err()
-                    .unwrap_or_else(|| unreachable!())
-                    .kind(),
-                SyntaxErrorKind::Unimplemented
-            );
-        }
+    fn invalid_forms_are_rejected() {
         for source in [
             "let value = [1, 2]",
             "let value = (1 + 2",

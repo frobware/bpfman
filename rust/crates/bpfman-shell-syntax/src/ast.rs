@@ -171,6 +171,61 @@ pub enum InterpolatedPart {
     Expression(Box<Expression>),
 }
 
+/// One named value in a record literal.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordField {
+    /// Validated field name.
+    pub name: Identifier,
+    /// Field value.
+    pub value: Expression,
+    /// Extent of the field and value.
+    pub span: Span,
+}
+
+/// A bare predicate in a matches row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MatchPredicate {
+    /// Value is nonempty.
+    NotEmpty,
+    /// Value is null.
+    Null,
+    /// Value is empty.
+    Empty,
+}
+
+/// Exactly one comparison form for a matches row.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MatchPattern {
+    /// Compare with an evaluated expression.
+    Value(Expression),
+    /// Apply a predicate to the selected value.
+    Predicate(MatchPredicate),
+    /// Recurse into the selected value.
+    Nested(MatchesBlock),
+}
+
+/// One path-pattern relation in a matches block.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchEntry {
+    /// Validated dotted or indexed path.
+    pub path: String,
+    /// The row's single pattern form.
+    pub pattern: MatchPattern,
+    /// Extent of this row.
+    pub span: Span,
+}
+
+/// Ordered, optionally exhaustive matches rows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MatchesBlock {
+    /// Rows in source order.
+    pub entries: Vec<MatchEntry>,
+    /// Whether extra fields are rejected by evaluation.
+    pub exhaustive: bool,
+    /// Extent including both braces.
+    pub span: Span,
+}
+
 /// Forms accepted by the incremental expression parser.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpressionKind {
@@ -231,6 +286,15 @@ pub enum ExpressionKind {
     },
     /// Whitespace-separated list literal.
     List(Vec<Expression>),
+    /// Named values; duplicate names have been rejected.
+    Record(Vec<RecordField>),
+    /// Structural comparison with validated rows.
+    Matches {
+        /// Value being inspected.
+        target: Box<Expression>,
+        /// Comparison rows.
+        block: MatchesBlock,
+    },
 }
 
 /// A nonempty command invocation. The head is evaluated before dispatch.
@@ -586,6 +650,19 @@ pub enum StatementKind {
         name: Identifier,
         /// Command producing the binding.
         command: Command,
+    },
+    /// Bind the aggregate outcome of a foreach whose final body statement is a command.
+    BindCollect {
+        /// Outcome or guard binding.
+        mode: BindMode,
+        /// Bound name; `_` discards the result.
+        name: Identifier,
+        /// Validated loop bindings.
+        bindings: LoopBindings,
+        /// Iteration source.
+        list: Expression,
+        /// Nonempty body ending in a producer command.
+        body: Vec<Statement>,
     },
     /// Cleanup command registered for the enclosing scope.
     Defer(Command),

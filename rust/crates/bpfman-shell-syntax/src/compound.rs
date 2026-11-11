@@ -3,7 +3,7 @@
 use bpfman_shell_source::Span;
 
 use crate::ast::{
-    Definition, Identifier, IfBranch, LoopBindings, Parameter, ParameterType, Statement,
+    BindMode, Definition, Identifier, IfBranch, LoopBindings, Parameter, ParameterType, Statement,
     StatementKind,
 };
 use crate::duration::{PositiveDuration, parse_positive_duration};
@@ -58,6 +58,8 @@ impl StatementCursor<'_> {
                 self.definition_statement()?
             } else if self.at("poll") {
                 self.poll_statement()?
+            } else if self.bind_collect_head() {
+                self.bind_collect_statement()?
             } else {
                 self.simple_statement()?
             };
@@ -66,11 +68,79 @@ impl StatementCursor<'_> {
         Ok(statements)
     }
 
+    fn bind_collect_head(&self) -> bool {
+        matches!(self.peek().map(|t| &t.kind), Some(TokenKind::Word(word)) if word == "let" || word == "guard")
+            && matches!(
+                self.tokens.get(self.pos + 2).map(|t| &t.kind),
+                Some(TokenKind::Bind)
+            )
+            && matches!(self.tokens.get(self.pos + 3).map(|t| &t.kind), Some(TokenKind::Word(word)) if word == "foreach")
+    }
+
+    fn bind_collect_statement(&mut self) -> Result<Statement, SyntaxError> {
+        let keyword = self.tokens[self.pos].clone();
+        let mode = if self.at("guard") {
+            BindMode::Guard
+        } else {
+            BindMode::Let
+        };
+        let name_token = &self.tokens[self.pos + 1];
+        let TokenKind::Word(text) = &name_token.kind else {
+            return Err(invalid(
+                &name_token.span,
+                "bind-collect requires a target name",
+            ));
+        };
+        let name = Identifier::new(text.clone(), name_token.span.clone()).ok_or_else(|| {
+            invalid(
+                &name_token.span,
+                "bind-collect requires a valid target name",
+            )
+        })?;
+        self.pos += 3;
+        let foreach = self.foreach_statement()?;
+        let StatementKind::Foreach {
+            bindings,
+            list,
+            body,
+        } = foreach.kind().clone()
+        else {
+            unreachable!()
+        };
+        let Some(last) = body.last() else {
+            return Err(invalid(
+                &keyword.span,
+                "bind-collect: foreach body must produce a command at its last statement",
+            ));
+        };
+        if !matches!(last.kind(), StatementKind::Command(_)) {
+            return Err(invalid(
+                last.span(),
+                "bind-collect: foreach body's last statement must be a command",
+            ));
+        }
+        let extent = span(&keyword.span, foreach.span())?;
+        Ok(Statement::new(
+            StatementKind::BindCollect {
+                mode,
+                name,
+                bindings,
+                list,
+                body,
+            },
+            extent,
+        ))
+    }
+
     fn simple_statement(&mut self) -> Result<Statement, SyntaxError> {
         let start = self.pos;
         let mut depth = 0usize;
         let mut collected = Vec::new();
         while let Some(token) = self.peek() {
+            if self.at("{") && expression_brace_tail(&collected) {
+                self.collect_expression_block(&mut collected)?;
+                continue;
+            }
             match &token.kind {
                 TokenKind::Separator(_) if depth == 0 => break,
                 TokenKind::Separator(_) => {}
@@ -91,6 +161,25 @@ impl StatementCursor<'_> {
             return Err(invalid(&self.tokens[start].span, "expected a statement"));
         }
         parse_statement(&collected)
+    }
+
+    fn collect_expression_block(&mut self, collected: &mut Vec<Token>) -> Result<(), SyntaxError> {
+        let open = self.tokens[self.pos].span.clone();
+        let mut depth = 0usize;
+        while let Some(token) = self.peek() {
+            if matches!(&token.kind, TokenKind::Word(word) if word == "{") {
+                depth += 1;
+            }
+            if matches!(&token.kind, TokenKind::Word(word) if word == "}") {
+                depth -= 1;
+            }
+            collected.push(token.clone());
+            self.pos += 1;
+            if depth == 0 {
+                return Ok(());
+            }
+        }
+        Err(invalid(&open, "unterminated expression block: missing '}'"))
     }
 
     fn if_statement(&mut self) -> Result<Statement, SyntaxError> {
@@ -410,6 +499,10 @@ impl StatementCursor<'_> {
         let mut tokens = Vec::new();
         let mut depth = 0usize;
         while let Some(token) = self.peek() {
+            if self.at("{") && expression_brace_tail(&tokens) {
+                self.collect_expression_block(&mut tokens)?;
+                continue;
+            }
             match &token.kind {
                 TokenKind::Separator(_) => {
                     self.pos += 1;
@@ -447,6 +540,23 @@ impl StatementCursor<'_> {
         self.pos += 1;
         Ok((statements, close))
     }
+}
+
+fn expression_brace_tail(tokens: &[Token]) -> bool {
+    let words = tokens
+        .iter()
+        .rev()
+        .filter_map(|token| match &token.kind {
+            TokenKind::Separator(_) => None,
+            TokenKind::Word(word) => Some(word.as_str()),
+            _ => Some(""),
+        })
+        .take(2)
+        .collect::<Vec<_>>();
+    matches!(
+        words.as_slice(),
+        ["record", ..] | ["matches", ..] | ["exhaustive", "matches"]
+    )
 }
 
 fn loop_name(token: &Token) -> Result<Identifier, SyntaxError> {
@@ -501,8 +611,122 @@ fn span(start: &Span, end: &Span) -> Result<Span, SyntaxError> {
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{ExpressionKind, ParameterType, StatementKind};
+    use crate::ast::{
+        ExpressionKind, MatchPattern, MatchPredicate, ParameterType, Statement, StatementKind,
+    };
     use crate::parse::{SyntaxErrorKind, parse};
+
+    #[test]
+    fn records_and_matches_preserve_go_shapes() {
+        let program = parse("shapes.bpfman", "let r = record {\n prog: $p\n count: (1 + 2)\n}\nassert $r matches exhaustive {\n prog: matches { id: $want }\n count: not-empty\n}").unwrap_or_else(|_| unreachable!());
+        let [record, assertion] = program.statements() else {
+            unreachable!()
+        };
+        let StatementKind::Let { value, .. } = record.kind() else {
+            unreachable!()
+        };
+        let ExpressionKind::Record(fields) = value.kind() else {
+            unreachable!()
+        };
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].name.text(), "prog");
+        let StatementKind::Assertion {
+            clause: crate::ast::AssertionClause::Expression(expr),
+            ..
+        } = assertion.kind()
+        else {
+            unreachable!()
+        };
+        let ExpressionKind::Matches { block, .. } = expr.kind() else {
+            unreachable!()
+        };
+        assert!(block.exhaustive);
+        assert!(
+            matches!(&block.entries[0].pattern, MatchPattern::Nested(nested) if nested.entries[0].path == "id")
+        );
+        assert!(matches!(
+            block.entries[1].pattern,
+            MatchPattern::Predicate(MatchPredicate::NotEmpty)
+        ));
+    }
+
+    #[test]
+    fn bind_collect_requires_a_producer_command() {
+        for prefix in ["let", "guard"] {
+            let source = format!("{prefix} xs <- foreach x in [\n1\n2\n] {{\n echo $x\n}}");
+            let program = parse("collect.bpfman", &source).unwrap_or_else(|_| unreachable!());
+            assert!(
+                matches!(program.statements()[0].kind(), StatementKind::BindCollect { body, .. } if matches!(body.last().map(Statement::kind), Some(StatementKind::Command(_))))
+            );
+        }
+        for source in [
+            "let xs <- foreach x in [1] {}",
+            "guard xs <- foreach x in [1] { return $x }",
+        ] {
+            let error = parse("collect.bpfman", source)
+                .err()
+                .unwrap_or_else(|| unreachable!());
+            assert_eq!(error.kind(), SyntaxErrorKind::Invalid);
+            assert!(
+                error.message().contains("last statement")
+                    || error.message().contains("must produce")
+            );
+        }
+    }
+
+    #[test]
+    fn record_and_matches_reject_bad_fields_and_rows() {
+        for source in [
+            "let r = record { x: 1 x: 2 }",
+            "let r = record { 1x: 1 }",
+            "let r = record { x: 1, }",
+            "assert $x matches { a: 1; }",
+            "assert $x matches exhaustive { a.b: 1 }",
+            "assert $x matches { a: 1, }",
+        ] {
+            assert_eq!(
+                parse("bad.bpfman", source)
+                    .err()
+                    .unwrap_or_else(|| unreachable!())
+                    .kind(),
+                SyntaxErrorKind::Invalid,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn matches_accepts_go_colon_spacing_and_indexed_paths() {
+        for source in [
+            "assert $x matches { a.b: foo }",
+            "assert $x matches { a.b : foo }",
+            "assert $x matches { a.b :foo }",
+            "assert $x matches { items[0].id: 1 }",
+            "if ($x matches { id: 1 }) { print ok }",
+            "print ($x matches { id: 1 })",
+        ] {
+            assert!(parse("matches.bpfman", source).is_ok(), "{source}");
+        }
+        let source = "assert $x matches { a.b :foo }";
+        let program = parse("matches.bpfman", source).unwrap_or_else(|_| unreachable!());
+        let StatementKind::Assertion {
+            clause: crate::ast::AssertionClause::Expression(expr),
+            ..
+        } = program.statements()[0].kind()
+        else {
+            unreachable!()
+        };
+        let ExpressionKind::Matches { block, .. } = expr.kind() else {
+            unreachable!()
+        };
+        let MatchPattern::Value(value) = &block.entries[0].pattern else {
+            unreachable!()
+        };
+        assert_eq!(
+            value.span().start().column(),
+            source.find(":foo").unwrap_or_else(|| unreachable!()) + 2
+        );
+    }
 
     #[test]
     fn if_elif_else_preserves_branch_structure_and_spans() {

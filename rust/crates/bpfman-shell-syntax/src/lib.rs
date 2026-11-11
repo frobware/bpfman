@@ -2,8 +2,8 @@
 //!
 //! The caller supplies a source name and text; the crate manages tokenisation,
 //! parsing, and source spans. The parser covers core expressions, simple
-//! statements, `if`, `foreach`, definitions, poll/retry, and assertions; remaining forms
-//! report incomplete coverage.
+//! statements, blocks, records, matches, bind-collect loops, definitions, and assertions.
+//! Remaining forms report incomplete coverage.
 //!
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,8 +23,8 @@ mod token;
 pub use ast::{
     AssertionClause, AssertionMode, BinaryOperator, BindMode, Command, CommandOutcome, Definition,
     Expression, ExpressionKind, Identifier, IfBranch, InterpolatedPart, LogicalOperator,
-    LoopBindings, Parameter, ParameterType, ParsedProgram, PureBuiltin, Statement, StatementKind,
-    ThreadCall,
+    LoopBindings, MatchEntry, MatchPattern, MatchPredicate, MatchesBlock, Parameter, ParameterType,
+    ParsedProgram, PureBuiltin, RecordField, Statement, StatementKind, ThreadCall,
 };
 pub use duration::PositiveDuration;
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};
