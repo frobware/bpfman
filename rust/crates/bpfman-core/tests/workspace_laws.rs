@@ -9,6 +9,7 @@ use serde_json::Value;
 
 const TIERS: &[(&str, u64)] = &[
     ("bpfman-shell-source", 0),
+    ("bpfman-shell-syntax", 1),
     ("bpfman-model", 0),
     ("bpfman-core", 1),
     ("bpfman-lock", 1),

@@ -82,6 +82,17 @@ crate owns the driver, builtins, and CLI. These are architectural boundaries,
 not a request to expose a large public API: each crate should export the
 smallest operation and result needed by its consumer.
 
+The syntax crate presents one ordinary entry point to the driver:
+`syntax::parse(source_name, source_text) -> Result<ParsedProgram, SyntaxError>`.
+The caller supplies UTF-8 source text and an identity for diagnostics; the crate creates
+its lexer/parser internally. `ParsedProgram` owns an immutable AST and its
+source identity. Keep `token`, `parse`, `ast`, and source formatting/inspection
+as private modules, re-exporting only the AST queries needed by the checker,
+the parse result, and diagnostic types. Expose `tokenise_at` as a lower-level
+API for focused syntax tests and parsing interpolation fragments at an
+absolute position. No driver should need to assemble a parser object or
+manage mutable token cursors.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and

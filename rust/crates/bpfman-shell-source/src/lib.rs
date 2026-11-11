@@ -33,6 +33,16 @@ pub struct Position {
 }
 
 impl Position {
+    /// The first byte of a named source unit.
+    #[must_use]
+    pub fn origin(name: SourceName) -> Self {
+        Self {
+            name,
+            line: NonZeroUsize::MIN,
+            column: NonZeroUsize::MIN,
+        }
+    }
+
     /// Construct a position; zero lines and columns are invalid.
     #[must_use]
     pub fn new(name: SourceName, line: usize, column: usize) -> Option<Self> {
@@ -79,6 +89,15 @@ pub struct Span {
 }
 
 impl Span {
+    /// A zero-length span at one valid source position.
+    #[must_use]
+    pub fn point(at: Position) -> Self {
+        Self {
+            start: at.clone(),
+            end: at,
+        }
+    }
+
     /// Form a span with an exclusive end in the same source unit.
     pub fn new(start: Position, end: Position) -> Result<Self, InvalidSpan> {
         if start.name != end.name {
@@ -126,6 +145,12 @@ impl<'a> SourceText<'a> {
             start,
             line_starts,
         }
+    }
+
+    /// Position of the first byte in this source fragment.
+    #[must_use]
+    pub fn start(&self) -> &Position {
+        &self.start
     }
 
     /// Map a byte offset, including the one-past-end offset, to a position.

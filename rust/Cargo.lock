@@ -394,6 +394,13 @@ name = "bpfman-shell-source"
 version = "0.1.0"
 
 [[package]]
+name = "bpfman-shell-syntax"
+version = "0.1.0"
+dependencies = [
+ "bpfman-shell-source",
+]
+
+[[package]]
 name = "bpfman-store"
 version = "0.1.0"
 dependencies = [
