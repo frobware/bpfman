@@ -120,6 +120,11 @@ those definitions in source order while retaining library source spans.
 `ExpandedProgram` is a distinct type but remains unchecked. The scope pass can
 inspect either parsed or expanded statements; full semantic preflight and the
 `Checked` constructor are still pending.
+The next independent call pass uses hoisted definitions to check command and
+thread argument counts, while keeping dynamic heads open. It rejects pure
+builtin names on `<-` binds unless a definition shadows that name. The syntax
+crate exposes one builtin-name and arity lookup so parsing and this pass share
+the same accepted vocabulary.
 
 ## Typestate and internal invariants
 

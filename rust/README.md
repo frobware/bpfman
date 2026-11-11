@@ -70,7 +70,7 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | --- | --- | --- |
 | `bpfman-shell-source` | 0 | Byte-based source positions and validated half-open spans for the Rust shell phases |
 | `bpfman-shell-syntax` | 1 | Argv-first lexer and typed AST; `parse(name, text)` covers the accepted Go statement forms, including destructuring, records, matches, and bind-collect loops |
-| `bpfman-shell-check` | 1 | Pure import planning/expansion and scope/placement analysis; `ExpandedProgram` retains imported source spans but does not certify execution |
+| `bpfman-shell-check` | 1 | Pure import planning/expansion, scope/placement analysis, and call arity checks; `ExpandedProgram` retains imported source spans but does not certify execution |
 | `bpfman-model` | 0 | Pure program specifications, stored records, kernel observations, and bounded XDP configuration |
 | `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, unload continuations, and XDP replacement planning |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |

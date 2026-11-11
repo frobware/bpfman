@@ -176,20 +176,7 @@ fn builtin(token: &Token) -> Option<(PureBuiltin, usize)> {
     let TokenKind::Word(text) = &token.kind else {
         return None;
     };
-    Some(match text.as_str() {
-        "jq" => (PureBuiltin::Jq, 2),
-        "u32le" => (PureBuiltin::U32Le, 1),
-        "u64le" => (PureBuiltin::U64Le, 1),
-        "range" => (PureBuiltin::Range, 1),
-        "zip" => (PureBuiltin::Zip, 2),
-        "path-exists" => (PureBuiltin::PathExists, 1),
-        "contains" => (PureBuiltin::Contains, 2),
-        "null" => (PureBuiltin::Null, 1),
-        "present" => (PureBuiltin::Present, 1),
-        "missing" => (PureBuiltin::Missing, 1),
-        "empty" => (PureBuiltin::Empty, 1),
-        _ => return None,
-    })
+    PureBuiltin::from_name(text).map(|builtin| (builtin, builtin.arity()))
 }
 
 fn validate_expression_word(token: &Token) -> Result<(), SyntaxError> {

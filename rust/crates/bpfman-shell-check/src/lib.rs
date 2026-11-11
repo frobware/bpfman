@@ -12,8 +12,10 @@ use bpfman_shell_syntax::{
     MatchPattern, MatchesBlock, ParsedProgram, Statement, StatementKind,
 };
 
+mod calls;
 mod imports;
 
+pub use calls::analyze_calls;
 pub use imports::{
     ExpandedProgram, ImportError, ImportPlan, ImportRequest, expand_imports, prepare_imports,
 };

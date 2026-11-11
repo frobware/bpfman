@@ -162,6 +162,43 @@ pub enum PureBuiltin {
     Empty,
 }
 
+impl PureBuiltin {
+    /// Lookup a registered pure builtin by its exact language spelling.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "jq" => Self::Jq,
+            "u32le" => Self::U32Le,
+            "u64le" => Self::U64Le,
+            "range" => Self::Range,
+            "zip" => Self::Zip,
+            "path-exists" => Self::PathExists,
+            "contains" => Self::Contains,
+            "null" => Self::Null,
+            "present" => Self::Present,
+            "missing" => Self::Missing,
+            "empty" => Self::Empty,
+            _ => return None,
+        })
+    }
+
+    /// Number of primary arguments consumed in expression position.
+    #[must_use]
+    pub fn arity(self) -> usize {
+        match self {
+            Self::Jq | Self::Zip | Self::Contains => 2,
+            Self::U32Le
+            | Self::U64Le
+            | Self::Range
+            | Self::PathExists
+            | Self::Null
+            | Self::Present
+            | Self::Missing
+            | Self::Empty => 1,
+        }
+    }
+}
+
 /// One part of an interpolated string; a segment has exactly one meaning.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InterpolatedPart {
