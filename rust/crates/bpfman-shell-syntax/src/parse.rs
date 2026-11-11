@@ -6,6 +6,7 @@ use std::fmt;
 use bpfman_shell_source::{Position, SourceName, Span};
 
 use crate::ast::{BindMode, Command, Identifier, ParsedProgram, Statement, StatementKind};
+use crate::compound::parse_statements;
 use crate::expr::{parse_command_args, parse_expression};
 use crate::token::{LexError, Token, TokenKind, tokenise_at};
 
@@ -80,7 +81,8 @@ impl From<LexError> for SyntaxError {
 /// Parse one source unit. The caller supplies only its name and UTF-8 text.
 ///
 /// This parser slice accepts command statements, core expressions, and the
-/// simple `let`, `guard`, `defer`, `return`, `break`, and `continue` forms. Other forms may return
+/// simple `let`, `guard`, `defer`, `return`, `break`, `continue`, `if`, and
+/// `foreach` forms. Other forms may return
 /// [`SyntaxErrorKind::Unimplemented`], including forms whose validity has not
 /// yet been checked.
 pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, SyntaxError> {
@@ -98,36 +100,11 @@ pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, S
             })?,
         _ => Span::point(origin),
     };
-    let mut statements = Vec::new();
-    let mut current = Vec::new();
-    let mut depth = 0usize;
-    for token in tokens {
-        match &token.kind {
-            TokenKind::Separator(_) if depth == 0 => {
-                if !current.is_empty() {
-                    statements.push(parse_statement(&current)?);
-                    current.clear();
-                }
-            }
-            TokenKind::Separator(_) => {}
-            TokenKind::Word(word) if word == "(" || word == "[" => {
-                depth += 1;
-                current.push(token);
-            }
-            TokenKind::Word(word) if (word == ")" || word == "]") && depth > 0 => {
-                depth -= 1;
-                current.push(token);
-            }
-            _ => current.push(token),
-        }
-    }
-    if !current.is_empty() {
-        statements.push(parse_statement(&current)?);
-    }
+    let statements = parse_statements(&tokens)?;
     Ok(ParsedProgram::new(name, statements, span))
 }
 
-fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError> {
+pub(crate) fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError> {
     let first = &tokens[0];
     let span = span_of(tokens, &first.span)?;
     let kind = match &first.kind {
@@ -458,7 +435,6 @@ mod tests {
     #[test]
     fn incomplete_language_constructs_are_never_reinterpreted_as_commands() {
         for source in [
-            "if $ready {",
             "let xs <- foreach n in $items {",
             "let result = $x matches { item: true }",
         ] {

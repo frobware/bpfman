@@ -98,8 +98,10 @@ expression-valued `let` assignments, `defer`, `return`, `break`, and `continue`.
 Expression lowering covers precedence, grouping, pure builtin calls, lists,
 interpolation, and threaded calls. Commands and threaded calls have nonempty
 typed heads that may be computed, matching Go's dynamic head resolution. Expression
-statements are parsed through the same grammar. `matches` blocks, record literals,
-and compound statements remain pending.
+statements are parsed through the same grammar. Recursive blocks now cover
+`if`/`elif`/`else` and `foreach`, including nested bodies and destructured loop
+bindings. `matches` blocks, record literals, definitions, poll/retry, assertions,
+and bind-collect loops remain pending.
 Other recognised language forms return a distinct incomplete-port error until
 their parser and AST contracts land. Do not wire this partial parser into the
 shell driver or checker as if the complete language were available.

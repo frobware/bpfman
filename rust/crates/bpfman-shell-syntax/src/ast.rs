@@ -338,6 +338,80 @@ impl Statement {
     }
 }
 
+/// One conditional branch and its lexical body.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IfBranch {
+    condition: Expression,
+    body: Vec<Statement>,
+    span: Span,
+}
+
+impl IfBranch {
+    pub(crate) fn new(condition: Expression, body: Vec<Statement>, span: Span) -> Self {
+        Self {
+            condition,
+            body,
+            span,
+        }
+    }
+
+    /// Condition evaluated when this branch is reached.
+    #[must_use]
+    pub fn condition(&self) -> &Expression {
+        &self.condition
+    }
+
+    /// Statements executed when the condition is true.
+    #[must_use]
+    pub fn body(&self) -> &[Statement] {
+        &self.body
+    }
+
+    /// Extent from the branch keyword through its closing brace.
+    #[must_use]
+    pub fn span(&self) -> &Span {
+        &self.span
+    }
+}
+
+/// Validated loop bindings. A destructured list has at least two names.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LoopBindings {
+    names: Vec<Identifier>,
+    destructured: bool,
+}
+
+impl LoopBindings {
+    pub(crate) fn single(name: Identifier) -> Self {
+        Self {
+            names: vec![name],
+            destructured: false,
+        }
+    }
+
+    pub(crate) fn destructured(names: Vec<Identifier>) -> Option<Self> {
+        if names.len() < 2 || names.iter().all(|name| name.text() == "_") {
+            return None;
+        }
+        Some(Self {
+            names,
+            destructured: true,
+        })
+    }
+
+    /// Binding names in source order; `_` is an explicit discarded slot.
+    #[must_use]
+    pub fn names(&self) -> &[Identifier] {
+        &self.names
+    }
+
+    /// Whether the names were written in parentheses.
+    #[must_use]
+    pub fn is_destructured(&self) -> bool {
+        self.destructured
+    }
+}
+
 /// Statement forms accepted by this parser slice.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StatementKind {
@@ -345,6 +419,24 @@ pub enum StatementKind {
     Command(Command),
     /// Evaluate an expression in statement position and discard its value.
     Expression(Expression),
+    /// Conditional chain with an optional final else body.
+    If {
+        /// Primary condition and body.
+        first: IfBranch,
+        /// Additional branches in source order.
+        elif: Vec<IfBranch>,
+        /// Present even when an explicit else body is empty.
+        else_body: Option<Vec<Statement>>,
+    },
+    /// Iterate over an expression, binding its elements in the body.
+    Foreach {
+        /// One name or a validated destructuring list.
+        bindings: LoopBindings,
+        /// Expression producing the list.
+        list: Expression,
+        /// Statements executed for each element.
+        body: Vec<Statement>,
+    },
     /// `let NAME = EXPR`.
     Let {
         /// Bound name.
