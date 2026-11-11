@@ -393,7 +393,15 @@ dependencies = [
 name = "bpfman-shell-check"
 version = "0.1.0"
 dependencies = [
+ "bpfman-shell-semantics",
  "bpfman-shell-source",
+ "bpfman-shell-syntax",
+]
+
+[[package]]
+name = "bpfman-shell-semantics"
+version = "0.1.0"
+dependencies = [
  "bpfman-shell-syntax",
 ]
 

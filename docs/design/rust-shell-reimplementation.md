@@ -125,6 +125,12 @@ thread argument counts, while keeping dynamic heads open. It rejects pure
 builtin names on `<-` binds unless a definition shadows that name. The syntax
 crate exposes one builtin-name and arity lookup so parsing and this pass share
 the same accepted vocabulary.
+The semantics crate now holds an origin and structural-shape vocabulary. A
+separate pure shape pass in the checker propagates proved record, list, native
+bind, and bind-collect shapes through lexical bindings and reports invalid
+fields only on sealed parents. Unknown and bpfman program/link payloads stay
+open pending verification against Rust's JSON projection. This pass is still
+partial: definition return shapes and the full preflight gate are pending.
 
 ## Typestate and internal invariants
 

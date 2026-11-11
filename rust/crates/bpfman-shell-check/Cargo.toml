@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 bpfman-shell-source = { path = "../bpfman-shell-source" }
 bpfman-shell-syntax = { path = "../bpfman-shell-syntax" }
+bpfman-shell-semantics = { path = "../bpfman-shell-semantics" }
 
 [lints]
 workspace = true

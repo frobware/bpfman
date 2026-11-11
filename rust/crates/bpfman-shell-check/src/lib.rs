@@ -14,11 +14,13 @@ use bpfman_shell_syntax::{
 
 mod calls;
 mod imports;
+mod shapes;
 
 pub use calls::analyze_calls;
 pub use imports::{
     ExpandedProgram, ImportError, ImportPlan, ImportRequest, expand_imports, prepare_imports,
 };
+pub use shapes::analyze_shapes;
 
 /// One static finding at its original source extent.
 #[derive(Clone, Debug, Eq, PartialEq)]
