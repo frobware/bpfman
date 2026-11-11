@@ -265,6 +265,11 @@ impl TcLifecycle for Kernel {
             if crate::pin_syscall::interface(stage.namespace.tc_interface())? != ifindex {
                 return Err(invalid("TC interface changed since admission"));
             }
+            // Go and the original Rust implementation leave clsact behind on
+            // detach because they cannot distinguish a borrowed qdisc from one
+            // they created. We record that distinction with the staged TC
+            // revision and carry it across both hooks. Teardown reclaims only
+            // a qdisc we created, after both filter blocks are empty.
             if !tc_netlink::clsact(ifindex)? {
                 // EEXIST is a raced creator. Reinspect and reuse without taking ownership.
                 match aya::programs::tc::qdisc_add_clsact(stage.namespace.tc_interface()) {

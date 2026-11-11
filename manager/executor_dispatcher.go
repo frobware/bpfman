@@ -435,19 +435,27 @@ func (e *executor) rebuildTCDispatcher(
 	}
 
 	dispProgPinPath := e.bpffs.DispatcherProgPath(dispType, nsid, ops.ifindex, revision)
+	newRevDir := e.bpffs.DispatcherRevisionDir(dispType, nsid, ops.ifindex, revision)
 
 	e.logger.InfoContext(ctx, "rebuilding TC dispatcher", "nsid", nsid, "ifindex", ops.ifindex, "ifname", ops.ifname, "direction", ops.direction, "revision", revision, "num_extensions", len(allSlots), "first_attach", firstAttach)
 
-	// Load new dispatcher with .rodata config.
-	dispatcherID, err := e.kernel.LoadAndPinTCDispatcher(ctx, cfg, dispProgPinPath)
-	if err != nil {
-		return extensionResult{}, fmt.Errorf("load TC dispatcher: %w", err)
-	}
-
+	// Pinning creates the revision directory before the filter can reject a
+	// foreign ingress qdisc. Roll back the entire staged revision, including
+	// its directory, on every failed attach path.
 	cleanupNewDispatcher := func() {
 		if rbErr := e.kernel.RemovePin(ctx, dispProgPinPath); rbErr != nil {
 			e.logger.ErrorContext(ctx, "rollback: remove new TC dispatcher pin failed", "path", dispProgPinPath, "error", rbErr)
 		}
+		if rbErr := e.bpffs.RemoveEmptyDispatcherRevDir(newRevDir); rbErr != nil {
+			e.logger.ErrorContext(ctx, "rollback: remove new TC revision directory failed", "path", newRevDir, "error", rbErr)
+		}
+	}
+
+	// Load new dispatcher with .rodata config.
+	dispatcherID, err := e.kernel.LoadAndPinTCDispatcher(ctx, cfg, dispProgPinPath)
+	if err != nil {
+		cleanupNewDispatcher()
+		return extensionResult{}, fmt.Errorf("load TC dispatcher: %w", err)
 	}
 
 	// Attach all extensions to the new dispatcher.

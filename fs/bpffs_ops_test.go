@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	bpfman "github.com/bpfman/bpfman"
+	"github.com/bpfman/bpfman/dispatcher"
 	"github.com/bpfman/bpfman/fs"
 )
 
@@ -80,6 +81,39 @@ func TestBPFFS_RemoveDispatcherRevDir_RefusesMountRoot(t *testing.T) {
 
 	if err := b.RemoveDispatcherRevDir(bpfman.DispatcherRevDir(b.MountPoint())); err == nil {
 		t.Errorf("RemoveDispatcherRevDir(mount root) = nil; want error")
+	}
+}
+
+func TestBPFFS_RemoveEmptyDispatcherRevDir_PreservesPins(t *testing.T) {
+	t.Parallel()
+
+	root, err := fs.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	b := root.BPFFS()
+	revDir := b.DispatcherRevisionDir(dispatcher.DispatcherTypeTCIngress, 1, 2, 3)
+	if err := os.MkdirAll(revDir.String(), 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	pin := filepath.Join(revDir.String(), "retained-link")
+	if err := os.WriteFile(pin, []byte("x"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := b.RemoveEmptyDispatcherRevDir(revDir); err == nil {
+		t.Fatal("RemoveEmptyDispatcherRevDir(nonempty) = nil; want error")
+	}
+	if _, err := os.Stat(pin); err != nil {
+		t.Fatalf("retained pin was removed: %v", err)
+	}
+	if err := os.Remove(pin); err != nil {
+		t.Fatalf("Remove pin: %v", err)
+	}
+	if err := b.RemoveEmptyDispatcherRevDir(revDir); err != nil {
+		t.Fatalf("RemoveEmptyDispatcherRevDir(empty): %v", err)
+	}
+	if _, err := os.Stat(revDir.String()); !os.IsNotExist(err) {
+		t.Fatalf("revision directory still exists: %v", err)
 	}
 }
 

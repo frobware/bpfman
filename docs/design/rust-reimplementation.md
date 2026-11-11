@@ -18,9 +18,10 @@ The current continuation retains the full shared non-external script corpus in
 the normal Rust gate with both file and local OCI bytecode. Use
 `direnv exec . make rust-test-bytecode-corpus` for that focused matrix.
 
-Cutover remains pending. The last broad Go comparison recorded a residue failure
-in `TestTC_RejectsAttachOverForeignIngressQdisc` and a production-policy skip for
-clsact reclamation; these are not green Go/Rust parity results. The 10 November
+Cutover remains pending. The current broad Go file/local-image comparison passes
+after fixing the `TestTC_RejectsAttachOverForeignIngressQdisc` residue failure.
+Go still skips the clsact-reclamation contract by production policy, while Rust
+runs it; that behavior is an explicit difference rather than a shared pass. The 10 November
 remote-image audit proves strict signed-release acceptance against both binaries.
 The subsequent OCI-referrers/Sigstore v0.3 implementation passes all ten unchanged
 current-example scripts against Rust with unsigned images forbidden; Go still
@@ -31,8 +32,8 @@ Broader shared-store validation now passes three complete file/local-OCI passes:
 with empty final inventories/pins and normal unmount. Single-node KIND deployment
 now passes the existing tracepoint/TC/TCX/XDP workloads and repeated strict CSI
 container-restart checks, with explicit operator mount-configuration fixes. Rust
-image targets remain opt-in. The remaining broad Go comparison still needs fresh
-evidence before production packaging or entry-point cutover. Physical-NIC/offload execution
+image targets remain opt-in. Production packaging and entry-point cutover still
+need a separate decision. Physical-NIC/offload execution
 and the documented Aya/kernel XDP boundaries also remain outside the completed
 evidence. Historical "next" notes
 below describe their checkpoint dates; this status and the latest appended
@@ -8572,3 +8573,34 @@ An isolated KIND cluster runs this exact image and passes all eleven local
 operator integration tests. Final audit finds empty managed inventories,
 pins, CSI mounts and application resources, with daemon ready and CSI
 registered. Logs and audit output are under `/tmp/bpfman-schema3-kind/`.
+
+### Broad Go/Rust script comparison after schema 3 (10 November 2026)
+
+The previous broad Go failure was reproducible only with isolated-runtime
+residue auditing: both rejected TC attaches over a foreign classic ingress
+qdisc left an empty staged dispatcher revision directory. Go pins the staged
+dispatcher before `CreateTCFilter` checks the qdisc. Failed TC rebuilds now
+remove the staged dispatcher pin and its revision directory, including when
+pinning itself fails. Directory removal requires it to be empty, preserving
+any retained extension link pins if their cleanup fails. The existing
+`TestTC_RejectsAttachOverForeignIngressQdisc` passes with the unchanged
+residue check; a filesystem unit test guards nonempty directory preservation.
+The foreign qdisc remains untouched.
+
+The current Go binary passes the full shared `!external,!rust-only` corpus with
+isolated runtimes in both file and local-image modes: 146 script files pass and
+none fail in each run. The one eligible Go skip is
+`TestTC_ClsactReclaimedOnLastDetach`, because Go's production policy leaves
+owned clsact reclamation disabled. Rust's focused real-kernel target runs the
+same selector and passes both file/image corpus cases, with normal fixture
+teardown; Rust enables its existing clsact-reclamation capability. This is a
+shared behavioral comparison with one stated policy difference, not a claim
+that Go and Rust have identical clsact policy. Remote signed-image acceptance,
+KIND deployment and database migration have separate evidence above.
+
+The focused Go script fails before the rollback fix and passes afterward.
+`direnv exec . make test RACE=1` and `make lint-go` pass. The first race-suite
+attempt was blocked by the session sandbox denying a localhost `httptest`
+listener in the unrelated OCI package; the host-access rerun passes. Logs are
+under `/tmp/bpfman-schema3-parity/`: `go-file-final.log`, `go-image.log`,
+`rust-corpus.log` and `go-test-race.log`.

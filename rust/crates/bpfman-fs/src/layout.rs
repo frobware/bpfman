@@ -179,6 +179,8 @@ impl RuntimeLayout {
 
 impl RuntimeLayout {
     /// Durable ownership evidence for one TC hook and revision.
+    /// The confined file under `<runtime>/tc/` contains one byte: `0` for a
+    /// borrowed clsact, `1` for one we created. Replacements copy this value.
     pub fn tc_ownership_path(
         &self,
         key: bpfman_model::TcKey,

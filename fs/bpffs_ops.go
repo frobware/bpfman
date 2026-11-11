@@ -120,6 +120,22 @@ func (b BPFFS) RemoveDispatcherRevDir(p bpfman.DispatcherRevDir) error {
 	return b.removeDir(path)
 }
 
+// RemoveEmptyDispatcherRevDir removes a staged revision only after its pins
+// have been released. A failed rollback must not discard retained link pins.
+func (b BPFFS) RemoveEmptyDispatcherRevDir(p bpfman.DispatcherRevDir) error {
+	path, err := b.cleanUnderMount(p.String())
+	if err != nil {
+		return err
+	}
+	if err := b.validateDispatcherRevDirPath(path); err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove empty dispatcher revision dir %s: %w", path, err)
+	}
+	return nil
+}
+
 // RemoveDispatcherLinkPin removes a dispatcher link pin of the form:
 //
 //	{bpffs}/{type}/dispatcher_{nsid}_{ifindex}_link
