@@ -93,6 +93,12 @@ API for focused syntax tests and parsing interpolation fragments at an
 absolute position. No driver should need to assemble a parser object or
 manage mutable token cursors.
 
+The first parser slice accepts simple commands, `let`/`guard` command binds,
+single-atom `let` assignments, `defer`, `return`, `break`, and `continue`.
+Other recognised language forms return a distinct incomplete-port error until
+their parser and AST contracts land. Do not wire this partial parser into the
+shell driver or checker as if the complete language were available.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and

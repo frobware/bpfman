@@ -24,6 +24,18 @@ impl SourceName {
     }
 }
 
+impl From<&str> for SourceName {
+    fn from(name: &str) -> Self {
+        Self::new(name)
+    }
+}
+
+impl From<String> for SourceName {
+    fn from(name: String) -> Self {
+        Self::new(name)
+    }
+}
+
 /// A one-based line and byte column in one source unit.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Position {
