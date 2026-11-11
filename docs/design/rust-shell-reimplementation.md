@@ -137,6 +137,11 @@ Literal `kill --signal=` values use the Go job-signal set and normalization.
 Literal `kill --grace=` values use the shared Go-style duration parser, including
 zero and signed values; negative durations are reported before execution because
 the Go runtime rejects them even though its preflight checker does not.
+Annotated definition parameters now check literal call arguments in command
+and threaded positions after arity succeeds. The syntax crate's JSON number
+validator is shared with this check; quoted values assert string, and variable
+or computed arguments remain runtime checked. Imported definition annotations
+are checked at their call sites after import expansion.
 The semantics crate now holds an origin and structural-shape vocabulary. A
 separate pure shape pass in the checker propagates proved record, list, native
 bind, and bind-collect shapes through lexical bindings and reports invalid

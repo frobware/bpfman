@@ -190,7 +190,7 @@ fn validate_expression_word(token: &Token) -> Result<(), SyntaxError> {
     let starts_numeric = bytes.first().is_some_and(u8::is_ascii_digit)
         || matches!(bytes.first(), Some(b'+' | b'-'))
             && bytes.get(1).is_some_and(u8::is_ascii_digit);
-    if starts_numeric && !json_number(text) {
+    if starts_numeric && !is_json_number(text) {
         return Err(invalid(
             &token.span,
             format!("invalid numeric literal {text:?}"),
@@ -199,7 +199,9 @@ fn validate_expression_word(token: &Token) -> Result<(), SyntaxError> {
     Ok(())
 }
 
-fn json_number(text: &str) -> bool {
+/// Whether text is exactly one finite JSON number, preserving large integers.
+#[must_use]
+pub fn is_json_number(text: &str) -> bool {
     let bytes = text.as_bytes();
     let mut i = usize::from(bytes.first() == Some(&b'-'));
     match bytes.get(i) {
@@ -1211,6 +1213,27 @@ mod tests {
         }
         // Command arguments are CLI words; they do not use expression-literal validation.
         assert!(parse("expr.bpfman", "print 1, +5").is_ok());
+    }
+
+    #[test]
+    fn json_number_validator_is_reusable_by_typed_call_checks() {
+        for number in [
+            "0",
+            "-5",
+            "3.14",
+            "1e3",
+            "1E-2",
+            "4026531840",
+            "123456789012345678901234567890",
+        ] {
+            assert!(super::is_json_number(number), "{number}");
+        }
+        for text in [
+            "NaN", "Inf", "+Inf", "-Inf", "Infinity", "+5", "05", "0x10", "1e309", "1 2", "",
+            "abc", "1.10.3",
+        ] {
+            assert!(!super::is_json_number(text), "{text}");
+        }
     }
 
     #[test]

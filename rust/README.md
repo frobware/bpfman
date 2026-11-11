@@ -69,9 +69,9 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | Crate | Tier | Responsibility |
 | --- | --- | --- |
 | `bpfman-shell-source` | 0 | Byte-based source positions and validated half-open spans for the Rust shell phases |
-| `bpfman-shell-syntax` | 1 | Argv-first lexer and typed AST; `parse(name, text)` covers the accepted Go statement forms, including destructuring, records, matches, and bind-collect loops; shared Go-style duration parsing |
-| `bpfman-shell-semantics` | 1 | Origin and structural-shape vocabulary for proved native values, pure builtin and kill flag literal contracts, and bind outcomes; unverified domain JSON shapes remain open |
-| `bpfman-shell-check` | 1 | Pure import planning/expansion, scope/placement, definition and native job-command arity, literal contracts, and conservative shape analyses; `ExpandedProgram` retains imported source spans but does not certify execution |
+| `bpfman-shell-syntax` | 1 | Argv-first lexer and typed AST; `parse(name, text)` covers the accepted Go statement forms, including destructuring, records, matches, and bind-collect loops; shared Go-style duration and JSON number validation |
+| `bpfman-shell-semantics` | 1 | Origin and structural-shape vocabulary for proved native values, pure builtin, kill flag, and typed parameter literal contracts, and bind outcomes; unverified domain JSON shapes remain open |
+| `bpfman-shell-check` | 1 | Pure import planning/expansion, scope/placement, definition and native job-command arity, literal contracts for builtins and annotated definitions, and conservative shape analyses; `ExpandedProgram` retains imported source spans but does not certify execution |
 | `bpfman-model` | 0 | Pure program specifications, stored records, kernel observations, and bounded XDP configuration |
 | `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, unload continuations, and XDP replacement planning |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |

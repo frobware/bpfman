@@ -6,7 +6,44 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use bpfman_shell_syntax::{Command, Expression, ExpressionKind, PureBuiltin, parse_go_duration};
+use bpfman_shell_syntax::{
+    Command, Expression, ExpressionKind, ParameterType, PureBuiltin, is_json_number,
+    parse_go_duration,
+};
+
+/// Check a literal argument against one annotated definition parameter.
+/// Computed values remain runtime checked.
+#[must_use]
+pub fn parameter_literal_issue(
+    definition: &str,
+    parameter: &str,
+    annotation: ParameterType,
+    argument: &Expression,
+) -> Option<String> {
+    let (text, quoted) = match argument.kind() {
+        ExpressionKind::Word(text) => (text.as_str(), false),
+        ExpressionKind::Quoted(text) => (text.as_str(), true),
+        _ => return None,
+    };
+    let expected = match annotation {
+        ParameterType::Number => "number",
+        ParameterType::String => "string",
+        ParameterType::Bool => "bool",
+    };
+    if quoted {
+        return (annotation != ParameterType::String).then(|| {
+            format!("def {definition}: parameter {parameter:?}: expected {expected}, got the quoted string {text:?} (quoting asserts string; drop the quotes to parse it)")
+        });
+    }
+    let valid = match annotation {
+        ParameterType::Number => is_json_number(text),
+        ParameterType::Bool => matches!(text, "true" | "false"),
+        ParameterType::String => true,
+    };
+    (!valid).then(|| {
+        format!("def {definition}: parameter {parameter:?}: expected {expected}, got {text:?}")
+    })
+}
 
 /// Validate the literal value of a `kill` flag. Computed arguments remain
 /// runtime checked. A definition named `kill` must be resolved before calling.

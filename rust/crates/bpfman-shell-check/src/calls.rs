@@ -2,17 +2,19 @@
 
 use std::collections::HashMap;
 
-use bpfman_shell_semantics::{CommandArity, command_arity, kill_flag_issue, pure_literal_issue};
+use bpfman_shell_semantics::{
+    CommandArity, command_arity, kill_flag_issue, parameter_literal_issue, pure_literal_issue,
+};
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax::{
     AssertionClause, Command, Expression, ExpressionKind, InterpolatedPart, MatchPattern,
-    MatchesBlock, PureBuiltin, Statement, StatementKind, ThreadCall,
+    MatchesBlock, Parameter, PureBuiltin, Statement, StatementKind, ThreadCall,
 };
 
 use crate::{ExpandedProgram, Issue};
 
 struct DefInfo {
-    arity: usize,
+    parameters: Vec<Parameter>,
     span: Span,
 }
 
@@ -33,7 +35,7 @@ pub fn analyze_calls(program: &ExpandedProgram) -> Vec<Issue> {
             definitions
                 .entry(definition.name().text().to_owned())
                 .or_insert_with(|| DefInfo {
-                    arity: definition.parameters().len(),
+                    parameters: definition.parameters().to_vec(),
                     span: definition.name().span().clone(),
                 });
         }
@@ -114,7 +116,7 @@ impl Analysis {
 
     fn command(&mut self, command: &Command, bind_target: Option<&str>) {
         if let ExpressionKind::Word(name) = command.head().kind() {
-            self.def_arity(name, command.arguments().len(), command.span());
+            self.def_call(name, command.arguments(), 0, command.span());
             if !self.definitions.contains_key(name) {
                 self.builtin_arity(name, command);
                 if name == "kill" {
@@ -164,26 +166,40 @@ impl Analysis {
         }
     }
 
-    fn def_arity(&mut self, name: &str, got: usize, span: &Span) {
+    fn def_call(&mut self, name: &str, arguments: &[Expression], offset: usize, span: &Span) {
         let Some(definition) = self.definitions.get(name) else {
             return;
         };
-        if got != definition.arity {
+        let got = arguments.len() + offset;
+        if got != definition.parameters.len() {
             self.issue(
                 span,
                 format!(
                     "{name}: expected {} argument(s), got {got} (def declared at {}:{})",
-                    definition.arity,
+                    definition.parameters.len(),
                     definition.span.start().line(),
                     definition.span.start().column()
                 ),
             );
+            return;
+        }
+        let findings: Vec<_> = arguments
+            .iter()
+            .zip(definition.parameters.iter().skip(offset))
+            .filter_map(|(argument, parameter)| {
+                let annotation = parameter.annotation()?;
+                parameter_literal_issue(name, parameter.name().text(), annotation, argument)
+                    .map(|message| (argument.span().clone(), message))
+            })
+            .collect();
+        for (span, message) in findings {
+            self.issue(&span, message);
         }
     }
 
     fn thread(&mut self, command: &ThreadCall) {
         if let ExpressionKind::Word(name) = command.head().kind() {
-            self.def_arity(name, command.arguments().len() + 1, command.span());
+            self.def_call(name, command.arguments(), 1, command.span());
         }
         self.expression(command.head());
         for argument in command.arguments() {
@@ -303,6 +319,36 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert!(found[0].contains("got 1"));
         assert!(found[1].contains("got 3"));
+    }
+
+    #[test]
+    fn typed_definition_literals_match_go_in_command_and_thread_calls() {
+        let found = messages(
+            "def n(want: number) { print $want }\ndef b(flag: bool) { print $flag }\ndef t(x y: number) { print $y }\nn abc\nn \"5\"\nn NaN\nn Inf\nb yes\nlet v = 1\nprint ($v |> t abc)",
+        );
+        assert_eq!(found.len(), 6);
+        assert_eq!(
+            found[0],
+            "def n: parameter \"want\": expected number, got \"abc\""
+        );
+        assert!(found[1].contains("quoting asserts string"));
+        assert!(found[2].contains("expected number, got \"NaN\""));
+        assert!(found[3].contains("expected number, got \"Inf\""));
+        assert_eq!(
+            found[4],
+            "def b: parameter \"flag\": expected bool, got \"yes\""
+        );
+        assert_eq!(
+            found[5],
+            "def t: parameter \"y\": expected number, got \"abc\""
+        );
+    }
+
+    #[test]
+    fn typed_definition_literals_keep_dynamic_inputs_open() {
+        assert!(messages(
+            "def n(want: number) { print $want }\ndef b(flag: bool) { print $flag }\ndef s(text: string) { print $text }\ndef u(any) { print $any }\nn 1e3\nn 123456789012345678901234567890\nn $value\nb true\nb false\ns hello\ns 'hello'\nu NaN"
+        ).is_empty());
     }
 
     #[test]
@@ -454,5 +500,24 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert!(issues[0].message.contains("expected 1 argument(s), got 0"));
         assert_eq!(issues[0].span.start().name().as_str(), "main.bpfman");
+    }
+
+    #[test]
+    fn imported_definition_annotations_validate_call_site_literals() {
+        let parsed =
+            parse("main.bpfman", "import lib.bpfman\ncall nope").unwrap_or_else(|_| unreachable!());
+        let plan = prepare_imports(parsed, Path::new(".")).unwrap_or_else(|_| unreachable!());
+        let gathered = BTreeMap::from([(
+            PathBuf::from("lib.bpfman"),
+            "def call(value: number) { print $value }".to_owned(),
+        )]);
+        let expanded = expand_imports(plan, &gathered).unwrap_or_else(|_| unreachable!());
+        let issues = analyze_calls(&expanded);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].span.start().name().as_str(), "main.bpfman");
+        assert_eq!(
+            issues[0].message,
+            "def call: parameter \"value\": expected number, got \"nope\""
+        );
     }
 }

@@ -27,6 +27,7 @@ pub use ast::{
     ParsedProgram, PureBuiltin, RecordField, Statement, StatementKind, ThreadCall,
 };
 pub use duration::{PositiveDuration, parse_go_duration};
+pub use expr::is_json_number;
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};
 
 pub use token::{
