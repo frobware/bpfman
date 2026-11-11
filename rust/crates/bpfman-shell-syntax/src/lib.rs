@@ -1,8 +1,8 @@
 //! Argv-first syntax for bpfman-shell.
 //!
 //! The caller supplies a source name and text; the crate manages tokenisation,
-//! parsing, and source spans. The parser currently covers only simple command
-//! and binding forms and reports other constructs as incomplete.
+//! parsing, and source spans. The parser covers simple statements and core
+//! expressions; remaining language forms report incomplete coverage.
 //!
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -13,12 +13,13 @@
 //! ```
 
 mod ast;
+mod expr;
 mod parse;
 mod token;
 
 pub use ast::{
-    BindMode, Command, CommandHead, Expression, ExpressionKind, Identifier, ParsedProgram,
-    Statement, StatementKind,
+    BinaryOperator, BindMode, Command, Expression, ExpressionKind, Identifier, InterpolatedPart,
+    LogicalOperator, ParsedProgram, PureBuiltin, Statement, StatementKind, ThreadCall,
 };
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};
 

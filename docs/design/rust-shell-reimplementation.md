@@ -93,8 +93,13 @@ API for focused syntax tests and parsing interpolation fragments at an
 absolute position. No driver should need to assemble a parser object or
 manage mutable token cursors.
 
-The first parser slice accepts simple commands, `let`/`guard` command binds,
-single-atom `let` assignments, `defer`, `return`, `break`, and `continue`.
+The parser now accepts simple commands, `let`/`guard` command binds,
+expression-valued `let` assignments, `defer`, `return`, `break`, and `continue`.
+Expression lowering covers precedence, grouping, pure builtin calls, lists,
+interpolation, and threaded calls. Commands and threaded calls have nonempty
+typed heads that may be computed, matching Go's dynamic head resolution. Expression
+statements are parsed through the same grammar. `matches` blocks, record literals,
+and compound statements remain pending.
 Other recognised language forms return a distinct incomplete-port error until
 their parser and AST contracts land. Do not wire this partial parser into the
 shell driver or checker as if the complete language were available.

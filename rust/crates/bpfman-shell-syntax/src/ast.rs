@@ -1,6 +1,6 @@
 //! Validated syntax nodes. Fields with structural invariants stay private.
 
-use bpfman_shell_source::{SourceName, Span};
+use bpfman_shell_source::{Position, SourceName, Span};
 
 use crate::token::VariableRef;
 
@@ -98,7 +98,79 @@ impl Expression {
     }
 }
 
-/// Forms currently accepted by the incremental expression parser.
+/// Operators with parser-checked precedence and spelling.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BinaryOperator {
+    /// `==`.
+    Equal,
+    /// `!=`.
+    NotEqual,
+    /// `<`.
+    Less,
+    /// `<=`.
+    LessEqual,
+    /// `>`.
+    Greater,
+    /// `>=`.
+    GreaterEqual,
+    /// `+`.
+    Add,
+    /// `-`.
+    Subtract,
+    /// `*`.
+    Multiply,
+    /// `/`.
+    Divide,
+    /// `%`.
+    Remainder,
+}
+
+/// Short-circuit boolean operators.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LogicalOperator {
+    /// Short-circuit conjunction.
+    And,
+    /// Short-circuit disjunction.
+    Or,
+}
+
+/// Fixed-arity pure functions recognised by the syntax phase.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PureBuiltin {
+    /// jq query over a value.
+    Jq,
+    /// Decode little-endian u32.
+    U32Le,
+    /// Decode little-endian u64.
+    U64Le,
+    /// Produce a numeric range.
+    Range,
+    /// Zip two lists.
+    Zip,
+    /// Check a path.
+    PathExists,
+    /// Check membership.
+    Contains,
+    /// Check whether a value is null.
+    Null,
+    /// Check presence.
+    Present,
+    /// Check absence.
+    Missing,
+    /// Check emptiness.
+    Empty,
+}
+
+/// One part of an interpolated string; a segment has exactly one meaning.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum InterpolatedPart {
+    /// Decoded literal text.
+    Literal(String),
+    /// Expression evaluated and rendered into the string.
+    Expression(Box<Expression>),
+}
+
+/// Forms accepted by the incremental expression parser.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExpressionKind {
     /// Bare word, interpreted by the evaluator as a scalar candidate.
@@ -114,56 +186,108 @@ pub enum ExpressionKind {
         /// Variable supplied to the adapter.
         variable: VariableRef,
     },
+    /// Double-quoted text with embedded expressions.
+    Interpolated(Vec<InterpolatedPart>),
+    /// Arithmetic or comparison operation.
+    Binary {
+        /// Left operand.
+        left: Box<Expression>,
+        /// Checked operator.
+        operator: BinaryOperator,
+        /// Right operand.
+        right: Box<Expression>,
+    },
+    /// Short-circuit boolean operation.
+    Logical {
+        /// Left operand.
+        left: Box<Expression>,
+        /// Checked operator.
+        operator: LogicalOperator,
+        /// Right operand.
+        right: Box<Expression>,
+    },
+    /// Boolean negation.
+    Not(Box<Expression>),
+    /// Numeric negation.
+    Negate(Box<Expression>),
+    /// Nonempty predicate.
+    NotEmpty(Box<Expression>),
+    /// Thread a value into the final command argument.
+    Thread {
+        /// Value produced on the left.
+        value: Box<Expression>,
+        /// Command that receives the value.
+        command: ThreadCall,
+        /// Position of `|>` for diagnostics.
+        pipe: Position,
+    },
+    /// Builtin whose argument count is checked during parsing.
+    PureCall {
+        /// Registered builtin.
+        builtin: PureBuiltin,
+        /// Arguments in source order.
+        arguments: Vec<Expression>,
+    },
+    /// Whitespace-separated list literal.
+    List(Vec<Expression>),
 }
 
-/// A lexical word naming a command.
+/// A nonempty command invocation. The head is evaluated before dispatch.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommandHead {
-    text: String,
+pub struct Command {
+    head: Box<Expression>,
+    arguments: Vec<Expression>,
     span: Span,
 }
 
-impl CommandHead {
-    pub(crate) fn new(text: String, span: Span) -> Option<Self> {
-        if text.is_empty() || matches!(text.as_str(), "{" | "}" | "(" | ")" | "[" | "]") {
-            return None;
+/// A nonempty threaded call. Its head may be a computed value.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThreadCall {
+    head: Box<Expression>,
+    arguments: Vec<Expression>,
+    span: Span,
+}
+
+impl ThreadCall {
+    pub(crate) fn new(head: Expression, arguments: Vec<Expression>, span: Span) -> Self {
+        Self {
+            head: Box::new(head),
+            arguments,
+            span,
         }
-        Some(Self { text, span })
     }
 
-    /// Command name exactly as written.
+    /// Expression resolving to the command name.
     #[must_use]
-    pub fn text(&self) -> &str {
-        &self.text
+    pub fn head(&self) -> &Expression {
+        &self.head
     }
 
-    /// Source extent of the command name.
+    /// Arguments before the threaded value.
+    #[must_use]
+    pub fn arguments(&self) -> &[Expression] {
+        &self.arguments
+    }
+
+    /// Extent of the call following `|>`.
     #[must_use]
     pub fn span(&self) -> &Span {
         &self.span
     }
 }
 
-/// A command invocation with a mandatory word head.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Command {
-    head: CommandHead,
-    arguments: Vec<Expression>,
-    span: Span,
-}
-
 impl Command {
-    pub(crate) fn new(head: CommandHead, arguments: Vec<Expression>, span: Span) -> Self {
+    pub(crate) fn new(head: Expression, arguments: Vec<Expression>, span: Span) -> Self {
         Self {
-            head,
+            head: Box::new(head),
             arguments,
             span,
         }
     }
 
-    /// The word naming the command.
+    /// Expression resolving to the command name.
     #[must_use]
-    pub fn head(&self) -> &CommandHead {
+    pub fn head(&self) -> &Expression {
         &self.head
     }
 
@@ -219,6 +343,8 @@ impl Statement {
 pub enum StatementKind {
     /// Plain command invocation.
     Command(Command),
+    /// Evaluate an expression in statement position and discard its value.
+    Expression(Expression),
     /// `let NAME = EXPR`.
     Let {
         /// Bound name.

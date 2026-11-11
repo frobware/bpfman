@@ -5,10 +5,8 @@ use std::fmt;
 
 use bpfman_shell_source::{Position, SourceName, Span};
 
-use crate::ast::{
-    BindMode, Command, CommandHead, Expression, ExpressionKind, Identifier, ParsedProgram,
-    Statement, StatementKind,
-};
+use crate::ast::{BindMode, Command, Identifier, ParsedProgram, Statement, StatementKind};
+use crate::expr::{parse_command_args, parse_expression};
 use crate::token::{LexError, Token, TokenKind, tokenise_at};
 
 /// Broad category of a syntax failure.
@@ -81,8 +79,8 @@ impl From<LexError> for SyntaxError {
 
 /// Parse one source unit. The caller supplies only its name and UTF-8 text.
 ///
-/// This parser slice accepts command statements and the simple `let`, `guard`,
-/// `defer`, `return`, `break`, and `continue` forms. Other forms may return
+/// This parser slice accepts command statements, core expressions, and the
+/// simple `let`, `guard`, `defer`, `return`, `break`, and `continue` forms. Other forms may return
 /// [`SyntaxErrorKind::Unimplemented`], including forms whose validity has not
 /// yet been checked.
 pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, SyntaxError> {
@@ -101,17 +99,30 @@ pub fn parse(name: impl Into<SourceName>, text: &str) -> Result<ParsedProgram, S
         _ => Span::point(origin),
     };
     let mut statements = Vec::new();
-    let mut cursor = 0;
-    while cursor < tokens.len() {
-        if matches!(tokens[cursor].kind, TokenKind::Separator(_)) {
-            cursor += 1;
-            continue;
+    let mut current = Vec::new();
+    let mut depth = 0usize;
+    for token in tokens {
+        match &token.kind {
+            TokenKind::Separator(_) if depth == 0 => {
+                if !current.is_empty() {
+                    statements.push(parse_statement(&current)?);
+                    current.clear();
+                }
+            }
+            TokenKind::Separator(_) => {}
+            TokenKind::Word(word) if word == "(" || word == "[" => {
+                depth += 1;
+                current.push(token);
+            }
+            TokenKind::Word(word) if (word == ")" || word == "]") && depth > 0 => {
+                depth -= 1;
+                current.push(token);
+            }
+            _ => current.push(token),
         }
-        let start = cursor;
-        while cursor < tokens.len() && !matches!(tokens[cursor].kind, TokenKind::Separator(_)) {
-            cursor += 1;
-        }
-        statements.push(parse_statement(&tokens[start..cursor])?);
+    }
+    if !current.is_empty() {
+        statements.push(parse_statement(&current)?);
     }
     Ok(ParsedProgram::new(name, statements, span))
 }
@@ -131,7 +142,7 @@ fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError> {
                         "return requires an expression: return EXPR",
                     ));
                 }
-                StatementKind::Return(parse_one_expression(&tokens[1..], &first.span)?)
+                StatementKind::Return(parse_expression(&tokens[1..], &first.span)?)
             }
             "break" => {
                 no_arguments(tokens, "break")?;
@@ -158,7 +169,7 @@ fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError> {
                 ));
             }
             "(" | "not" | "not-empty" | "true" | "false" => {
-                return Err(unimplemented(&first.span, "expression statement"));
+                StatementKind::Expression(parse_expression(tokens, &first.span)?)
             }
             _ => StatementKind::Command(parse_command(tokens, &first.span)?),
         },
@@ -166,7 +177,7 @@ fn parse_statement(tokens: &[Token]) -> Result<Statement, SyntaxError> {
         | TokenKind::Quoted(_)
         | TokenKind::Adapter { .. }
         | TokenKind::Interpolated(_) => {
-            return Err(unimplemented(&first.span, "expression statement"));
+            StatementKind::Expression(parse_expression(tokens, &first.span)?)
         }
         _ => return Err(invalid(&first.span, "expected a statement")),
     };
@@ -205,7 +216,7 @@ fn parse_let(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
                     "let requires: let <name> = <value...>",
                 ));
             }
-            let value = parse_one_expression(&tokens[3..], &operator.span)?;
+            let value = parse_expression(&tokens[3..], &operator.span)?;
             Ok(StatementKind::Let { name, value })
         }
         TokenKind::Bind => {
@@ -277,40 +288,18 @@ fn identifier(token: &Token) -> Result<Identifier, SyntaxError> {
 }
 
 fn parse_command(tokens: &[Token], location: &Span) -> Result<Command, SyntaxError> {
-    let Some((head, tail)) = tokens.split_first() else {
+    let Some(head) = tokens.first() else {
         return Err(invalid(location, "command form requires a command head"));
     };
-    let TokenKind::Word(word) = &head.kind else {
-        return Err(invalid(&head.span, "command head must be a word"));
-    };
-    let head = CommandHead::new(word.clone(), head.span.clone())
-        .ok_or_else(|| invalid(&head.span, "command head must be a word"))?;
-    let mut arguments = Vec::with_capacity(tail.len());
-    for token in tail {
-        arguments.push(parse_atom(token)?);
-    }
-    Ok(Command::new(head, arguments, span_of(tokens, location)?))
-}
-
-fn parse_one_expression(tokens: &[Token], location: &Span) -> Result<Expression, SyntaxError> {
-    let Some((first, rest)) = tokens.split_first() else {
-        return Err(invalid(location, "expected an expression"));
-    };
-    if let Some(stray_assign) = rest
-        .iter()
-        .find(|token| matches!(token.kind, TokenKind::Assign))
-    {
-        return Err(invalid(&stray_assign.span, "unexpected '=' in let RHS"));
-    }
-    if !rest.is_empty() {
-        if matches!(&rest[0].kind, TokenKind::Word(word) if !matches!(word.as_str(), "+" | "-" | "*" | "/" | "%" | "==" | "!=" | "<" | "<=" | ">" | ">=" | "and" | "or" | "matches"))
-            && !matches!(&first.kind, TokenKind::Word(word) if matches!(word.as_str(), "jq" | "range" | "zip" | "record" | "not" | "not-empty"))
-        {
-            return Err(invalid(&rest[0].span, "unexpected token after expression"));
-        }
-        return Err(unimplemented(&rest[0].span, "compound expression"));
-    }
-    parse_atom(first)
+    let mut values = parse_command_args(tokens)?.into_iter();
+    let head_value = values
+        .next()
+        .ok_or_else(|| invalid(&head.span, "command form requires a command head"))?;
+    Ok(Command::new(
+        head_value,
+        values.collect(),
+        span_of(tokens, location)?,
+    ))
 }
 
 fn validate_bind_rhs(tokens: &[Token], operator: &Span) -> Result<(), SyntaxError> {
@@ -325,34 +314,6 @@ fn validate_bind_rhs(tokens: &[Token], operator: &Span) -> Result<(), SyntaxErro
         }
     }
     Ok(())
-}
-
-fn parse_atom(token: &Token) -> Result<Expression, SyntaxError> {
-    let kind = match &token.kind {
-        TokenKind::Word(text) if !matches!(text.as_str(), "(" | ")" | "[" | "]" | "{" | "}") => {
-            ExpressionKind::Word(text.clone())
-        }
-        TokenKind::Quoted(text) => ExpressionKind::Quoted(text.clone()),
-        TokenKind::Variable(variable) => ExpressionKind::Variable(variable.clone()),
-        TokenKind::Adapter { name, variable } => ExpressionKind::Adapter {
-            name: name.clone(),
-            variable: variable.clone(),
-        },
-        TokenKind::Interpolated(_) => {
-            return Err(unimplemented(&token.span, "interpolated expression"));
-        }
-        TokenKind::Word(_) => return Err(unimplemented(&token.span, "grouped or list expression")),
-        TokenKind::Assign => {
-            return Err(invalid(
-                &token.span,
-                "unexpected '='; use let for assignment",
-            ));
-        }
-        TokenKind::Bind => return Err(invalid(&token.span, "unexpected '<-'")),
-        TokenKind::Thread => return Err(unimplemented(&token.span, "thread expression")),
-        TokenKind::Separator(_) => return Err(invalid(&token.span, "unexpected separator")),
-    };
-    Ok(Expression::new(kind, token.span.clone()))
 }
 
 fn no_arguments(tokens: &[Token], name: &str) -> Result<(), SyntaxError> {
@@ -371,11 +332,11 @@ fn span_of(tokens: &[Token], fallback: &Span) -> Result<Span, SyntaxError> {
         .map_err(|_| invalid(&first.span, "source span overflow"))
 }
 
-fn invalid(span: &Span, message: impl Into<String>) -> SyntaxError {
+pub(crate) fn invalid(span: &Span, message: impl Into<String>) -> SyntaxError {
     SyntaxError::new(SyntaxErrorKind::Invalid, span.clone(), message)
 }
 
-fn unimplemented(span: &Span, feature: impl Into<String>) -> SyntaxError {
+pub(crate) fn unimplemented(span: &Span, feature: impl Into<String>) -> SyntaxError {
     SyntaxError::new(
         SyntaxErrorKind::Unimplemented,
         span.clone(),
@@ -409,7 +370,7 @@ mod tests {
         let StatementKind::Command(command) = statement.kind() else {
             unreachable!()
         };
-        assert_eq!(command.head().text(), "print");
+        assert!(matches!(command.head().kind(), ExpressionKind::Word(text) if text == "print"));
         assert!(
             matches!(command.arguments()[0].kind(), ExpressionKind::Quoted(text) if text == "hi")
         );
@@ -449,7 +410,25 @@ mod tests {
             matches!(third.kind(), StatementKind::Bind { mode: BindMode::Guard, name, .. } if name.text() == "live")
         );
         assert!(
-            matches!(fourth.kind(), StatementKind::Defer(command) if command.head().text() == "print")
+            matches!(fourth.kind(), StatementKind::Defer(command) if matches!(command.head().kind(), ExpressionKind::Word(text) if text == "print"))
+        );
+    }
+
+    #[test]
+    fn bind_and_defer_preserve_computed_command_heads() {
+        let program = parse(
+            "main.bpfman",
+            "let result <- $command arg\ndefer $cleanup done",
+        )
+        .unwrap_or_else(|_| unreachable!());
+        let [bind, defer] = program.statements() else {
+            unreachable!()
+        };
+        assert!(
+            matches!(bind.kind(), StatementKind::Bind { command, .. } if matches!(command.head().kind(), ExpressionKind::Variable(var) if var.name == "command"))
+        );
+        assert!(
+            matches!(defer.kind(), StatementKind::Defer(command) if matches!(command.head().kind(), ExpressionKind::Variable(var) if var.name == "cleanup"))
         );
     }
 
@@ -458,7 +437,7 @@ mod tests {
         for (source, expected) in [
             ("let _ = 1", "single-name let cannot bind"),
             ("let x =", "let requires"),
-            ("let x = a = b", "unexpected '=' in let RHS"),
+            ("let x = a = b", "unexpected token after expression"),
             ("let x = load file", "unexpected token after expression"),
             ("guard x = print hi", "guard requires '<-'"),
             ("guard <- print hi", "guard requires an identifier"),
@@ -480,9 +459,8 @@ mod tests {
     fn incomplete_language_constructs_are_never_reinterpreted_as_commands() {
         for source in [
             "if $ready {",
-            "let x = 1 + 2",
             "let xs <- foreach n in $items {",
-            "print ($x |> jq .id)",
+            "let result = $x matches { item: true }",
         ] {
             let error = parse("main.bpfman", source)
                 .err()
