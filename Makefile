@@ -638,6 +638,7 @@ help:
 	@echo "  build-all                   Build all binaries"
 	@echo "  clean                       Remove all build artifacts"
 	@echo "  clean-mrproper              Like 'clean', plus wipe Go's shared build/test/fuzz caches (~/.cache/go-build); affects all Go projects on this machine"
+	@echo "  rust-clean                  Remove the new Rust workspace's build artifacts (target and build-dir)"
 	@echo ""
 	@echo "Testing:"
 	@printf "  %-31s %s\n" "rust-check" "Check the new Rust workspace (format, clippy, tests, docs)"
@@ -1074,7 +1075,7 @@ test-e2e-selection: $(RUST_DISPATCHER)
 
 # Every Cargo entry point names the new manifest. These are opt-in while the
 # Go implementation remains the production build.
-.PHONY: rust-check rust-build rust-test rust-fmt rust-fmt-fix rust-lock rust-lint rust-doc
+.PHONY: rust-check rust-build rust-clean rust-test rust-fmt rust-fmt-fix rust-lock rust-lint rust-doc
 # Stamp the independent Rust CLI with the same release inputs as Go. Exporting
 # values avoids interpolating branch names or signing identities into shell code.
 export BPFMAN_BUILD_VERSION = $(GIT_VERSION)
@@ -1178,6 +1179,12 @@ rust-lint: $(RUST_DISPATCHER)
 
 rust-doc: $(RUST_DISPATCHER)
 	RUSTDOCFLAGS="-D warnings" cargo doc --manifest-path $(RUST_MANIFEST) --workspace --no-deps --locked
+
+# Removes the workspace's target directory and its build-dir, wherever
+# Cargo's configuration puts them. A bare `cargo clean` at the top of
+# the tree finds the other workspace in ./Cargo.toml instead.
+rust-clean:
+	cargo clean --manifest-path $(RUST_MANIFEST)
 
 # `run-e2e-scripts` lives in the recipe rather than the
 # prerequisite list because GNU make does not sequence
