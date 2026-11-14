@@ -1085,6 +1085,13 @@ export BPFMAN_BUILD_BUILD_DATE = $(BUILD_DATE)
 export BPFMAN_BUILD_IMAGE_REF = $(IMAGE_REF)
 export BPFMAN_BUILD_SIGNER_IDENTITY = $(SIGNER_IDENTITY)
 export BPFMAN_BUILD_OIDC_ISSUER = $(OIDC_ISSUER)
+
+# bpfman-proto's build script runs prost-build, which needs protoc. Use
+# the pinned download rather than whatever protoc is on $PATH. Targets
+# reaching bpfman-proto only through rust-build inherit the dependency.
+export PROTOC = $(abspath $(BIN_DIR))/protoc
+test-e2e-selection rust-build rust-build-csi rust-test-unit rust-test-kernel-fake rust-test-xdp-store rust-test-load-compensation rust-test-unload rust-lint rust-doc: | $(BIN_DIR)/protoc
+
 rust-check: rust-fmt rust-lint rust-test rust-doc
 
 rust-build: $(RUST_DISPATCHER)
