@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use bpfman_shell_ir::{BlockId, Expression, ParameterType};
+use bpfman_shell_source::{Position, Span};
 
 use super::{
     Argument, CommandPurpose, CommandRequest, CommandResponse, ExecutionError, Invocation, Machine,
@@ -26,6 +27,8 @@ pub(super) struct Caller {
     pending_retry: Option<super::polls::RetrySignal>,
     observations: HashMap<*const Expression, Value>,
     purpose: CommandPurpose,
+    call_span: Span,
+    invocation: Invocation,
 }
 
 impl Machine<'_> {
@@ -64,9 +67,11 @@ impl Machine<'_> {
         let mut temps = Vec::with_capacity(def.num_temps());
         for (arg, param) in request.arguments.iter().zip(def.parameters()) {
             let value = parameter(arg, param.annotation).ok_or_else(|| {
+                let wanted = param.annotation.map_or("scalar or record", parameter_type);
                 format!(
-                    "def {head}: invalid argument for parameter {:?}",
-                    param.name
+                    "def {head}: parameter {:?}: expected {wanted}, got {}",
+                    param.name,
+                    argument_kind(arg)
                 )
             })?;
             temps.push(Some(Slot::Value(value)));
@@ -89,6 +94,8 @@ impl Machine<'_> {
             pending_retry: self.pending_retry.take(),
             observations: std::mem::take(&mut self.expression_observations),
             purpose,
+            call_span: request.span.clone(),
+            invocation: Invocation::from_request(request),
         });
         self.jump(BlockId(0));
         Ok(None)
@@ -187,6 +194,21 @@ impl Machine<'_> {
         Ok(())
     }
 
+    pub(super) fn guard_site<'s>(&'s self, span: &'s Span) -> &'s Span {
+        self.callers
+            .iter()
+            .rev()
+            .take_while(|caller| !matches!(caller.purpose, CommandPurpose::Cleanup))
+            .last()
+            .map_or(span, |caller| &caller.invocation.span)
+    }
+
+    pub(super) fn call_context(&self) -> Option<(&str, &Position)> {
+        let def = self.program.definitions().get(self.unit?)?;
+        let call = self.callers.last()?;
+        Some((def.name(), call.call_span.start()))
+    }
+
     pub(super) fn unwind_failed_definition(
         &mut self,
         failure: ExecutionError,
@@ -194,10 +216,22 @@ impl Machine<'_> {
         let Some(caller) = self.callers.pop() else {
             return Err(failure);
         };
-        let (purpose, _, _) = self.restore_caller(caller);
-        if matches!(purpose, CommandPurpose::Cleanup) {
-            self.cleanup_failed();
+        if matches!(caller.purpose, CommandPurpose::Cleanup) {
+            let origin = Invocation {
+                span: caller.invocation.span.clone(),
+                display: caller.invocation.display.clone(),
+            };
+            let _ = self.restore_caller(caller);
+            self.defer_failure(
+                &origin,
+                &CommandResponse {
+                    exit_code: 1,
+                    stderr: failure.message,
+                    ..CommandResponse::success(Value::Absent)
+                },
+            );
         } else {
+            let _ = self.restore_caller(caller);
             self.abort(failure);
         }
         Ok(())
@@ -209,7 +243,7 @@ impl Machine<'_> {
 
     pub(super) fn propagate_retry(&mut self, retry: super::polls::RetrySignal) {
         let Some(caller) = self.callers.pop() else {
-            self.error(&retry.span, "retry outside any active poll".to_owned());
+            self.error(&retry.span, "retry: outside any poll".to_owned());
             return;
         };
         let (purpose, _, _) = self.restore_caller(caller);
@@ -278,5 +312,26 @@ fn parameter(argument: &Argument, annotation: Option<ParameterType>) -> Option<V
         | (Argument::Value(value @ Value::Number(_)), Some(T::Number))
         | (Argument::Value(value @ Value::Bool(_)), Some(T::Bool)) => Some(value.clone()),
         _ => None,
+    }
+}
+
+fn parameter_type(annotation: ParameterType) -> &'static str {
+    match annotation {
+        ParameterType::Number => "number",
+        ParameterType::String => "string",
+        ParameterType::Bool => "bool",
+    }
+}
+
+fn argument_kind(argument: &Argument) -> &'static str {
+    match argument {
+        Argument::Word(_) | Argument::Quoted(_) | Argument::Value(Value::String(_)) => "a string",
+        Argument::Value(Value::Number(_)) => "a number",
+        Argument::Value(Value::Bool(_)) => "a bool",
+        Argument::Value(Value::Null) => "null",
+        Argument::Value(Value::Absent) => "an absent value",
+        Argument::Value(Value::List(_)) => "a list",
+        Argument::Value(_) => "an object",
+        Argument::Adapter { .. } => "an adapter",
     }
 }

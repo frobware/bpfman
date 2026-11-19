@@ -364,6 +364,9 @@ a poll.
 Command failure reports preserve resolved argv, captured output and the
 enclosing statement location. Deferred failures are reported while
 draining, and job leaks cite the declaration that created the job.
+Diagnostics retain the innermost definition call context or the outer
+guard statement as appropriate. Poll timeout reports carry the schedule,
+attempt count and last retry reason.
 
 ## Typestate and internal invariants
 

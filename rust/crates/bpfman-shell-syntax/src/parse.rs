@@ -278,7 +278,7 @@ fn parse_let_destructure(tokens: &[Token]) -> Result<StatementKind, SyntaxError>
     match operator.kind {
         TokenKind::Bind => Err(invalid(
             &open.span,
-            "tuple bind after '<-' is no longer supported",
+            "tuple bind after '<-' is no longer supported; bind a single outcome name and use named fields",
         )),
         TokenKind::Assign => {
             if names.iter().all(|name| name.text() == "_") {
@@ -314,7 +314,7 @@ fn parse_guard(tokens: &[Token]) -> Result<StatementKind, SyntaxError> {
     if matches!(&name_token.kind, TokenKind::Word(word) if word == "(") {
         return Err(invalid(
             &name_token.span,
-            "tuple bind after '<-' is no longer supported",
+            "tuple bind after '<-' is no longer supported; bind a single outcome name and use named fields",
         ));
     }
     if !matches!(name_token.kind, TokenKind::Word(_)) {

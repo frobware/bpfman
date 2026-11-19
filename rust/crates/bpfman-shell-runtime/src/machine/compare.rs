@@ -32,7 +32,13 @@ pub(super) fn evaluate(op: Op, left: Value, right: Value) -> Result<Value, Strin
                 .partial_cmp(&float(b)?)
                 .ok_or("invalid numeric comparison")?,
         },
-        _ => return Err("comparison requires compatible scalar operands".to_owned()),
+        _ => {
+            return Err(format!(
+                "binary {op}: cannot compare {} to {}; coerce explicitly (e.g. \"$x |> jq tonumber\" for stringy numeric input)",
+                kind(&left),
+                kind(&right)
+            ));
+        }
     };
     Ok(Value::Bool(match op {
         Equal => order.is_eq(),
@@ -43,6 +49,16 @@ pub(super) fn evaluate(op: Op, left: Value, right: Value) -> Result<Value, Strin
         GreaterEqual => order.is_ge(),
         _ => return Err("expected comparison operator".to_owned()),
     }))
+}
+
+fn kind(value: &Value) -> &'static str {
+    match value {
+        Value::String(_) => "string",
+        Value::Number(_) => "number",
+        Value::Bool(_) => "bool",
+        Value::List(_) => "list",
+        _ => "object",
+    }
 }
 
 fn arithmetic(op: Op, left: Value, right: Value) -> Result<Value, String> {

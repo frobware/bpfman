@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use bpfman_shell_ir::{BlockId, PollSchedule, RetryTarget, Temp};
+use bpfman_shell_ir::{BlockId, GoDuration, PollSchedule, RetryTarget, Temp};
 use bpfman_shell_source::Span;
 
-use super::{Action, Machine, Step, Value};
+use super::{Action, Machine, Step, Value, location};
 
 pub(super) struct Poll {
     pub(super) owner: BlockId,
@@ -12,7 +12,7 @@ pub(super) struct Poll {
     timeout: BlockId,
     pub(super) success: BlockId,
     deadline: Duration,
-    every: Duration,
+    schedule: PollSchedule,
     frames: usize,
     loops: usize,
     pub(super) deferred_base: usize,
@@ -66,7 +66,7 @@ impl<'a> ClockContinuation<'a> {
                     timeout,
                     success,
                     deadline: now.saturating_add(Duration::from_nanos(schedule.timeout.get())),
-                    every: Duration::from_nanos(schedule.every.get()),
+                    schedule,
                     frames: self.machine.frames.len(),
                     loops: self.machine.loops.len(),
                     deferred_base: self.machine.deferred.len(),
@@ -86,7 +86,7 @@ impl<'a> ClockContinuation<'a> {
                     self.machine.jump(timeout);
                 } else {
                     poll.attempts = poll.attempts.saturating_add(1);
-                    let duration = poll.every;
+                    let duration = Duration::from_nanos(poll.schedule.every.get());
                     let attempt = poll.attempt;
                     return Step::Pause {
                         duration,
@@ -180,12 +180,21 @@ impl Machine<'_> {
             .polls
             .last()
             .filter(|poll| poll.timeout == self.block)?;
-        let mut message = format!("poll timed out after {} attempt(s)", poll.attempts);
-        if let Some(reason) = &poll.last_message {
-            message.push_str(": ");
-            message.push_str(reason);
-        }
+        let origin = poll.span.clone();
+        let timeout = GoDuration(poll.schedule.timeout);
+        let every = GoDuration(poll.schedule.every);
+        let suffix = poll
+            .last_message
+            .as_ref()
+            .map_or_else(String::new, |reason| format!(": {reason}"));
+        let attempts = poll.attempts;
         self.polls.pop();
-        Some(message)
+        self.report(&origin, format!(
+            "{}: [poll] FAIL: timed out after {timeout} every {every} across {attempts} attempt(s){suffix}",
+            location(&origin),
+        ));
+        Some(format!(
+            "poll timed out after {timeout} across {attempts} attempt(s){suffix}"
+        ))
     }
 }

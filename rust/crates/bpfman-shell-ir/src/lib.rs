@@ -1,6 +1,8 @@
 //! Verified block-structured IR for the shell's lowering and execution phases.
 
 mod dump;
+mod duration;
+pub use duration::GoDuration;
 mod expr;
 mod loops;
 mod model;

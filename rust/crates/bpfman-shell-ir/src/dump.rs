@@ -1,3 +1,4 @@
+use crate::GoDuration;
 use std::{
     collections::{BTreeMap, HashSet},
     fmt,
@@ -230,9 +231,9 @@ fn dump_blocks(
                 success,
             } => {
                 write!(f, "  BeginPoll timeout=")?;
-                write_duration(f, schedule.timeout.get())?;
+                write!(f, "{}", GoDuration(schedule.timeout))?;
                 f.write_str(" every=")?;
-                write_duration(f, schedule.every.get())?;
+                write!(f, "{}", GoDuration(schedule.every))?;
                 writeln!(
                     f,
                     " attempt=bb{} timeout=bb{} success=bb{}",
@@ -249,33 +250,6 @@ fn dump_blocks(
         }
     }
     Ok(())
-}
-
-fn write_duration(f: &mut fmt::Formatter<'_>, nanos: u64) -> fmt::Result {
-    const SECOND: u64 = 1_000_000_000;
-    let (nanos, unit, precision, suffix) = if nanos >= SECOND {
-        let hours = nanos / (SECOND * 3600);
-        let minutes = (nanos / (SECOND * 60)) % 60;
-        if hours != 0 {
-            write!(f, "{hours}h")?;
-        }
-        if hours != 0 || minutes != 0 {
-            write!(f, "{minutes}m")?;
-        }
-        (nanos % (SECOND * 60), SECOND, 9, "s")
-    } else if nanos >= 1_000_000 {
-        (nanos, 1_000_000, 6, "ms")
-    } else if nanos >= 1_000 {
-        (nanos, 1_000, 3, "µs")
-    } else {
-        return write!(f, "{nanos}ns");
-    };
-    write!(f, "{}", nanos / unit)?;
-    if nanos % unit != 0 {
-        let fraction = format!("{:0precision$}", nanos % unit);
-        write!(f, ".{}", fraction.trim_end_matches('0'))?;
-    }
-    f.write_str(suffix)
 }
 
 fn lane(command: &Command, definitions: &HashSet<&str>) -> String {

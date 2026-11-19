@@ -190,11 +190,22 @@ fn validate_expression_word(token: &Token) -> Result<(), SyntaxError> {
     let starts_numeric = bytes.first().is_some_and(u8::is_ascii_digit)
         || matches!(bytes.first(), Some(b'+' | b'-'))
             && bytes.get(1).is_some_and(u8::is_ascii_digit);
-    if starts_numeric && !is_json_number(text) {
-        return Err(invalid(
-            &token.span,
-            format!("invalid numeric literal {text:?}"),
-        ));
+    if starts_numeric {
+        match number_form(text) {
+            None => {
+                return Err(invalid(
+                    &token.span,
+                    format!("invalid numeric literal {text:?}"),
+                ));
+            }
+            Some(true) if !text.parse::<f64>().is_ok_and(f64::is_finite) => {
+                return Err(invalid(
+                    &token.span,
+                    format!("numeric literal {text:?} exceeds the representable range"),
+                ));
+            }
+            Some(_) => {}
+        }
     }
     Ok(())
 }
@@ -202,6 +213,11 @@ fn validate_expression_word(token: &Token) -> Result<(), SyntaxError> {
 /// Whether text is exactly one finite JSON number, preserving large integers.
 #[must_use]
 pub fn is_json_number(text: &str) -> bool {
+    number_form(text)
+        .is_some_and(|fractional| !fractional || text.parse::<f64>().is_ok_and(f64::is_finite))
+}
+
+fn number_form(text: &str) -> Option<bool> {
     let bytes = text.as_bytes();
     let mut i = usize::from(bytes.first() == Some(&b'-'));
     match bytes.get(i) {
@@ -212,7 +228,7 @@ pub fn is_json_number(text: &str) -> bool {
                 i += 1;
             }
         }
-        _ => return false,
+        _ => return None,
     }
     let mut fractional = false;
     if bytes.get(i) == Some(&b'.') {
@@ -223,7 +239,7 @@ pub fn is_json_number(text: &str) -> bool {
             i += 1;
         }
         if i == begin {
-            return false;
+            return None;
         }
     }
     if matches!(bytes.get(i), Some(b'e' | b'E')) {
@@ -237,10 +253,10 @@ pub fn is_json_number(text: &str) -> bool {
             i += 1;
         }
         if i == begin {
-            return false;
+            return None;
         }
     }
-    i == bytes.len() && (!fractional || text.parse::<f64>().is_ok_and(f64::is_finite))
+    (i == bytes.len()).then_some(fractional)
 }
 
 fn span(start: &Span, end: &Span) -> Result<Span, SyntaxError> {

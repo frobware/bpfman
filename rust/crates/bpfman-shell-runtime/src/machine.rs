@@ -204,6 +204,7 @@ pub struct ExecutionError {
     /// Explanation without location formatting.
     pub message: String,
     reported: bool,
+    guard_report: Option<String>,
 }
 
 impl ExecutionError {
@@ -212,6 +213,7 @@ impl ExecutionError {
             span: span.clone(),
             message,
             reported: false,
+            guard_report: None,
         }
     }
 
@@ -224,15 +226,10 @@ impl ExecutionError {
 
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let start = self.span.start();
-        write!(
-            f,
-            "{}:{}:{}: {}",
-            start.name().as_str(),
-            start.line(),
-            start.column(),
-            self.message
-        )
+        match &self.guard_report {
+            Some(report) => f.write_str(report),
+            None => write!(f, "{}: {}", location(&self.span), self.message),
+        }
     }
 }
 
@@ -578,6 +575,16 @@ impl<'a> Machine<'a> {
     }
 
     fn error(&mut self, span: &Span, message: String) {
+        let message = self.call_context().map_or_else(
+            || message.clone(),
+            |(name, at)| {
+                format!(
+                    "in def {name} (called at {}:{}): {message}",
+                    at.line(),
+                    at.column()
+                )
+            },
+        );
         self.abort(ExecutionError::new(span, message));
     }
 
@@ -844,20 +851,18 @@ impl<'a> Machine<'a> {
                     }
                     ir::BindPolicy::Guard { on_failure } if response.exit_code != 0 => {
                         let origin = Invocation {
-                            span: span.clone(),
+                            span: self.guard_site(span).clone(),
                             display: self.argv(*argv)?.display,
                         };
-                        let report = origin.describe_failure("guard", response);
                         let mut failure = ExecutionError::new(
-                            span,
+                            &origin.span,
                             format!(
                                 "guard {target}: command failed (exit {})",
                                 response.exit_code
                             ),
                         );
-                        failure.reported = true;
+                        failure.guard_report = Some(origin.describe_failure("guard", response));
                         self.failure = Some(failure);
-                        self.report(span, report);
                         self.jump(*on_failure);
                     }
                     ir::BindPolicy::Guard { .. } => return Err("invalid guard outcome".into()),
@@ -1590,10 +1595,14 @@ mod tests {
         let Step::ReadClock(clock) = continuation.resume(result(0, Value::Absent)) else {
             unreachable!("expected second retry clock observation");
         };
-        let Step::Failed(error) = clock.resume(Ok(Duration::from_secs(5))) else {
+        let Step::Failed(error) = acknowledge_diagnostics(clock.resume(Ok(Duration::from_secs(5))))
+        else {
             unreachable!("expected timeout at the deadline");
         };
-        assert_eq!(error.message, "poll timed out after 2 attempt(s): waiting");
+        assert_eq!(
+            error.message,
+            "poll timed out after 5s across 2 attempt(s): waiting"
+        );
     }
 
     #[test]
@@ -1665,7 +1674,8 @@ mod tests {
         let Step::ReadClock(clock) = step else {
             unreachable!("expected retry clock");
         };
-        let Step::Failed(error) = clock.resume(Ok(Duration::from_secs(1))) else {
+        let Step::Failed(error) = acknowledge_diagnostics(clock.resume(Ok(Duration::from_secs(1))))
+        else {
             unreachable!("expected timeout");
         };
         assert!(error.message.ends_with(": waiting"));
