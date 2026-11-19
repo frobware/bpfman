@@ -15,6 +15,7 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-shell-ir", 1),
     ("bpfman-shell-lower", 4),
     ("bpfman-shell-runtime", 5),
+    ("bpfman-shell", 6),
     ("bpfman-model", 0),
     ("bpfman-core", 1),
     ("bpfman-lock", 1),
