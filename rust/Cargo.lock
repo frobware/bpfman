@@ -399,6 +399,8 @@ dependencies = [
  "bpfman-shell-runtime",
  "bpfman-shell-syntax",
  "clap",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -1047,16 +1047,19 @@ bpfman-shell-fmt: bpfman-shell-compile
 .PHONY: build-e2e-scripts
 build-e2e-scripts: bpfman-compile bpfman-shell-compile $(E2E_SCRIPTS_TEST_BIN) $(BIN_DIR)/xdp-delivery-probe
 
-# Select the shell independently of the daemon. PATH puts the daemon
-# first for raw script commands, while the runner invokes the shell by
-# its absolute path.
+# Select the shell independently of the daemon, including fixture
+# helpers that resolve the shell from PATH inside scripts.
 .PHONY: run-e2e-scripts
 run-e2e-scripts:
 	@test "$(BPFMAN_E2E_IMPLEMENTATION)" = go -o "$(BPFMAN_E2E_IMPLEMENTATION)" = rust || { echo "BPFMAN_E2E_IMPLEMENTATION must be go or rust" >&2; exit 1; }
 	@test "$(notdir $(BPFMAN_UNDER_TEST))" = bpfman || { echo "BPFMAN_UNDER_TEST must name an executable called bpfman" >&2; exit 1; }
 	@test -x "$(abspath $(BPFMAN_UNDER_TEST))" || { echo "BPFMAN_UNDER_TEST is not executable: $(abspath $(BPFMAN_UNDER_TEST))" >&2; exit 1; }
 	@test -x "$(abspath $(BPFMAN_SHELL_UNDER_TEST))" || { echo "BPFMAN_SHELL_UNDER_TEST is not executable: $(abspath $(BPFMAN_SHELL_UNDER_TEST))" >&2; exit 1; }
-	sudo env PATH="$(patsubst %/,%,$(dir $(abspath $(BPFMAN_UNDER_TEST)))):$(abspath $(BIN_DIR)):$$PATH" \
+	@set -e; \
+	selection=$$(mktemp -d); \
+	trap 'if test -L "$$selection/bpfman"; then unlink "$$selection/bpfman"; fi; rmdir "$$selection"' EXIT; \
+	ln -s "$(abspath $(BPFMAN_UNDER_TEST))" "$$selection/bpfman"; \
+	sudo env PATH="$$selection:$(patsubst %/,%,$(dir $(abspath $(BPFMAN_SHELL_UNDER_TEST)))):$(patsubst %/,%,$(dir $(abspath $(BPFMAN_UNDER_TEST)))):$(abspath $(BIN_DIR)):$$PATH" \
 	    BPFMAN_BIN="$(abspath $(BPFMAN_UNDER_TEST))" \
 	    BPFMAN_SHELL_BIN="$(abspath $(BPFMAN_SHELL_UNDER_TEST))" \
 	    BPFMAN_E2E_DIR=$(abspath e2e) \

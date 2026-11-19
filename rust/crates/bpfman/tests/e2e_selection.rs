@@ -40,7 +40,7 @@ impl Fixture {
         executable(&rust.join("bpfman-shell"), "exit 99\n")?;
         executable(
             &go.join("bpfman-shell"),
-            "\"$BPFMAN_BIN\"\nbpfman\nsh -c 'exec bpfman'\n",
+            "\"$BPFMAN_BIN\"\nbpfman\nsh -c 'exec bpfman'\ncase $(command -v bpfman-shell) in */go/bpfman-shell) ;; *) exit 99 ;; esac\n",
         )?;
 
         Ok(Self {

@@ -858,7 +858,7 @@ fn is_empty(value: &Value) -> bool {
             .parse::<f64>()
             .is_ok_and(|value| value == 0.0),
         Value::List(values) => values.is_empty(),
-        Value::Record(fields) => fields.is_empty(),
+        Value::Record(fields) | Value::BpfmanRecord { fields, .. } => fields.is_empty(),
         _ => false,
     }
 }
@@ -866,7 +866,9 @@ fn is_empty(value: &Value) -> bool {
 fn field_value(value: Value, field: &str) -> Result<Value, String> {
     match value {
         Value::Outcome(outcome) => outcome_field(&outcome, field),
-        Value::Record(mut fields) => Ok(fields.remove(field).unwrap_or(Value::Absent)),
+        Value::Record(mut fields) | Value::BpfmanRecord { mut fields, .. } => {
+            Ok(fields.remove(field).unwrap_or(Value::Absent))
+        }
         _ => Err(format!("cannot access field {field:?}")),
     }
 }

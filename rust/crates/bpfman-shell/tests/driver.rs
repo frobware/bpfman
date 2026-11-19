@@ -1,13 +1,21 @@
 //! Whole-program CLI contracts for the first Rust shell driver.
 
 use std::{
+    fs,
     io::{self, Write},
+    os::unix::fs::PermissionsExt,
     process::{Command, Output, Stdio},
 };
 
 fn run(args: &[&str], source: &str) -> io::Result<Output> {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"))
-        .args(args)
+    run_command(
+        Command::new(env!("CARGO_BIN_EXE_bpfman-shell")).args(args),
+        source,
+    )
+}
+
+fn run_command(command: &mut Command, source: &str) -> io::Result<Output> {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -19,6 +27,30 @@ fn run(args: &[&str], source: &str) -> io::Result<Output> {
     stdin.write_all(source.as_bytes())?;
     drop(stdin);
     child.wait_with_output()
+}
+
+#[test]
+fn typed_bpfman_uses_the_selected_binary_and_round_trips_ids() -> io::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let binary = dir.path().join("selected-bpfman");
+    fs::write(
+        &binary,
+        concat!(
+            "#!/bin/sh\n",
+            "test \"$1 $2 $3 $4 $5\" = 'program get 7 -o json' || exit 71\n",
+            "printf '%s' '{\"record\":{\"program_id\":7},\"big\":18446744073709551615}'\n",
+        ),
+    )?;
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"));
+    command.env("BPFMAN_BIN", &binary);
+    let output = run_command(
+        &mut command,
+        "guard p <- bpfman program get 7\nguard q <- bpfman program get $p\nprint $q.record.program_id $q.big",
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"7 18446744073709551615\n");
+    Ok(())
 }
 
 #[test]

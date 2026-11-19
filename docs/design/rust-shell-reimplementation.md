@@ -237,11 +237,16 @@ little-endian conversion, containment, and presence predicates. Structural
 matches evaluate nested and exhaustive rows. Expression and command-status
 assertions distinguish nonfatal diagnostics from requirements that unwind
 the program. Go's detailed match and assertion diagnostics are still pending.
-Cross-call retry, threaded calls, jq and path effects, typed builtins, signals, process-group
+The shell can invoke the CLI selected by `BPFMAN_BIN`, preserve exact JSON
+integers, and project program and link records to IDs for later command
+arguments. Cross-call retry, threaded calls, jq and path effects, remaining
+typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently
 via `BPFMAN_SHELL_UNDER_TEST` because the Rust daemon's directory can also
-contain the Rust shell. The selected daemon still comes first on script PATH.
+contain the Rust shell. A temporary directory exposes just the selected daemon
+first on script PATH. The selected shell's directory follows it so scripts
+that look up the shell's fixture helpers find the same executable.
 
 ## Typestate and internal invariants
 

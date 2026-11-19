@@ -4,7 +4,10 @@ use super::{Machine, Value, is_empty};
 
 impl Machine<'_> {
     pub(super) fn matches(&self, value: Value, block: &MatchBlock) -> Result<bool, String> {
-        if !matches!(value, Value::Record(_) | Value::List(_) | Value::Outcome(_)) {
+        if !matches!(
+            value,
+            Value::Record(_) | Value::BpfmanRecord { .. } | Value::List(_) | Value::Outcome(_)
+        ) {
             return Err("matches requires a structured value".to_owned());
         }
         self.matches_block(&value, block)
@@ -15,7 +18,9 @@ impl Machine<'_> {
         if block.exhaustive {
             let claimed = |name: &str| block.entries.iter().any(|entry| entry.path == name);
             matched = match value {
-                Value::Record(fields) => fields.keys().all(|key| claimed(key)),
+                Value::Record(fields) | Value::BpfmanRecord { fields, .. } => {
+                    fields.keys().all(|key| claimed(key))
+                }
                 Value::Outcome(outcome) => {
                     ["ok", "exit_code", "stdout", "stderr", "killed", "signal"]
                         .into_iter()

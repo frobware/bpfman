@@ -38,6 +38,13 @@ pub enum Value {
     List(Vec<Value>),
     /// Named fields.
     Record(BTreeMap<String, Value>),
+    /// A bpfman CLI record with a resolved ID for subsequent commands.
+    BpfmanRecord {
+        /// Fields from the CLI's JSON projection.
+        fields: BTreeMap<String, Value>,
+        /// Program or link ID accepted by the CLI.
+        id: Number,
+    },
     /// Captured command outcome, with a distinct primary when supplied.
     Outcome(Box<CommandResponse>),
 }

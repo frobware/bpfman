@@ -11,6 +11,8 @@ use bpfman_shell_runtime::{
     Argument, CommandRequest, CommandResponse, DispatchLane, OutputStream, Step, Value, execute,
 };
 
+mod bpfman;
+
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
     let mut step = execute(program, HashMap::new());
@@ -46,6 +48,9 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
 
 fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandResponse, String> {
     let head = argument(&request.head)?;
+    if head == "bpfman" {
+        return bpfman::invoke(request.arguments);
+    }
     let arguments = request
         .arguments
         .iter()
@@ -77,35 +82,30 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
     // The Rust driver currently supplies only print and subprocess effects.
     // Refuse known typed builtins until their adapters are implemented.
     if head != "exec"
-        && matches!(
-            head.as_str(),
-            "bpfman"
-                | "defs"
-                | "file"
-                | "fire"
-                | "import"
-                | "jobs"
-                | "jq"
-                | "kfunc"
-                | "kill"
-                | "linkinfo"
-                | "lsm"
-                | "net"
-                | "process"
-                | "proginfo"
-                | "range"
-                | "reap"
-                | "registry"
-                | "start"
-                | "tempdir"
-                | "trace"
-                | "u32le"
-                | "u64le"
-                | "uprobe"
-                | "uprobe-target"
-                | "wait"
-                | "zip"
-        )
+        && matches!(head.as_str(), |"defs"| "file"
+            | "fire"
+            | "import"
+            | "jobs"
+            | "jq"
+            | "kfunc"
+            | "kill"
+            | "linkinfo"
+            | "lsm"
+            | "net"
+            | "process"
+            | "proginfo"
+            | "range"
+            | "reap"
+            | "registry"
+            | "start"
+            | "tempdir"
+            | "trace"
+            | "u32le"
+            | "u64le"
+            | "uprobe"
+            | "uprobe-target"
+            | "wait"
+            | "zip")
     {
         return Err(format!("{head}: builtin is not yet implemented"));
     }
