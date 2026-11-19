@@ -42,6 +42,20 @@ pub enum Value {
     Outcome(Box<CommandResponse>),
 }
 
+impl Value {
+    /// Render a scalar while preserving exact number spellings.
+    #[must_use]
+    pub fn scalar_text(&self) -> Option<String> {
+        match self {
+            Self::Null => Some("null".to_owned()),
+            Self::Bool(value) => Some(value.to_string()),
+            Self::Number(value) => Some(value.as_str().to_owned()),
+            Self::String(value) => Some(value.clone()),
+            _ => None,
+        }
+    }
+}
+
 /// One argv operand with its evaluation origin.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Argument {

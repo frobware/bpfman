@@ -226,9 +226,12 @@ through separate continuations. Fake-clock tests cover cleanup before retry
 and deadline handling. The Rust CLI gathers stdin, script files, and direct
 imports, supports checked and explicitly unchecked lowering, and drives
 the initial print, subprocess, output, and clock effects. Effect coverage is
-partial. Cross-call retry, most expression evaluation, typed builtins,
-signals, process-group ownership, and the remaining inspection modes are
-pending. The Go harness still uses the Go shell.
+partial. The interpreter now evaluates nested paths, interpolation, unary
+predicates, short-circuit operations, and compatible scalar comparisons.
+Integer comparisons do not round through floating point. Cross-call retry,
+arithmetic, match and call evaluation, typed builtins, signals, process-group
+ownership, and the remaining inspection modes are pending. The Go harness
+still uses the Go shell.
 
 ## Typestate and internal invariants
 

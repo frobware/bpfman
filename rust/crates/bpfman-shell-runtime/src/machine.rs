@@ -6,6 +6,7 @@ use bpfman_shell_source::Span;
 use crate::{Argument, Number, Value};
 
 mod calls;
+mod compare;
 mod loops;
 mod polls;
 
@@ -581,6 +582,7 @@ impl<'a> Machine<'a> {
         Ok(match &expression.node {
             ir::ExpressionKind::Word(text) => Argument::Word(text.clone()),
             ir::ExpressionKind::Quoted(text) => Argument::Quoted(text.clone()),
+            ir::ExpressionKind::Variable(variable) => Argument::Value(self.lookup(variable, true)?),
             _ => Argument::Value(self.eval(expression)?),
         })
     }
@@ -604,22 +606,63 @@ impl<'a> Machine<'a> {
                 },
             },
             ir::ExpressionKind::Quoted(text) => Value::String(text.clone()),
-            ir::ExpressionKind::Variable(variable) => {
-                let mut value = self
-                    .frames
-                    .iter()
-                    .rev()
-                    .find_map(|frame| frame.get(&variable.name))
-                    .cloned()
-                    .ok_or_else(|| format!("undefined variable: {}", variable.name))?;
-                for field in variable.path.split('.').filter(|field| !field.is_empty()) {
-                    value = match value {
-                        Value::Outcome(outcome) => outcome_field(&outcome, field)?,
-                        Value::Record(mut fields) => fields.remove(field).unwrap_or(Value::Absent),
-                        _ => return Err(format!("cannot access field {field:?}")),
-                    };
+            ir::ExpressionKind::Variable(variable) => self.lookup(variable, false)?,
+            ir::ExpressionKind::Binary {
+                left,
+                operator,
+                right,
+            } => compare::evaluate(*operator, self.eval(left)?, self.eval(right)?)?,
+            ir::ExpressionKind::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                let left = boolean(self.eval(left)?)?;
+                let short = matches!(
+                    (operator, left),
+                    (ir::LogicalOperator::And, false) | (ir::LogicalOperator::Or, true)
+                );
+                Value::Bool(if short {
+                    left
+                } else {
+                    boolean(self.eval(right)?)?
+                })
+            }
+            ir::ExpressionKind::Unary { operator, operand } => {
+                let value = self.eval(operand)?;
+                match operator {
+                    ir::UnaryOperator::Not => Value::Bool(!boolean(value)?),
+                    ir::UnaryOperator::NotEmpty => Value::Bool(!is_empty(&value)),
+                    ir::UnaryOperator::Negate => {
+                        let Value::Number(number) = value else {
+                            return Err("negation requires a number".to_owned());
+                        };
+                        let text = number.as_str();
+                        let negated = if let Some(positive) = text.strip_prefix('-') {
+                            positive.to_owned()
+                        } else {
+                            format!("-{text}")
+                        };
+                        Value::Number(Number::new(negated).ok_or("invalid negated number")?)
+                    }
                 }
-                value
+            }
+            ir::ExpressionKind::Interpolated(parts) => {
+                let mut text = String::new();
+                for part in parts {
+                    match part {
+                        ir::InterpolatedPart::Literal(literal) => text.push_str(literal),
+                        ir::InterpolatedPart::Expression(value) => {
+                            let value = self.eval(value)?;
+                            text.push_str(
+                                &value
+                                    .scalar_text()
+                                    .ok_or("interpolation requires a scalar")?,
+                            );
+                        }
+                    }
+                }
+                Value::String(text)
             }
             ir::ExpressionKind::List(items) => Value::List(
                 items
@@ -639,6 +682,78 @@ impl<'a> Machine<'a> {
             _ => return Err("expression is not yet implemented".to_owned()),
         })
     }
+    fn lookup(&self, variable: &ir::VariableRef, soft: bool) -> Result<Value, String> {
+        let find = |name: &str| self.frames.iter().rev().find_map(|frame| frame.get(name));
+        let mut value = find(&variable.name)
+            .cloned()
+            .ok_or_else(|| format!("undefined variable: {}", variable.name))?;
+        let mut path = variable.path.as_str();
+        while !path.is_empty() {
+            path = path.strip_prefix('.').unwrap_or(path);
+            if let Some(index_path) = path.strip_prefix('[') {
+                let (index, rest) = index_path.split_once(']').ok_or("unclosed index")?;
+                let index = if let Some(variable) = index.strip_prefix('$') {
+                    find(variable)
+                        .and_then(Value::scalar_text)
+                        .and_then(|text| text.parse::<usize>().ok())
+                } else {
+                    index.parse::<usize>().ok()
+                }
+                .ok_or("invalid list index")?;
+                let Value::List(items) = value else {
+                    return Err("cannot index a non-list".to_owned());
+                };
+                value = items.into_iter().nth(index).unwrap_or(Value::Absent);
+                path = rest;
+            } else {
+                let boundary = path.find(['.', '[']).unwrap_or(path.len());
+                let (field, rest) = path.split_at(boundary);
+                value = field_value(value, field)?;
+                path = rest;
+            }
+            if value == Value::Absent {
+                return if soft {
+                    Ok(Value::Absent)
+                } else {
+                    Err(format!(
+                        "{}: path {:?} is absent",
+                        variable.name, variable.path
+                    ))
+                };
+            }
+        }
+        Ok(value)
+    }
+}
+
+fn boolean(value: Value) -> Result<bool, String> {
+    if let Value::Bool(value) = value {
+        Ok(value)
+    } else {
+        Err("condition must evaluate to a boolean".to_owned())
+    }
+}
+
+fn is_empty(value: &Value) -> bool {
+    match value {
+        Value::Absent | Value::Null | Value::Bool(false) => true,
+        Value::String(text) => text.is_empty(),
+        Value::Number(number) => number
+            .as_str()
+            .parse::<f64>()
+            .is_ok_and(|value| value == 0.0),
+        Value::List(values) => values.is_empty(),
+        Value::Record(fields) => fields.is_empty(),
+        _ => false,
+    }
+}
+
+fn field_value(value: Value, field: &str) -> Result<Value, String> {
+    match value {
+        Value::Outcome(outcome) => outcome_field(&outcome, field),
+        Value::Record(mut fields) => Ok(fields.remove(field).unwrap_or(Value::Absent)),
+        _ => Err(format!("cannot access field {field:?}")),
+    }
 }
 
 fn outcome_field(outcome: &CommandResponse, field: &str) -> Result<Value, String> {
@@ -656,7 +771,7 @@ fn outcome_field(outcome: &CommandResponse, field: &str) -> Result<Value, String
             .and_then(|pid| Number::new(pid.to_string()))
             .map_or(Value::Absent, Value::Number)),
         "value" => Ok(outcome.primary.clone()),
-        _ => Err(format!("unknown outcome field {field:?}")),
+        _ => Ok(Value::Absent),
     }
 }
 
@@ -926,5 +1041,29 @@ mod tests {
             unreachable!("expected timeout at the deadline");
         };
         assert_eq!(error.message, "poll timed out after 2 attempt(s): waiting");
+    }
+
+    #[test]
+    fn evaluation_preserves_large_integer_order_and_short_circuits() {
+        let program = program(
+            "let high = 99999999999999999999999999999999\nlet low = 99999999999999999999999999999998\nlet index = 1\nlet data = record { items: [spare ready] }\nif $high > $low or jq . $low { print \"${data.items[$index]} ${$high}\" }",
+        );
+        let Step::Command {
+            request,
+            continuation,
+        } = execute(&program, HashMap::new())
+        else {
+            unreachable!("expected a command after the short-circuit");
+        };
+        assert_eq!(
+            request.arguments,
+            [Argument::Value(Value::String(
+                "ready 99999999999999999999999999999999".to_owned()
+            ))]
+        );
+        assert!(matches!(
+            continuation.resume(result(0, Value::Absent)),
+            Step::Finished { exit_code: 0 }
+        ));
     }
 }

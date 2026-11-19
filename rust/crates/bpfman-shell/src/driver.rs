@@ -143,12 +143,7 @@ fn argument(argument: &Argument) -> Result<String, String> {
 }
 
 fn scalar(value: &Value) -> Result<String, String> {
-    match value {
-        Value::Absent => Err("expected a value".to_owned()),
-        Value::Null => Ok("null".to_owned()),
-        Value::Bool(value) => Ok(value.to_string()),
-        Value::Number(value) => Ok(value.as_str().to_owned()),
-        Value::String(value) => Ok(value.clone()),
-        _ => Err("expected a scalar".to_owned()),
-    }
+    value
+        .scalar_text()
+        .ok_or_else(|| "expected a scalar".to_owned())
 }
