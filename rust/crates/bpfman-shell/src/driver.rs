@@ -8,11 +8,13 @@ use std::{
 
 use bpfman_shell_ir::Program;
 use bpfman_shell_runtime::{
-    Argument, CommandRequest, CommandResponse, DispatchLane, OutputStream, Step, Value, execute,
+    Argument, CommandRequest, CommandResponse, DispatchLane, OutputStream, QueryRequest, Step,
+    Value, execute,
 };
 
 mod bpfman;
 mod files;
+mod query;
 
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
@@ -42,9 +44,10 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
                     .map_err(|error| error.to_string());
                 continuation.resume(present)
             }
-            Step::Query { continuation, .. } => {
-                continuation.resume(Err("jq adapter is not yet implemented".to_owned()))
-            }
+            Step::Query {
+                request,
+                continuation,
+            } => continuation.resume(query::run(request)),
             Step::ReadClock(continuation) => continuation.resume(Ok(start.elapsed())),
             Step::Pause {
                 duration,
@@ -63,6 +66,29 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
     let head = argument(&request.head)?;
     if head == "bpfman" {
         return bpfman::invoke(request.arguments);
+    }
+    if head == "jq" {
+        let [filter, input] = <[Argument; 2]>::try_from(request.arguments)
+            .map_err(|_| "usage: jq <filter> <value>".to_owned())?;
+        let mut values = query::run(QueryRequest {
+            filter: argument(&filter)?,
+            input: input.into(),
+            span: request.span,
+        })?;
+        let primary = match values.len() {
+            0 => Value::Absent,
+            1 => values.pop().unwrap_or(Value::Absent),
+            _ => Value::List(values),
+        };
+        return Ok(CommandResponse {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            primary,
+            killed: false,
+            signal: None,
+            pid: None,
+        });
     }
     if head == "print" {
         let pretty = request.arguments.len() == 1;
@@ -127,7 +153,6 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
                 | "fire"
                 | "import"
                 | "jobs"
-                | "jq"
                 | "kfunc"
                 | "kill"
                 | "linkinfo"

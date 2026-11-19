@@ -101,7 +101,7 @@ impl Shape {
     }
 }
 
-fn project(json: Json) -> Result<Value, String> {
+pub(super) fn project(json: Json) -> Result<Value, String> {
     Ok(match json {
         Json::Null => Value::Null,
         Json::Bool(value) => Value::Bool(value),

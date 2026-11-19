@@ -102,6 +102,15 @@ pub enum QueryInput {
     Value(Value),
 }
 
+impl From<Argument> for QueryInput {
+    fn from(argument: Argument) -> Self {
+        match argument {
+            Argument::Word(text) | Argument::Quoted(text) => Self::JsonText(text),
+            Argument::Value(value) | Argument::Adapter { value, .. } => Self::Value(value),
+        }
+    }
+}
+
 /// A jq query request.
 pub struct QueryRequest {
     /// Filter source.
@@ -157,15 +166,11 @@ impl Machine<'_> {
                 value.scalar_text().ok_or("jq requires a scalar filter")?
             }
         };
-        let input = match input {
-            Argument::Word(text) | Argument::Quoted(text) => QueryInput::JsonText(text),
-            Argument::Value(value) | Argument::Adapter { value, .. } => QueryInput::Value(value),
-        };
         Err(EvalError::Query {
             key,
             request: Box::new(QueryRequest {
                 filter,
-                input,
+                input: input.into(),
                 span: expression.span.clone(),
             }),
         })

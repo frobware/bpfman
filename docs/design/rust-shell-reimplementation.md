@@ -247,8 +247,8 @@ The `path-exists` expression requests a typed filesystem observation. Multiple
 queries in one expression resume in order, with observations reused only
 until that instruction completes. The jq effect distinguishes literal JSON
 text from already typed values and preserves zero, one, or multiple results.
-An in-process jq adapter and its compatibility audit remain pending, along
-with non-jq threaded calls and remaining
+An in-process jq adapter is available for expression, thread and standalone
+calls. Non-jq threaded calls and remaining
 typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently
@@ -398,19 +398,14 @@ regex `test`, `capture`, `sub`, `scan`, and `splits`. Build the full jq standard
 definitions/functions and enable `jaq-std`'s regex feature. Parse user-written
 JSON strictly before converting to `jaq-json::Val`; its parser accepts a JSON
 superset, whereas the Go shell's input boundary accepts JSON only. Preserve
-large integers without a `serde_json::Number` or `f64` round trip.
+large integers with the `serde_json` arbitrary-precision feature and
+jaq's integer representation.
 
-`jaq` is the chosen candidate, not yet an admitted dependency. Gather every
-checked-in filter from the shell unit tests, behaviour fixtures and e2e
-scripts. Compare Go and Rust evaluation on the same typed inputs for
-parse/runtime errors, zero/one/multiple results, explicit null, strings,
-regex, object ordering, and large integer arithmetic. In particular, `jaq`
-3 accepts multiple JSON values in `fromjson` where jq rejects them; check
-the Go behaviour and bridge any difference in the adapter. The shell's
-`tojson` comparisons also make key ordering observable. Admit exact versions
-only after checking the selected Cargo feature closure for permissive licenses
-and the workspace's Rust 1.87 minimum. Record each difference as a regression
-test. Do not weaken scripts or call out to jq or the Go binary.
+The shell driver pins `jaq-core` 3.1.2, `jaq-std` 3.0.4 and `jaq-json`
+2.0.3. Cargo resolved the updated lockfile for the workspace's Rust 1.87
+minimum. The three crates declare Rust 1.69 or 1.70 and MIT. The new
+transitive crates have permissive license options including MIT, Apache-2.0,
+and Zlib. The dependency law restricts the engine to the shell driver.
 
 The Go shell accepted `1]` and `1}` as the number `1` at the jq input
 boundary. `Decoder.More()` treated those delimiters as the end of a container
@@ -439,8 +434,12 @@ inputs agreed on the result stream or on whether evaluation failed. The six
 differences were negative indexing on strings and objects. The two
 literal filters that use negative indexes both access the array produced by
 `splits` in `TestLink_Presentation.bpfman`, and array indexing agreed.
-This probe still leaves variable and interpolated filters, inputs from the
-actual scripts, and diagnostic text to verify.
+An instrumented Go shell recorded both literal and computed queries while
+running the scripts against Go and Rust daemons. The shared Go run had
+fixture failures. The isolated Rust run with the `rust=ok,!external`
+selector passed. Across both captures, all 3,482 distinct filter/input pairs
+produced the same result streams in gojq and the candidate. Exact error text
+and the four-way shell/daemon acceptance matrix remain open.
 
 The Go embed returns an empty object from `env`, allows `now`, rejects
 `input`, and exposes neither `debug` nor `stderr`. The probe replaces

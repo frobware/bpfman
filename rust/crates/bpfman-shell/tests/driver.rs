@@ -30,6 +30,54 @@ fn run_command(command: &mut Command, source: &str) -> io::Result<Output> {
 }
 
 #[test]
+fn embedded_jq_preserves_precision_result_stream_and_argument_origin() -> io::Result<()> {
+    let output = run(
+        &[],
+        r#"
+let n = '100000000000000000000' |> jq '. * .'
+let absent = 'null' |> jq empty
+let present_null = 'null' |> jq .
+let present_list = 'null' |> jq 'null, true'
+let source = '1]'
+let typed_string = (jq . $source)
+let keys = '{"z":1,"a":2}' |> jq tojson
+let captured = ('"aab"' |> jq 'capture("(?<key>a+)").key')
+assert missing $absent
+assert null $present_null
+assert present $present_list
+print $n $typed_string $keys $captured
+jq "." "1"
+"#,
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"10000000000000000000000000000000000000000 1] {\"a\":2,\"z\":1} aa\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn embedded_jq_rejects_trailing_json_in_both_decoders() -> io::Result<()> {
+    for (source, message) in [
+        ("let result = '1]' |> jq .", "input is not valid JSON"),
+        (
+            "let result = '\"1 2\"' |> jq fromjson",
+            "fromjson cannot be applied",
+        ),
+        ("let result = 'null' |> jq '.['", "parse filter"),
+    ] {
+        let output = run(&[], source)?;
+        assert!(!output.status.success(), "{output:?}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{output:?}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn typed_bpfman_uses_the_selected_binary_and_round_trips_ids() -> io::Result<()> {
     let dir = tempfile::tempdir()?;
     let binary = dir.path().join("selected-bpfman");

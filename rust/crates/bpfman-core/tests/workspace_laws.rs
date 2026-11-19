@@ -288,6 +288,10 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                     matches!(name, "bpfman" | "bpfman-shell"),
                     "CLI parsing belongs in the outer binaries"
                 ),
+                "jaq-core" | "jaq-json" | "jaq-std" => assert_eq!(
+                    name, "bpfman-shell",
+                    "embedded query evaluation belongs to the shell driver"
+                ),
                 "anyhow" | "tracing-subscriber" | "tracing-chrome" => assert_eq!(
                     name, "bpfman",
                     "CLI parsing, reports, and telemetry collection belong in the binary"

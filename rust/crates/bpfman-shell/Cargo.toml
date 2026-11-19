@@ -15,6 +15,9 @@ bpfman-shell-lower = { path = "../bpfman-shell-lower" }
 bpfman-shell-runtime = { path = "../bpfman-shell-runtime" }
 bpfman-shell-syntax = { path = "../bpfman-shell-syntax" }
 clap.workspace = true
+jaq-core = "=3.1.2"
+jaq-json = "=2.0.3"
+jaq-std = "=3.0.4"
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 tempfile.workspace = true
 

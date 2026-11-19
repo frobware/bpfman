@@ -105,7 +105,7 @@ fn new_file(argument: &Argument) -> Result<NamedTempFile, String> {
     Ok(file)
 }
 
-fn to_json(value: &Value) -> Result<Json, String> {
+pub(super) fn to_json(value: &Value) -> Result<Json, String> {
     Ok(match value {
         Value::Absent | Value::Null => Json::Null,
         Value::Bool(value) => Json::Bool(*value),
