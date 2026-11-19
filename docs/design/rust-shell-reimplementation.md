@@ -412,10 +412,10 @@ only after checking the selected Cargo feature closure for permissive licenses
 and the workspace's Rust 1.87 minimum. Record each difference as a regression
 test. Do not weaken scripts or call out to jq or the Go binary.
 
-The Go scalar decoder currently checks `Decoder.More()` after its first
-decode. That does not reject every trailing token at top level; another
-runtime JSON decoder already uses a second `Decode` for this reason. Record
-the observed Go behaviour in a differential test, then fix the Go boundary
-and make the Rust boundary strict if this is confirmed as an unintended bug.
+The Go shell accepted `1]` and `1}` as the number `1` at the jq input
+boundary. `Decoder.More()` treated those delimiters as the end of a container
+even at top level. The Go boundary now requires EOF after decoding one value
+and has regression tests for both unmatched delimiters and a second value.
+The Rust adapter will enforce the same single-value boundary.
 Also check whether gojq's arbitrary-size integer results are converted by
 the existing wrapper before treating large-integer output as compatible.

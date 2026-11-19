@@ -7,6 +7,7 @@ package builtins
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -158,7 +159,7 @@ func decodeJQScalar(text string) (any, error) {
 	if err := dec.Decode(&v); err != nil {
 		return nil, fmt.Errorf("input is not valid JSON: %w", err)
 	}
-	if dec.More() {
+	if err := dec.Decode(new(any)); err != io.EOF {
 		return nil, fmt.Errorf("input is not valid JSON: trailing data after value")
 	}
 	return v, nil

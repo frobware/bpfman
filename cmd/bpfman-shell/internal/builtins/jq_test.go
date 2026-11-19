@@ -59,6 +59,20 @@ func TestJQ_ScalarNotValidJSONIsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "not valid JSON")
 }
 
+func TestJQ_ScalarRejectsTrailingData(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{"1]", "1}", "1 2"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := jqCall(t, []runtime.Arg{
+				runtime.WordArg{Text: "."},
+				runtime.QuotedArg{Text: input},
+			})
+			require.ErrorContains(t, err, "input is not valid JSON: trailing data after value")
+		})
+	}
+}
+
 func TestJQ_PathOnStructured(t *testing.T) {
 	t.Parallel()
 
