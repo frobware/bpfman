@@ -30,10 +30,10 @@ pub(super) fn invoke(arguments: Vec<Argument>) -> Result<CommandResponse, String
     let shape = match (noun, verb) {
         ("program", "get") => Shape::Program,
         ("link", "get" | "attach") => Shape::Link,
-        ("program", "list" | "load")
-        | ("link", "list")
-        | ("dispatcher", "get" | "list")
-        | ("image", "inspect") => Shape::Json,
+        ("program", "load") => Shape::LoadedPrograms,
+        ("program" | "link", "list") | ("dispatcher", "get" | "list") | ("image", "inspect") => {
+            Shape::Json
+        }
         _ => Shape::Void,
     };
     if format_supported && !output_format {
@@ -74,6 +74,7 @@ enum Shape {
     Json,
     Program,
     Link,
+    LoadedPrograms,
 }
 
 impl Shape {
@@ -83,22 +84,47 @@ impl Shape {
         }
         let json: Json = serde_json::from_slice(stdout)
             .map_err(|error| format!("decode bpfman output: {error}"))?;
-        let id_key = match self {
-            Self::Program => "program_id",
-            Self::Link => "id",
-            _ => return project(json),
-        };
-        let id = json
-            .get("record")
-            .and_then(|record| record.get(id_key))
-            .and_then(Json::as_number)
-            .and_then(|number| Number::new(number.to_string()))
-            .ok_or_else(|| format!("bpfman output has no numeric record.{id_key}"))?;
-        let Value::Record(fields) = project(json)? else {
-            return Err("expected a bpfman record".to_owned());
-        };
-        Ok(Value::BpfmanRecord { fields, id })
+        match self {
+            Self::Program => project_managed(json, "program_id"),
+            Self::Link => project_managed(json, "id"),
+            Self::LoadedPrograms => project_loaded(json),
+            Self::Void | Self::Json => project(json),
+        }
     }
+}
+
+fn project_loaded(json: Json) -> Result<Value, String> {
+    let Json::Object(fields) = json else {
+        return project(json);
+    };
+    let fields = fields
+        .into_iter()
+        .map(|(key, value)| {
+            let value = match value {
+                Json::Array(rows) if key == "programs" => Value::List(
+                    rows.into_iter()
+                        .map(|row| project_managed(row, "program_id"))
+                        .collect::<Result<_, _>>()?,
+                ),
+                other => project(other)?,
+            };
+            Ok((key, value))
+        })
+        .collect::<Result<_, String>>()?;
+    Ok(Value::Record(fields))
+}
+
+fn project_managed(json: Json, id_key: &str) -> Result<Value, String> {
+    let id = json
+        .get("record")
+        .and_then(|record| record.get(id_key))
+        .and_then(Json::as_number)
+        .and_then(|number| Number::new(number.to_string()))
+        .ok_or_else(|| format!("bpfman output has no numeric record.{id_key}"))?;
+    let Value::Record(fields) = project(json)? else {
+        return Err("expected a bpfman record".to_owned());
+    };
+    Ok(Value::BpfmanRecord { fields, id })
 }
 
 pub(super) fn project(json: Json) -> Result<Value, String> {

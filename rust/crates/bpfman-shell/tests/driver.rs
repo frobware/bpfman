@@ -111,8 +111,11 @@ fn typed_bpfman_uses_the_selected_binary_and_round_trips_ids() -> io::Result<()>
         &binary,
         concat!(
             "#!/bin/sh\n",
-            "test \"$1 $2 $3 $4 $5\" = 'program get 7 -o json' || exit 71\n",
-            "printf '%s' '{\"record\":{\"program_id\":7},\"big\":18446744073709551615}'\n",
+            "if test \"$*\" = 'program load file dummy.o -o json'; then\n",
+            "  printf '%s' '{\"programs\":[{\"record\":{\"program_id\":7}}]}'\n",
+            "elif test \"$*\" = 'program get 7 -o json'; then\n",
+            "  printf '%s' '{\"record\":{\"program_id\":7},\"big\":18446744073709551615}'\n",
+            "else exit 71; fi\n",
         ),
     )?;
     fs::set_permissions(&binary, fs::Permissions::from_mode(0o755))?;
@@ -120,7 +123,7 @@ fn typed_bpfman_uses_the_selected_binary_and_round_trips_ids() -> io::Result<()>
     command.env("BPFMAN_BIN", &binary);
     let output = run_command(
         &mut command,
-        "guard p <- bpfman program get 7\nguard q <- bpfman program get $p\nprint $q.record.program_id $q.big",
+        "guard loaded <- bpfman program load file dummy.o\nguard p <- bpfman program get $loaded.programs[0]\nguard q <- bpfman program get $p\nprint $q.record.program_id $q.big",
     )?;
     assert!(output.status.success(), "{output:?}");
     assert_eq!(output.stdout, b"7 18446744073709551615\n");

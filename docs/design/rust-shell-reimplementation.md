@@ -259,6 +259,12 @@ contain the Rust shell. A temporary directory exposes just the selected daemon
 first on script PATH. The selected shell's directory follows it so scripts
 that look up the shell's fixture helpers find the same executable.
 
+The Rust shell and Rust daemon passed the tracepoint load fixture and the
+metadata and global-data fixture. The latter verified that elements of
+`program load`'s `programs` list retain the program ID capability when passed
+back to `bpfman`. The first broader isolated run exposed missing network
+topology and kernel-function adapters, which account for most early failures.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and
