@@ -1,18 +1,20 @@
 //! Conservative shape propagation and proved field-access diagnostics.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use bpfman_shell_semantics::{
-    FieldLookup, OriginKind, Shape, bind_primary_shape, collect_shape, kind_shape, outcome_shape,
-    pure_shape,
+    FieldLookup, OriginKind, Shape, collect_shape, kind_shape, outcome_shape, pure_shape,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax::{
-    AssertionClause, BinaryOperator, Command, Expression, ExpressionKind, InterpolatedPart,
-    MatchPattern, MatchesBlock, Statement, StatementKind, VariableRef, is_json_number,
+    AssertionClause, BinaryOperator, BindMode, Command, Definition, Expression, ExpressionKind,
+    InterpolatedPart, MatchPattern, MatchesBlock, Statement, StatementKind, VariableRef,
+    is_json_number,
 };
 
 use crate::{ExpandedProgram, Issue};
+
+mod returns;
 
 /// Report proved field-access mistakes, incompatible comparison operands, and
 /// provably nonnumeric arithmetic operands.
@@ -24,22 +26,24 @@ pub fn analyze_shapes(program: &ExpandedProgram) -> Vec<Issue> {
         .statements()
         .iter()
         .filter_map(|statement| match statement.kind() {
-            StatementKind::Definition(definition) => Some(definition.name().text().to_owned()),
+            StatementKind::Definition(definition) => Some((definition.name().text(), definition)),
             _ => None,
         })
         .collect();
     let mut analysis = Analysis {
         frames: vec![HashMap::new()],
         defs,
+        returns: HashMap::new(),
         issues: Vec::new(),
     };
     analysis.statements(program.statements());
     analysis.issues
 }
 
-struct Analysis {
+struct Analysis<'a> {
     frames: Vec<HashMap<String, Binding>>,
-    defs: HashSet<String>,
+    defs: HashMap<&'a str, &'a Definition>,
+    returns: HashMap<&'a str, returns::Inference>,
     issues: Vec<Issue>,
 }
 
@@ -48,7 +52,7 @@ struct Binding {
     nonnumeric_literal: Option<String>,
 }
 
-impl Analysis {
+impl Analysis<'_> {
     fn issue(&mut self, span: &Span, message: impl Into<String>) {
         self.issues.push(Issue {
             span: span.clone(),
@@ -78,13 +82,32 @@ impl Analysis {
         self.frames.iter().rev().find_map(|frame| frame.get(name))
     }
 
-    fn scoped(&mut self, names: impl IntoIterator<Item = String>, body: &[Statement]) {
+    fn push_scope(&mut self, names: impl IntoIterator<Item = String>) {
         self.frames.push(HashMap::new());
         for name in names {
             self.define(&name, Shape::unknown());
         }
+    }
+
+    fn scoped(&mut self, names: impl IntoIterator<Item = String>, body: &[Statement]) {
+        self.push_scope(names);
         self.statements(body);
         self.frames.pop();
+    }
+
+    fn bind_shape(&mut self, mode: BindMode, command: &Command) -> Shape {
+        let primary = self.primary_shape(command);
+        match mode {
+            BindMode::Guard => primary,
+            BindMode::Let => outcome_shape(primary),
+        }
+    }
+
+    fn collect_primary_shape(&mut self, body: &[Statement]) -> Shape {
+        match body.last().map(Statement::kind) {
+            Some(StatementKind::Command(command)) => self.primary_shape(command),
+            _ => Shape::unknown(),
+        }
     }
 
     fn statements(&mut self, statements: &[Statement]) {
@@ -127,17 +150,7 @@ impl Analysis {
                 command,
             } => {
                 self.command(command);
-                let primary = if matches!(command.head().kind(), ExpressionKind::Word(head) if self.defs.contains(head))
-                {
-                    Shape::unknown()
-                } else {
-                    bind_primary_shape(command)
-                };
-                let shape = if *mode == bpfman_shell_syntax::BindMode::Guard {
-                    primary
-                } else {
-                    outcome_shape(primary)
-                };
+                let shape = self.bind_shape(*mode, command);
                 self.define(name.text(), shape);
             }
             StatementKind::BindCollect {
@@ -153,16 +166,10 @@ impl Analysis {
                     bindings.names().iter().map(|name| name.text().to_owned()),
                     body,
                 );
-                let primary = match body.last().map(Statement::kind) {
-                    Some(StatementKind::Command(command)) if matches!(command.head().kind(), ExpressionKind::Word(head) if self.defs.contains(head)) => {
-                        Shape::unknown()
-                    }
-                    Some(StatementKind::Command(command)) => bind_primary_shape(command),
-                    _ => Shape::unknown(),
-                };
+                let primary = self.collect_primary_shape(body);
                 self.define(
                     name.text(),
-                    collect_shape(primary, *mode == bpfman_shell_syntax::BindMode::Guard),
+                    collect_shape(primary, *mode == BindMode::Guard),
                 );
             }
             StatementKind::Definition(definition) => {
@@ -242,7 +249,7 @@ impl Analysis {
                 crate::arithmetic::check(
                     *operator,
                     [left, right],
-                    |name| self.defs.contains(name),
+                    |name| self.defs.contains_key(name),
                     |operand| self.arithmetic_variable_issue(operand),
                     &mut arithmetic_issues,
                 );
@@ -250,7 +257,7 @@ impl Analysis {
                 if let Some(issue) = crate::comparison::issue(
                     value,
                     |operand| self.infer(operand),
-                    |name| self.defs.contains(name),
+                    |name| self.defs.contains_key(name),
                 ) {
                     self.issues.push(issue);
                 }
@@ -607,5 +614,39 @@ mod tests {
                 "arithmetic /: nothing is null, not a number",
             ]
         );
+    }
+
+    #[test]
+    fn definition_return_shapes_flow_through_hoisted_bind_and_collect() {
+        let found = messages(
+            "guard direct <- outer\nprint $direct.id\nprint $direct.typo\nlet wrapped <- inner\nprint $wrapped.value.typo\nguard collected <- foreach n in [1] { inner }\nprint $collected[0].typo\ndef outer() { guard value <- inner\n return $value }\ndef inner() { let value = record { id: 1 }\n return $value }",
+        );
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(found.iter().all(|issue| issue.contains("valid: id")));
+    }
+
+    #[test]
+    fn exhaustive_returns_join_only_matching_shapes() {
+        let found = messages(
+            "def same(flag) { if $flag { return record { id: 1 } }\n return record { id: 2 } }\ndef different(flag) { if $flag { return record { id: 1 } } else { return record { name: x } } }\ndef partial(flag) { if $flag { return record { id: 1 } } }\nguard a <- same true\nprint $a.typo\nguard b <- different true\nprint $b.typo\nguard c <- partial true\nprint $c.typo",
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("a has no field"));
+    }
+
+    #[test]
+    fn recursive_definitions_and_caller_bindings_stay_open() {
+        assert!(messages(
+            "let caller = record { id: 1 }\ndef local() { return $caller }\ndef first() { guard value <- second\n return $value }\ndef second() { guard value <- first\n return $value }\nguard a <- first\nprint $a.typo\nguard b <- local\nprint $b.typo"
+        ).is_empty());
+    }
+
+    #[test]
+    fn no_return_definition_has_result_shape_but_loops_may_return() {
+        let found = messages(
+            "def no_return() { print ok }\ndef maybe() { foreach n in [1] { return record { id: 1 } } }\nguard a <- no_return\nprint $a.exit_code\nprint $a.typo\nguard b <- maybe\nprint $b.typo",
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("a has kind result"));
     }
 }

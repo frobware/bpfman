@@ -156,7 +156,12 @@ at the operand span. Binary arithmetic checks each literal operand against
 the JSON-number grammar, including operands inside interpolation. Variable
 operands use lexical binding evidence, including known nonnumeric literal
 assignments and proved nonnumeric kinds. Dynamic operands remain runtime
-checked. Definition return shapes and the full preflight gate are pending.
+checked. Definition bind shapes are inferred on demand from hoisted bodies in
+isolated lexical frames. Matching return shapes propagate when every path
+returns, including through nested binds and collect producers. Disagreeing
+returns, possible fallthrough, and recursive inference without a proved shape
+stay open. Definitions without a return produce the ordinary command result
+shape. The full preflight gate is pending.
 
 ## Typestate and internal invariants
 
