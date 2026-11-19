@@ -4,7 +4,7 @@ mod machine;
 mod value;
 
 pub use machine::{
-    CommandContinuation, CommandRequest, CommandResponse, DispatchLane, ExecutionError,
-    OutputContinuation, OutputRequest, Step, execute,
+    ClockContinuation, CommandContinuation, CommandRequest, CommandResponse, DispatchLane,
+    ExecutionError, OutputContinuation, OutputRequest, PauseContinuation, Step, execute,
 };
 pub use value::{Argument, Number, Value};

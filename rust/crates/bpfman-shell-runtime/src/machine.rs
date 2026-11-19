@@ -7,6 +7,9 @@ use crate::{Argument, Number, Value};
 
 mod calls;
 mod loops;
+mod polls;
+
+pub use polls::{ClockContinuation, PauseContinuation};
 
 /// A suspended interpreter step or its final result.
 pub enum Step<'a> {
@@ -23,6 +26,15 @@ pub enum Step<'a> {
         request: OutputRequest,
         /// State that accepts the output observation.
         continuation: OutputContinuation<'a>,
+    },
+    /// Request the driver's current monotonic time.
+    ReadClock(ClockContinuation<'a>),
+    /// Request an interruptible delay.
+    Pause {
+        /// Requested delay.
+        duration: std::time::Duration,
+        /// State that accepts completion of the delay.
+        continuation: PauseContinuation<'a>,
     },
     /// The program has finished.
     Finished {
@@ -172,6 +184,8 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         temps: (0..program.num_temps()).map(|_| None).collect(),
         frames: vec![bindings],
         loops: Vec::new(),
+        polls: Vec::new(),
+        attempt_cleanup: None,
         deferred: Vec::new(),
         draining: None,
         unit: None,
@@ -220,6 +234,8 @@ struct Machine<'a> {
     temps: Vec<Option<Slot>>,
     frames: Vec<HashMap<String, Value>>,
     loops: Vec<loops::Iteration>,
+    polls: Vec<polls::Poll>,
+    attempt_cleanup: Option<Span>,
     deferred: Vec<(Argv, Span)>,
     draining: Option<usize>,
     unit: Option<usize>,
@@ -234,6 +250,7 @@ enum Action {
     Next,
     Command(CommandRequest, CommandPurpose),
     Output(OutputRequest),
+    Clock(polls::ClockPurpose),
     Stop,
 }
 
@@ -253,6 +270,7 @@ impl<'a> Machine<'a> {
                     }
                 }
                 self.draining = None;
+                self.attempt_cleanup = None;
                 if let Some(failure) = self.failure.take() {
                     if let Err(failure) = self.unwind_failed_definition(failure) {
                         return Step::Failed(failure);
@@ -281,6 +299,13 @@ impl<'a> Machine<'a> {
                     return Step::Finished {
                         exit_code: self.exit_code,
                     };
+                }
+                Ok(Action::Clock(purpose)) => {
+                    return Step::ReadClock(ClockContinuation {
+                        machine: self,
+                        purpose,
+                        span: span.clone(),
+                    });
                 }
                 Ok(Action::Command(request, purpose)) => {
                     match self.start_definition(&request, purpose) {
@@ -356,10 +381,12 @@ impl<'a> Machine<'a> {
             Instruction::EnterProgramDefers
             | Instruction::TraceBranch(_)
             | Instruction::TraceLoop(_) => {}
-            Instruction::EnterIfFrame | Instruction::EnterDefinitionFrame => {
-                self.frames.push(HashMap::new())
-            }
-            Instruction::EnterDefinitionDefers => {}
+            Instruction::EnterIfFrame
+            | Instruction::EnterDefinitionFrame
+            | Instruction::EnterAttemptFrame => self.frames.push(HashMap::new()),
+            Instruction::EnterDefinitionDefers
+            | Instruction::EnterAttemptDefers
+            | Instruction::TracePoll(_) => {}
             Instruction::ExitFrame => {
                 if self.frames.len() <= 1 {
                     return Err("cannot leave the program frame".to_owned());
@@ -367,6 +394,13 @@ impl<'a> Machine<'a> {
                 self.frames.pop();
             }
             Instruction::RunProgramDefers => self.draining = Some(0),
+            Instruction::RunAttemptDefers => {
+                self.draining = Some(self.polls.last().map_or_else(
+                    || self.callers.last().map_or(0, |caller| caller.deferred_base),
+                    |poll| poll.deferred_base,
+                ));
+                self.attempt_cleanup = Some(span.clone());
+            }
             Instruction::RunDefinitionDefers => {
                 self.draining = self.callers.last().map(|caller| caller.deferred_base);
             }
@@ -463,7 +497,26 @@ impl<'a> Machine<'a> {
     fn terminate(&mut self, terminator: &Terminator) -> Result<Action, String> {
         match *terminator {
             Terminator::Stop => return Ok(Action::Stop),
-            Terminator::Jump(target) => self.jump(target),
+            Terminator::Jump(target) => {
+                if self.polls.last().is_some_and(|poll| poll.success == target) {
+                    self.polls.pop();
+                }
+                self.jump(target);
+            }
+            Terminator::BeginPoll {
+                schedule,
+                attempt,
+                timeout,
+                success,
+            } => {
+                return Ok(Action::Clock(polls::ClockPurpose::Start {
+                    schedule,
+                    attempt,
+                    timeout,
+                    success,
+                }));
+            }
+            Terminator::RetryPoll { target, message } => return self.retry_poll(target, message),
             Terminator::Branch {
                 condition,
                 on_true,
@@ -485,7 +538,11 @@ impl<'a> Machine<'a> {
                 self.jump(epilogue);
             }
             Terminator::FinishDefinition => self.finish_definition()?,
-            Terminator::PropagateError => return Err("missing active error".to_owned()),
+            Terminator::PropagateError => {
+                return Err(self
+                    .poll_timeout()
+                    .unwrap_or_else(|| "missing active error".to_owned()));
+            }
             Terminator::ForEach {
                 list,
                 ref bindings,
@@ -829,5 +886,45 @@ mod tests {
         };
         assert!(error.message.contains("exit 7"));
         assert_eq!(error.span.start().line(), 4);
+    }
+
+    #[test]
+    fn polling_requests_time_and_only_retries_after_attempt_cleanup() {
+        use std::time::Duration;
+
+        let program =
+            program("poll timeout 5s every 1s { defer echo cleanup\n retry \"waiting\" }");
+        let Step::ReadClock(clock) = execute(&program, HashMap::new()) else {
+            unreachable!("expected initial clock observation");
+        };
+        let Step::Command {
+            request,
+            continuation,
+        } = clock.resume(Ok(Duration::ZERO))
+        else {
+            unreachable!("expected first attempt cleanup");
+        };
+        assert_eq!(request.lane, DispatchLane::Deferred);
+        let Step::ReadClock(clock) = continuation.resume(result(0, Value::Absent)) else {
+            unreachable!("expected retry clock observation");
+        };
+        let Step::Pause {
+            duration,
+            continuation,
+        } = clock.resume(Ok(Duration::from_secs(1)))
+        else {
+            unreachable!("expected a delay between attempts");
+        };
+        assert_eq!(duration, Duration::from_secs(1));
+        let Step::Command { continuation, .. } = continuation.resume(Ok(())) else {
+            unreachable!("expected second attempt cleanup");
+        };
+        let Step::ReadClock(clock) = continuation.resume(result(0, Value::Absent)) else {
+            unreachable!("expected second retry clock observation");
+        };
+        let Step::Failed(error) = clock.resume(Ok(Duration::from_secs(5))) else {
+            unreachable!("expected timeout at the deadline");
+        };
+        assert_eq!(error.message, "poll timed out after 2 attempt(s): waiting");
     }
 }

@@ -221,7 +221,9 @@ destructuring, and partial collection publication on break. Definition calls
 resolve before driver dispatch, bind typed parameters, and run with their
 own temporary slots and defer boundary. Tests exercise nested returns,
 both cleanup scopes, and an error in a deferred definition while another
-error is already active. Most expression evaluation, polling, and the
+error is already active. Local polls request monotonic time and delay
+through separate continuations. Fake-clock tests cover cleanup before retry
+and deadline handling. Cross-call retry, most expression evaluation, and the
 effectful driver are pending.
 
 ## Typestate and internal invariants

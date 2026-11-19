@@ -14,6 +14,8 @@ pub(super) struct Caller {
     temps: Vec<Option<Slot>>,
     pub(super) frame_depth: usize,
     loops: Vec<loops::Iteration>,
+    polls: Vec<super::polls::Poll>,
+    attempt_cleanup: Option<bpfman_shell_source::Span>,
     pub(super) deferred_base: usize,
     draining: Option<usize>,
     returned: Value,
@@ -73,6 +75,8 @@ impl Machine<'_> {
             temps: std::mem::replace(&mut self.temps, temps),
             frame_depth: self.frames.len(),
             loops: std::mem::take(&mut self.loops),
+            polls: std::mem::take(&mut self.polls),
+            attempt_cleanup: self.attempt_cleanup.take(),
             deferred_base: self.deferred.len(),
             draining: self.draining.take(),
             returned: std::mem::replace(&mut self.returned, Value::Absent),
@@ -133,6 +137,8 @@ impl Machine<'_> {
         self.temps = caller.temps;
         self.frames.truncate(caller.frame_depth);
         self.loops = caller.loops;
+        self.polls = caller.polls;
+        self.attempt_cleanup = caller.attempt_cleanup;
         self.draining = caller.draining;
         self.failure = caller.prior_failure;
         (caller.purpose, returned, cleanup_failed)
@@ -140,6 +146,15 @@ impl Machine<'_> {
 
     pub(super) fn cleanup_failed(&mut self) {
         self.exit_code = 1;
+        if self.failure.is_none() {
+            if let Some(span) = &self.attempt_cleanup {
+                self.failure = Some(ExecutionError {
+                    span: span.clone(),
+                    message: "poll attempt deferred cleanup failed".to_owned(),
+                });
+                self.draining = Some(self.callers.last().map_or(0, |caller| caller.deferred_base));
+            }
+        }
         if self.unit.is_some() {
             self.local_cleanup_failed = true;
         }
