@@ -161,7 +161,14 @@ isolated lexical frames. Matching return shapes propagate when every path
 returns, including through nested binds and collect producers. Disagreeing
 returns, possible fallthrough, and recursive inference without a proved shape
 stay open. Definitions without a return produce the ordinary command result
-shape. The full preflight gate is pending.
+shape. The job pass follows Go's name-based check for guarded native starts.
+It recognizes waits, kills, and deferred cleanup, and treats direct returns
+from a definition as ownership transfers. Hoisted definitions shadow the
+native commands. The runtime still owns path-sensitive job cleanup. Lexical
+shape checking validates job operands and distinguishes a namespace pair from
+its endpoints for network commands. Job checks use the selected field's shape,
+so a job stored in an outcome's `value` field is accepted. The full preflight
+gate is pending.
 
 ## Typestate and internal invariants
 

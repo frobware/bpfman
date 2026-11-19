@@ -14,6 +14,7 @@ use bpfman_shell_syntax::{
 
 use crate::{ExpandedProgram, Issue};
 
+mod arguments;
 mod returns;
 
 /// Report proved field-access mistakes, incompatible comparison operands, and
@@ -233,6 +234,7 @@ impl Analysis<'_> {
         for argument in command.arguments() {
             self.expression(argument);
         }
+        self.check_native_argument(command);
     }
 
     fn expression(&mut self, value: &Expression) {
@@ -648,5 +650,42 @@ mod tests {
         );
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found[0].contains("a has kind result"));
+    }
+
+    #[test]
+    fn job_commands_check_the_selected_value_shape() {
+        let found = messages(
+            "let scalar = 1\nwait $scalar\ndefer kill --signal=TERM $scalar\nlet started <- start sleep 1\nwait $started.value\nwait $started\nlet open = jq . 1\nwait $open",
+        );
+        assert_eq!(
+            found,
+            [
+                "expected a $job argument, got a scalar value",
+                "expected a $job argument, got a scalar value",
+                "expected a $job argument, got a result value",
+            ]
+        );
+        assert!(
+            messages("let scalar = 1\nwait $scalar\ndef wait(value) { print $value }").is_empty()
+        );
+    }
+
+    #[test]
+    fn network_commands_distinguish_pairs_and_endpoints() {
+        let found = messages(
+            "guard pair <- net netns-veth-pair\nnet exec $pair.a true\nnet start $pair.b true\nnet release $pair\nnet exec $pair true\nnet release $pair.a\nlet scalar = 1\nnet start $scalar true\nlet open = jq . 1\nnet release $open",
+        );
+        assert_eq!(
+            found,
+            [
+                "net exec: netns-veth-pair has two endpoints; use $pair.a or $pair.b",
+                "net release: endpoint belongs to a netns-veth-pair; release the pair",
+                "net start: expected a $pair or endpoint argument, got a scalar value",
+            ]
+        );
+        assert!(
+            messages("let scalar = 1\nnet release $scalar\ndef net(action value) { print $value }")
+                .is_empty()
+        );
     }
 }
