@@ -501,6 +501,18 @@ pub fn bind_primary_shape(command: &Command) -> Shape {
     let ExpressionKind::Word(head) = command.head().kind() else {
         return Shape::unknown();
     };
+    native_bind_shape(command).unwrap_or_else(|| {
+        PureBuiltin::from_name(head).map_or_else(|| kind_shape(OriginKind::Result), pure_shape)
+    })
+}
+
+/// Return the registered shape of a native bind head. An open shape still
+/// identifies a known command. External commands have no registered shape.
+#[must_use]
+pub fn native_bind_shape(command: &Command) -> Option<Shape> {
+    let ExpressionKind::Word(head) = command.head().kind() else {
+        return None;
+    };
     let first = command
         .arguments()
         .first()
@@ -509,7 +521,7 @@ pub fn bind_primary_shape(command: &Command) -> Shape {
             _ => None,
         });
     use OriginKind as K;
-    match head.as_str() {
+    Some(match head.as_str() {
         "start" | "fire" => kind_shape(K::Job),
         "exec" | "wait" | "kill" => kind_shape(K::Result),
         "linkinfo" => kind_shape(K::LinkInfo),
@@ -537,8 +549,8 @@ pub fn bind_primary_shape(command: &Command) -> Shape {
             Some("fire") => kind_shape(K::Result),
             _ => Shape::unknown(),
         },
-        _ => PureBuiltin::from_name(head).map_or_else(|| kind_shape(K::Result), pure_shape),
-    }
+        _ => return None,
+    })
 }
 
 /// The outcome visible from a `let NAME <- COMMAND` bind.

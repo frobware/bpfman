@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use bpfman_shell_semantics::{
-    CommandArity, command_arity, kill_flag_issue, parameter_literal_issue, pure_literal_issue,
+    CommandArity, command_arity, kill_flag_issue, native_bind_shape, parameter_literal_issue,
+    pure_literal_issue,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax::{
@@ -68,8 +69,18 @@ impl Analysis {
                 self.command(command, None)
             }
             StatementKind::Bind { name, command, .. } => self.command(command, Some(name.text())),
-            StatementKind::Let { value, .. }
-            | StatementKind::LetDestructure { value, .. }
+            StatementKind::Let { name, value } => {
+                if let ExpressionKind::Word(word) = value.kind() {
+                    if self.definitions.contains_key(word) {
+                        let name = name.text();
+                        self.issue(value.span(), format!(
+                            "let {name} = {word} binds the literal string {word:?}; {word:?} is a def -- did you mean `let {name} <- {word}`?"
+                        ));
+                    }
+                }
+                self.expression(value);
+            }
+            StatementKind::LetDestructure { value, .. }
             | StatementKind::Expression(value)
             | StatementKind::Return(value) => self.expression(value),
             StatementKind::If {
@@ -127,10 +138,20 @@ impl Analysis {
                     }
                 }
             }
-            if let Some(target) = bind_target {
-                if !self.definitions.contains_key(name) && PureBuiltin::from_name(name).is_some() {
+            if let Some(target) = bind_target.filter(|_| !self.definitions.contains_key(name)) {
+                if PureBuiltin::from_name(name).is_some() {
                     let target = if target == "_" { "x" } else { target };
                     self.issue(command.span(), format!("{name} is a pure builtin; use 'let {target} = {name} ...' rather than '<-' (no result envelope is produced)"));
+                } else if native_bind_shape(command).is_none() {
+                    if let Some(suggestion) = crate::definitions::nearest_definition(
+                        name,
+                        self.definitions.keys().map(String::as_str),
+                    ) {
+                        self.issue(
+                            command.head().span(),
+                            format!("unknown bind head {name:?}; did you mean {suggestion:?}?"),
+                        );
+                    }
                 }
             }
         }

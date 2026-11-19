@@ -1,7 +1,4 @@
-//! Pure scope and control-flow analysis for parsed bpfman-shell programs.
-//!
-//! `analyze_scopes` is an incremental checker pass. It reports only the
-//! contracts documented here and does not produce a checked executable program.
+//! SANS-I/O preflight for expanded bpfman-shell programs.
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -15,8 +12,10 @@ use bpfman_shell_syntax::{
 mod arithmetic;
 mod calls;
 mod comparison;
+mod definitions;
 mod imports;
 mod jobs;
+mod preflight;
 mod shapes;
 
 pub use calls::analyze_calls;
@@ -24,6 +23,7 @@ pub use imports::{
     ExpandedProgram, ImportError, ImportPlan, ImportRequest, expand_imports, prepare_imports,
 };
 pub use jobs::analyze_jobs;
+pub use preflight::{CheckedProgram, check};
 pub use shapes::analyze_shapes;
 
 /// One static finding at its original source extent.

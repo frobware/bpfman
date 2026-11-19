@@ -107,9 +107,8 @@ nested block), and bind-collect loops now have typed AST forms. Bind-collect
 requires a final producer command in its foreach body at parse time, matching
 the Go syntax phase. `let` destructuring now validates positional name lists,
 including discard slots. The accepted Go statement forms have Rust AST variants;
-parser error and formatting parity remain test work. The separate checker is
-being built as incremental pure analyses. None of these analyses yet produces
-the `Checked` state or authorizes execution.
+parser error and formatting parity remain test work. The separate checker
+combines its pure analyses at the preflight boundary.
 
 The import boundary now has a pure two-step API in the checker crate:
 `prepare_imports(parsed, base_dir)` validates all import sites and returns the
@@ -117,10 +116,8 @@ resolved direct paths to gather; the driver supplies their source text to
 `expand_imports(plan, gathered)`. Expansion parses each library, requires
 top-level definitions, rejects duplicate visible definitions, and splices
 those definitions in source order while retaining library source spans.
-`ExpandedProgram` is a distinct type but remains unchecked. The scope pass can
-inspect either parsed or expanded statements; full semantic preflight and the
-`Checked` constructor are still pending.
-The next independent call pass uses hoisted definitions to check command and
+`ExpandedProgram` is a distinct unchecked type. The scope pass can inspect
+either parsed or expanded statements. The call pass uses hoisted definitions to check command and
 thread argument counts, while keeping dynamic heads open. It rejects pure
 builtin names on `<-` binds unless a definition shadows that name. The syntax
 crate exposes one builtin-name and arity lookup so parsing and this pass share
@@ -167,8 +164,13 @@ from a definition as ownership transfers. Hoisted definitions shadow the
 native commands. The runtime still owns path-sensitive job cleanup. Lexical
 shape checking validates job operands and distinguishes a namespace pair from
 its endpoints for network commands. Job checks use the selected field's shape,
-so a job stored in an outcome's `value` field is accepted. The full preflight
-gate is pending.
+so a job stored in an outcome's `value` field is accepted. The call pass also
+suggests a definition call when an unquoted definition name is assigned with
+`=`, or when an unquoted, unregistered bind head is close to a known definition.
+The pure `check(ExpandedProgram)` entry point returns diagnostics from the
+scope, call, shape, and job passes or constructs a `CheckedProgram` with the
+original source spans. Driver-level side-effect and `--no-check` contracts
+remain part of the lowerer and driver work.
 
 ## Typestate and internal invariants
 
