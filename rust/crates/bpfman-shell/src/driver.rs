@@ -131,6 +131,9 @@ fn dispatch(
     if head == "linkinfo" {
         return Ok(kernel::linkinfo(&request.arguments));
     }
+    if head == "proginfo" {
+        return Ok(kernel::proginfo(&request.arguments));
+    }
     if head == "wait" {
         return jobs.wait(&request.arguments, interrupt);
     }
@@ -232,7 +235,6 @@ fn dispatch(
                 | "import"
                 | "lsm"
                 | "process"
-                | "proginfo"
                 | "range"
                 | "registry"
                 | "trace"

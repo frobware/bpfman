@@ -1,9 +1,18 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, path::Path};
 
+use bpfman_kernel_aya::ProgramIdentitySource;
 use bpfman_shell_runtime::{Argument, CommandResponse, Value};
 
 pub(super) fn linkinfo(arguments: &[Argument]) -> CommandResponse {
-    match observe_link(arguments) {
+    observe(observe_link(arguments))
+}
+
+pub(super) fn proginfo(arguments: &[Argument]) -> CommandResponse {
+    observe(observe_program(arguments))
+}
+
+fn observe(result: Result<Value, String>) -> CommandResponse {
+    match result {
         Ok(value) => CommandResponse::success(value),
         Err(stderr) => CommandResponse {
             exit_code: 1,
@@ -11,6 +20,71 @@ pub(super) fn linkinfo(arguments: &[Argument]) -> CommandResponse {
             ..CommandResponse::success(Value::Absent)
         },
     }
+}
+
+fn observe_program(arguments: &[Argument]) -> Result<Value, String> {
+    let [mode, argument] = arguments else {
+        return Err("proginfo: usage: proginfo id N | proginfo pinned PATH".to_owned());
+    };
+    let argument = super::argument(argument)?;
+    let source = match super::argument(mode)?.as_str() {
+        "id" => ProgramIdentitySource::Id(
+            argument
+                .parse()
+                .map_err(|error| format!("proginfo: id {argument:?}: {error}"))?,
+        ),
+        "pinned" => ProgramIdentitySource::Pin(Path::new(&argument)),
+        other => return Err(format!("proginfo: unknown subcommand {other:?}")),
+    };
+    let identity = bpfman_kernel_aya::program_identity(source)
+        .map_err(|error| format!("proginfo: {error}"))?;
+    super::bpfman::project(serde_json::json!({
+        "id": identity.id.get(),
+        "type": program_type_name(identity.type_code),
+        "name": identity.name,
+        "tag": identity.tag,
+    }))
+}
+
+fn program_type_name(kind: u32) -> String {
+    const NAMES: &[&str] = &[
+        "UnspecifiedProgram",
+        "SocketFilter",
+        "Kprobe",
+        "SchedCLS",
+        "SchedACT",
+        "TracePoint",
+        "XDP",
+        "PerfEvent",
+        "CGroupSKB",
+        "CGroupSock",
+        "LWTIn",
+        "LWTOut",
+        "LWTXmit",
+        "SockOps",
+        "SkSKB",
+        "CGroupDevice",
+        "SkMsg",
+        "RawTracepoint",
+        "CGroupSockAddr",
+        "LWTSeg6Local",
+        "LircMode2",
+        "SkReuseport",
+        "FlowDissector",
+        "CGroupSysctl",
+        "RawTracepointWritable",
+        "CGroupSockopt",
+        "Tracing",
+        "StructOps",
+        "Extension",
+        "LSM",
+        "SkLookup",
+        "Syscall",
+        "Netfilter",
+    ];
+    NAMES
+        .get(kind as usize)
+        .map_or_else(|| format!("ProgramType({kind})"), |name| (*name).to_owned())
 }
 
 fn observe_link(arguments: &[Argument]) -> Result<Value, String> {

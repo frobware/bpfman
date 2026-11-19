@@ -29,7 +29,10 @@ mod xdp;
 pub use image::{BytecodeMetadata, inspect_bytecode};
 pub use maps::VolumeMap;
 pub use netns::XdpNamespace;
-pub use observe::{KernelLinkIdentity, link_identity};
+pub use observe::{
+    KernelLinkIdentity, KernelProgramIdentity, ProgramIdentitySource, link_identity,
+    program_identity,
+};
 
 use bpfman_kernel::{Error, ErrorKind};
 

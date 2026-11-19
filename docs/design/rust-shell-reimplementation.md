@@ -305,6 +305,10 @@ attributes give the probes their fixed ELF names, and the workspace law
 confines the exception to those attributes. `uprobe target` resolves the
 file-backed offset through the existing ELF reader. Actual uprobe, uretprobe,
 dotted-symbol and PID-filter traffic cases passed against the Go daemon.
+`proginfo` reads program identity by ID or through an open bpffs pin. It
+verifies that a pin refers to a program before reading its metadata. Four
+program inventory fixtures passed against the Go daemon, including the
+kernel-only rows created outside bpfman.
 
 ## Typestate and internal invariants
 

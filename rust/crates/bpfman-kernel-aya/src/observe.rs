@@ -3,7 +3,8 @@ use bpfman_model::{KernelMap, KernelProgram, ProgramStats};
 use std::{
     collections::BTreeMap,
     num::NonZeroU32,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, OwnedFd},
+    path::Path,
 };
 
 fn failure(operation: &'static str, source: std::io::Error) -> Error {
@@ -33,6 +34,62 @@ pub fn link_identity(id: NonZeroU32) -> Result<KernelLinkIdentity, Error> {
         id,
         program_id: info.prog_id,
         type_code: info.type_,
+    })
+}
+
+/// Where to open the live program whose identity is needed.
+pub enum ProgramIdentitySource<'a> {
+    /// Open by the kernel's program ID.
+    Id(NonZeroU32),
+    /// Open the program pinned at the given path.
+    Pin(&'a Path),
+}
+
+/// Common identity fields of a live kernel BPF program.
+#[derive(Debug, Eq, PartialEq)]
+pub struct KernelProgramIdentity {
+    /// Kernel program ID.
+    pub id: NonZeroU32,
+    /// Raw Linux UAPI program type.
+    pub type_code: u32,
+    /// Kernel program name.
+    pub name: String,
+    /// Kernel program tag in hexadecimal.
+    pub tag: String,
+}
+
+/// Observe a live program's identity through a held descriptor.
+pub fn program_identity(source: ProgramIdentitySource<'_>) -> Result<KernelProgramIdentity, Error> {
+    let fd = match source {
+        ProgramIdentitySource::Id(id) => syscall::program_fd(id.get()),
+        ProgramIdentitySource::Pin(path) => crate::pin_syscall::open(path).and_then(|fd| {
+            if fdinfo(&fd).contains_key("prog_type") {
+                Ok(fd)
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "pin does not reference a BPF program",
+                ))
+            }
+        }),
+    }
+    .map_err(|error| failure("open kernel program", error))?;
+    let info = syscall::program_info(fd.as_fd())
+        .map_err(|error| failure("read kernel program identity", error))?;
+    let id = NonZeroU32::new(info.id).ok_or_else(|| {
+        failure(
+            "read kernel program identity",
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "kernel did not report a program ID",
+            ),
+        )
+    })?;
+    Ok(KernelProgramIdentity {
+        id,
+        type_code: info.type_,
+        name: name(&info.name),
+        tag: info.tag.iter().map(|byte| format!("{byte:02x}")).collect(),
     })
 }
 

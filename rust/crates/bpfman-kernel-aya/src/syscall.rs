@@ -65,7 +65,7 @@ fn info<T>(fd: BorrowedFd<'_>, value: &mut T) -> io::Result<u32> {
 
 pub(super) fn program(id: u32) -> io::Result<(OwnedFd, bpf_prog_info, Vec<u32>, u32, bool)> {
     use std::os::fd::AsFd;
-    let fd = by_id(id, 13)?;
+    let fd = program_fd(id)?;
 
     // SAFETY: generated C info structs contain only integers and integer arrays;
     // zero initializes every field and all kernel pointer/count pairs.
@@ -175,6 +175,10 @@ pub(super) fn program_info(fd: BorrowedFd<'_>) -> io::Result<bpf_prog_info> {
     let mut result = unsafe { zeroed() };
     info(fd, &mut result)?;
     Ok(result)
+}
+
+pub(super) fn program_fd(id: u32) -> io::Result<OwnedFd> {
+    by_id(id, 13)
 }
 
 pub(super) fn btf_next(start: u32) -> io::Result<Option<u32>> {
