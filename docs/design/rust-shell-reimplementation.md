@@ -201,8 +201,11 @@ tables, typed parameters, and a shared return epilogue. Definition guards
 drain their local deferred commands before propagating failure. A Go fixture
 covers forward dispatch, returns from loops, and definition-local cleanup.
 The IR also distinguishes expression assertions from command-status clauses
-and retains positional destructuring names and discard slots. Bind-collect,
-poll cleanup, the full golden dump, and execution are pending.
+and retains positional destructuring names and discard slots. Bind-collect
+shares the iterator model and tracks guarded versus capturing aggregation.
+The producer retains both the trailing command span and the enclosing bind
+span. A Go fixture covers both policies and explicit loop control. Poll
+cleanup, the full golden dump, and execution are pending.
 
 ## Typestate and internal invariants
 

@@ -4,8 +4,9 @@ use crate::expr::{lower_expression, lower_expressions};
 use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
-    Assertion, BindPolicy, BranchTrace, Command, CommandStatus, Definition, Instruction, Located,
-    LoopBindings, LoopTrace, Parameter, ParameterType, Program, Temp, VerifyError,
+    Assertion, BindPolicy, BranchTrace, CollectMode, Command, CommandStatus, Definition,
+    Instruction, Located, LoopBindings, LoopTrace, Parameter, ParameterType, Program, Temp,
+    VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -267,7 +268,23 @@ impl Body {
             } => {
                 return self.bind_command(span, *mode, name.text(), command);
             }
-            S::BindCollect { .. } => return Err(unsupported(span, "collect")),
+            S::BindCollect {
+                foreach_span,
+                mode,
+                name,
+                bindings,
+                list,
+                body,
+            } => {
+                return self.collect(
+                    span,
+                    foreach_span,
+                    (name.text(), *mode),
+                    bindings,
+                    list,
+                    body,
+                );
+            }
             S::Break => return self.loop_control(span, LoopTrace::Break),
             S::Continue => return self.loop_control(span, LoopTrace::Continue),
         };
@@ -294,21 +311,7 @@ impl Body {
         target: &str,
         command: &syntax::Command,
     ) -> Result<(), LowerError> {
-        let argv = self.build_args(command.span(), command);
-        let result = self.allocate();
-        let keyword = match mode {
-            syntax::BindMode::Let => "let",
-            syntax::BindMode::Guard => "guard",
-        };
-        self.emit(
-            span,
-            Instruction::DispatchBind {
-                dst: result,
-                argv,
-                call_span: command.span().clone(),
-                trace_header: format!("{keyword} {target}"),
-            },
-        );
+        let (argv, result) = self.dispatch_bind(span, mode, target, command);
         let policy = match mode {
             syntax::BindMode::Let => BindPolicy::Capture,
             syntax::BindMode::Guard => {
@@ -337,6 +340,85 @@ impl Body {
                 policy,
             },
         );
+        Ok(())
+    }
+
+    fn dispatch_bind(
+        &mut self,
+        span: &Span,
+        mode: syntax::BindMode,
+        target: &str,
+        command: &syntax::Command,
+    ) -> (Temp, Temp) {
+        let argv = self.build_args(command.span(), command);
+        let result = self.allocate();
+        let keyword = match mode {
+            syntax::BindMode::Let => "let",
+            syntax::BindMode::Guard => "guard",
+        };
+        self.emit(
+            span,
+            Instruction::DispatchBind {
+                dst: result,
+                argv,
+                call_span: command.span().clone(),
+                trace_header: format!("{keyword} {target}"),
+            },
+        );
+        (argv, result)
+    }
+
+    fn collect(
+        &mut self,
+        span: &Span,
+        foreach_span: &Span,
+        (target, mode): (&str, syntax::BindMode),
+        bindings: &syntax::LoopBindings,
+        list: &syntax::Expression,
+        statements: &[syntax::Statement],
+    ) -> Result<(), LowerError> {
+        let Some((producer, prefix)) = statements.split_last() else {
+            return Err(LowerError::IncompleteLayout(span.clone()));
+        };
+        let syntax::StatementKind::Command(command) = producer.kind() else {
+            return Err(LowerError::IncompleteLayout(producer.span().clone()));
+        };
+        let owner = self.layout.current();
+        let list = self.eval(foreach_span, list);
+        let bindings = lower_bindings(foreach_span, bindings.names())?;
+        let body = self.layout.new_block(foreach_span);
+        let exit = self.layout.new_block(foreach_span);
+        let collect_mode = match mode {
+            syntax::BindMode::Let => CollectMode::Capture,
+            syntax::BindMode::Guard => CollectMode::Guard,
+        };
+        self.layout.terminate(located(
+            foreach_span,
+            Exit::ForEachCollect {
+                list,
+                bindings,
+                target: target.to_owned(),
+                mode: collect_mode,
+                body,
+                exit,
+            },
+        ));
+        let outer = self.current_loop.replace(owner);
+        self.layout.select(body);
+        for statement in prefix {
+            self.statement(statement)?;
+        }
+        let (_, result) = self.dispatch_bind(producer.span(), mode, target, command);
+        self.layout.terminate(located(
+            producer.span(),
+            Exit::CollectProduce {
+                owner,
+                result,
+                bind_span: span.clone(),
+            },
+        ));
+        self.current_loop = outer;
+        self.layout.select(exit);
         Ok(())
     }
 
@@ -582,11 +664,11 @@ mod tests {
         assert!(check(unknown.clone()).is_err());
         assert!(lower_unchecked(&unknown).is_ok());
 
-        let program = check(expand("print ok\nlet r <- foreach n in [1] { echo $n }"))
+        let program = check(expand("print ok\npoll timeout 1s every 1s { print ok }"))
             .unwrap_or_else(|issues| unreachable!("{issues:?}"));
         assert!(matches!(
             lower(&program),
-            Err(LowerError::Unsupported { form: "collect", span }) if &span == program.statements()[1].span()
+            Err(LowerError::Unsupported { form: "poll", span }) if &span == program.statements()[1].span()
         ));
     }
 
@@ -682,6 +764,35 @@ mod tests {
             ir.to_string(),
             include_str!("../testdata/assertions.lowered")
         );
+    }
+
+    #[test]
+    fn collecting_guards_and_captures_match_go_and_keep_distinct_spans() {
+        use bpfman_shell_ir::{BlockId, CollectMode, LoopId, Terminator};
+
+        let program = check(expand(include_str!("../testdata/collect.bpfman")))
+            .unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(ir.to_string(), include_str!("../testdata/collect.lowered"));
+        let header = &ir.blocks()[0].terminator;
+        assert!(matches!(
+            header.node,
+            Terminator::ForEachCollect {
+                mode: CollectMode::Capture,
+                ..
+            }
+        ));
+        assert_eq!(header.span.start().column(), 17);
+        let producer = ir
+            .blocks()
+            .iter()
+            .find_map(|block| match &block.terminator.node {
+                Terminator::CollectProduce {
+                    owner, bind_span, ..
+                } if *owner == LoopId(BlockId(0)) => Some(bind_span),
+                _ => None,
+            });
+        assert_eq!(producer, Some(program.statements()[0].span()));
     }
 
     #[test]

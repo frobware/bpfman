@@ -1,7 +1,7 @@
 //! Reserve branch joins independently of their final dump order.
 
 use bpfman_shell_ir::{
-    Block, BlockId, Instruction, Located, LoopBindings, LoopId, Temp, Terminator,
+    Block, BlockId, CollectMode, Instruction, Located, LoopBindings, LoopId, Temp, Terminator,
 };
 use bpfman_shell_source::Span;
 
@@ -25,6 +25,19 @@ pub(super) enum Exit {
         exit: Label,
     },
     ForEachContinue(Label),
+    ForEachCollect {
+        list: Temp,
+        bindings: LoopBindings,
+        target: String,
+        mode: CollectMode,
+        body: Label,
+        exit: Label,
+    },
+    CollectProduce {
+        owner: Label,
+        result: Temp,
+        bind_span: Span,
+    },
     BreakLoop(Label),
     PropagateError,
     ReturnValue {
@@ -152,6 +165,30 @@ impl Layout {
                     Exit::ForEachContinue(owner) => {
                         Terminator::ForEachContinue(LoopId(resolve(owner)))
                     }
+                    Exit::ForEachCollect {
+                        list,
+                        bindings,
+                        target,
+                        mode,
+                        body,
+                        exit,
+                    } => Terminator::ForEachCollect {
+                        list,
+                        bindings,
+                        target,
+                        mode,
+                        body: resolve(body),
+                        exit: resolve(exit),
+                    },
+                    Exit::CollectProduce {
+                        owner,
+                        result,
+                        bind_span,
+                    } => Terminator::CollectProduce {
+                        owner: LoopId(resolve(owner)),
+                        result,
+                        bind_span,
+                    },
                     Exit::BreakLoop(owner) => Terminator::ExitLoop(LoopId(resolve(owner))),
                 };
                 Ok(Block {

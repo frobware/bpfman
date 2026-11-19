@@ -193,6 +193,27 @@ fn dump_blocks(
                 exit.0,
             )?,
             Terminator::ForEachContinue(_) => writeln!(f, "  ForEachContinue")?,
+            Terminator::ForEachCollect {
+                list,
+                ref bindings,
+                ref target,
+                mode,
+                body,
+                exit,
+            } => {
+                let guard = mode == crate::CollectMode::Guard;
+                writeln!(
+                    f,
+                    "  ForEachCollect list=t{} names=[{}] target={target} guard={guard} body=bb{} exit=bb{}",
+                    list.0,
+                    bindings.names().join(" "),
+                    body.0,
+                    exit.0
+                )?;
+            }
+            Terminator::CollectProduce { result, .. } => {
+                writeln!(f, "  CollectProduce t{}", result.0)?
+            }
             Terminator::ExitLoop(_) => writeln!(f, "  ExitLoop")?,
         }
     }

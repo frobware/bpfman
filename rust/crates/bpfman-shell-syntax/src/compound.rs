@@ -122,6 +122,7 @@ impl StatementCursor<'_> {
         let extent = span(&keyword.span, foreach.span())?;
         Ok(Statement::new(
             StatementKind::BindCollect {
+                foreach_span: foreach.span().clone(),
                 mode,
                 name,
                 bindings,

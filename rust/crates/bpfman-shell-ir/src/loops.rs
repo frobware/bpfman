@@ -39,7 +39,9 @@ pub enum LoopTrace {
 
 pub(super) fn targets(blocks: &[Block], owner: LoopId) -> Result<(BlockId, BlockId), VerifyError> {
     match blocks.get(owner.0.0).map(|block| &block.terminator.node) {
-        Some(Terminator::ForEach { body, exit, .. }) => Ok((*body, *exit)),
+        Some(
+            Terminator::ForEach { body, exit, .. } | Terminator::ForEachCollect { body, exit, .. },
+        ) => Ok((*body, *exit)),
         _ => Err(VerifyError::InvalidLoopOwner(owner)),
     }
 }
@@ -62,17 +64,20 @@ pub(super) fn verify_context(blocks: &[Block]) -> Result<(), VerifyError> {
                 follow(on_true, &stack)?;
                 follow(on_false, &stack)?;
             }
-            Terminator::ForEach { body, exit, .. } => {
+            Terminator::ForEach { body, exit, .. }
+            | Terminator::ForEachCollect { body, exit, .. } => {
                 follow(exit, &stack)?;
                 stack.push(LoopId(id));
                 follow(body, &stack)?;
             }
-            Terminator::ForEachContinue(owner) | Terminator::ExitLoop(owner) => {
+            Terminator::ForEachContinue(owner)
+            | Terminator::ExitLoop(owner)
+            | Terminator::CollectProduce { owner, .. } => {
                 if stack.last() != Some(&owner) {
                     return Err(VerifyError::InvalidLoopContext(id));
                 }
                 let (body, exit) = targets(blocks, owner)?;
-                if matches!(blocks[id.0].terminator.node, Terminator::ForEachContinue(_)) {
+                if !matches!(blocks[id.0].terminator.node, Terminator::ExitLoop(_)) {
                     follow(body, &stack)?;
                 }
                 stack.pop();

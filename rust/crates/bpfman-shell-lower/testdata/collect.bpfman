@@ -1,0 +1,9 @@
+let captured <- foreach item in [1 2] {
+  if $item == 1 { continue }
+  echo $item
+}
+guard values <- foreach item in [3 4] {
+  if $item == 4 { break }
+  exec echo $item
+}
+print $captured $values

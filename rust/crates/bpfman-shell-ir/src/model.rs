@@ -58,6 +58,15 @@ pub enum BindPolicy {
     },
 }
 
+/// How a collecting loop publishes its accumulated results.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CollectMode {
+    /// Bind the aggregate outcome.
+    Capture,
+    /// Bind successful primary values and fail on the first failed producer.
+    Guard,
+}
+
 /// Expected command status.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandStatus {
@@ -207,6 +216,30 @@ pub enum Terminator {
     },
     /// Unwind through the current iteration frame and advance its iterator.
     ForEachContinue(LoopId),
+    /// Initialize a foreach that accumulates producer results.
+    ForEachCollect {
+        /// Evaluated list.
+        list: Temp,
+        /// Iteration binding slots.
+        bindings: LoopBindings,
+        /// Name that receives the aggregate.
+        target: String,
+        /// Aggregation and failure policy.
+        mode: CollectMode,
+        /// Iteration body.
+        body: BlockId,
+        /// Continuation after the aggregate is published.
+        exit: BlockId,
+    },
+    /// Submit a command outcome, unwind the iteration, and advance.
+    CollectProduce {
+        /// Collecting iterator owner.
+        owner: LoopId,
+        /// Command-result temporary.
+        result: Temp,
+        /// Full bind span used when framing a failed guard.
+        bind_span: Span,
+    },
     /// Unwind through the iteration frame and leave the loop.
     ExitLoop(LoopId),
     /// Report the active error after cleanup and unwind the program.
@@ -552,6 +585,9 @@ impl Unit {
                 Terminator::Stop | Terminator::PropagateError | Terminator::FinishDefinition => {}
                 Terminator::ForEach {
                     list, body, exit, ..
+                }
+                | Terminator::ForEachCollect {
+                    list, body, exit, ..
                 } => {
                     verify_operand(list, TempKind::Value, &kinds)?;
                     verify_successor(body)?;
@@ -559,6 +595,17 @@ impl Unit {
                 }
                 Terminator::ForEachContinue(owner) | Terminator::ExitLoop(owner) => {
                     loops::targets(&blocks, owner)?;
+                }
+                Terminator::CollectProduce { owner, result, .. } => {
+                    if !matches!(kinds.get(&result), Some(TempKind::BindResult(_))) {
+                        return Err(VerifyError::InvalidOperand(result));
+                    }
+                    if !matches!(
+                        blocks.get(owner.0.0).map(|block| &block.terminator.node),
+                        Some(Terminator::ForEachCollect { .. })
+                    ) {
+                        return Err(VerifyError::InvalidLoopOwner(owner));
+                    }
                 }
             }
         }

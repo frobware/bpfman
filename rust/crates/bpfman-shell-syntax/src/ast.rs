@@ -697,6 +697,8 @@ pub enum StatementKind {
     },
     /// Bind the aggregate outcome of a foreach whose final body statement is a command.
     BindCollect {
+        /// Source extent beginning at the nested foreach keyword.
+        foreach_span: Span,
         /// Outcome or guard binding.
         mode: BindMode,
         /// Bound name; `_` discards the result.

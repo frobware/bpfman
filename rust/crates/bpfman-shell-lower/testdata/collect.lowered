@@ -1,0 +1,56 @@
+body entry=bb0
+
+bb0:
+  EnterDeferScope kind=program
+  Eval t0 = [1 2]
+  ForEachCollect list=t0 names=[item] target=captured guard=false body=bb1 exit=bb2
+
+bb1:
+  Eval t1 = $item == 1
+  Branch cond=t1 true=bb3 false=bb4
+
+bb2:
+  Eval t4 = [3 4]
+  ForEachCollect list=t4 names=[item] target=values guard=true body=bb7 exit=bb8
+
+bb3:
+  EnterFrame kind=if-branch
+  ForEachContinue
+
+bb4:
+  Jump bb6
+
+bb5:
+  ExitFrame
+  Jump bb6
+
+bb6:
+  BuildArgs t2 = [echo $item]
+  DispatchBind t3 = t2 policy=def-then-exec-bind lane=exec
+  CollectProduce t3
+
+bb7:
+  Eval t5 = $item == 4
+  Branch cond=t5 true=bb9 false=bb10
+
+bb8:
+  BuildArgs t8 = [print $captured $values]
+  DispatchCommand argv=t8 policy=def-then-exec-command lane=builtin(print)
+  RunDefers policy=program
+  Stop
+
+bb9:
+  EnterFrame kind=if-branch
+  ExitLoop
+
+bb10:
+  Jump bb12
+
+bb11:
+  ExitFrame
+  Jump bb12
+
+bb12:
+  BuildArgs t6 = [exec echo $item]
+  DispatchBind t7 = t6 policy=def-then-exec-bind lane=builtin(exec)
+  CollectProduce t7
