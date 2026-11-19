@@ -14,6 +14,7 @@ use bpfman_shell_runtime::{
 mod bpfman;
 mod files;
 mod jobs;
+mod kernel;
 mod kfunc;
 mod process;
 mod query;
@@ -96,6 +97,9 @@ fn dispatch(
     }
     if head == "kfunc" {
         return functions.invoke(&request.arguments, cite(&request), interrupt);
+    }
+    if head == "linkinfo" {
+        return Ok(kernel::linkinfo(&request.arguments));
     }
     if head == "wait" {
         return jobs.wait(&request.arguments, interrupt);
@@ -197,7 +201,6 @@ fn dispatch(
             "defs"
                 | "fire"
                 | "import"
-                | "linkinfo"
                 | "lsm"
                 | "net"
                 | "process"

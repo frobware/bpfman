@@ -15,6 +15,27 @@ fn failure(operation: &'static str, source: std::io::Error) -> Error {
     Error::new(kind, operation, source)
 }
 
+/// Common identity fields of a live kernel BPF link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct KernelLinkIdentity {
+    /// Kernel link ID.
+    pub id: NonZeroU32,
+    /// Attached kernel program ID, which can be zero for a defunct link.
+    pub program_id: u32,
+    /// Raw Linux UAPI link type, including values added by newer kernels.
+    pub type_code: u32,
+}
+
+/// Read the stable identity fields without interpreting the type-specific union.
+pub fn link_identity(id: NonZeroU32) -> Result<KernelLinkIdentity, Error> {
+    let info = syscall::link(id.get()).map_err(|error| failure("observe kernel link", error))?;
+    Ok(KernelLinkIdentity {
+        id,
+        program_id: info.prog_id,
+        type_code: info.type_,
+    })
+}
+
 pub(crate) fn next_program_id(after: Option<NonZeroU32>) -> Result<Option<NonZeroU32>, Error> {
     syscall::program_next(after.map_or(0, NonZeroU32::get))
         .map(|id| id.and_then(NonZeroU32::new))

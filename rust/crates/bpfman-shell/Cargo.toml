@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+bpfman-kernel-aya = { path = "../bpfman-kernel-aya" }
 bpfman-shell-check = { path = "../bpfman-shell-check" }
 bpfman-shell-ir = { path = "../bpfman-shell-ir" }
 bpfman-shell-lower = { path = "../bpfman-shell-lower" }
