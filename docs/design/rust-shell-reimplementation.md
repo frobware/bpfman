@@ -193,7 +193,10 @@ now distinguish capturing an outcome from guarding its primary value. Each
 program-scope guard gets a defer-cleanup block, including guards inside
 conditionals and loops. Verification checks that the applied result came
 from the same argv and that the failure target drains defers before propagating
-the error. Bind-collect, definition and poll cleanup scopes, the full golden
+the error. Every current syntax expression now lowers to IR-owned operands,
+including interpolation, adapters, records, nested matches, calls, and logical
+operators. The expression fixture checks Go's dump and preserves source spans
+in the IR. Bind-collect, definition and poll cleanup scopes, the full golden
 dump, and execution are pending.
 
 ## Typestate and internal invariants

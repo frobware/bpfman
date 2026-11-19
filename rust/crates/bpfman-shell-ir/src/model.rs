@@ -5,7 +5,7 @@ use std::{
 
 use bpfman_shell_source::Span;
 
-use crate::{LoopBindings, LoopId, LoopTrace, loops};
+use crate::{Expression, LoopBindings, LoopId, LoopTrace, loops};
 
 /// A node together with its original source extent.
 #[derive(Debug, Eq, PartialEq)]
@@ -23,63 +23,6 @@ pub struct BlockId(pub usize);
 /// A temporary index in its owning program, numbered in emission order.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Temp(pub usize);
-
-/// A lowered expression with source coordinates.
-pub type Expression = Located<ExpressionKind>;
-
-/// The expression vocabulary of the initial IR slice.
-#[derive(Debug, Eq, PartialEq)]
-pub enum ExpressionKind {
-    /// An unquoted word, classified by the evaluator.
-    Word(String),
-    /// A quoted string.
-    Quoted(String),
-    /// A variable lookup with optional path.
-    Variable {
-        /// Variable name.
-        name: String,
-        /// Remaining field and index path.
-        path: String,
-    },
-    /// A list evaluated left to right.
-    List(Vec<Expression>),
-    /// Apply an arithmetic or comparison operator.
-    Binary {
-        /// Left operand.
-        left: Box<Expression>,
-        /// Operator.
-        operator: BinaryOperator,
-        /// Right operand.
-        right: Box<Expression>,
-    },
-}
-
-/// Arithmetic and comparison operators understood by the IR.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BinaryOperator {
-    /// Addition.
-    Add,
-    /// Subtraction.
-    Subtract,
-    /// Multiplication.
-    Multiply,
-    /// Division.
-    Divide,
-    /// Remainder.
-    Remainder,
-    /// Equality.
-    Equal,
-    /// Inequality.
-    NotEqual,
-    /// Less than.
-    Less,
-    /// Less than or equal.
-    LessEqual,
-    /// Greater than.
-    Greater,
-    /// Greater than or equal.
-    GreaterEqual,
-}
 
 /// Trace event emitted when control selects an if-chain path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -444,12 +387,10 @@ fn verify_operand(
 
 #[cfg(test)]
 mod tests {
+    use crate::ExpressionKind;
     use bpfman_shell_source::{Position, SourceName, Span};
 
-    use super::{
-        Block, BlockId, ExpressionKind, Instruction, Located, Program, Temp, Terminator,
-        VerifyError,
-    };
+    use super::{Block, BlockId, Instruction, Located, Program, Temp, Terminator, VerifyError};
 
     fn located<T>(node: T) -> Located<T> {
         let pos = Position::new(SourceName::new("ir.bpfman"), 1, 1)

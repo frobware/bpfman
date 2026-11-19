@@ -1,5 +1,6 @@
 //! SANS-I/O compilation of shell syntax into verified block IR.
 
+mod expr;
 mod layout;
 mod lower;
 

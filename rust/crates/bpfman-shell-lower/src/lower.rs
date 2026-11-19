@@ -1,10 +1,11 @@
 use std::fmt;
 
+use crate::expr::{lower_expression, lower_expressions};
 use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
-    BinaryOperator, BindPolicy, BranchTrace, Command, Expression, ExpressionKind, Instruction,
-    Located, LoopBindings, LoopTrace, Program, Temp, VerifyError,
+    BindPolicy, BranchTrace, Command, Instruction, Located, LoopBindings, LoopTrace, Program, Temp,
+    VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -129,16 +130,16 @@ impl Body {
         let instruction = match statement.kind() {
             S::Let { name, value } => Instruction::BindName {
                 name: name.text().to_owned(),
-                src: self.eval(span, value)?,
+                src: self.eval(span, value),
             },
             S::Expression(value) => Instruction::EmitResult {
-                src: self.eval(span, value)?,
+                src: self.eval(span, value),
             },
             S::Command(command) => Instruction::DispatchCommand {
-                argv: self.build_args(span, command)?,
+                argv: self.build_args(span, command),
             },
             S::Defer(command) => Instruction::RegisterDefer {
-                argv: self.build_args(command.span(), command)?,
+                argv: self.build_args(command.span(), command),
             },
             S::Definition(_) => return Err(unsupported(span, "definition")),
             S::Return(_) => return Err(unsupported(span, "return")),
@@ -182,7 +183,7 @@ impl Body {
         target: &str,
         command: &syntax::Command,
     ) -> Result<(), LowerError> {
-        let argv = self.build_args(command.span(), command)?;
+        let argv = self.build_args(command.span(), command);
         let result = self.allocate();
         let keyword = match mode {
             syntax::BindMode::Let => "let",
@@ -231,7 +232,7 @@ impl Body {
         statements: &[syntax::Statement],
     ) -> Result<(), LowerError> {
         let owner = self.layout.current();
-        let list = self.eval(span, list)?;
+        let list = self.eval(span, list);
         let bindings = LoopBindings::new(
             bindings
                 .names()
@@ -296,7 +297,7 @@ impl Body {
         let merge = self.layout.reserve(span);
         for (index, branch) in std::iter::once(first).chain(elif).enumerate() {
             let branch_span = if index == 0 { span } else { branch.span() };
-            let condition = self.eval(branch_span, branch.condition())?;
+            let condition = self.eval(branch_span, branch.condition());
             let on_true = self.layout.new_block(branch_span);
             let next_span = elif.get(index).map_or(branch_span, syntax::IfBranch::span);
             let on_false = self.layout.new_block(next_span);
@@ -350,66 +351,21 @@ impl Body {
         Ok(())
     }
 
-    fn eval(&mut self, span: &Span, value: &syntax::Expression) -> Result<Temp, LowerError> {
-        let expression = lower_expression(value)?;
+    fn eval(&mut self, span: &Span, value: &syntax::Expression) -> Temp {
+        let expression = lower_expression(value);
         let dst = self.allocate();
         self.emit(span, Instruction::Eval { dst, expression });
-        Ok(dst)
+        dst
     }
 
-    fn build_args(&mut self, span: &Span, command: &syntax::Command) -> Result<Temp, LowerError> {
+    fn build_args(&mut self, span: &Span, command: &syntax::Command) -> Temp {
         let command = Command {
-            head: lower_expression(command.head())?,
-            arguments: lower_expressions(command.arguments())?,
+            head: lower_expression(command.head()),
+            arguments: lower_expressions(command.arguments()),
         };
         let dst = self.allocate();
         self.emit(span, Instruction::BuildArgs { dst, command });
-        Ok(dst)
-    }
-}
-
-fn lower_expressions(values: &[syntax::Expression]) -> Result<Vec<Expression>, LowerError> {
-    values.iter().map(lower_expression).collect()
-}
-
-fn lower_expression(value: &syntax::Expression) -> Result<Expression, LowerError> {
-    use syntax::ExpressionKind as E;
-    let node = match value.kind() {
-        E::Word(word) => ExpressionKind::Word(word.clone()),
-        E::Quoted(word) => ExpressionKind::Quoted(word.clone()),
-        E::Variable(variable) => ExpressionKind::Variable {
-            name: variable.name.clone(),
-            path: variable.path.clone(),
-        },
-        E::List(items) => ExpressionKind::List(lower_expressions(items)?),
-        E::Binary {
-            left,
-            operator,
-            right,
-        } => ExpressionKind::Binary {
-            left: Box::new(lower_expression(left)?),
-            operator: lower_operator(*operator),
-            right: Box::new(lower_expression(right)?),
-        },
-        _ => return Err(unsupported(value.span(), "expression")),
-    };
-    Ok(located(value.span(), node))
-}
-
-fn lower_operator(operator: syntax::BinaryOperator) -> BinaryOperator {
-    use syntax::BinaryOperator as O;
-    match operator {
-        O::Add => BinaryOperator::Add,
-        O::Subtract => BinaryOperator::Subtract,
-        O::Multiply => BinaryOperator::Multiply,
-        O::Divide => BinaryOperator::Divide,
-        O::Remainder => BinaryOperator::Remainder,
-        O::Equal => BinaryOperator::Equal,
-        O::NotEqual => BinaryOperator::NotEqual,
-        O::Less => BinaryOperator::Less,
-        O::LessEqual => BinaryOperator::LessEqual,
-        O::Greater => BinaryOperator::Greater,
-        O::GreaterEqual => BinaryOperator::GreaterEqual,
+        dst
     }
 }
 
@@ -560,6 +516,17 @@ mod tests {
                     if actual == keyword && &span == program.statements()[0].span()
             ));
         }
+    }
+
+    #[test]
+    fn expression_operands_match_go_without_retaining_syntax_nodes() {
+        let program = check(expand(include_str!("../testdata/expressions.bpfman")))
+            .unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(
+            ir.to_string(),
+            include_str!("../testdata/expressions.lowered")
+        );
     }
 
     #[test]

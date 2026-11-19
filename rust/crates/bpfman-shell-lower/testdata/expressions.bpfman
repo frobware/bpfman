@@ -1,0 +1,8 @@
+let n = 3
+let r = record { id: $n stats: record { count: 5 } }
+let val = jq . $r
+let piped = $r |> jq .id
+let check = not false and ($n > -2)
+let yes = $r matches { id: not-empty
+ stats: matches { count: 5 } }
+print "n=${n} sum=${$n + 1}" file:$n

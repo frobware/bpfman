@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, fmt};
 
 use crate::{
-    BinaryOperator, BindPolicy, Command, Expression, ExpressionKind, Instruction, Program,
-    Terminator,
+    BinaryOperator, BindPolicy, Command, Expression, ExpressionKind, Instruction, InterpolatedPart,
+    LogicalOperator, MatchBlock, MatchPattern, MatchPredicate, Program, PureBuiltin, Terminator,
+    UnaryOperator, VariableRef,
 };
 
 impl fmt::Display for Program {
@@ -141,12 +142,84 @@ impl fmt::Display for Expression {
         match &self.node {
             ExpressionKind::Word(word) => f.write_str(word),
             ExpressionKind::Quoted(word) => write!(f, "{word:?}"),
-            ExpressionKind::Variable { name, path } => {
-                write!(f, "${name}")?;
-                if !path.is_empty() {
-                    write!(f, ".{path}")?;
+            ExpressionKind::Variable(variable) => {
+                f.write_str("$")?;
+                write_variable(f, variable)
+            }
+            ExpressionKind::Adapter { name, variable } => {
+                write!(f, "{name}:$")?;
+                write_variable(f, variable)
+            }
+            ExpressionKind::Interpolated(parts) => {
+                f.write_str("\"")?;
+                for part in parts {
+                    match part {
+                        InterpolatedPart::Literal(text) => f.write_str(text)?,
+                        InterpolatedPart::Expression(value) => {
+                            f.write_str("${")?;
+                            match &value.node {
+                                ExpressionKind::Variable(variable) => write_variable(f, variable)?,
+                                ExpressionKind::Adapter { name, variable } => {
+                                    write!(f, "{name}:")?;
+                                    write_variable(f, variable)?;
+                                }
+                                _ => write!(f, "{value}")?,
+                            }
+                            f.write_str("}")?;
+                        }
+                    }
+                }
+                f.write_str("\"")
+            }
+            ExpressionKind::Record(fields) => {
+                f.write_str("record {")?;
+                for (index, field) in fields.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(" ")?;
+                    }
+                    write!(f, "{}: {}", field.name, field.value)?;
+                }
+                f.write_str("}")
+            }
+            ExpressionKind::Unary { operator, operand } => {
+                f.write_str(match operator {
+                    UnaryOperator::Not => "not ",
+                    UnaryOperator::Negate => "-",
+                    UnaryOperator::NotEmpty => "not-empty ",
+                })?;
+                write_atom(f, operand)
+            }
+            ExpressionKind::Logical {
+                left,
+                operator,
+                right,
+            } => {
+                write_atom(f, left)?;
+                f.write_str(match operator {
+                    LogicalOperator::And => " and ",
+                    LogicalOperator::Or => " or ",
+                })?;
+                write_atom(f, right)
+            }
+            ExpressionKind::PureCall { builtin, arguments } => {
+                f.write_str(builtin_name(*builtin))?;
+                for argument in arguments {
+                    write!(f, " {argument}")?;
                 }
                 Ok(())
+            }
+            ExpressionKind::Thread { value, command, .. } => {
+                write_atom(f, value)?;
+                write!(f, " |> {}", command.head)?;
+                for argument in &command.arguments {
+                    write!(f, " {argument}")?;
+                }
+                Ok(())
+            }
+            ExpressionKind::Matches { target, block } => {
+                write_atom(f, target)?;
+                f.write_str(" ")?;
+                write_matches(f, block)
             }
             ExpressionKind::List(items) => {
                 f.write_str("[")?;
@@ -172,10 +245,69 @@ impl fmt::Display for Expression {
 }
 
 fn write_atom(f: &mut fmt::Formatter<'_>, expression: &Expression) -> fmt::Result {
-    if matches!(expression.node, ExpressionKind::Binary { .. }) {
+    if matches!(
+        expression.node,
+        ExpressionKind::Binary { .. }
+            | ExpressionKind::Unary { .. }
+            | ExpressionKind::Logical { .. }
+            | ExpressionKind::Thread { .. }
+            | ExpressionKind::Matches { .. }
+    ) {
         write!(f, "({expression})")
     } else {
         write!(f, "{expression}")
+    }
+}
+
+fn write_variable(f: &mut fmt::Formatter<'_>, variable: &VariableRef) -> fmt::Result {
+    f.write_str(&variable.name)?;
+    if !variable.path.is_empty() {
+        write!(f, ".{}", variable.path)?;
+    }
+    Ok(())
+}
+
+fn write_matches(f: &mut fmt::Formatter<'_>, block: &MatchBlock) -> fmt::Result {
+    f.write_str("matches")?;
+    if block.exhaustive {
+        f.write_str(" exhaustive")?;
+    }
+    f.write_str(" {")?;
+    for (index, entry) in block.entries.iter().enumerate() {
+        if index > 0 {
+            f.write_str(",")?;
+        }
+        write!(f, " {}: ", entry.path)?;
+        match &entry.pattern {
+            MatchPattern::Value(value) => write!(f, "{value}")?,
+            MatchPattern::Nested(block) => write_matches(f, block)?,
+            MatchPattern::Predicate(predicate) => f.write_str(match predicate {
+                MatchPredicate::NotEmpty => "not-empty",
+                MatchPredicate::Null => "null",
+                MatchPredicate::Empty => "empty",
+            })?,
+        }
+    }
+    if !block.entries.is_empty() {
+        f.write_str(" ")?;
+    }
+    f.write_str("}")
+}
+
+fn builtin_name(builtin: PureBuiltin) -> &'static str {
+    use PureBuiltin as B;
+    match builtin {
+        B::Jq => "jq",
+        B::U32Le => "u32le",
+        B::U64Le => "u64le",
+        B::Range => "range",
+        B::Zip => "zip",
+        B::PathExists => "path-exists",
+        B::Contains => "contains",
+        B::Null => "null",
+        B::Present => "present",
+        B::Missing => "missing",
+        B::Empty => "empty",
     }
 }
 

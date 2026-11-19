@@ -1,0 +1,20 @@
+body entry=bb0
+
+bb0:
+  EnterDeferScope kind=program
+  Eval t0 = 3
+  BindName n = t0
+  Eval t1 = record {id: $n stats: record {count: 5}}
+  BindName r = t1
+  Eval t2 = jq . $r
+  BindName val = t2
+  Eval t3 = $r |> jq .id
+  BindName piped = t3
+  Eval t4 = (not false) and ($n > -2)
+  BindName check = t4
+  Eval t5 = $r matches { id: not-empty, stats: matches { count: 5 } }
+  BindName yes = t5
+  BuildArgs t6 = [print "n=${n} sum=${$n + 1}" file:$n]
+  DispatchCommand argv=t6 policy=def-then-exec-command lane=builtin(print)
+  RunDefers policy=program
+  Stop
