@@ -89,7 +89,7 @@ impl Machine<'_> {
             request: PathRequest {
                 path,
                 span: expression.span.clone(),
-            }),
+            },
         })
     }
 }
@@ -167,7 +167,7 @@ impl Machine<'_> {
                 filter,
                 input,
                 span: expression.span.clone(),
-            },
+            }),
         })
     }
 }
