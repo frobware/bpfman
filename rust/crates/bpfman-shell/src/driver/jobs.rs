@@ -36,6 +36,23 @@ impl Jobs {
         arguments: &[Argument],
         origin: String,
     ) -> Result<CommandResponse, String> {
+        self.spawn(arguments, origin, true)
+    }
+
+    pub(super) fn start_in_namespace(
+        &mut self,
+        arguments: &[Argument],
+        origin: String,
+    ) -> Result<CommandResponse, String> {
+        self.spawn(arguments, origin, false)
+    }
+
+    fn spawn(
+        &mut self,
+        arguments: &[Argument],
+        origin: String,
+        expose_executable: bool,
+    ) -> Result<CommandResponse, String> {
         let id = self
             .last_id
             .checked_add(1)
@@ -50,7 +67,8 @@ impl Jobs {
         let process = CapturedChild::spawn(Command::new(executable).args(args))
             .map_err(|error| format!("start {executable}: {error}"))?;
         let pid = process.pid().ok_or("background child has no PID")?;
-        let handle = JobHandle::new(id, pid, executable.clone());
+        let target = expose_executable.then(|| executable.clone());
+        let handle = JobHandle::new(id, pid, target);
         let job = Job::spawn(process, files, pid, argv.join(" "), origin)?;
 
         self.last_id = id.get();

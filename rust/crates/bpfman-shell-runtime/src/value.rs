@@ -1,6 +1,7 @@
 use crate::CommandResponse;
 use std::{
     collections::BTreeMap,
+    net::Ipv4Addr,
     num::{NonZeroU32, NonZeroU64},
 };
 
@@ -34,14 +35,13 @@ pub struct JobHandle {
 impl JobHandle {
     /// Associate a driver-issued job identity with the current process ID.
     #[must_use]
-    pub fn new(id: NonZeroU64, pid: NonZeroU32, target_binary: String) -> Self {
-        Self {
-            id,
-            fields: BTreeMap::from([
-                ("pid".to_owned(), Value::Number(Number(pid.to_string()))),
-                ("target_binary".to_owned(), Value::String(target_binary)),
-            ]),
+    pub fn new(id: NonZeroU64, pid: NonZeroU32, target_binary: Option<String>) -> Self {
+        let mut fields =
+            BTreeMap::from([("pid".to_owned(), Value::Number(Number(pid.to_string())))]);
+        if let Some(binary) = target_binary {
+            fields.insert("target_binary".to_owned(), Value::String(binary));
         }
+        Self { id, fields }
     }
 
     /// Identify the job without using its potentially reusable process ID.
@@ -80,6 +80,103 @@ impl KfuncHandle {
     }
 }
 
+/// One endpoint of an isolated veth pair.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EndpointSide {
+    /// The first endpoint.
+    A,
+    /// The second endpoint.
+    B,
+}
+
+/// Which operation a network handle can authorise.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkRole {
+    /// A pair can be released.
+    Pair,
+    /// An endpoint can run a command in its namespace.
+    Endpoint(EndpointSide),
+}
+
+/// The observed fields of one veth end in a named namespace.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkEndpoint {
+    /// The owned namespace name.
+    pub namespace: String,
+    /// The interface name.
+    pub interface: String,
+    /// Address on the private fixture subnet.
+    pub address: Ipv4Addr,
+    /// Interface index in its namespace, or zero when unavailable.
+    pub interface_index: u32,
+    /// Namespace inode, or zero when unavailable.
+    pub namespace_id: u64,
+}
+
+/// An opaque capability and record projection for a network fixture.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NetworkHandle {
+    id: NonZeroU64,
+    role: NetworkRole,
+    fields: BTreeMap<String, Value>,
+}
+
+impl NetworkHandle {
+    /// Build a pair whose endpoints are tied to the same driver-issued lease.
+    #[must_use]
+    pub fn pair(id: NonZeroU64, a: NetworkEndpoint, b: NetworkEndpoint) -> Self {
+        Self {
+            id,
+            role: NetworkRole::Pair,
+            fields: BTreeMap::from([
+                (
+                    "a".to_owned(),
+                    Value::Network(Self::endpoint(id, EndpointSide::A, a)),
+                ),
+                (
+                    "b".to_owned(),
+                    Value::Network(Self::endpoint(id, EndpointSide::B, b)),
+                ),
+            ]),
+        }
+    }
+
+    fn endpoint(id: NonZeroU64, side: EndpointSide, endpoint: NetworkEndpoint) -> Self {
+        Self {
+            id,
+            role: NetworkRole::Endpoint(side),
+            fields: BTreeMap::from([
+                ("ns".to_owned(), Value::String(endpoint.namespace)),
+                ("link".to_owned(), Value::String(endpoint.interface)),
+                (
+                    "addr".to_owned(),
+                    Value::String(endpoint.address.to_string()),
+                ),
+                (
+                    "ifindex".to_owned(),
+                    Value::Number(Number(endpoint.interface_index.to_string())),
+                ),
+                (
+                    "nsid".to_owned(),
+                    Value::Number(Number(endpoint.namespace_id.to_string())),
+                ),
+            ]),
+        }
+    }
+
+    /// Identify the lease shared by the pair and both endpoints.
+    #[must_use]
+    pub fn id(&self) -> NonZeroU64 {
+        self.id
+    }
+
+    /// Determine whether this capability refers to a pair or endpoint.
+    #[must_use]
+    pub fn role(&self) -> NetworkRole {
+        self.role
+    }
+}
+
 /// An evaluated shell value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Value {
@@ -108,6 +205,8 @@ pub enum Value {
     Job(JobHandle),
     /// A capability for a leased kernel function fixture.
     Kfunc(KfuncHandle),
+    /// A capability for a network fixture or an endpoint of it.
+    Network(NetworkHandle),
     /// Captured command outcome, with a distinct primary when supplied.
     Outcome(Box<CommandResponse>),
 }
@@ -120,6 +219,7 @@ impl Value {
             Self::Record(fields) | Self::BpfmanRecord { fields, .. } => Some(fields),
             Self::Job(job) => Some(&job.fields),
             Self::Kfunc(function) => Some(&function.fields),
+            Self::Network(handle) => Some(&handle.fields),
             _ => None,
         }
     }

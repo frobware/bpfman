@@ -2,7 +2,7 @@
 
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
-    io::{self, Seek, SeekFrom, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     ops::RangeInclusive,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
@@ -52,6 +52,13 @@ pub(super) struct Lock {
 }
 
 impl Lock {
+    pub(super) fn previous(&mut self) -> io::Result<Map<String, Json>> {
+        let mut contents = Vec::new();
+        self.file.seek(SeekFrom::Start(0))?;
+        self.file.read_to_end(&mut contents)?;
+        Ok(serde_json::from_slice(&contents).unwrap_or_default())
+    }
+
     pub(super) fn claim(mut self, metadata: Map<String, Json>) -> io::Result<Lease> {
         write_record(&mut self.file, &metadata)?;
         Ok(Lease {

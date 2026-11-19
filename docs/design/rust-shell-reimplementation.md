@@ -281,6 +281,14 @@ events on a leased slot. `linkinfo` reads the common kernel link identity
 through the existing Aya adapter. The tracepoint round-trip and unload
 fixtures passed with the Rust shell and Rust daemon, including checks that
 a removed link can no longer be opened.
+The isolated veth fixture uses the same TEST-NET-2 address pool as the Go
+shell. A pair can release its lease, while its typed endpoints can run or
+start commands in their own namespace. Setup records each created resource
+for rollback and writes release provenance only after teardown. The Rust
+daemon's XDP namespace round-trip and the Go daemon's TC and TCX namespace
+round-trips passed. A smoke test ran a namespace job, exchanged packets, and
+verified both namespaces were removed.
+Host-side veth pairs and policy routing remain pending.
 
 ## Typestate and internal invariants
 

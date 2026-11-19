@@ -32,16 +32,20 @@ pub(super) struct Interrupt {
 
 impl Interrupt {
     pub(super) fn register() -> io::Result<Self> {
-        let mut interrupt = Self {
-            pending: Arc::new(AtomicBool::new(false)),
-            handlers: Vec::new(),
-        };
+        let mut interrupt = Self::unregistered();
         for signal in [SIGINT, SIGTERM] {
             interrupt
                 .handlers
                 .push(flag::register(signal, Arc::clone(&interrupt.pending))?);
         }
         Ok(interrupt)
+    }
+
+    pub(super) fn unregistered() -> Self {
+        Self {
+            pending: Arc::new(AtomicBool::new(false)),
+            handlers: Vec::new(),
+        }
     }
 
     pub(super) fn check(&self) -> Result<(), String> {

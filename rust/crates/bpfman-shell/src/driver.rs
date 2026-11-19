@@ -16,6 +16,7 @@ mod files;
 mod jobs;
 mod kernel;
 mod kfunc;
+mod net;
 mod process;
 mod query;
 mod slot_pool;
@@ -25,6 +26,7 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
     let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
     let mut jobs = jobs::Jobs::default();
     let mut functions = kfunc::Pool::default();
+    let mut network = net::Network::default();
     let mut step = execute(program, HashMap::new());
     loop {
         step = match step {
@@ -37,6 +39,7 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
                 &interrupt,
                 &mut jobs,
                 &mut functions,
+                &mut network,
             )),
             Step::Output {
                 request,
@@ -87,6 +90,7 @@ fn dispatch(
     interrupt: &process::Interrupt,
     jobs: &mut jobs::Jobs,
     functions: &mut kfunc::Pool,
+    network: &mut net::Network,
 ) -> Result<CommandResponse, String> {
     interrupt.check()?;
     let head = argument(&request.head)?;
@@ -98,6 +102,9 @@ fn dispatch(
     }
     if head == "kfunc" {
         return functions.invoke(&request.arguments, cite(&request), interrupt);
+    }
+    if head == "net" {
+        return network.invoke(&request.arguments, cite(&request), interrupt, jobs);
     }
     if head == "linkinfo" {
         return Ok(kernel::linkinfo(&request.arguments));
@@ -203,7 +210,6 @@ fn dispatch(
                 | "fire"
                 | "import"
                 | "lsm"
-                | "net"
                 | "process"
                 | "proginfo"
                 | "range"
