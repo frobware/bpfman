@@ -233,8 +233,11 @@ remainder are exact. Division and mixed arithmetic use finite floating point,
 as in Go. The interpreter alone admits the pure arithmetic closure
 `num-bigint` 0.4.6, `num-integer` 0.1.47, and `num-traits` 0.2.19, all
 MIT or Apache-2.0. Deterministic expression builtins now cover range, zip,
-little-endian conversion, containment, and presence predicates. Cross-call retry,
-structural matches, threaded calls, jq and path effects, typed builtins, signals, process-group
+little-endian conversion, containment, and presence predicates. Structural
+matches evaluate nested and exhaustive rows. Expression and command-status
+assertions distinguish nonfatal diagnostics from requirements that unwind
+the program. Go's detailed match and assertion diagnostics are still pending.
+Cross-call retry, threaded calls, jq and path effects, typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently
 via `BPFMAN_SHELL_UNDER_TEST` because the Rust daemon's directory can also

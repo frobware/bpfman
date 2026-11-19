@@ -48,3 +48,15 @@ fn inspection_never_dispatches_and_execution_drives_external_commands() -> io::R
     assert_eq!(executed.stdout, b"before\nafter\n");
     Ok(())
 }
+
+#[test]
+fn assertions_use_stderr_continue_and_require_stops_after_cleanup() -> io::Result<()> {
+    let source = "let r = record { nested: record { n: 2 } }\nassert $r matches exhaustive { nested: matches { n: 2 } }\nassert false\nassert fail exec false\nprint continued\nrequire false\nprint unreachable";
+    let output = run(&[], source)?;
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"continued\n");
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(errors.matches("assertion failed").count(), 1);
+    assert!(errors.contains("require failed"));
+    Ok(())
+}

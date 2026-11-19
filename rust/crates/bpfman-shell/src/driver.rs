@@ -8,36 +8,39 @@ use std::{
 
 use bpfman_shell_ir::Program;
 use bpfman_shell_runtime::{
-    Argument, CommandRequest, CommandResponse, DispatchLane, Step, Value, execute,
+    Argument, CommandRequest, CommandResponse, DispatchLane, OutputStream, Step, Value, execute,
 };
 
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
     let mut step = execute(program, HashMap::new());
     loop {
-        step =
-            match step {
-                Step::Command {
-                    request,
-                    continuation,
-                } => continuation.resume(dispatch(request, stdout)),
-                Step::Output {
-                    request,
-                    continuation,
-                } => continuation.resume(scalar(&request.value).and_then(|value| {
-                    writeln!(stdout, "{value}").map_err(|error| error.to_string())
-                })),
-                Step::ReadClock(continuation) => continuation.resume(Ok(start.elapsed())),
-                Step::Pause {
-                    duration,
-                    continuation,
-                } => {
-                    std::thread::sleep(duration);
-                    continuation.resume(Ok(()))
+        step = match step {
+            Step::Command {
+                request,
+                continuation,
+            } => continuation.resume(dispatch(request, stdout)),
+            Step::Output {
+                request,
+                continuation,
+            } => continuation.resume(scalar(&request.value).and_then(|value| {
+                match request.stream {
+                    OutputStream::Stdout => writeln!(stdout, "{value}"),
+                    OutputStream::Stderr => writeln!(io::stderr().lock(), "{value}"),
                 }
-                Step::Finished { exit_code } => return Ok(exit_code),
-                Step::Failed(error) => return Err(error.to_string()),
-            };
+                .map_err(|error| error.to_string())
+            })),
+            Step::ReadClock(continuation) => continuation.resume(Ok(start.elapsed())),
+            Step::Pause {
+                duration,
+                continuation,
+            } => {
+                std::thread::sleep(duration);
+                continuation.resume(Ok(()))
+            }
+            Step::Finished { exit_code } => return Ok(exit_code),
+            Step::Failed(error) => return Err(error.to_string()),
+        };
     }
 }
 

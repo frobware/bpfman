@@ -8,6 +8,7 @@ use crate::{Argument, Number, Value};
 mod calls;
 mod compare;
 mod loops;
+mod matches;
 mod polls;
 mod pure;
 
@@ -56,6 +57,8 @@ pub enum DispatchLane {
     Bind,
     /// A command previously registered by a defer.
     Deferred,
+    /// A command whose status is inspected by an assertion.
+    Assertion,
 }
 
 /// One invocation to perform.
@@ -97,6 +100,17 @@ pub struct OutputRequest {
     pub value: Value,
     /// Statement source extent.
     pub span: Span,
+    /// Destination selected by the runtime.
+    pub stream: OutputStream,
+}
+
+/// Output channel for a rendered value or diagnostic.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OutputStream {
+    /// Ordinary script output.
+    Stdout,
+    /// Assertion diagnostic.
+    Stderr,
 }
 
 /// The interpreter state suspended at command dispatch.
@@ -118,6 +132,19 @@ impl<'a> CommandContinuation<'a> {
                     }
                 }
                 CommandPurpose::Bind(dst) => self.machine.put(dst, Slot::Result(response)),
+                CommandPurpose::Assertion {
+                    expected_ok,
+                    required,
+                    text,
+                    span,
+                } => {
+                    self.machine.assertion_result(
+                        (response.exit_code == 0) == expected_ok,
+                        required,
+                        text,
+                        &span,
+                    );
+                }
                 CommandPurpose::Cleanup => {
                     if response.exit_code != 0 {
                         self.machine.cleanup_failed();
@@ -188,6 +215,7 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         loops: Vec::new(),
         polls: Vec::new(),
         attempt_cleanup: None,
+        diagnostic: None,
         deferred: Vec::new(),
         draining: None,
         unit: None,
@@ -227,6 +255,12 @@ enum CommandPurpose {
     Ordinary,
     Bind(Temp),
     Cleanup,
+    Assertion {
+        expected_ok: bool,
+        required: bool,
+        text: String,
+        span: Span,
+    },
 }
 
 struct Machine<'a> {
@@ -238,6 +272,7 @@ struct Machine<'a> {
     loops: Vec<loops::Iteration>,
     polls: Vec<polls::Poll>,
     attempt_cleanup: Option<Span>,
+    diagnostic: Option<OutputRequest>,
     deferred: Vec<(Argv, Span)>,
     draining: Option<usize>,
     unit: Option<usize>,
@@ -259,6 +294,16 @@ enum Action {
 impl<'a> Machine<'a> {
     fn advance(mut self) -> Step<'a> {
         loop {
+            if let Some(request) = self.diagnostic.take() {
+                let span = request.span.clone();
+                return Step::Output {
+                    request,
+                    continuation: OutputContinuation {
+                        machine: self,
+                        span,
+                    },
+                };
+            }
             if let Some(base) = self.draining {
                 if self.deferred.len() > base {
                     if let Some((argv, span)) = self.deferred.pop() {
@@ -418,17 +463,40 @@ impl<'a> Machine<'a> {
                 return Ok(Action::Output(OutputRequest {
                     value: self.value(*src)?.clone(),
                     span: span.clone(),
+                    stream: OutputStream::Stdout,
                 }));
             }
+            Instruction::Assert { required, clause } => match clause.as_ref() {
+                ir::Assertion::Expression(expression) => {
+                    let truth = boolean(self.eval(expression)?)?;
+                    self.assertion_result(truth, *required, expression.to_string(), span);
+                }
+                ir::Assertion::Command {
+                    expected,
+                    command,
+                    negated,
+                    ..
+                } => {
+                    let argv = self.build_argv(command)?;
+                    let expected_ok = (*expected == ir::CommandStatus::Ok) != *negated;
+                    let text = format!(
+                        "expected command to {}",
+                        if expected_ok { "succeed" } else { "fail" }
+                    );
+                    let request = argv.request(DispatchLane::Assertion, span.clone());
+                    return Ok(Action::Command(
+                        request,
+                        CommandPurpose::Assertion {
+                            expected_ok,
+                            required: *required,
+                            text,
+                            span: span.clone(),
+                        },
+                    ));
+                }
+            },
             Instruction::BuildArgs { dst, command } => {
-                let argv = Argv {
-                    head: self.argument(&command.head)?,
-                    arguments: command
-                        .arguments
-                        .iter()
-                        .map(|value| self.argument(value))
-                        .collect::<Result<_, _>>()?,
-                };
+                let argv = self.build_argv(command)?;
                 self.put(*dst, Slot::Args(argv));
             }
             Instruction::DispatchCommand { argv } => {
@@ -486,9 +554,41 @@ impl<'a> Machine<'a> {
             Instruction::RegisterDefer { argv } => {
                 self.deferred.push((self.argv(*argv)?, span.clone()))
             }
-            _ => return Err("instruction is not yet implemented".to_owned()),
         }
         Ok(Action::Next)
+    }
+
+    fn build_argv(&self, command: &ir::Command) -> Result<Argv, String> {
+        Ok(Argv {
+            head: self.argument(&command.head)?,
+            arguments: command
+                .arguments
+                .iter()
+                .map(|value| self.argument(value))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    fn assertion_result(&mut self, truth: bool, required: bool, text: String, span: &Span) {
+        if truth {
+            return;
+        }
+        if required {
+            self.error(span, format!("require failed: {text}"));
+        } else {
+            self.exit_code = 1;
+            let position = span.start();
+            self.diagnostic = Some(OutputRequest {
+                value: Value::String(format!(
+                    "{}:{}:{}: assertion failed: {text}",
+                    position.name().as_str(),
+                    position.line(),
+                    position.column()
+                )),
+                span: span.clone(),
+                stream: OutputStream::Stderr,
+            });
+        }
     }
 
     fn jump(&mut self, block: BlockId) {
@@ -574,7 +674,7 @@ impl<'a> Machine<'a> {
             Terminator::CollectProduce { owner, result, .. } => {
                 self.collect_result(owner, result)?
             }
-            _ => return Err("terminator is not yet implemented".to_owned()),
+            Terminator::Unreachable => return Err("entered an unreachable block".to_owned()),
         }
         Ok(Action::Next)
     }
@@ -671,6 +771,9 @@ impl<'a> Machine<'a> {
                     .map(|item| self.eval(item))
                     .collect::<Result<_, _>>()?,
             ),
+            ir::ExpressionKind::Matches { target, block } => {
+                Value::Bool(self.matches(self.eval(target)?, block)?)
+            }
             ir::ExpressionKind::PureCall { builtin, arguments } => {
                 self.pure_call(*builtin, arguments)?
             }
@@ -687,11 +790,26 @@ impl<'a> Machine<'a> {
         })
     }
     fn lookup(&self, variable: &ir::VariableRef, soft: bool) -> Result<Value, String> {
-        let find = |name: &str| self.frames.iter().rev().find_map(|frame| frame.get(name));
-        let mut value = find(&variable.name)
+        let value = self
+            .frames
+            .iter()
+            .rev()
+            .find_map(|frame| frame.get(&variable.name))
             .cloned()
             .ok_or_else(|| format!("undefined variable: {}", variable.name))?;
-        let mut path = variable.path.as_str();
+        let value = self.lookup_path(value, &variable.path)?;
+        if value == Value::Absent && !soft && !variable.path.is_empty() {
+            Err(format!(
+                "{}: path {:?} is absent",
+                variable.name, variable.path
+            ))
+        } else {
+            Ok(value)
+        }
+    }
+
+    fn lookup_path(&self, mut value: Value, mut path: &str) -> Result<Value, String> {
+        let find = |name: &str| self.frames.iter().rev().find_map(|frame| frame.get(name));
         while !path.is_empty() {
             path = path.strip_prefix('.').unwrap_or(path);
             if let Some(index_path) = path.strip_prefix('[') {
@@ -716,14 +834,7 @@ impl<'a> Machine<'a> {
                 path = rest;
             }
             if value == Value::Absent {
-                return if soft {
-                    Ok(Value::Absent)
-                } else {
-                    Err(format!(
-                        "{}: path {:?} is absent",
-                        variable.name, variable.path
-                    ))
-                };
+                return Ok(Value::Absent);
             }
         }
         Ok(value)

@@ -93,6 +93,14 @@ impl Machine<'_> {
         let (purpose, returned, cleanup_failed) = self.restore_caller(caller);
         match purpose {
             CommandPurpose::Ordinary => {}
+            CommandPurpose::Assertion {
+                expected_ok,
+                required,
+                text,
+                span,
+            } => {
+                self.assertion_result(cleanup_failed != expected_ok, required, text, &span);
+            }
             CommandPurpose::Bind(dst) => self.put(
                 dst,
                 Slot::Result(CommandResponse {
