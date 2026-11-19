@@ -427,3 +427,19 @@ The pinned jaq probe confirmed two remaining adapter requirements. Go
 rejects `"1 2" | fromjson` while jaq emits two values. Go's `tojson`
 sorts object keys while jaq preserves their insertion order. The adapter
 needs compatible implementations for both filters before admission.
+
+A temporary probe using jaq-core 3.1.2, jaq-std 3.0.4 and jaq-json 2.0.3
+compiled all 197 distinct literal filters found by tokenizing the checked-in
+`.bpfman` files. It used a strict JSON decoder for `fromjson` and sorted
+keys for `tojson`. Against gojq, 1,176 of 1,182 comparisons on six synthetic
+inputs agreed on the result stream or on whether evaluation failed. The six
+differences were negative indexing on strings and objects. The two
+literal filters that use negative indexes both access the array produced by
+`splits` in `TestLink_Presentation.bpfman`, and array indexing agreed.
+This probe still leaves variable and interpolated filters, inputs from the
+actual scripts, and diagnostic text to verify.
+
+The Go embed returns an empty object from `env`, allows `now`, rejects
+`input`, and exposes neither `debug` nor `stderr`. The probe replaces
+jaq's process environment access with an empty object and removes its
+direct diagnostic output functions. Clock access stays in the driver.
