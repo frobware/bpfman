@@ -393,6 +393,7 @@ dependencies = [
 name = "bpfman-shell"
 version = "0.1.0"
 dependencies = [
+ "bpfman-core",
  "bpfman-kernel-aya",
  "bpfman-shell-check",
  "bpfman-shell-ir",

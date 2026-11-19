@@ -344,6 +344,11 @@ reparses the result and compares the syntax with source positions omitted.
 All 191 checked-in end-to-end scripts produced byte-identical canonical
 source in both shells.
 
+`--list-scripts` walks script paths and evaluates a typed Kubernetes label
+selector. Header parsing bounds input to the first twenty lines, merges
+the three label forms, and validates parameterized cases before filtering
+scripts. Ordinary execution accepts one source file or stdin.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and

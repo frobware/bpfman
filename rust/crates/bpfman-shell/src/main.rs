@@ -16,6 +16,7 @@ use clap::Parser;
 
 mod driver;
 mod fixturemode;
+mod scripts;
 mod symbols;
 
 #[derive(Parser)]
@@ -45,7 +46,13 @@ struct Options {
     /// Print the parsed program's editor symbol table as JSON.
     #[arg(long, conflicts_with_all = ["check", "no_check", "lowered"])]
     symbols: bool,
-    /// Script paths. With no paths or a single dash, read stdin.
+    /// List files with matching script metadata in the given paths.
+    #[arg(long, conflicts_with_all = ["check", "no_check", "lowered", "symbols", "ast", "fmt"])]
+    list_scripts: bool,
+    /// Filter listed files by a Kubernetes label selector.
+    #[arg(long, default_value = "")]
+    selector: String,
+    /// Script path. With no path or a single dash, read stdin.
     scripts: Vec<PathBuf>,
 }
 
@@ -87,82 +94,85 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
     if let Some(path) = options.directory {
         std::env::set_current_dir(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     }
-    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
-    let scripts = if options.scripts.is_empty() {
-        vec![PathBuf::from("-")]
-    } else {
-        options.scripts
-    };
-    let mut status = 0;
-    let mut registry = driver::ImageRegistry::default();
-    for path in scripts {
-        if options.write && path == Path::new("-") {
-            return Err("fmt --write requires a script file".to_owned());
-        }
-        let (name, source, base) = read_source(&cwd, &path)?;
-        if (options.symbols || options.ast || options.fmt) && source.trim().is_empty() {
-            return Ok(0);
-        }
-        let parsed = parse(name, &source).map_err(|error| error.to_string())?;
-        if options.fmt {
-            let formatted = format_source(&source, &parsed).map_err(|error| error.to_string())?;
-            if options.write {
-                if formatted != source {
-                    fs::write(cwd.join(&path), formatted)
-                        .map_err(|error| format!("{}: {error}", path.display()))?;
-                }
-            } else {
-                stdout
-                    .write_all(formatted.as_bytes())
-                    .map_err(|error| error.to_string())?;
-            }
-            return Ok(0);
-        }
-        if options.symbols {
-            symbols::write(
-                &parsed,
-                (path != Path::new("-")).then_some(base.as_path()),
-                stdout,
-            )?;
-            return Ok(0);
-        }
-        if options.ast {
-            let start = parsed.span().start().clone();
-            let span = parsed
-                .statements()
-                .last()
-                .and_then(|statement| Span::new(start, statement.span().end().clone()).ok());
-            let program = gather(parsed, &base)?;
-            stdout
-                .write_all(dump_ast(program.statements(), span.as_ref()).as_bytes())
-                .map_err(|error| error.to_string())?;
-            return Ok(0);
-        }
-        let program = gather(parsed, &base)?;
-        let ir = if options.no_check {
-            lower_unchecked(&program)
-        } else {
-            let checked = check(program).map_err(|issues| {
-                issues
-                    .iter()
-                    .map(|issue| format!("{}:{issue}", issue.span.start().name().as_str()))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })?;
-            if options.check {
-                continue;
-            }
-            lower(&checked)
-        }
-        .map_err(|error| error.to_string())?;
-
-        if options.lowered {
-            write!(stdout, "{ir}").map_err(|error| error.to_string())?;
-        } else {
-            status = status.max(driver::run(&ir, stdout, &mut registry)?);
-        }
+    if options.list_scripts {
+        scripts::list(&options.scripts, &options.selector, stdout)?;
+        return Ok(0);
     }
-    Ok(status)
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    let path = match options.scripts.as_slice() {
+        [] => Path::new("-"),
+        [path] => path.as_path(),
+        _ => return Err(
+            "expected at most one script to run; use --list-scripts to inspect multiple scripts"
+                .to_owned(),
+        ),
+    };
+    if options.write && path == Path::new("-") {
+        return Err("fmt --write requires a script file".to_owned());
+    }
+    let (name, source, base) = read_source(&cwd, path)?;
+    if (options.symbols || options.ast || options.fmt) && source.trim().is_empty() {
+        return Ok(0);
+    }
+    let parsed = parse(name, &source).map_err(|error| error.to_string())?;
+    if options.fmt {
+        let formatted = format_source(&source, &parsed).map_err(|error| error.to_string())?;
+        if options.write {
+            if formatted != source {
+                fs::write(cwd.join(path), formatted)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+            }
+        } else {
+            stdout
+                .write_all(formatted.as_bytes())
+                .map_err(|error| error.to_string())?;
+        }
+        return Ok(0);
+    }
+    if options.symbols {
+        symbols::write(
+            &parsed,
+            (path != Path::new("-")).then_some(base.as_path()),
+            stdout,
+        )?;
+        return Ok(0);
+    }
+    if options.ast {
+        let start = parsed.span().start().clone();
+        let span = parsed
+            .statements()
+            .last()
+            .and_then(|statement| Span::new(start, statement.span().end().clone()).ok());
+        let program = gather(parsed, &base)?;
+        stdout
+            .write_all(dump_ast(program.statements(), span.as_ref()).as_bytes())
+            .map_err(|error| error.to_string())?;
+        return Ok(0);
+    }
+    let program = gather(parsed, &base)?;
+    let ir = if options.no_check {
+        lower_unchecked(&program)
+    } else {
+        let checked = check(program).map_err(|issues| {
+            issues
+                .iter()
+                .map(|issue| format!("{}:{issue}", issue.span.start().name().as_str()))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })?;
+        if options.check {
+            return Ok(0);
+        }
+        lower(&checked)
+    }
+    .map_err(|error| error.to_string())?;
+
+    if options.lowered {
+        write!(stdout, "{ir}").map_err(|error| error.to_string())?;
+        Ok(0)
+    } else {
+        driver::run(&ir, stdout, &mut driver::ImageRegistry::default())
+    }
 }
 
 fn read_source(cwd: &Path, path: &Path) -> Result<(String, String, PathBuf), String> {

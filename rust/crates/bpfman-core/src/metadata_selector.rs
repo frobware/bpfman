@@ -45,7 +45,8 @@ impl MetadataSelector {
         self.0.is_empty()
     }
 
-    pub(super) fn matches(&self, metadata: &BTreeMap<String, String>) -> bool {
+    /// Evaluate the selector against a set of labels.
+    pub fn matches(&self, metadata: &BTreeMap<String, String>) -> bool {
         self.0.iter().all(|requirement| {
             let value = metadata.get(&requirement.key);
             match &requirement.predicate {
