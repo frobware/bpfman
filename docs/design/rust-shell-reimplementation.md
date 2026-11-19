@@ -334,6 +334,10 @@ executing the program. Syntax owns the binding walk, and editor mode shares
 the checker's import validation. A missing import is reported in the JSON
 while valid imports and local symbols remain available. The stdin JSON was
 compared byte for byte with the Go shell.
+`--ast` renders the public tree from typed syntax after direct imports are
+expanded. Parent expression spans retain consumed closing delimiters, while
+inner nodes keep their own byte ranges. The complete Go language fixture
+and all 191 checked-in end-to-end scripts matched the Go dump byte for byte.
 
 ## Typestate and internal invariants
 

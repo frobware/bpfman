@@ -15,6 +15,7 @@
 
 mod ast;
 mod compound;
+mod dump;
 mod duration;
 mod expr;
 mod parse;
@@ -27,6 +28,7 @@ pub use ast::{
     LoopBindings, MatchEntry, MatchPattern, MatchPredicate, MatchesBlock, Parameter, ParameterType,
     ParsedProgram, PureBuiltin, RecordField, Statement, StatementKind, ThreadCall,
 };
+pub use dump::dump_ast;
 pub use duration::{PositiveDuration, parse_go_duration};
 pub use expr::is_json_number;
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};

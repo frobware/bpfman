@@ -264,6 +264,15 @@ impl Cursor<'_> {
         Some(token)
     }
 
+    fn span_through(&self, start: &Span) -> Result<Span, SyntaxError> {
+        span(
+            start,
+            self.tokens[..self.pos]
+                .last()
+                .map_or(start, |token| &token.span),
+        )
+    }
+
     fn at(&self, text: &str) -> bool {
         self.peek().is_some_and(|token| word(token, text))
     }
@@ -288,7 +297,7 @@ impl Cursor<'_> {
         while self.at("or") {
             self.take();
             let rhs = self.and()?;
-            let extent = span(lhs.span(), rhs.span())?;
+            let extent = self.span_through(lhs.span())?;
             lhs = Expression::new(
                 ExpressionKind::Logical {
                     left: Box::new(lhs),
@@ -306,7 +315,7 @@ impl Cursor<'_> {
         while self.at("and") {
             self.take();
             let rhs = self.not()?;
-            let extent = span(lhs.span(), rhs.span())?;
+            let extent = self.span_through(lhs.span())?;
             lhs = Expression::new(
                 ExpressionKind::Logical {
                     left: Box::new(lhs),
@@ -325,7 +334,7 @@ impl Cursor<'_> {
                 .take()
                 .ok_or_else(|| invalid(&self.tokens[0].span, "unexpected end of input"))?;
             let operand = self.not()?;
-            let extent = span(&start.span, operand.span())?;
+            let extent = self.span_through(&start.span)?;
             return Ok(Expression::new(
                 ExpressionKind::Not(Box::new(operand)),
                 extent,
@@ -369,7 +378,7 @@ impl Cursor<'_> {
         };
         self.take();
         let rhs = self.additive()?;
-        let extent = span(lhs.span(), rhs.span())?;
+        let extent = self.span_through(lhs.span())?;
         Ok(Expression::new(
             ExpressionKind::Binary {
                 left: Box::new(lhs),
@@ -387,7 +396,7 @@ impl Cursor<'_> {
         {
             self.take();
             let rhs = self.multiplicative()?;
-            let extent = span(lhs.span(), rhs.span())?;
+            let extent = self.span_through(lhs.span())?;
             lhs = Expression::new(
                 ExpressionKind::Binary {
                     left: Box::new(lhs),
@@ -410,7 +419,7 @@ impl Cursor<'_> {
         {
             self.take();
             let rhs = self.predicate()?;
-            let extent = span(lhs.span(), rhs.span())?;
+            let extent = self.span_through(lhs.span())?;
             lhs = Expression::new(
                 ExpressionKind::Binary {
                     left: Box::new(lhs),
@@ -430,7 +439,7 @@ impl Cursor<'_> {
         }) {
             let start = self.take().ok_or_else(|| invalid(&self.tokens[0].span, "unexpected end of input"))?;
             let operand = self.term()?;
-            let extent = span(&start.span, operand.span())?;
+            let extent = self.span_through(&start.span)?;
             return Ok(Expression::new(ExpressionKind::NotEmpty(Box::new(operand)), extent));
         }
         self.negate()
@@ -442,7 +451,7 @@ impl Cursor<'_> {
                 .take()
                 .ok_or_else(|| invalid(&self.tokens[0].span, "unexpected end of input"))?;
             let operand = self.negate()?;
-            let extent = span(&start.span, operand.span())?;
+            let extent = self.span_through(&start.span)?;
             return Ok(Expression::new(
                 ExpressionKind::Negate(Box::new(operand)),
                 extent,
@@ -532,10 +541,7 @@ impl Cursor<'_> {
                 for _ in 0..arity {
                     args.push(self.call_arg(&start.span)?);
                 }
-                let extent = span(
-                    &start.span,
-                    args.last().map_or(&start.span, Expression::span),
-                )?;
+                let extent = self.span_through(&start.span)?;
                 return Ok(Expression::new(
                     ExpressionKind::PureCall {
                         builtin,
@@ -677,7 +683,7 @@ impl Cursor<'_> {
             let value = self.term()?;
             fields.push(RecordField {
                 name,
-                span: span(&token.span, value.span())?,
+                span: self.span_through(&token.span)?,
                 value,
             });
         }

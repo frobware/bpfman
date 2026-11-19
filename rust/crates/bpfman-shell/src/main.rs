@@ -10,7 +10,8 @@ use std::{
 
 use bpfman_shell_check::{ExpandedProgram, check, expand_imports, prepare_imports};
 use bpfman_shell_lower::{lower, lower_unchecked};
-use bpfman_shell_syntax::{ParsedProgram, parse};
+use bpfman_shell_source::Span;
+use bpfman_shell_syntax::{ParsedProgram, dump_ast, parse};
 use clap::Parser;
 
 mod driver;
@@ -32,6 +33,9 @@ struct Options {
     /// Print the lowered IR without executing.
     #[arg(long)]
     lowered: bool,
+    /// Print the whole program's parsed AST without executing.
+    #[arg(long, conflicts_with_all = ["check", "no_check", "lowered", "symbols"])]
+    ast: bool,
     /// Print the parsed program's editor symbol table as JSON.
     #[arg(long, conflicts_with_all = ["check", "no_check", "lowered"])]
     symbols: bool,
@@ -81,7 +85,7 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
     let mut registry = driver::ImageRegistry::default();
     for path in scripts {
         let (name, source, base) = read_source(&cwd, &path)?;
-        if options.symbols && source.trim().is_empty() {
+        if (options.symbols || options.ast) && source.trim().is_empty() {
             return Ok(0);
         }
         let parsed = parse(name, &source).map_err(|error| error.to_string())?;
@@ -91,6 +95,18 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
                 (path != Path::new("-")).then_some(base.as_path()),
                 stdout,
             )?;
+            return Ok(0);
+        }
+        if options.ast {
+            let start = parsed.span().start().clone();
+            let span = parsed
+                .statements()
+                .last()
+                .and_then(|statement| Span::new(start, statement.span().end().clone()).ok());
+            let program = gather(parsed, &base)?;
+            stdout
+                .write_all(dump_ast(program.statements(), span.as_ref()).as_bytes())
+                .map_err(|error| error.to_string())?;
             return Ok(0);
         }
         let program = gather(parsed, &base)?;

@@ -363,6 +363,18 @@ fn symbols_keep_valid_imports_and_local_bindings_when_an_import_is_missing() -> 
 }
 
 #[test]
+fn ast_mode_matches_the_go_tree_shape_and_preserves_group_extent() -> io::Result<()> {
+    let result = run(&["--ast"], "let x = 1 == (2 + 3)\n")?;
+    assert!(result.status.success(), "{result:?}");
+    let output = String::from_utf8_lossy(&result.stdout);
+    assert!(output.starts_with("Program {\n  Stmts: []syntax.Stmt (len = 1) {\n"));
+    assert!(output.contains("          Span: 1:15-1:20\n"));
+    assert!(output.contains("        Span: 1:9-1:21\n"));
+    assert!(output.ends_with("  Span: 1:1-1:21\n}\n"));
+    Ok(())
+}
+
+#[test]
 fn assertions_use_stderr_continue_and_require_stops_after_cleanup() -> io::Result<()> {
     let source = "let r = record { nested: record { n: 2 } }\nassert $r matches exhaustive { nested: matches { n: 2 } }\nassert false\nassert fail exec false\nprint continued\nrequire false\nprint unreachable";
     let output = run(&[], source)?;
