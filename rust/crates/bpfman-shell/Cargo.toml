@@ -24,6 +24,7 @@ jiff = { version = "0.2", default-features = false, features = ["tz-system", "tz
 object.workspace = true
 rustix = { version = "1", default-features = false, features = ["fs", "process", "std"] }
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
+sha2.workspace = true
 signal-hook.workspace = true
 tempfile.workspace = true
 

@@ -317,6 +317,11 @@ The container fixture helpers now aggregate child PIDs across every task and
 produce the same native-endian dynamic-linker cache bytes as the Go shell.
 All seven non-external container uprobe cases passed with the Rust shell and
 Go daemon, including mount and PID namespace resolution.
+The registry adapter mints reserved alias references, resolves them at the
+bpfman invocation boundary, and uses either the harness override or a
+process-owned loopback registry. Build, inspect, load and attach passed with
+both backends against the Go daemon. A regression test checks that a digest
+mismatch leaves the upload available for retry.
 
 ## Typestate and internal invariants
 

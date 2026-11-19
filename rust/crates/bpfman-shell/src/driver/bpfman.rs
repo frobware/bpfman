@@ -6,6 +6,7 @@ use serde_json::Value as Json;
 pub(super) fn invoke(
     arguments: Vec<Argument>,
     interrupt: &super::process::Interrupt,
+    registry: &mut super::ImageRegistry,
 ) -> Result<CommandResponse, String> {
     let mut argv = arguments
         .into_iter()
@@ -14,6 +15,7 @@ pub(super) fn invoke(
             argument => super::argument(&argument),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    registry.rewrite(&mut argv)?;
     if argv.is_empty() {
         return Err("missing command after bpfman".to_owned());
     }

@@ -21,8 +21,11 @@ mod net;
 mod process;
 mod procfs;
 mod query;
+mod registry;
 mod slot_pool;
 mod uprobe;
+
+pub(super) use registry::Registry as ImageRegistry;
 
 #[derive(Default)]
 struct Fixtures {
@@ -31,7 +34,11 @@ struct Fixtures {
     probes: lsm::Probes,
 }
 
-pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
+pub(super) fn run(
+    program: &Program,
+    stdout: &mut impl Write,
+    registry: &mut ImageRegistry,
+) -> Result<u8, String> {
     let start = Instant::now();
     let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
     let mut jobs = jobs::Jobs::default();
@@ -48,6 +55,7 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
                 &interrupt,
                 &mut jobs,
                 &mut fixtures,
+                registry,
             )),
             Step::Output {
                 request,
@@ -98,11 +106,12 @@ fn dispatch(
     interrupt: &process::Interrupt,
     jobs: &mut jobs::Jobs,
     fixtures: &mut Fixtures,
+    registry: &mut ImageRegistry,
 ) -> Result<CommandResponse, String> {
     interrupt.check()?;
     let head = argument(&request.head)?;
     if head == "bpfman" {
-        return bpfman::invoke(request.arguments, interrupt);
+        return bpfman::invoke(request.arguments, interrupt, registry);
     }
     if head == "start" {
         return jobs.start(&request.arguments, cite(&request));
@@ -146,6 +155,9 @@ fn dispatch(
     }
     if head == "proginfo" {
         return Ok(kernel::proginfo(&request.arguments));
+    }
+    if head == "registry" {
+        return Ok(builtin_response(registry.invoke(&request.arguments)));
     }
     if head == "process" {
         return Ok(builtin_response(procfs::invoke(&request.arguments)));
@@ -247,7 +259,7 @@ fn dispatch(
     if head != "exec"
         && matches!(
             head.as_str(),
-            "defs" | "import" | "range" | "registry" | "trace" | "u32le" | "u64le" | "zip"
+            "defs" | "import" | "range" | "trace" | "u32le" | "u64le" | "zip"
         )
     {
         return Err(format!("{head}: builtin is not yet implemented"));

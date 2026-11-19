@@ -74,6 +74,7 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
         options.scripts
     };
     let mut status = 0;
+    let mut registry = driver::ImageRegistry::default();
     for path in scripts {
         let program = gather(&cwd, &path)?;
         let ir = if options.no_check {
@@ -96,7 +97,7 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
         if options.lowered {
             write!(stdout, "{ir}").map_err(|error| error.to_string())?;
         } else {
-            status = status.max(driver::run(&ir, stdout)?);
+            status = status.max(driver::run(&ir, stdout, &mut registry)?);
         }
     }
     Ok(status)
