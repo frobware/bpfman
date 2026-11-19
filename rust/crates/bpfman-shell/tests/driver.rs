@@ -35,7 +35,8 @@ fn embedded_jq_preserves_precision_result_stream_and_argument_origin() -> io::Re
         &[],
         r#"
 let n = '100000000000000000000' |> jq '. * .'
-let absent = 'null' |> jq empty
+let absent = (jq empty 'null')
+let empty_thread = 'null' |> jq empty
 let present_null = 'null' |> jq .
 let present_list = 'null' |> jq 'null, true'
 let source = '1]'
@@ -43,6 +44,7 @@ let typed_string = (jq . $source)
 let keys = '{"z":1,"a":2}' |> jq tojson
 let captured = ('"aab"' |> jq 'capture("(?<key>a+)").key')
 assert missing $absent
+assert $empty_thread.ok
 assert null $present_null
 assert present $present_list
 print $n $typed_string $keys $captured
@@ -74,6 +76,30 @@ fn embedded_jq_rejects_trailing_json_in_both_decoders() -> io::Result<()> {
             "{output:?}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn threaded_calls_keep_prior_observations_across_definition_frames() -> io::Result<()> {
+    let output = run(
+        &[],
+        r#"
+def decorate(prefix: string input: string) {
+    defer exec true
+    print visited
+    let echo = $input |> exec printf '%s'
+    return "${prefix}${echo.stdout}"
+}
+let decorated = ("a" |> decorate "first-")
+let pair = [($decorated |> decorate "second-") ("b" |> decorate "third-")]
+print $pair[0] $pair[1]
+"#,
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        output.stdout,
+        b"visited\nvisited\nvisited\nsecond-first-a third-b\n"
+    );
     Ok(())
 }
 

@@ -248,8 +248,10 @@ queries in one expression resume in order, with observations reused only
 until that instruction completes. The jq effect distinguishes literal JSON
 text from already typed values and preserves zero, one, or multiple results.
 An in-process jq adapter is available for expression, thread and standalone
-calls. Non-jq threaded calls and remaining
-typed builtins, signals, process-group
+calls. Thread expressions can also call local definitions or dispatch an
+invocation to the driver. They preserve the caller's observations across
+definition frames and use the command envelope when no primary value is
+returned. Remaining typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently
 via `BPFMAN_SHELL_UNDER_TEST` because the Rust daemon's directory can also
@@ -377,8 +379,9 @@ VALUE`, parses the filter with `gojq`, converts one argument to a JSON-shaped
 value, runs the filter, and collects its result stream. It accepts no jq CLI
 flags. User-written scalar tokens are intended to decode as one JSON value;
 resolved shell values retain their original type. Zero results become an
-absent shell value, one result remains a single value, and multiple results
-become a list. An explicit JSON null stays present. Boolean and scalar result
+absent shell value in a direct expression and the successful command envelope
+when threaded. One result remains a single value, and multiple results become
+a list. An explicit JSON null stays present. Boolean and scalar result
 origins are preserved; ordinary integer results are converted to
 `json.Number`. The Rust adapter must own these boundary rules, rather than
 exposing `jaq` values to the rest of the shell.

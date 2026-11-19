@@ -79,6 +79,8 @@ pub enum DispatchLane {
     Deferred,
     /// A command whose status is inspected by an assertion.
     Assertion,
+    /// A command whose primary value is consumed by a thread expression.
+    Thread,
 }
 
 /// One invocation to perform.
@@ -111,6 +113,20 @@ pub struct CommandResponse {
     pub signal: Option<String>,
     /// Process ID, when the adapter knows it.
     pub pid: Option<u32>,
+}
+
+impl CommandResponse {
+    fn success(primary: Value) -> Self {
+        Self {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            primary,
+            killed: false,
+            signal: None,
+            pid: None,
+        }
+    }
 }
 
 /// An expression statement's output.
@@ -152,6 +168,9 @@ impl<'a> CommandContinuation<'a> {
                     }
                 }
                 CommandPurpose::Bind(dst) => self.machine.put(dst, Slot::Result(response)),
+                CommandPurpose::Thread { key, span } => {
+                    self.machine.finish_thread(key, &span, response);
+                }
                 CommandPurpose::Assertion {
                     expected_ok,
                     required,
@@ -277,6 +296,10 @@ enum CommandPurpose {
     Ordinary,
     Bind(Temp),
     Cleanup,
+    Thread {
+        key: *const ir::Expression,
+        span: Span,
+    },
     Assertion {
         expected_ok: bool,
         required: bool,
@@ -375,19 +398,22 @@ impl<'a> Machine<'a> {
             let block = &blocks[self.block.0];
             let (action, span) = if let Some(instruction) = block.instructions.get(self.offset) {
                 self.offset += 1;
-                (self.instruction(instruction), &instruction.span)
+                let action = self.instruction(instruction);
+                if !matches!(
+                    &action,
+                    Err(EvalError::Path { .. }
+                        | EvalError::Query { .. }
+                        | EvalError::Thread { .. })
+                ) {
+                    self.expression_observations.clear();
+                }
+                (action, &instruction.span)
             } else {
                 (
                     self.terminate(&block.terminator).map_err(EvalError::from),
                     &block.terminator.span,
                 )
             };
-            if !matches!(
-                &action,
-                Err(EvalError::Path { .. } | EvalError::Query { .. })
-            ) {
-                self.expression_observations.clear();
-            }
             match action {
                 Ok(Action::Next) => {}
                 Ok(Action::Stop) => {
@@ -432,7 +458,7 @@ impl<'a> Machine<'a> {
                         },
                     };
                 }
-                Err(EvalError::Query { key, request }) => {
+                Err(EvalError::Query { key, request, mode }) => {
                     self.offset -= 1;
                     let span = request.span.clone();
                     return Step::Query {
@@ -441,8 +467,21 @@ impl<'a> Machine<'a> {
                             machine: self,
                             key,
                             span,
+                            mode,
                         },
                     };
+                }
+                Err(EvalError::Thread { key, request }) => {
+                    self.offset -= 1;
+                    let purpose = CommandPurpose::Thread {
+                        key,
+                        span: request.span.clone(),
+                    };
+                    match self.start_definition(&request, purpose) {
+                        Ok(Some(purpose)) => return self.suspend_command(*request, purpose),
+                        Ok(None) => {}
+                        Err(message) => self.error(&request.span, message),
+                    }
                 }
             }
         }
@@ -639,6 +678,48 @@ impl<'a> Machine<'a> {
                 .map(|value| self.argument(value))
                 .collect::<Result<_, _>>()?,
         })
+    }
+
+    fn eval_thread(
+        &self,
+        expression: &ir::Expression,
+        input: &ir::Expression,
+        command: &ir::Command,
+    ) -> EvalResult<Value> {
+        let key = std::ptr::from_ref(expression);
+        if let Some(value) = self.expression_observations.get(&key) {
+            return Ok(value.clone());
+        }
+        let mut argv = self.build_argv(command)?;
+        argv.arguments.push(self.argument(input)?);
+        Err(EvalError::Thread {
+            key,
+            request: Box::new(argv.request(DispatchLane::Thread, expression.span.clone())),
+        })
+    }
+
+    fn finish_thread(
+        &mut self,
+        key: *const ir::Expression,
+        span: &Span,
+        response: CommandResponse,
+    ) {
+        if response.exit_code != 0 {
+            let mut message = format!("thread: command failed (exit {})", response.exit_code);
+            if !response.stderr.is_empty() {
+                message.push_str(": ");
+                message.push_str(&response.stderr);
+            }
+            self.expression_observations.clear();
+            self.error(span, message);
+            return;
+        }
+        let value = if response.primary == Value::Absent {
+            Value::Outcome(Box::new(response))
+        } else {
+            response.primary
+        };
+        self.expression_observations.insert(key, value);
     }
 
     fn assertion_result(&mut self, truth: bool, required: bool, text: String, span: &Span) {
@@ -871,7 +952,12 @@ impl<'a> Machine<'a> {
                 let [filter, input] = arguments.as_slice() else {
                     return Err("jq requires a filter and input".into());
                 };
-                self.query(expression, self.argument(filter)?, self.argument(input)?)?
+                self.query(
+                    expression,
+                    self.argument(filter)?,
+                    self.argument(input)?,
+                    observations::QueryMode::Expression,
+                )?
             }
             ir::ExpressionKind::Thread { value, command, .. }
                 if matches!(&command.head.node, ir::ExpressionKind::Word(name) if name == "jq")
@@ -884,7 +970,15 @@ impl<'a> Machine<'a> {
                 let [filter] = command.arguments.as_slice() else {
                     return Err("threaded jq requires a filter".into());
                 };
-                self.query(expression, self.argument(filter)?, self.argument(value)?)?
+                self.query(
+                    expression,
+                    self.argument(filter)?,
+                    self.argument(value)?,
+                    observations::QueryMode::Thread,
+                )?
+            }
+            ir::ExpressionKind::Thread { value, command, .. } => {
+                self.eval_thread(expression, value, command)?
             }
             ir::ExpressionKind::PureCall { builtin, arguments } => {
                 self.pure_call(*builtin, arguments)?

@@ -1,7 +1,7 @@
 use bpfman_shell_ir::Expression;
 use bpfman_shell_source::Span;
 
-use super::{Argument, Machine, Step, Value};
+use super::{Argument, CommandRequest, CommandResponse, Machine, Step, Value};
 
 pub(super) type EvalResult<T> = Result<T, EvalError>;
 
@@ -14,6 +14,11 @@ pub(super) enum EvalError {
     Query {
         key: *const Expression,
         request: Box<QueryRequest>,
+        mode: QueryMode,
+    },
+    Thread {
+        key: *const Expression,
+        request: Box<CommandRequest>,
     },
 }
 
@@ -126,6 +131,13 @@ pub struct QueryContinuation<'a> {
     pub(super) machine: Machine<'a>,
     pub(super) key: *const Expression,
     pub(super) span: Span,
+    pub(super) mode: QueryMode,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum QueryMode {
+    Expression,
+    Thread,
 }
 
 impl<'a> QueryContinuation<'a> {
@@ -134,6 +146,9 @@ impl<'a> QueryContinuation<'a> {
         match observation {
             Ok(mut results) => {
                 let value = match results.len() {
+                    0 if matches!(self.mode, QueryMode::Thread) => {
+                        Value::Outcome(Box::new(CommandResponse::success(Value::Absent)))
+                    }
                     0 => Value::Absent,
                     1 => results.pop().unwrap_or(Value::Absent),
                     _ => Value::List(results),
@@ -155,6 +170,7 @@ impl Machine<'_> {
         expression: &Expression,
         filter: Argument,
         input: Argument,
+        mode: QueryMode,
     ) -> EvalResult<Value> {
         let key = std::ptr::from_ref(expression);
         if let Some(value) = self.expression_observations.get(&key) {
@@ -168,6 +184,7 @@ impl Machine<'_> {
         };
         Err(EvalError::Query {
             key,
+            mode,
             request: Box::new(QueryRequest {
                 filter,
                 input: input.into(),

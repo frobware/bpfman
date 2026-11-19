@@ -1,4 +1,6 @@
-use bpfman_shell_ir::{BlockId, ParameterType};
+use std::collections::HashMap;
+
+use bpfman_shell_ir::{BlockId, Expression, ParameterType};
 
 use super::{
     Argument, CommandPurpose, CommandRequest, CommandResponse, ExecutionError, Machine, Number,
@@ -22,6 +24,7 @@ pub(super) struct Caller {
     cleanup_failed: bool,
     prior_failure: Option<ExecutionError>,
     pending_retry: Option<super::polls::RetrySignal>,
+    observations: HashMap<*const Expression, Value>,
     purpose: CommandPurpose,
 }
 
@@ -84,6 +87,7 @@ impl Machine<'_> {
             cleanup_failed: std::mem::take(&mut self.local_cleanup_failed),
             prior_failure: self.failure.take(),
             pending_retry: self.pending_retry.take(),
+            observations: std::mem::take(&mut self.expression_observations),
             purpose,
         });
         self.jump(BlockId(0));
@@ -103,18 +107,16 @@ impl Machine<'_> {
             } => {
                 self.assertion_result(cleanup_failed != expected_ok, required, text, &span);
             }
-            CommandPurpose::Bind(dst) => self.put(
-                dst,
-                Slot::Result(CommandResponse {
-                    exit_code: u8::from(cleanup_failed),
-                    stdout: String::new(),
-                    stderr: String::new(),
-                    primary: returned,
-                    killed: false,
-                    signal: None,
-                    pid: None,
-                }),
-            ),
+            CommandPurpose::Bind(dst) => {
+                let mut response = CommandResponse::success(returned);
+                response.exit_code = u8::from(cleanup_failed);
+                self.put(dst, Slot::Result(response));
+            }
+            CommandPurpose::Thread { key, span } => {
+                let mut response = CommandResponse::success(returned);
+                response.exit_code = u8::from(cleanup_failed);
+                self.finish_thread(key, &span, response);
+            }
             CommandPurpose::Cleanup if cleanup_failed => self.cleanup_failed(),
             CommandPurpose::Cleanup => {}
         }
@@ -170,6 +172,7 @@ impl Machine<'_> {
         self.draining = caller.draining;
         self.failure = caller.prior_failure;
         self.pending_retry = caller.pending_retry;
+        self.expression_observations = caller.observations;
         (caller.purpose, returned, cleanup_failed)
     }
 
