@@ -4,9 +4,9 @@ use std::{
 };
 
 use crate::{
-    BinaryOperator, BindPolicy, Block, Command, Expression, ExpressionKind, Instruction,
-    InterpolatedPart, LogicalOperator, MatchBlock, MatchPattern, MatchPredicate, ParameterType,
-    Program, PureBuiltin, Terminator, UnaryOperator, VariableRef,
+    Assertion, BinaryOperator, BindPolicy, Block, Command, CommandStatus, Expression,
+    ExpressionKind, Instruction, InterpolatedPart, LogicalOperator, MatchBlock, MatchPattern,
+    MatchPredicate, ParameterType, Program, PureBuiltin, Terminator, UnaryOperator, VariableRef,
 };
 
 impl fmt::Display for Program {
@@ -73,6 +73,39 @@ fn dump_blocks(
                 }
                 Instruction::BindName { name, src } => {
                     writeln!(f, "BindName {name} = t{}", src.0)?;
+                }
+                Instruction::BindDestructure { bindings, src } => {
+                    writeln!(
+                        f,
+                        "BindDestructure [{}] = t{}",
+                        bindings.names().join(" "),
+                        src.0
+                    )?;
+                }
+                Instruction::Assert { required, clause } => {
+                    f.write_str(if *required { "Require " } else { "Assert " })?;
+                    match clause.as_ref() {
+                        Assertion::Expression(expression) => write!(f, "{expression}")?,
+                        Assertion::Command {
+                            expected,
+                            command,
+                            negated,
+                            ..
+                        } => {
+                            if *negated {
+                                f.write_str("not ")?;
+                            }
+                            let status = match expected {
+                                CommandStatus::Ok => "ok",
+                                CommandStatus::Fail => "fail",
+                            };
+                            write!(f, "{status} {}", command.head)?;
+                            for argument in &command.arguments {
+                                write!(f, " {argument}")?;
+                            }
+                        }
+                    }
+                    writeln!(f)?;
                 }
                 Instruction::EmitResult { src } => writeln!(f, "EmitResult t{}", src.0)?,
                 Instruction::BuildArgs { dst, command } => {

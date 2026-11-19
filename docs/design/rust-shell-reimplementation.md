@@ -200,7 +200,9 @@ in the IR. Hoisted definitions now have independent block and temporary
 tables, typed parameters, and a shared return epilogue. Definition guards
 drain their local deferred commands before propagating failure. A Go fixture
 covers forward dispatch, returns from loops, and definition-local cleanup.
-Bind-collect, poll cleanup, the full golden dump, and execution are pending.
+The IR also distinguishes expression assertions from command-status clauses
+and retains positional destructuring names and discard slots. Bind-collect,
+poll cleanup, the full golden dump, and execution are pending.
 
 ## Typestate and internal invariants
 

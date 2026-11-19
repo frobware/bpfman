@@ -58,6 +58,33 @@ pub enum BindPolicy {
     },
 }
 
+/// Expected command status.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandStatus {
+    /// The command should succeed.
+    Ok,
+    /// The command should fail.
+    Fail,
+}
+
+/// What an assertion evaluates.
+#[derive(Debug, Eq, PartialEq)]
+pub enum Assertion {
+    /// Evaluate the truth of an expression.
+    Expression(Expression),
+    /// Dispatch a command and inspect its status.
+    Command {
+        /// Expected success or failure.
+        expected: CommandStatus,
+        /// Location of the status keyword.
+        status_span: Span,
+        /// Command arguments in source order.
+        command: Command,
+        /// Whether to invert the expectation.
+        negated: bool,
+    },
+}
+
 /// An operation with fallthrough to the next instruction.
 #[derive(Debug, Eq, PartialEq)]
 pub enum Instruction {
@@ -90,6 +117,20 @@ pub enum Instruction {
         name: String,
         /// Source value temporary.
         src: Temp,
+    },
+    /// Bind positional list elements to named slots.
+    BindDestructure {
+        /// Ordered names, including discard slots.
+        bindings: LoopBindings,
+        /// Source list value.
+        src: Temp,
+    },
+    /// Evaluate an assertion or requirement.
+    Assert {
+        /// Stop execution on failure.
+        required: bool,
+        /// Condition to evaluate.
+        clause: Box<Assertion>,
     },
     /// Print the value of an expression statement.
     EmitResult {
@@ -420,7 +461,9 @@ impl Unit {
                         verify_operand(*argv, TempKind::Args, &kinds)?;
                         Some((*dst, TempKind::BindResult(*argv)))
                     }
-                    Instruction::BindName { src, .. } | Instruction::EmitResult { src } => {
+                    Instruction::BindName { src, .. }
+                    | Instruction::BindDestructure { src, .. }
+                    | Instruction::EmitResult { src } => {
                         verify_operand(*src, TempKind::Value, &kinds)?;
                         None
                     }
@@ -445,7 +488,8 @@ impl Unit {
                     | Instruction::EnterIfFrame
                     | Instruction::ExitFrame
                     | Instruction::TraceBranch(_)
-                    | Instruction::TraceLoop(_) => None,
+                    | Instruction::TraceLoop(_)
+                    | Instruction::Assert { .. } => None,
                 };
                 if let Some((dst, kind)) = definition {
                     if !destinations.insert(dst) {

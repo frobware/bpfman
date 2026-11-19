@@ -1,0 +1,4 @@
+let (first _) = [1 2]
+assert $first == 1
+assert not ok exec false
+require fail exec false

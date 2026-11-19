@@ -4,8 +4,8 @@ use crate::expr::{lower_expression, lower_expressions};
 use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
-    BindPolicy, BranchTrace, Command, Definition, Instruction, Located, LoopBindings, LoopTrace,
-    Parameter, ParameterType, Program, Temp, VerifyError,
+    Assertion, BindPolicy, BranchTrace, Command, CommandStatus, Definition, Instruction, Located,
+    LoopBindings, LoopTrace, Parameter, ParameterType, Program, Temp, VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -35,6 +35,8 @@ pub enum LowerError {
     NestedDefinition(Span),
     /// A return appears outside any definition.
     OutsideDefinition(Span),
+    /// A status assertion is missing its command.
+    MissingAssertionCommand(Span),
 }
 
 impl fmt::Display for LowerError {
@@ -51,6 +53,13 @@ impl fmt::Display for LowerError {
                 )
             }
             Self::InvalidIr(error) => write!(f, "invalid lowered program: {error}"),
+            Self::MissingAssertionCommand(span) => write!(
+                f,
+                "{}:{}:{}: expected command after assertion status",
+                span.start().name().as_str(),
+                span.start().line(),
+                span.start().column()
+            ),
             Self::NestedDefinition(span) => write!(
                 f,
                 "{}:{}:{}: def must be declared at top level",
@@ -90,7 +99,8 @@ impl std::error::Error for LowerError {
             | Self::IncompleteLayout(_)
             | Self::OutsideLoop { .. }
             | Self::NestedDefinition(_)
-            | Self::OutsideDefinition(_) => None,
+            | Self::OutsideDefinition(_)
+            | Self::MissingAssertionCommand(_) => None,
         }
     }
 }
@@ -242,8 +252,14 @@ impl Body {
             }
             S::Poll { .. } => return Err(unsupported(span, "poll")),
             S::Retry { .. } => return Err(unsupported(span, "retry")),
-            S::Assertion { .. } => return Err(unsupported(span, "assertion")),
-            S::LetDestructure { .. } => return Err(unsupported(span, "destructuring")),
+            S::Assertion { mode, clause } => Instruction::Assert {
+                required: *mode == syntax::AssertionMode::Require,
+                clause: Box::new(lower_assertion(clause)?),
+            },
+            S::LetDestructure { names, value } => Instruction::BindDestructure {
+                src: self.eval(span, value),
+                bindings: lower_bindings(span, names)?,
+            },
             S::Bind {
                 mode,
                 name,
@@ -333,14 +349,7 @@ impl Body {
     ) -> Result<(), LowerError> {
         let owner = self.layout.current();
         let list = self.eval(span, list);
-        let bindings = LoopBindings::new(
-            bindings
-                .names()
-                .iter()
-                .map(|name| name.text().to_owned())
-                .collect(),
-        )
-        .ok_or_else(|| LowerError::IncompleteLayout(span.clone()))?;
+        let bindings = lower_bindings(span, bindings.names())?;
         let body = self.layout.new_block(span);
         let exit = self.layout.new_block(span);
         self.layout.terminate(located(
@@ -474,6 +483,41 @@ fn unsupported(span: &Span, form: &'static str) -> LowerError {
         form,
         span: span.clone(),
     }
+}
+
+fn lower_bindings(span: &Span, names: &[syntax::Identifier]) -> Result<LoopBindings, LowerError> {
+    LoopBindings::new(names.iter().map(|name| name.text().to_owned()).collect())
+        .ok_or_else(|| LowerError::IncompleteLayout(span.clone()))
+}
+
+fn lower_assertion(clause: &syntax::AssertionClause) -> Result<Assertion, LowerError> {
+    Ok(match clause {
+        syntax::AssertionClause::Expression(value) => {
+            Assertion::Expression(lower_expression(value))
+        }
+        syntax::AssertionClause::CommandStatus {
+            outcome,
+            head_span,
+            arguments,
+            negated,
+        } => {
+            let (head, arguments) = arguments
+                .split_first()
+                .ok_or_else(|| LowerError::MissingAssertionCommand(head_span.clone()))?;
+            Assertion::Command {
+                expected: match outcome {
+                    syntax::CommandOutcome::Ok => CommandStatus::Ok,
+                    syntax::CommandOutcome::Fail => CommandStatus::Fail,
+                },
+                status_span: head_span.clone(),
+                command: Command {
+                    head: lower_expression(head),
+                    arguments: lower_expressions(arguments),
+                },
+                negated: *negated,
+            }
+        }
+    })
 }
 
 fn located<T>(span: &Span, node: T) -> Located<T> {
@@ -626,6 +670,17 @@ mod tests {
         assert_eq!(
             ir.to_string(),
             include_str!("../testdata/expressions.lowered")
+        );
+    }
+
+    #[test]
+    fn assertion_and_destructure_lowering_matches_go() {
+        let program = check(expand(include_str!("../testdata/assertions.bpfman")))
+            .unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(
+            ir.to_string(),
+            include_str!("../testdata/assertions.lowered")
         );
     }
 

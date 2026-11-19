@@ -1,0 +1,11 @@
+body entry=bb0
+
+bb0:
+  EnterDeferScope kind=program
+  Eval t0 = [1 2]
+  BindDestructure [first _] = t0
+  Assert $first == 1
+  Assert not ok exec false
+  Require fail exec false
+  RunDefers policy=program
+  Stop
