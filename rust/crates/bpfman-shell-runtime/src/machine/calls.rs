@@ -216,23 +216,32 @@ impl Machine<'_> {
         let Some(caller) = self.callers.pop() else {
             return Err(failure);
         };
-        if matches!(caller.purpose, CommandPurpose::Cleanup) {
-            let origin = Invocation {
-                span: caller.invocation.span.clone(),
-                display: caller.invocation.display.clone(),
-            };
-            let _ = self.restore_caller(caller);
-            self.defer_failure(
-                &origin,
-                &CommandResponse {
-                    exit_code: 1,
-                    stderr: failure.message,
-                    ..CommandResponse::success(Value::Absent)
+        let origin = Invocation {
+            span: caller.invocation.span.clone(),
+            display: caller.invocation.display.clone(),
+        };
+        let (purpose, _, _) = self.restore_caller(caller);
+        match (purpose, failure) {
+            (CommandPurpose::Cleanup, failure) => {
+                let response = failure.guard.map_or_else(
+                    || CommandResponse {
+                        exit_code: 1,
+                        stderr: failure.message,
+                        ..CommandResponse::success(Value::Absent)
+                    },
+                    |guard| guard.response,
+                );
+                self.defer_failure(&origin, &response);
+            }
+            (
+                purpose @ CommandPurpose::Assertion { .. },
+                ExecutionError {
+                    guard: Some(guard), ..
                 },
-            );
-        } else {
-            let _ = self.restore_caller(caller);
-            self.abort(failure);
+            ) => {
+                self.complete_command(purpose, &origin, Ok(guard.response));
+            }
+            (_, failure) => self.abort(failure),
         }
         Ok(())
     }

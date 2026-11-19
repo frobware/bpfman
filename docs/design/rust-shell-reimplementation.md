@@ -372,6 +372,10 @@ draining, and job leaks cite the declaration that created the job.
 Diagnostics retain the innermost definition call context or the outer
 guard statement as appropriate. Poll timeout reports carry the schedule,
 attempt count and last retry reason.
+Command-status assertions can inspect a shell definition's guard outcome
+after its local defers drain. The signed-release fixture exercises the
+actual failed load through its helper, including the wrong-signer
+rejections for each pull policy.
 
 ## Typestate and internal invariants
 

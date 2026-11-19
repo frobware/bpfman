@@ -483,3 +483,15 @@ fn matches_reports_nested_failures_and_unclaimed_fields() -> io::Result<()> {
     assert!(stderr.ends_with("1 assertion(s) failed\n"), "{stderr}");
     Ok(())
 }
+
+#[test]
+fn command_status_assertion_observes_guard_failure_in_definition() -> io::Result<()> {
+    let output = run(
+        &[],
+        "def rejects() {\n  defer print cleanup\n  guard _ <- exec false\n}\nassert fail rejects\nprint afterward\n",
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"cleanup\nafterward\n");
+    assert!(output.stderr.is_empty(), "{output:?}");
+    Ok(())
+}

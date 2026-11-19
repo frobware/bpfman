@@ -204,7 +204,7 @@ pub struct ExecutionError {
     /// Explanation without location formatting.
     pub message: String,
     reported: bool,
-    guard_report: Option<String>,
+    guard: Option<Box<GuardDiagnostic>>,
 }
 
 impl ExecutionError {
@@ -213,7 +213,7 @@ impl ExecutionError {
             span: span.clone(),
             message,
             reported: false,
-            guard_report: None,
+            guard: None,
         }
     }
 
@@ -226,8 +226,8 @@ impl ExecutionError {
 
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.guard_report {
-            Some(report) => f.write_str(report),
+        match &self.guard {
+            Some(guard) => f.write_str(&guard.origin.describe_failure("guard", &guard.response)),
             None => write!(f, "{}: {}", location(&self.span), self.message),
         }
     }
@@ -282,9 +282,16 @@ struct Argv {
     display: String,
 }
 
+#[derive(Debug, Eq, PartialEq)]
 struct Invocation {
     span: Span,
     display: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct GuardDiagnostic {
+    origin: Invocation,
+    response: CommandResponse,
 }
 
 impl Invocation {
@@ -624,12 +631,17 @@ impl<'a> Machine<'a> {
                     text,
                     span,
                 } => {
-                    self.assertion_result(
-                        (response.exit_code == 0) == expected_ok,
-                        required,
-                        text,
-                        &span,
-                    );
+                    let ok = response.exit_code == 0;
+                    if ok != expected_ok {
+                        let detail = if ok {
+                            "but it succeeded".to_owned()
+                        } else if response.stderr.is_empty() {
+                            format!("but got: exit code {}", response.exit_code)
+                        } else {
+                            format!("but got: {}", response.stderr.trim_end())
+                        };
+                        self.assertion_result(false, required, format!("{text}, {detail}"), &span);
+                    }
                 }
                 CommandPurpose::Cleanup => {
                     if response.exit_code != 0 {
@@ -861,7 +873,10 @@ impl<'a> Machine<'a> {
                                 response.exit_code
                             ),
                         );
-                        failure.guard_report = Some(origin.describe_failure("guard", response));
+                        failure.guard = Some(Box::new(GuardDiagnostic {
+                            origin,
+                            response: response.clone(),
+                        }));
                         self.failure = Some(failure);
                         self.jump(*on_failure);
                     }
