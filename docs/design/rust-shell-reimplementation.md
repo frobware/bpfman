@@ -251,8 +251,10 @@ An in-process jq adapter is available for expression, thread and standalone
 calls. Thread expressions can also call local definitions or dispatch an
 invocation to the driver. They preserve the caller's observations across
 definition frames and use the command envelope when no primary value is
-returned. Remaining typed builtins, signals, process-group
-ownership, and the remaining inspection modes are pending. The Go harness
+returned. Foreground commands run in owned process groups. SIGINT and
+SIGTERM interrupt the current wait or poll and let the evaluator drain
+defers. Background jobs, second-signal behavior, remaining typed builtins,
+and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently
 via `BPFMAN_SHELL_UNDER_TEST` because the Rust daemon's directory can also
 contain the Rust shell. A temporary directory exposes just the selected daemon

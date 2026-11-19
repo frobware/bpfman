@@ -3,7 +3,10 @@ use std::{collections::BTreeMap, env, os::unix::process::ExitStatusExt, process:
 use bpfman_shell_runtime::{Argument, CommandResponse, Number, Value};
 use serde_json::Value as Json;
 
-pub(super) fn invoke(arguments: Vec<Argument>) -> Result<CommandResponse, String> {
+pub(super) fn invoke(
+    arguments: Vec<Argument>,
+    interrupt: &super::process::Interrupt,
+) -> Result<CommandResponse, String> {
     let mut argv = arguments
         .into_iter()
         .map(|argument| match argument {
@@ -43,9 +46,7 @@ pub(super) fn invoke(arguments: Vec<Argument>) -> Result<CommandResponse, String
     let executable = env::var_os("BPFMAN_BIN")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "bpfman".into());
-    let output = Command::new(&executable)
-        .args(argv)
-        .output()
+    let output = super::process::capture(Command::new(&executable).args(argv), interrupt)
         .map_err(|error| format!("{}: {error}", executable.to_string_lossy()))?;
     let primary = if output.status.success() {
         shape.decode(&output.stdout)?

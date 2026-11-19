@@ -5,6 +5,8 @@ use std::{
     io::{self, Write},
     os::unix::fs::PermissionsExt,
     process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 fn run(args: &[&str], source: &str) -> io::Result<Output> {
@@ -27,6 +29,48 @@ fn run_command(command: &mut Command, source: &str) -> io::Result<Output> {
     stdin.write_all(source.as_bytes())?;
     drop(stdin);
     child.wait_with_output()
+}
+
+#[test]
+fn interrupt_cancels_foreground_process_and_drains_defers() -> io::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let marker = dir.path().join("started");
+    let mut shell = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"))
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdin = shell
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("stdin"))?;
+    stdin.write_all(b"defer touch cleaned\nexec sh -c 'echo $$ > started; sleep 30 & wait'\n")?;
+    drop(stdin);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while fs::read_to_string(&marker).map_or(true, |text| text.trim().is_empty()) {
+        if Instant::now() >= deadline {
+            shell.kill()?;
+            let output = shell.wait_with_output()?;
+            return Err(io::Error::other(format!("child never started: {output:?}")));
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+    let pid = i32::try_from(shell.id())
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .ok_or_else(|| io::Error::other("invalid shell PID"))?;
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
+    let output = shell.wait_with_output()?;
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("interrupted by signal"),
+        "{output:?}"
+    );
+    assert!(dir.path().join("cleaned").exists());
+    let worker = fs::read_to_string(&marker)?;
+    assert!(!std::path::Path::new("/proc").join(worker.trim()).exists());
+    Ok(())
 }
 
 #[test]

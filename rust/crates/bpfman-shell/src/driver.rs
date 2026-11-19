@@ -14,58 +14,71 @@ use bpfman_shell_runtime::{
 
 mod bpfman;
 mod files;
+mod process;
 mod query;
 
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
+    let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
     let mut step = execute(program, HashMap::new());
     loop {
         step = match step {
             Step::Command {
                 request,
                 continuation,
-            } => continuation.resume(dispatch(request, stdout)),
+            } => continuation.resume(dispatch(request, stdout, &interrupt)),
             Step::Output {
                 request,
                 continuation,
-            } => continuation.resume(files::render(&request.value, true).and_then(|value| {
-                match request.stream {
-                    OutputStream::Stdout => writeln!(stdout, "{value}"),
-                    OutputStream::Stderr => writeln!(io::stderr().lock(), "{value}"),
-                }
-                .map_err(|error| error.to_string())
-            })),
+            } => continuation.resume(
+                interrupt
+                    .check()
+                    .and_then(|()| files::render(&request.value, true))
+                    .and_then(|value| {
+                        match request.stream {
+                            OutputStream::Stdout => writeln!(stdout, "{value}"),
+                            OutputStream::Stderr => writeln!(io::stderr().lock(), "{value}"),
+                        }
+                        .map_err(|error| error.to_string())
+                    }),
+            ),
             Step::PathExists {
                 request,
                 continuation,
             } => {
-                let present = std::path::Path::new(&request.path)
-                    .try_exists()
-                    .map_err(|error| error.to_string());
+                let present = interrupt.check().and_then(|()| {
+                    std::path::Path::new(&request.path)
+                        .try_exists()
+                        .map_err(|error| error.to_string())
+                });
                 continuation.resume(present)
             }
             Step::Query {
                 request,
                 continuation,
-            } => continuation.resume(query::run(request)),
-            Step::ReadClock(continuation) => continuation.resume(Ok(start.elapsed())),
+            } => continuation.resume(interrupt.check().and_then(|()| query::run(request))),
+            Step::ReadClock(continuation) => {
+                continuation.resume(interrupt.check().map(|()| start.elapsed()))
+            }
             Step::Pause {
                 duration,
                 continuation,
-            } => {
-                std::thread::sleep(duration);
-                continuation.resume(Ok(()))
-            }
+            } => continuation.resume(interrupt.pause(duration)),
             Step::Finished { exit_code } => return Ok(exit_code),
             Step::Failed(error) => return Err(error.to_string()),
         };
     }
 }
 
-fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandResponse, String> {
+fn dispatch(
+    request: CommandRequest,
+    stdout: &mut impl Write,
+    interrupt: &process::Interrupt,
+) -> Result<CommandResponse, String> {
+    interrupt.check()?;
     let head = argument(&request.head)?;
     if head == "bpfman" {
-        return bpfman::invoke(request.arguments);
+        return bpfman::invoke(request.arguments, interrupt);
     }
     if head == "jq" {
         let [filter, input] = <[Argument; 2]>::try_from(request.arguments)
@@ -175,9 +188,7 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
     {
         return Err(format!("{head}: builtin is not yet implemented"));
     }
-    let output = Command::new(executable)
-        .args(arguments)
-        .output()
+    let output = process::capture(Command::new(executable).args(arguments), interrupt)
         .map_err(|error| format!("{executable}: {error}"))?;
     if request.lane == DispatchLane::Command {
         stdout

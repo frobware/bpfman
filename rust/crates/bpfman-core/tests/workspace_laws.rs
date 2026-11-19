@@ -268,9 +268,13 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                 "rustix" => assert!(
                     matches!(
                         name,
-                        "bpfman-lock" | "bpfman-fs" | "bpfman-kernel-aya" | "bpfman"
+                        "bpfman-lock"
+                            | "bpfman-fs"
+                            | "bpfman-kernel-aya"
+                            | "bpfman"
+                            | "bpfman-shell"
                     ),
-                    "syscalls belong in adapters or the private binary namespace helper"
+                    "syscalls belong in adapters or binary effect drivers"
                 ),
                 "aya" | "aya-obj" => assert_eq!(
                     name, "bpfman-kernel-aya",
