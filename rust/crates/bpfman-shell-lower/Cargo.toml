@@ -1,0 +1,18 @@
+[package]
+name = "bpfman-shell-lower"
+description = "Pure lowering for bpfman-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+bpfman-shell-check = { path = "../bpfman-shell-check" }
+bpfman-shell-ir = { path = "../bpfman-shell-ir" }
+bpfman-shell-source = { path = "../bpfman-shell-source" }
+bpfman-shell-syntax = { path = "../bpfman-shell-syntax" }
+
+[lints]
+workspace = true

@@ -72,6 +72,8 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-shell-syntax` | 1 | Argv-first lexer and typed AST; `parse(name, text)` covers the accepted Go statement forms, including destructuring, records, matches, and bind-collect loops; shared Go-style duration and JSON number validation |
 | `bpfman-shell-semantics` | 2 | Origin and structural-shape vocabulary for proved native values, pure builtin, kill flag, and typed parameter literal contracts, and bind outcomes; unverified domain JSON shapes remain open |
 | `bpfman-shell-check` | 3 | Pure import planning and expansion, scope, calls, shape and job analyses, and the preflight transition from `ExpandedProgram` to `CheckedProgram` |
+| `bpfman-shell-ir` | 1 | Block-structured shell IR, reference verification, and deterministic dumping |
+| `bpfman-shell-lower` | 4 | Pure lowering from `CheckedProgram`, with an explicit unchecked entry point and initial straight-line coverage |
 | `bpfman-model` | 0 | Pure program specifications, stored records, kernel observations, and bounded XDP configuration |
 | `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, unload continuations, and XDP replacement planning |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |

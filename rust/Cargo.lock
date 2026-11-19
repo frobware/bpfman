@@ -399,6 +399,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "bpfman-shell-ir"
+version = "0.1.0"
+dependencies = [
+ "bpfman-shell-source",
+]
+
+[[package]]
+name = "bpfman-shell-lower"
+version = "0.1.0"
+dependencies = [
+ "bpfman-shell-check",
+ "bpfman-shell-ir",
+ "bpfman-shell-source",
+ "bpfman-shell-syntax",
+]
+
+[[package]]
 name = "bpfman-shell-semantics"
 version = "0.1.0"
 dependencies = [

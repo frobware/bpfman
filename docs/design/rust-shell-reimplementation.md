@@ -172,6 +172,16 @@ scope, call, shape, and job passes or constructs a `CheckedProgram` with the
 original source spans. Driver-level side-effect and `--no-check` contracts
 remain part of the lowerer and driver work.
 
+The first IR and lowering slice supports straight-line commands, value
+assignments, expression statements, and defers with words, quoted strings,
+variable paths, and lists. The IR owns these operands independently of syntax.
+Blocks carry their terminator separately, and program construction validates
+successor indices and block-local temporary definitions and uses. The initial
+dump matches Go's straight-line output. `lower(&CheckedProgram)` is the normal
+entry point, and `lower_unchecked(&ExpandedProgram)` is the explicit bypass.
+Both verify their output and report unsupported syntax at its source span.
+Compound control flow, the full golden dump, and execution are pending.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and
