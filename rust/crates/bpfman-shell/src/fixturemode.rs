@@ -2,6 +2,7 @@
 
 use std::{ffi::OsStr, fs};
 
+mod ldso;
 pub(crate) mod uprobe;
 mod waves;
 pub(crate) use waves::Waves;
@@ -12,6 +13,9 @@ pub(crate) fn run(mode: &OsStr, arguments: &[String]) -> Result<(), String> {
     }
     if mode == "lsm-open-worker" {
         return lsm_open(arguments);
+    }
+    if mode == "ldso-cache-writer" {
+        return ldso::run(arguments);
     }
     Err(format!("unknown BPFMAN_SHELL_MODE {mode:?}"))
 }

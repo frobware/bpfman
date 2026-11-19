@@ -313,6 +313,10 @@ LSM probes carry a typed handle to the driver's marker and owned temporary
 directory. The Rust worker opens the target under that marker. The Go
 daemon's LSM round-trip observed exactly 50 opens and no additional events
 after detach.
+The container fixture helpers now aggregate child PIDs across every task and
+produce the same native-endian dynamic-linker cache bytes as the Go shell.
+All seven non-external container uprobe cases passed with the Rust shell and
+Go daemon, including mount and PID namespace resolution.
 
 ## Typestate and internal invariants
 

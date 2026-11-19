@@ -4,22 +4,11 @@ use bpfman_kernel_aya::ProgramIdentitySource;
 use bpfman_shell_runtime::{Argument, CommandResponse, Value};
 
 pub(super) fn linkinfo(arguments: &[Argument]) -> CommandResponse {
-    observe(observe_link(arguments))
+    super::builtin_response(observe_link(arguments))
 }
 
 pub(super) fn proginfo(arguments: &[Argument]) -> CommandResponse {
-    observe(observe_program(arguments))
-}
-
-fn observe(result: Result<Value, String>) -> CommandResponse {
-    match result {
-        Ok(value) => CommandResponse::success(value),
-        Err(stderr) => CommandResponse {
-            exit_code: 1,
-            stderr,
-            ..CommandResponse::success(Value::Absent)
-        },
-    }
+    super::builtin_response(observe_program(arguments))
 }
 
 fn observe_program(arguments: &[Argument]) -> Result<Value, String> {

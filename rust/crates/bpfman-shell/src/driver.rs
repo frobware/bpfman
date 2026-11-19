@@ -19,6 +19,7 @@ mod kfunc;
 mod lsm;
 mod net;
 mod process;
+mod procfs;
 mod query;
 mod slot_pool;
 mod uprobe;
@@ -146,6 +147,9 @@ fn dispatch(
     if head == "proginfo" {
         return Ok(kernel::proginfo(&request.arguments));
     }
+    if head == "process" {
+        return Ok(builtin_response(procfs::invoke(&request.arguments)));
+    }
     if head == "wait" {
         return jobs.wait(&request.arguments, interrupt);
     }
@@ -243,15 +247,7 @@ fn dispatch(
     if head != "exec"
         && matches!(
             head.as_str(),
-            "defs"
-                | "import"
-                | "process"
-                | "range"
-                | "registry"
-                | "trace"
-                | "u32le"
-                | "u64le"
-                | "zip"
+            "defs" | "import" | "range" | "registry" | "trace" | "u32le" | "u64le" | "zip"
         )
     {
         return Err(format!("{head}: builtin is not yet implemented"));
@@ -274,6 +270,17 @@ fn argument(argument: &Argument) -> Result<String, String> {
     match argument {
         Argument::Word(text) | Argument::Quoted(text) => Ok(text.clone()),
         Argument::Value(value) | Argument::Adapter { value, .. } => scalar(value),
+    }
+}
+
+fn builtin_response(result: Result<Value, String>) -> CommandResponse {
+    match result {
+        Ok(value) => CommandResponse::success(value),
+        Err(stderr) => CommandResponse {
+            exit_code: 1,
+            stderr,
+            ..CommandResponse::success(Value::Absent)
+        },
     }
 }
 
