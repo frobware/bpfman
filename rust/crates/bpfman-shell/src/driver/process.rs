@@ -2,7 +2,8 @@
 
 use std::{
     io::{self, Read},
-    os::unix::process::CommandExt,
+    num::NonZeroU32,
+    os::unix::process::{CommandExt, ExitStatusExt},
     process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{
         Arc,
@@ -12,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use bpfman_shell_runtime::{CommandResponse, Value};
 use rustix::process::{Pid, Signal, kill_process_group};
 use signal_hook::{
     SigId,
@@ -71,33 +73,73 @@ impl Drop for Interrupt {
 
 pub(super) fn capture(command: &mut Command, interrupt: &Interrupt) -> Result<Output, String> {
     interrupt.check()?;
-    let (mut group, stdout, stderr) = spawn(command).map_err(|error| error.to_string())?;
-    let status = loop {
+    let mut child = CapturedChild::spawn(command).map_err(|error| error.to_string())?;
+    loop {
         interrupt.check()?;
-        if let Some(status) = group.try_wait().map_err(|error| error.to_string())? {
-            break status;
+        if let Some(output) = child.try_output().map_err(|error| error.to_string())? {
+            return Ok(output);
         }
         thread::sleep(POLL);
-    };
-    Ok(Output {
-        status,
-        stdout: read_capture(&stdout).map_err(|error| error.to_string())?,
-        stderr: read_capture(&stderr).map_err(|error| error.to_string())?,
-    })
+    }
 }
 
-fn spawn(command: &mut Command) -> io::Result<(Group, NamedTempFile, NamedTempFile)> {
-    // Files let the child make progress even if both streams fill.
-    // Reopening also gives the reader an independent file offset.
-    let stdout = tempfile::NamedTempFile::new()?;
-    let stderr = tempfile::NamedTempFile::new()?;
-    let child = command
-        .process_group(0)
-        .stdin(Stdio::null())
-        .stdout(stdout.reopen()?)
-        .stderr(stderr.reopen()?)
-        .spawn()?;
-    Ok((Group(Some(child)), stdout, stderr))
+pub(super) fn response(output: Output) -> CommandResponse {
+    let signal = output.status.signal();
+    let code = output
+        .status
+        .code()
+        .unwrap_or_else(|| 128 + signal.unwrap_or(0));
+    CommandResponse {
+        exit_code: u8::try_from(code).unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        signal: signal.map(|value| value.to_string()),
+        ..CommandResponse::success(Value::Absent)
+    }
+}
+
+pub(super) struct CapturedChild {
+    group: Group,
+    stdout: NamedTempFile,
+    stderr: NamedTempFile,
+}
+
+impl CapturedChild {
+    pub(super) fn spawn(command: &mut Command) -> io::Result<Self> {
+        // Files let the child make progress even if both streams fill.
+        // Reopening also gives the reader an independent file offset.
+        let stdout = tempfile::NamedTempFile::new()?;
+        let stderr = tempfile::NamedTempFile::new()?;
+        let child = command
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(stdout.reopen()?)
+            .stderr(stderr.reopen()?)
+            .spawn()?;
+        Ok(Self {
+            group: Group(Some(child)),
+            stdout,
+            stderr,
+        })
+    }
+
+    pub(super) fn pid(&self) -> Option<NonZeroU32> {
+        self.group
+            .0
+            .as_ref()
+            .and_then(|child| NonZeroU32::new(child.id()))
+    }
+
+    pub(super) fn try_output(&mut self) -> io::Result<Option<Output>> {
+        let Some(status) = self.group.try_wait()? else {
+            return Ok(None);
+        };
+        Ok(Some(Output {
+            status,
+            stdout: read_capture(&self.stdout)?,
+            stderr: read_capture(&self.stderr)?,
+        }))
+    }
 }
 
 fn read_capture(file: &NamedTempFile) -> io::Result<Vec<u8>> {

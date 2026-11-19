@@ -74,6 +74,43 @@ fn interrupt_cancels_foreground_process_and_drains_defers() -> io::Result<()> {
 }
 
 #[test]
+fn jobs_keep_an_opaque_handle_and_cache_the_observed_exit() -> io::Result<()> {
+    let output = run(
+        &[],
+        r#"
+guard worker <- start sh -c 'printf output; printf diagnostic >&2; exit 7'
+assert $worker.pid > 0
+assert $worker.target_binary == sh
+let first <- wait $worker
+let again <- wait $worker
+assert $first.exit_code == 7
+assert $again.exit_code == 7
+print $first.stdout $again.stderr
+"#,
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"output diagnostic\n");
+    Ok(())
+}
+
+#[test]
+fn script_exit_cleans_up_an_unmanaged_background_job() -> io::Result<()> {
+    let output = run(
+        &["--no-check"],
+        "guard worker <- start sleep 30\nprint $worker.pid\n",
+    )?;
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("unmanaged job"),
+        "{output:?}"
+    );
+    let pid = String::from_utf8_lossy(&output.stdout);
+    assert!(!pid.trim().is_empty(), "{output:?}");
+    assert!(!std::path::Path::new("/proc").join(pid.trim()).exists());
+    Ok(())
+}
+
+#[test]
 fn embedded_jq_preserves_precision_result_stream_and_argument_origin() -> io::Result<()> {
     let output = run(
         &[],

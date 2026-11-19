@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     io::{self, Write},
-    os::unix::process::ExitStatusExt,
     process::Command,
     time::Instant,
 };
@@ -14,19 +13,21 @@ use bpfman_shell_runtime::{
 
 mod bpfman;
 mod files;
+mod jobs;
 mod process;
 mod query;
 
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
     let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
+    let mut jobs = jobs::Jobs::default();
     let mut step = execute(program, HashMap::new());
     loop {
         step = match step {
             Step::Command {
                 request,
                 continuation,
-            } => continuation.resume(dispatch(request, stdout, &interrupt)),
+            } => continuation.resume(dispatch(request, stdout, &interrupt, &mut jobs)),
             Step::Output {
                 request,
                 continuation,
@@ -64,8 +65,8 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
                 duration,
                 continuation,
             } => continuation.resume(interrupt.pause(duration)),
-            Step::Finished { exit_code } => return Ok(exit_code),
-            Step::Failed(error) => return Err(error.to_string()),
+            Step::Finished { exit_code } => return jobs.finish(Ok(exit_code)),
+            Step::Failed(error) => return jobs.finish(Err(error.to_string())),
         };
     }
 }
@@ -74,11 +75,18 @@ fn dispatch(
     request: CommandRequest,
     stdout: &mut impl Write,
     interrupt: &process::Interrupt,
+    jobs: &mut jobs::Jobs,
 ) -> Result<CommandResponse, String> {
     interrupt.check()?;
     let head = argument(&request.head)?;
     if head == "bpfman" {
         return bpfman::invoke(request.arguments, interrupt);
+    }
+    if head == "start" {
+        return jobs.start(&request.arguments);
+    }
+    if head == "wait" {
+        return jobs.wait(&request.arguments, interrupt);
     }
     if head == "jq" {
         let [filter, input] = <[Argument; 2]>::try_from(request.arguments)
@@ -176,13 +184,11 @@ fn dispatch(
                 | "range"
                 | "reap"
                 | "registry"
-                | "start"
                 | "trace"
                 | "u32le"
                 | "u64le"
                 | "uprobe"
                 | "uprobe-target"
-                | "wait"
                 | "zip"
         )
     {
@@ -199,20 +205,7 @@ fn dispatch(
             .write_all(&output.stderr)
             .map_err(|error| error.to_string())?;
     }
-    let signal = output.status.signal();
-    let code = output
-        .status
-        .code()
-        .unwrap_or_else(|| 128 + signal.unwrap_or(0));
-    Ok(CommandResponse {
-        exit_code: u8::try_from(code).unwrap_or(1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        primary: Value::Absent,
-        killed: false,
-        signal: signal.map(|value| value.to_string()),
-        pid: None,
-    })
+    Ok(process::response(output))
 }
 
 fn argument(argument: &Argument) -> Result<String, String> {

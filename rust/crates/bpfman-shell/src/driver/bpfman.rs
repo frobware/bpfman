@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, env, os::unix::process::ExitStatusExt, process::Command};
+use std::{collections::BTreeMap, env, process::Command};
 
 use bpfman_shell_runtime::{Argument, CommandResponse, Number, Value};
 use serde_json::Value as Json;
@@ -53,19 +53,9 @@ pub(super) fn invoke(
     } else {
         Value::Absent
     };
-    let signal = output.status.signal();
-    let code = output
-        .status
-        .code()
-        .unwrap_or_else(|| 128 + signal.unwrap_or(0));
     Ok(CommandResponse {
-        exit_code: u8::try_from(code).unwrap_or(1),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         primary,
-        killed: false,
-        signal: signal.map(|value| value.to_string()),
-        pid: None,
+        ..super::process::response(output)
     })
 }
 

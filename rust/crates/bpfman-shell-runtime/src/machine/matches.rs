@@ -6,7 +6,11 @@ impl Machine<'_> {
     pub(super) fn matches(&self, value: Value, block: &MatchBlock) -> EvalResult<bool> {
         if !matches!(
             value,
-            Value::Record(_) | Value::BpfmanRecord { .. } | Value::List(_) | Value::Outcome(_)
+            Value::Record(_)
+                | Value::BpfmanRecord { .. }
+                | Value::List(_)
+                | Value::Outcome(_)
+                | Value::Job(_)
         ) {
             return Err("matches requires a structured value".into());
         }
@@ -21,6 +25,7 @@ impl Machine<'_> {
                 Value::Record(fields) | Value::BpfmanRecord { fields, .. } => {
                     fields.keys().all(|key| claimed(key))
                 }
+                Value::Job(job) => job.fields().keys().all(|key| claimed(key)),
                 Value::Outcome(outcome) => {
                     ["ok", "exit_code", "stdout", "stderr", "killed", "signal"]
                         .into_iter()

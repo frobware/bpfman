@@ -253,8 +253,12 @@ invocation to the driver. They preserve the caller's observations across
 definition frames and use the command envelope when no primary value is
 returned. Foreground commands run in owned process groups. SIGINT and
 SIGTERM interrupt the current wait or poll and let the evaluator drain
-defers. Background jobs, second-signal behavior, remaining typed builtins,
-and the remaining inspection modes are pending. The Go harness
+defers. `start` issues an opaque job handle and a driver reaper owns the
+process group and adapter files. `wait` observes and caches the exit
+envelope. Each script has one job registry, which reports and cleans up
+unmanaged jobs after defers. Job signaling and inspection, second-signal
+behavior, remaining typed builtins, and the remaining inspection modes
+are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently
 via `BPFMAN_SHELL_UNDER_TEST` because the Rust daemon's directory can also
 contain the Rust shell. A temporary directory exposes just the selected daemon

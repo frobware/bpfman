@@ -1,5 +1,8 @@
 use crate::CommandResponse;
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    num::{NonZeroU32, NonZeroU64},
+};
 
 use bpfman_shell_syntax::is_json_number;
 
@@ -18,6 +21,39 @@ impl Number {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+/// A background process capability and its immutable script-visible fields.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JobHandle {
+    id: NonZeroU64,
+    fields: BTreeMap<String, Value>,
+}
+
+impl JobHandle {
+    /// Associate a driver-issued job identity with the current process ID.
+    #[must_use]
+    pub fn new(id: NonZeroU64, pid: NonZeroU32, target_binary: String) -> Self {
+        Self {
+            id,
+            fields: BTreeMap::from([
+                ("pid".to_owned(), Value::Number(Number(pid.to_string()))),
+                ("target_binary".to_owned(), Value::String(target_binary)),
+            ]),
+        }
+    }
+
+    /// Identify the job without using its potentially reusable process ID.
+    #[must_use]
+    pub fn id(&self) -> NonZeroU64 {
+        self.id
+    }
+
+    /// Fields visible to scripts and JSON rendering.
+    #[must_use]
+    pub fn fields(&self) -> &BTreeMap<String, Value> {
+        &self.fields
     }
 }
 
@@ -45,6 +81,8 @@ pub enum Value {
         /// Program or link ID accepted by the CLI.
         id: Number,
     },
+    /// A capability for a background process owned by the driver.
+    Job(JobHandle),
     /// Captured command outcome, with a distinct primary when supplied.
     Outcome(Box<CommandResponse>),
 }

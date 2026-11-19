@@ -29,12 +29,17 @@ fn file_contents(argument: &Argument) -> Result<String, String> {
     if matches!(
         argument,
         Argument::Value(
-            Value::List(_) | Value::Record(_) | Value::Outcome(_) | Value::BpfmanRecord { .. }
+            Value::List(_)
+                | Value::Record(_)
+                | Value::Outcome(_)
+                | Value::BpfmanRecord { .. }
+                | Value::Job(_)
         ) | Argument::Adapter {
             value: Value::List(_)
                 | Value::Record(_)
                 | Value::Outcome(_)
-                | Value::BpfmanRecord { .. },
+                | Value::BpfmanRecord { .. }
+                | Value::Job(_),
             ..
         }
     ) {
@@ -117,12 +122,8 @@ pub(super) fn to_json(value: &Value) -> Result<Json, String> {
         ),
         Value::String(value) => Json::String(value.clone()),
         Value::List(items) => Json::Array(items.iter().map(to_json).collect::<Result<_, _>>()?),
-        Value::Record(fields) | Value::BpfmanRecord { fields, .. } => Json::Object(
-            fields
-                .iter()
-                .map(|(key, value)| to_json(value).map(|value| (key.clone(), value)))
-                .collect::<Result<_, _>>()?,
-        ),
+        Value::Record(fields) | Value::BpfmanRecord { fields, .. } => json_object(fields)?,
+        Value::Job(job) => json_object(job.fields())?,
         Value::Outcome(outcome) => {
             let mut fields = Map::from_iter([
                 ("ok".to_owned(), Json::Bool(outcome.exit_code == 0)),
@@ -144,4 +145,12 @@ pub(super) fn to_json(value: &Value) -> Result<Json, String> {
             Json::Object(fields)
         }
     })
+}
+
+fn json_object(fields: &BTreeMap<String, Value>) -> Result<Json, String> {
+    fields
+        .iter()
+        .map(|(key, value)| to_json(value).map(|value| (key.clone(), value)))
+        .collect::<Result<_, _>>()
+        .map(Json::Object)
 }
