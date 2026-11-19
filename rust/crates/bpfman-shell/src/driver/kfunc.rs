@@ -2,19 +2,17 @@
 
 use std::{
     collections::BTreeMap,
-    fs::{self, DirBuilder, File, OpenOptions},
-    io::{self, Seek, SeekFrom, Write},
+    fs::{self, OpenOptions},
+    io::Write,
     num::NonZeroU64,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use bpfman_shell_runtime::{Argument, CommandResponse, KfuncHandle, Value};
 use jiff::Timestamp;
-use rustix::fs::{FlockOperation, flock};
-use serde_json::{Value as Json, json};
+use serde_json::{Map, Value as Json};
 
-use super::process::Interrupt;
+use super::{process::Interrupt, slot_pool};
 
 const SLOTS: u8 = 128;
 
@@ -75,34 +73,16 @@ impl Pool {
             .ok_or("exhausted kernel function lease identities")?;
         fs::metadata(&self.debugfs)
             .map_err(|error| format!("kfunc pool: {}: {error}", self.debugfs.display()))?;
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&self.root)
-            .map_err(|error| format!("kfunc pool: mkdir {}: {error}", self.root.display()))?;
-
-        let mut slots = Vec::with_capacity(usize::from(SLOTS));
-        for index in 0..SLOTS {
-            let path = self.root.join(format!("{index:02}.lock"));
-            let last_use = last_used_at(&path)
-                .map_err(|error| format!("kfunc pool: {}: {error}", path.display()))?;
-            slots.push((last_use, index, path));
-        }
-        slots.sort_by_key(|(last_use, ..)| *last_use);
-        for (_, index, path) in slots {
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(&path)
-                .map_err(|error| format!("kfunc pool: open {}: {error}", path.display()))?;
-            match flock(&file, FlockOperation::NonBlockingLockExclusive) {
-                Ok(()) => {}
-                Err(rustix::io::Errno::WOULDBLOCK) => continue,
-                Err(error) => return Err(format!("kfunc pool: lock {}: {error}", path.display())),
-            }
+        let slots = slot_pool::candidates(&self.root, 0..=SLOTS - 1)
+            .map_err(|error| format!("kfunc pool: {}: {error}", self.root.display()))?;
+        for slot in slots {
+            let index = slot.index;
+            let Some(lock) = slot
+                .try_lock()
+                .map_err(|error| format!("kfunc pool: lock {index}: {error}"))?
+            else {
+                continue;
+            };
             let name = format!("bpfman_e2e_target_{index}");
             let trigger = self.debugfs.join(format!("trigger_{index:03}"));
             let count = self.debugfs.join(format!("count_{index:03}"));
@@ -111,19 +91,26 @@ impl Pool {
                     .map_err(|error| format!("kfunc pool: {}: {error}", path.display()))?;
             }
 
-            let mut lease = Lease {
-                file,
+            let lock = lock
+                .claim(Map::from_iter([
+                    ("origin".into(), Json::String(origin)),
+                    ("slot".into(), Json::from(index)),
+                    ("name".into(), Json::String(name.clone())),
+                    (
+                        "trigger".into(),
+                        Json::String(trigger.display().to_string()),
+                    ),
+                    ("count".into(), Json::String(count.display().to_string())),
+                    (
+                        "acquired_at".into(),
+                        Json::String(Timestamp::now().to_string()),
+                    ),
+                ]))
+                .map_err(|error| format!("kfunc pool: save slot {index}: {error}"))?;
+            let lease = Lease {
+                lock,
                 trigger: trigger.clone(),
-                metadata: json!({
-                    "origin": origin,
-                    "slot": index,
-                    "name": name,
-                    "trigger": trigger,
-                    "count": count,
-                    "acquired_at": Timestamp::now().to_string(),
-                }),
             };
-            lease.save()?;
             self.last_lease = id.get();
             self.active.insert(id, lease);
             return Ok(CommandResponse::success(Value::Kfunc(KfuncHandle::new(
@@ -138,9 +125,11 @@ impl Pool {
     }
 
     fn release(&mut self, handle: &KfuncHandle) -> Result<CommandResponse, String> {
-        if let Some(mut lease) = self.active.remove(&handle.id()) {
-            lease.metadata["released_at"] = Json::String(Timestamp::now().to_string());
-            lease.save()?;
+        if let Some(lease) = self.active.remove(&handle.id()) {
+            lease
+                .lock
+                .release()
+                .map_err(|error| format!("kfunc pool: release: {error}"))?;
         } else if handle.id().get() > self.last_lease {
             return Err("unknown kernel function lease".to_owned());
         }
@@ -175,42 +164,14 @@ impl Pool {
 }
 
 struct Lease {
-    file: File,
+    lock: slot_pool::Lease,
     trigger: PathBuf,
-    metadata: Json,
-}
-
-impl Lease {
-    fn save(&mut self) -> Result<(), String> {
-        let mut write = || -> io::Result<()> {
-            self.file.set_len(0)?;
-            self.file.seek(SeekFrom::Start(0))?;
-            serde_json::to_writer(&mut self.file, &self.metadata)?;
-            self.file.write_all(b"\n")
-        };
-        write().map_err(|error| format!("kfunc pool: write provenance: {error}"))
-    }
-}
-
-fn last_used_at(path: &Path) -> io::Result<Option<Timestamp>> {
-    let info = match fs::metadata(path) {
-        Ok(info) => info,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let released = fs::read(path)
-        .ok()
-        .and_then(|body| serde_json::from_slice::<Json>(&body).ok())
-        .and_then(|record| record.get("released_at")?.as_str()?.parse().ok());
-    Ok(released.or_else(|| {
-        info.modified()
-            .ok()
-            .and_then(|time| Timestamp::try_from(time).ok())
-    }))
 }
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+
     use super::*;
 
     #[test]

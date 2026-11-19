@@ -274,7 +274,9 @@ metadata and global-data fixture. The latter verified that elements of
 back to `bpfman`. The first broader isolated run exposed missing network
 topology and kernel-function adapters, which account for most early failures.
 The kernel-function adapter uses the same lock files, slot ordering and
-provenance format as the Go shell. A real-kernel smoke test verified three
+provenance format as the Go shell. The driver keeps the locked slot and the
+recorded lease as separate types so a slot can be released only after its
+claim has been written. A real-kernel smoke test verified three
 events on a leased slot. `linkinfo` reads the common kernel link identity
 through the existing Aya adapter. The tracepoint round-trip and unload
 fixtures passed with the Rust shell and Rust daemon, including checks that

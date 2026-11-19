@@ -18,6 +18,7 @@ mod kernel;
 mod kfunc;
 mod process;
 mod query;
+mod slot_pool;
 
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
