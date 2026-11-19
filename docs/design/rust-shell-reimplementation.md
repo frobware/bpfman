@@ -209,7 +209,14 @@ lowering carries a positive schedule, attempt-local cleanup, and distinct
 success and timeout continuations. Retry identifies either the lexical poll
 or the dynamically enclosing poll of a caller. The complete Go
 `language.lowered` golden now matches after import expansion and preflight.
-The runtime and driver are pending.
+The runtime now has a first SANS-I/O execution slice for straight-line
+commands, expression output, basic values, conditional branches, command
+binds, and program-scope defers. The driver supplies command and output
+observations through consuming, type-specific continuations. Numbers retain
+their exact text and the interpreter shares syntax's pure JSON-number
+classifier. Unit tests drive the machine without processes or a clock and
+check LIFO capture and guard-failure cleanup. Definition execution, most
+expression evaluation, loops, polling, and the effectful driver are pending.
 
 ## Typestate and internal invariants
 

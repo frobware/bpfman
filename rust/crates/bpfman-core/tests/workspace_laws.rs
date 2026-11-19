@@ -14,6 +14,7 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-shell-check", 3),
     ("bpfman-shell-ir", 1),
     ("bpfman-shell-lower", 4),
+    ("bpfman-shell-runtime", 5),
     ("bpfman-model", 0),
     ("bpfman-core", 1),
     ("bpfman-lock", 1),
@@ -37,6 +38,7 @@ const PURE: &[&str] = &[
     "bpfman-shell-check",
     "bpfman-shell-ir",
     "bpfman-shell-lower",
+    "bpfman-shell-runtime",
 ];
 
 // No external normal dependencies are admitted to the pure crates. In
