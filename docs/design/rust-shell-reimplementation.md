@@ -245,7 +245,10 @@ The driver also supports caller-owned temporary files and directories,
 structured rendering, and subprocess-scoped `file:$value` adapters.
 The `path-exists` expression requests a typed filesystem observation. Multiple
 queries in one expression resume in order, with observations reused only
-until that instruction completes. Threaded calls, jq, remaining
+until that instruction completes. The jq effect distinguishes literal JSON
+text from already typed values and preserves zero, one, or multiple results.
+An in-process jq adapter and its compatibility audit remain pending, along
+with non-jq threaded calls and remaining
 typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently

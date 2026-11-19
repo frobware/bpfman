@@ -14,7 +14,9 @@ mod polls;
 mod pure;
 
 use observations::{EvalError, EvalResult};
-pub use observations::{PathContinuation, PathRequest};
+pub use observations::{
+    PathContinuation, PathRequest, QueryContinuation, QueryInput, QueryRequest,
+};
 
 pub use polls::{ClockContinuation, PauseContinuation};
 
@@ -33,6 +35,13 @@ pub enum Step<'a> {
         request: OutputRequest,
         /// State that accepts the output observation.
         continuation: OutputContinuation<'a>,
+    },
+    /// Evaluate a jq query in the driver's query adapter.
+    Query {
+        /// Filter and input.
+        request: QueryRequest,
+        /// State that accepts a stream of query results.
+        continuation: QueryContinuation<'a>,
     },
     /// Request a filesystem path observation.
     PathExists {
@@ -228,7 +237,7 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         attempt_cleanup: None,
         diagnostic: None,
         pending_retry: None,
-        observed_paths: HashMap::new(),
+        expression_observations: HashMap::new(),
         deferred: Vec::new(),
         draining: None,
         unit: None,
@@ -287,7 +296,7 @@ struct Machine<'a> {
     attempt_cleanup: Option<Span>,
     diagnostic: Option<OutputRequest>,
     pending_retry: Option<polls::RetrySignal>,
-    observed_paths: HashMap<*const ir::Expression, bool>,
+    expression_observations: HashMap<*const ir::Expression, Value>,
     deferred: Vec<(Argv, Span)>,
     draining: Option<usize>,
     unit: Option<usize>,
@@ -373,8 +382,11 @@ impl<'a> Machine<'a> {
                     &block.terminator.span,
                 )
             };
-            if !matches!(&action, Err(EvalError::Path { .. })) {
-                self.observed_paths.clear();
+            if !matches!(
+                &action,
+                Err(EvalError::Path { .. } | EvalError::Query { .. })
+            ) {
+                self.expression_observations.clear();
             }
             match action {
                 Ok(Action::Next) => {}
@@ -414,6 +426,18 @@ impl<'a> Machine<'a> {
                     return Step::PathExists {
                         request,
                         continuation: PathContinuation {
+                            machine: self,
+                            key,
+                            span,
+                        },
+                    };
+                }
+                Err(EvalError::Query { key, request }) => {
+                    self.offset -= 1;
+                    let span = request.span.clone();
+                    return Step::Query {
+                        request: *request,
+                        continuation: QueryContinuation {
                             machine: self,
                             key,
                             span,
@@ -840,6 +864,28 @@ impl<'a> Machine<'a> {
                 builtin: ir::PureBuiltin::PathExists,
                 arguments,
             } => self.path_exists(expression, arguments)?,
+            ir::ExpressionKind::PureCall {
+                builtin: ir::PureBuiltin::Jq,
+                arguments,
+            } => {
+                let [filter, input] = arguments.as_slice() else {
+                    return Err("jq requires a filter and input".into());
+                };
+                self.query(expression, filter, self.argument(input)?)?
+            }
+            ir::ExpressionKind::Thread { value, command, .. }
+                if matches!(&command.head.node, ir::ExpressionKind::Word(name) if name == "jq")
+                    && !self
+                        .program
+                        .definitions()
+                        .iter()
+                        .any(|definition| definition.name() == "jq") =>
+            {
+                let [filter] = command.arguments.as_slice() else {
+                    return Err("threaded jq requires a filter".into());
+                };
+                self.query(expression, filter, Argument::Value(self.eval(value)?))?
+            }
             ir::ExpressionKind::PureCall { builtin, arguments } => {
                 self.pure_call(*builtin, arguments)?
             }
@@ -1325,6 +1371,43 @@ mod tests {
         };
         assert!(matches!(
             continuation.resume(result(0, Value::Absent)),
+            Step::Finished { exit_code: 0 }
+        ));
+    }
+
+    #[test]
+    fn query_effect_preserves_input_origin_and_result_cardinality() {
+        let program = program("let result = (jq . 'null') |> jq .\n($result)");
+        let Step::Query {
+            request,
+            continuation,
+        } = execute(&program, HashMap::new())
+        else {
+            unreachable!("expected literal query");
+        };
+        assert_eq!(request.filter, ".");
+        assert!(matches!(request.input, QueryInput::JsonText(text) if text == "null"));
+        let Step::Query {
+            request,
+            continuation,
+        } = continuation.resume(Ok(vec![Value::Null]))
+        else {
+            unreachable!("expected threaded query");
+        };
+        assert!(matches!(request.input, QueryInput::Value(Value::Null)));
+        let Step::Output {
+            request,
+            continuation,
+        } = continuation.resume(Ok(vec![Value::Null, Value::Bool(true)]))
+        else {
+            unreachable!("expected materialized results");
+        };
+        assert_eq!(
+            request.value,
+            Value::List(vec![Value::Null, Value::Bool(true)])
+        );
+        assert!(matches!(
+            continuation.resume(Ok(())),
             Step::Finished { exit_code: 0 }
         ));
     }

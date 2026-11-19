@@ -6,6 +6,6 @@ mod value;
 pub use machine::{
     ClockContinuation, CommandContinuation, CommandRequest, CommandResponse, DispatchLane,
     ExecutionError, OutputContinuation, OutputRequest, OutputStream, PathContinuation, PathRequest,
-    PauseContinuation, Step, execute,
+    PauseContinuation, QueryContinuation, QueryInput, QueryRequest, Step, execute,
 };
 pub use value::{Argument, Number, Value};

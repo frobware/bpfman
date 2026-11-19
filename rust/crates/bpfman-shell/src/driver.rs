@@ -42,6 +42,9 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
                     .map_err(|error| error.to_string());
                 continuation.resume(present)
             }
+            Step::Query { continuation, .. } => {
+                continuation.resume(Err("jq adapter is not yet implemented".to_owned()))
+            }
             Step::ReadClock(continuation) => continuation.resume(Ok(start.elapsed())),
             Step::Pause {
                 duration,

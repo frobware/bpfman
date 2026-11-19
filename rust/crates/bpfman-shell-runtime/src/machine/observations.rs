@@ -11,6 +11,10 @@ pub(super) enum EvalError {
         key: *const Expression,
         request: PathRequest,
     },
+    Query {
+        key: *const Expression,
+        request: Box<QueryRequest>,
+    },
 }
 
 impl From<String> for EvalError {
@@ -45,10 +49,12 @@ impl<'a> PathContinuation<'a> {
     pub fn resume(mut self, observation: Result<bool, String>) -> Step<'a> {
         match observation {
             Ok(exists) => {
-                self.machine.observed_paths.insert(self.key, exists);
+                self.machine
+                    .expression_observations
+                    .insert(self.key, Value::Bool(exists));
             }
             Err(error) => {
-                self.machine.observed_paths.clear();
+                self.machine.expression_observations.clear();
                 self.machine.error(&self.span, error);
             }
         }
@@ -66,8 +72,8 @@ impl Machine<'_> {
         // program. It is never dereferenced. Keep observations only while the
         // containing instruction is evaluating, including across suspensions.
         let key = std::ptr::from_ref(expression);
-        if let Some(exists) = self.observed_paths.get(&key) {
-            return Ok(Value::Bool(*exists));
+        if let Some(exists) = self.expression_observations.get(&key) {
+            return Ok(exists.clone());
         }
         let [argument] = arguments else {
             return Err("path-exists requires one argument".into());
@@ -82,6 +88,84 @@ impl Machine<'_> {
             key,
             request: PathRequest {
                 path,
+                span: expression.span.clone(),
+            }),
+        })
+    }
+}
+
+/// Input distinguished by its origin at the JSON query boundary.
+pub enum QueryInput {
+    /// Literal argv text that must be decoded as a single JSON value.
+    JsonText(String),
+    /// Already evaluated and typed shell value.
+    Value(Value),
+}
+
+/// A jq query request.
+pub struct QueryRequest {
+    /// Filter source.
+    pub filter: String,
+    /// Input and its origin.
+    pub input: QueryInput,
+    /// Source extent of the query.
+    pub span: Span,
+}
+
+/// An evaluator suspended at a jq query.
+pub struct QueryContinuation<'a> {
+    pub(super) machine: Machine<'a>,
+    pub(super) key: *const Expression,
+    pub(super) span: Span,
+}
+
+impl<'a> QueryContinuation<'a> {
+    /// Continue with the values emitted by the query engine, in order.
+    pub fn resume(mut self, observation: Result<Vec<Value>, String>) -> Step<'a> {
+        match observation {
+            Ok(mut results) => {
+                let value = match results.len() {
+                    0 => Value::Absent,
+                    1 => results.pop().unwrap_or(Value::Absent),
+                    _ => Value::List(results),
+                };
+                self.machine.expression_observations.insert(self.key, value);
+            }
+            Err(error) => {
+                self.machine.expression_observations.clear();
+                self.machine.error(&self.span, error);
+            }
+        }
+        self.machine.advance()
+    }
+}
+
+impl Machine<'_> {
+    pub(super) fn query(
+        &self,
+        expression: &Expression,
+        filter: &Expression,
+        input: Argument,
+    ) -> EvalResult<Value> {
+        let key = std::ptr::from_ref(expression);
+        if let Some(value) = self.expression_observations.get(&key) {
+            return Ok(value.clone());
+        }
+        let filter = match self.argument(filter)? {
+            Argument::Word(text) | Argument::Quoted(text) => text,
+            Argument::Value(value) | Argument::Adapter { value, .. } => {
+                value.scalar_text().ok_or("jq requires a scalar filter")?
+            }
+        };
+        let input = match input {
+            Argument::Word(text) | Argument::Quoted(text) => QueryInput::JsonText(text),
+            Argument::Value(value) | Argument::Adapter { value, .. } => QueryInput::Value(value),
+        };
+        Err(EvalError::Query {
+            key,
+            request: Box::new(QueryRequest {
+                filter,
+                input,
                 span: expression.span.clone(),
             },
         })
