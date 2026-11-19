@@ -417,6 +417,9 @@ boundary. `Decoder.More()` treated those delimiters as the end of a container
 even at top level. The Go boundary now requires EOF after decoding one value
 and has regression tests for both unmatched delimiters and a second value.
 The Rust adapter will enforce the same single-value boundary.
+Both query forms preserve the argument origin. A quoted token goes through
+JSON decoding, while a shell variable containing the same text goes through
+as a string. The runtime tests cover both paths.
 Both engines computed the exact 41-digit result of squaring `10^20`.
 The Go wrapper previously passed the resulting `*big.Int` through and
 the shell could not print it as a scalar. It now normalizes large integers

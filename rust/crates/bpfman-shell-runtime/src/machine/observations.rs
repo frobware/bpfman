@@ -144,14 +144,14 @@ impl Machine<'_> {
     pub(super) fn query(
         &self,
         expression: &Expression,
-        filter: &Expression,
+        filter: Argument,
         input: Argument,
     ) -> EvalResult<Value> {
         let key = std::ptr::from_ref(expression);
         if let Some(value) = self.expression_observations.get(&key) {
             return Ok(value.clone());
         }
-        let filter = match self.argument(filter)? {
+        let filter = match filter {
             Argument::Word(text) | Argument::Quoted(text) => text,
             Argument::Value(value) | Argument::Adapter { value, .. } => {
                 value.scalar_text().ok_or("jq requires a scalar filter")?

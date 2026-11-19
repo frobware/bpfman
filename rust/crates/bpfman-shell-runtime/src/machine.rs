@@ -871,7 +871,7 @@ impl<'a> Machine<'a> {
                 let [filter, input] = arguments.as_slice() else {
                     return Err("jq requires a filter and input".into());
                 };
-                self.query(expression, filter, self.argument(input)?)?
+                self.query(expression, self.argument(filter)?, self.argument(input)?)?
             }
             ir::ExpressionKind::Thread { value, command, .. }
                 if matches!(&command.head.node, ir::ExpressionKind::Word(name) if name == "jq")
@@ -884,7 +884,7 @@ impl<'a> Machine<'a> {
                 let [filter] = command.arguments.as_slice() else {
                     return Err("threaded jq requires a filter".into());
                 };
-                self.query(expression, filter, Argument::Value(self.eval(value)?))?
+                self.query(expression, self.argument(filter)?, self.argument(value)?)?
             }
             ir::ExpressionKind::PureCall { builtin, arguments } => {
                 self.pure_call(*builtin, arguments)?
@@ -1377,7 +1377,7 @@ mod tests {
 
     #[test]
     fn query_effect_preserves_input_origin_and_result_cardinality() {
-        let program = program("let result = (jq . 'null') |> jq .\n($result)");
+        let program = program("let result = 'null' |> jq . |> jq .\n($result)");
         let Step::Query {
             request,
             continuation,
@@ -1410,5 +1410,14 @@ mod tests {
             continuation.resume(Ok(())),
             Step::Finished { exit_code: 0 }
         ));
+    }
+
+    #[test]
+    fn query_call_keeps_a_bound_string_as_a_value() {
+        let program = program("let input = '1]'\nlet result = (jq . $input)");
+        let Step::Query { request, .. } = execute(&program, HashMap::new()) else {
+            unreachable!("expected query");
+        };
+        assert!(matches!(request.input, QueryInput::Value(Value::String(text)) if text == "1]"));
     }
 }
