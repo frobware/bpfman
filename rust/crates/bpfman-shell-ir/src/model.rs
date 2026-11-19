@@ -162,6 +162,8 @@ pub enum Instruction {
         name: String,
         /// Source value temporary.
         src: Temp,
+        /// Whether this is a source-level let with a trace line.
+        trace: bool,
     },
     /// Bind positional list elements to named slots.
     BindDestructure {

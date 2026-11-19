@@ -6,7 +6,8 @@ mod value;
 pub use machine::{
     ClockContinuation, CommandContinuation, CommandRequest, CommandResponse, DispatchLane,
     ExecutionError, OutputContinuation, OutputRequest, OutputStream, PathContinuation, PathRequest,
-    PauseContinuation, QueryContinuation, QueryInput, QueryRequest, Step, execute,
+    PauseContinuation, QueryContinuation, QueryInput, QueryRequest, Step, TracePart, TraceRequest,
+    execute, execute_with_trace,
 };
 pub use value::{
     Argument, EndpointSide, HostNetworkPair, JobHandle, KfuncHandle, LsmHandle, NetworkEndpoint,

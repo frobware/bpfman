@@ -113,6 +113,15 @@ impl Machine<'_> {
             self.complete_command(purpose, &request.span, Ok(CommandResponse::success(value)));
             return Ok(None);
         }
+        if head == "trace" {
+            self.set_trace(&request.arguments)?;
+            self.complete_command(
+                purpose,
+                &request.span,
+                Ok(CommandResponse::success(Value::Absent)),
+            );
+            return Ok(None);
+        }
         if head != "defs" {
             return Ok(Some(purpose));
         }
@@ -131,11 +140,11 @@ impl Machine<'_> {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            self.output.push_back(OutputRequest {
+            self.output.push_back(super::Event::Output(OutputRequest {
                 value: Value::String(listing),
                 span: request.span.clone(),
                 stream: OutputStream::Stdout,
-            });
+            }));
         }
         self.complete_command(
             purpose,

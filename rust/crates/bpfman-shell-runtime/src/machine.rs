@@ -12,6 +12,8 @@ mod matches;
 mod observations;
 mod polls;
 mod pure;
+mod trace;
+pub use trace::{TracePart, TraceRequest};
 
 use observations::{EvalError, EvalResult};
 pub use observations::{
@@ -34,6 +36,13 @@ pub enum Step<'a> {
         /// Output request.
         request: OutputRequest,
         /// State that accepts the output observation.
+        continuation: OutputContinuation<'a>,
+    },
+    /// Report a trace event with already evaluated values.
+    Trace {
+        /// Trace event and its source extent.
+        request: TraceRequest,
+        /// Continue after handling the event.
         continuation: OutputContinuation<'a>,
     },
     /// Evaluate a jq query in the driver's query adapter.
@@ -210,7 +219,16 @@ impl std::error::Error for ExecutionError {}
 
 /// Start the verified program using an explicit initial environment.
 pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> {
-    Machine {
+    execute_with_trace(program, bindings, false)
+}
+
+/// Start the verified program with its initial tracing setting.
+pub fn execute_with_trace(
+    program: &Program,
+    bindings: HashMap<String, Value>,
+    trace_enabled: bool,
+) -> Step<'_> {
+    let mut machine = Machine {
         program,
         block: program.entry(),
         offset: 0,
@@ -220,6 +238,8 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         polls: Vec::new(),
         attempt_cleanup: None,
         output: Default::default(),
+        trace_enabled,
+        pending_effect: None,
         pending_retry: None,
         expression_observations: HashMap::new(),
         deferred: Vec::new(),
@@ -230,8 +250,9 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         local_cleanup_failed: false,
         failure: None,
         exit_code: 0,
-    }
-    .advance()
+    };
+    machine.trace_definitions();
+    machine.advance()
 }
 
 #[derive(Clone)]
@@ -282,7 +303,9 @@ struct Machine<'a> {
     loops: Vec<loops::Iteration>,
     polls: Vec<polls::Poll>,
     attempt_cleanup: Option<Span>,
-    output: std::collections::VecDeque<OutputRequest>,
+    output: std::collections::VecDeque<Event>,
+    trace_enabled: bool,
+    pending_effect: Option<PendingEffect>,
     pending_retry: Option<polls::RetrySignal>,
     expression_observations: HashMap<*const ir::Expression, Value>,
     deferred: Vec<(Argv, Span)>,
@@ -295,10 +318,19 @@ struct Machine<'a> {
     exit_code: u8,
 }
 
+enum Event {
+    Output(OutputRequest),
+    Trace(TraceRequest),
+}
+
+enum PendingEffect {
+    Command(CommandRequest, CommandPurpose),
+    Clock(polls::ClockPurpose, Span),
+}
+
 enum Action {
     Next,
-    Command(CommandRequest, CommandPurpose),
-    Output(OutputRequest),
+    Command(Box<CommandRequest>, CommandPurpose),
     Clock(polls::ClockPurpose),
     Stop,
 }
@@ -306,22 +338,51 @@ enum Action {
 impl<'a> Machine<'a> {
     fn advance(mut self) -> Step<'a> {
         loop {
-            if let Some(request) = self.output.pop_front() {
-                let span = request.span.clone();
-                return Step::Output {
-                    request,
-                    continuation: OutputContinuation {
+            if let Some(event) = self.output.pop_front() {
+                return match event {
+                    Event::Output(request) => {
+                        let continuation = OutputContinuation {
+                            span: request.span.clone(),
+                            machine: self,
+                        };
+                        Step::Output {
+                            request,
+                            continuation,
+                        }
+                    }
+                    Event::Trace(request) => {
+                        let continuation = OutputContinuation {
+                            span: request.span.clone(),
+                            machine: self,
+                        };
+                        Step::Trace {
+                            request,
+                            continuation,
+                        }
+                    }
+                };
+            }
+            if let Some(effect) = self.pending_effect.take() {
+                return match effect {
+                    PendingEffect::Command(request, purpose) => {
+                        self.suspend_command(request, purpose)
+                    }
+                    PendingEffect::Clock(purpose, span) => Step::ReadClock(ClockContinuation {
                         machine: self,
+                        purpose,
                         span,
-                    },
+                    }),
                 };
             }
             if let Some(base) = self.draining {
                 if self.deferred.len() > base {
                     if let Some((argv, span)) = self.deferred.pop() {
+                        self.trace_argv(&span, "defer fire: ", &argv);
                         let request = argv.request(DispatchLane::Deferred, span);
                         match self.start_call(&request, CommandPurpose::Cleanup) {
-                            Ok(Some(purpose)) => return self.suspend_command(request, purpose),
+                            Ok(Some(purpose)) => {
+                                self.pending_effect = Some(PendingEffect::Command(request, purpose))
+                            }
                             Ok(None) => {}
                             Err(_) => self.cleanup_failed(),
                         }
@@ -341,11 +402,10 @@ impl<'a> Machine<'a> {
                     if let Some(owner) = self.polls.last().map(|poll| poll.owner) {
                         match self.prepare_retry(owner, retry.message) {
                             Ok(()) => {
-                                return Step::ReadClock(ClockContinuation {
-                                    machine: self,
-                                    purpose: polls::ClockPurpose::Retry,
-                                    span: retry.span,
-                                });
+                                self.pending_effect = Some(PendingEffect::Clock(
+                                    polls::ClockPurpose::Retry,
+                                    retry.span,
+                                ));
                             }
                             Err(message) => self.error(&retry.span, message),
                         }
@@ -387,27 +447,15 @@ impl<'a> Machine<'a> {
                     };
                 }
                 Ok(Action::Clock(purpose)) => {
-                    return Step::ReadClock(ClockContinuation {
-                        machine: self,
-                        purpose,
-                        span: span.clone(),
-                    });
+                    self.pending_effect = Some(PendingEffect::Clock(purpose, span.clone()));
                 }
                 Ok(Action::Command(request, purpose)) => match self.start_call(&request, purpose) {
-                    Ok(Some(purpose)) => return self.suspend_command(request, purpose),
+                    Ok(Some(purpose)) => {
+                        self.pending_effect = Some(PendingEffect::Command(*request, purpose))
+                    }
                     Ok(None) => {}
                     Err(message) => self.error(&request.span, message),
                 },
-                Ok(Action::Output(request)) => {
-                    let span = request.span.clone();
-                    return Step::Output {
-                        request,
-                        continuation: OutputContinuation {
-                            machine: self,
-                            span,
-                        },
-                    };
-                }
                 Err(EvalError::Message(message)) => self.error(span, message),
                 Err(EvalError::Path { key, request }) => {
                     self.offset -= 1;
@@ -441,7 +489,9 @@ impl<'a> Machine<'a> {
                         span: request.span.clone(),
                     };
                     match self.start_call(&request, purpose) {
-                        Ok(Some(purpose)) => return self.suspend_command(*request, purpose),
+                        Ok(Some(purpose)) => {
+                            self.pending_effect = Some(PendingEffect::Command(*request, purpose))
+                        }
                         Ok(None) => {}
                         Err(message) => self.error(&request.span, message),
                     }
@@ -546,15 +596,34 @@ impl<'a> Machine<'a> {
     fn instruction(&mut self, instruction: &ir::Located<Instruction>) -> EvalResult<Action> {
         let span = &instruction.span;
         match &instruction.node {
-            Instruction::EnterProgramDefers
-            | Instruction::TraceBranch(_)
-            | Instruction::TraceLoop(_) => {}
+            Instruction::EnterProgramDefers => {}
+            Instruction::TraceBranch(branch) => self.trace_note(
+                span,
+                match branch {
+                    ir::BranchTrace::Then => "if then",
+                    ir::BranchTrace::Elif => "if elif",
+                    ir::BranchTrace::Else => "if else",
+                    ir::BranchTrace::Skip => "if skip",
+                },
+            ),
+            Instruction::TraceLoop(event) => self.trace_note(
+                span,
+                match event {
+                    ir::LoopTrace::Break => "break",
+                    ir::LoopTrace::Continue => "continue",
+                },
+            ),
+            Instruction::TracePoll(event) => self.trace_note(
+                span,
+                match event {
+                    ir::PollTrace::Attempt => "poll attempt",
+                    ir::PollTrace::Timeout => "poll timeout",
+                },
+            ),
             Instruction::EnterIfFrame
             | Instruction::EnterDefinitionFrame
             | Instruction::EnterAttemptFrame => self.frames.push(HashMap::new()),
-            Instruction::EnterDefinitionDefers
-            | Instruction::EnterAttemptDefers
-            | Instruction::TracePoll(_) => {}
+            Instruction::EnterDefinitionDefers | Instruction::EnterAttemptDefers => {}
             Instruction::ExitFrame => {
                 if self.frames.len() <= 1 {
                     return Err("cannot leave the program frame".into());
@@ -575,14 +644,23 @@ impl<'a> Machine<'a> {
             Instruction::Eval { dst, expression } => {
                 self.put(*dst, Slot::Value(self.eval(expression)?));
             }
-            Instruction::BindName { name, src } => self.bind(name, self.value(*src)?.clone())?,
+            Instruction::BindName { name, src, trace } => {
+                let value = self.value(*src)?.clone();
+                if *trace && self.trace_enabled {
+                    self.trace_value(span, format!("let {name} = "), &value);
+                }
+                self.bind(name, value)?;
+            }
             Instruction::BindDestructure { bindings, src } => {
                 let value = self.value(*src)?.clone();
+                self.trace_bindings(span, "let", bindings.names(), &value);
                 self.destructure(bindings.names(), value)?;
             }
             Instruction::EmitResult { src } => {
-                return Ok(Action::Output(OutputRequest {
-                    value: self.value(*src)?.clone(),
+                let value = self.value(*src)?.clone();
+                self.trace_value(span, "expr ".to_owned(), &value);
+                self.output.push_back(Event::Output(OutputRequest {
+                    value,
                     span: span.clone(),
                     stream: OutputStream::Stdout,
                 }));
@@ -606,7 +684,7 @@ impl<'a> Machine<'a> {
                     );
                     let request = argv.request(DispatchLane::Assertion, span.clone());
                     return Ok(Action::Command(
-                        request,
+                        Box::new(request),
                         CommandPurpose::Assertion {
                             expected_ok,
                             required: *required,
@@ -621,21 +699,26 @@ impl<'a> Machine<'a> {
                 self.put(*dst, Slot::Args(argv));
             }
             Instruction::DispatchCommand { argv } => {
-                let request = self
-                    .argv(*argv)?
-                    .request(DispatchLane::Command, span.clone());
-                return Ok(Action::Command(request, CommandPurpose::Ordinary));
+                let argv = self.argv(*argv)?;
+                self.trace_argv(span, "", &argv);
+                let request = argv.request(DispatchLane::Command, span.clone());
+                return Ok(Action::Command(Box::new(request), CommandPurpose::Ordinary));
             }
             Instruction::DispatchBind {
                 dst,
                 argv,
                 call_span,
-                ..
+                trace_header,
             } => {
-                let request = self
-                    .argv(*argv)?
-                    .request(DispatchLane::Bind, call_span.clone());
-                return Ok(Action::Command(request, CommandPurpose::Bind(*dst)));
+                let argv = self.argv(*argv)?;
+                if self.trace_enabled {
+                    self.trace_argv(span, &format!("{trace_header} <- "), &argv);
+                }
+                let request = argv.request(DispatchLane::Bind, call_span.clone());
+                return Ok(Action::Command(
+                    Box::new(request),
+                    CommandPurpose::Bind(*dst),
+                ));
             }
             Instruction::ApplyBind {
                 src,
@@ -673,7 +756,9 @@ impl<'a> Machine<'a> {
                 }
             }
             Instruction::RegisterDefer { argv } => {
-                self.deferred.push((self.argv(*argv)?, span.clone()))
+                let argv = self.argv(*argv)?;
+                self.trace_argv(span, "defer ", &argv);
+                self.deferred.push((argv, span.clone()));
             }
         }
         Ok(Action::Next)
@@ -741,7 +826,7 @@ impl<'a> Machine<'a> {
         } else {
             self.exit_code = 1;
             let position = span.start();
-            self.output.push_back(OutputRequest {
+            self.output.push_back(Event::Output(OutputRequest {
                 value: Value::String(format!(
                     "{}:{}:{}: assertion failed: {text}",
                     position.name().as_str(),
@@ -750,7 +835,7 @@ impl<'a> Machine<'a> {
                 )),
                 span: span.clone(),
                 stream: OutputStream::Stderr,
-            });
+            }));
         }
     }
 
@@ -764,7 +849,9 @@ impl<'a> Machine<'a> {
             Terminator::Stop => return Ok(Action::Stop),
             Terminator::Jump(target) => {
                 if self.polls.last().is_some_and(|poll| poll.success == target) {
-                    self.polls.pop();
+                    if let Some(poll) = self.polls.pop() {
+                        self.trace_note(&poll.span, "poll success");
+                    }
                 }
                 self.jump(target);
             }
@@ -795,7 +882,9 @@ impl<'a> Machine<'a> {
                 self.jump(if *value { on_true } else { on_false });
             }
             Terminator::ReturnValue { src, epilogue } => {
-                self.returned = self.value(src)?.clone();
+                let value = self.value(src)?.clone();
+                self.trace_value(&terminator.span, "return ".to_owned(), &value);
+                self.returned = value;
                 let caller = self
                     .callers
                     .last()
@@ -816,7 +905,7 @@ impl<'a> Machine<'a> {
                 body,
                 exit,
             } => {
-                self.start_loop(list, bindings, body, exit, None)?;
+                self.start_loop(list, bindings, body, exit, None, &terminator.span)?;
             }
             Terminator::ForEachCollect {
                 list,
@@ -832,6 +921,7 @@ impl<'a> Machine<'a> {
                     body,
                     exit,
                     Some(loops::Collection::new(target.clone(), mode)),
+                    &terminator.span,
                 )?;
             }
             Terminator::ForEachContinue(owner) => self.advance_loop(owner, false)?,

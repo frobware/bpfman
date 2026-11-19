@@ -46,6 +46,9 @@ struct Options {
     /// Print the parsed program's editor symbol table as JSON.
     #[arg(long, conflicts_with_all = ["check", "no_check", "lowered"])]
     symbols: bool,
+    /// Trace resolved statements and control flow to stderr.
+    #[arg(short = 'x', long)]
+    trace: bool,
     /// List files with matching script metadata in the given paths.
     #[arg(long, conflicts_with_all = ["check", "no_check", "lowered", "symbols", "ast", "fmt"])]
     list_scripts: bool,
@@ -171,7 +174,12 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
         write!(stdout, "{ir}").map_err(|error| error.to_string())?;
         Ok(0)
     } else {
-        driver::run(&ir, stdout, &mut driver::ImageRegistry::default())
+        driver::run(
+            &ir,
+            stdout,
+            &mut driver::ImageRegistry::default(),
+            options.trace,
+        )
     }
 }
 

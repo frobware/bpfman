@@ -443,3 +443,18 @@ fn definitions_and_direct_pure_calls_share_command_dispatch() -> io::Result<()> 
     assert_eq!(output.stdout, b"  a()\n  z(name)\nhello\n");
     Ok(())
 }
+
+#[test]
+fn trace_toggles_apply_when_defers_fire() -> io::Result<()> {
+    let output = run(
+        &["-x"],
+        "let name = \"cleanup\"\ntrace off\ndefer print $name\ntrace on\nprint before-exit\n",
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"before-exit\ncleanup\n");
+    assert_eq!(
+        output.stderr,
+        b"+ <stdin>:1: let name = cleanup\n+ <stdin>:2: trace off\n+ <stdin>:5: print before-exit\n+ <stdin>:3: defer fire: print cleanup\n"
+    );
+    Ok(())
+}

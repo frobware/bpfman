@@ -78,7 +78,7 @@ fn dump_blocks(
                 Instruction::Eval { dst, expression } => {
                     writeln!(f, "Eval t{} = {expression}", dst.0)?;
                 }
-                Instruction::BindName { name, src } => {
+                Instruction::BindName { name, src, .. } => {
                     writeln!(f, "BindName {name} = t{}", src.0)?;
                 }
                 Instruction::BindDestructure { bindings, src } => {

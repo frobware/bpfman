@@ -8,7 +8,7 @@ use std::{
 use bpfman_shell_ir::Program;
 use bpfman_shell_runtime::{
     Argument, CommandRequest, CommandResponse, DispatchLane, OutputStream, QueryRequest, Step,
-    Value, execute,
+    TracePart, Value, execute_with_trace,
 };
 
 mod bpfman;
@@ -38,12 +38,13 @@ pub(super) fn run(
     program: &Program,
     stdout: &mut impl Write,
     registry: &mut ImageRegistry,
+    trace: bool,
 ) -> Result<u8, String> {
     let start = Instant::now();
     let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
     let mut jobs = jobs::Jobs::default();
     let mut fixtures = Fixtures::default();
-    let mut step = execute(program, HashMap::new());
+    let mut step = execute_with_trace(program, HashMap::new(), trace);
     loop {
         step = match step {
             Step::Command {
@@ -72,6 +73,25 @@ pub(super) fn run(
                         .map_err(|error| error.to_string())
                     }),
             ),
+            Step::Trace {
+                request,
+                continuation,
+            } => {
+                let position = request.span.start();
+                let mut line = format!("+ {}:{}: ", position.name().as_str(), position.line());
+                for part in request.parts {
+                    line.push_str(&match part {
+                        TracePart::Text(text) => text,
+                        TracePart::Argument(argument) => {
+                            files::render_argument(&argument, false).unwrap_or_default()
+                        }
+                        TracePart::Value(value) => files::render(&value, false)
+                            .unwrap_or_else(|_| "<unrenderable value>".to_owned()),
+                    });
+                }
+                let _ = writeln!(io::stderr().lock(), "{line}");
+                continuation.resume(Ok(()))
+            }
             Step::PathExists {
                 request,
                 continuation,
@@ -208,12 +228,12 @@ fn dispatch(
             .map(|argument| files::render_argument(argument, pretty))
             .collect::<Result<Vec<_>, _>>()?
             .join(" ");
-        if request.lane == DispatchLane::Command {
+        if matches!(request.lane, DispatchLane::Command | DispatchLane::Deferred) {
             writeln!(stdout, "{line}").map_err(|error| error.to_string())?;
         }
         return Ok(CommandResponse {
             exit_code: 0,
-            stdout: line,
+            stdout: format!("{line}\n"),
             stderr: String::new(),
             primary: Value::Absent,
             killed: false,
@@ -254,12 +274,14 @@ fn dispatch(
     } else {
         (head.as_str(), arguments.as_slice())
     };
-    if head != "exec" && matches!(head.as_str(), "import" | "trace") {
+    if head != "exec" && head == "import" {
         return Err(format!("{head}: builtin is not yet implemented"));
     }
     let output = process::capture(Command::new(executable).args(arguments), interrupt)
         .map_err(|error| format!("{executable}: {error}"))?;
-    if request.lane == DispatchLane::Command {
+    if request.lane == DispatchLane::Command
+        || (request.lane == DispatchLane::Deferred && output.status.success())
+    {
         stdout
             .write_all(&output.stdout)
             .map_err(|error| error.to_string())?;

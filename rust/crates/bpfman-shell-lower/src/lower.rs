@@ -173,6 +173,7 @@ fn lower_definition(
             Instruction::BindName {
                 name: parameter.name.clone(),
                 src: Temp(index),
+                trace: false,
             },
         );
     }
@@ -220,6 +221,7 @@ impl Body {
             S::Let { name, value } => Instruction::BindName {
                 name: name.text().to_owned(),
                 src: self.eval(span, value),
+                trace: true,
             },
             S::Expression(value) => Instruction::EmitResult {
                 src: self.eval(span, value),

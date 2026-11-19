@@ -7,6 +7,7 @@ use super::{Action, Machine, Step, Value};
 
 pub(super) struct Poll {
     pub(super) owner: BlockId,
+    pub(super) span: Span,
     attempt: BlockId,
     timeout: BlockId,
     pub(super) success: BlockId,
@@ -60,6 +61,7 @@ impl<'a> ClockContinuation<'a> {
             } => {
                 self.machine.polls.push(Poll {
                     owner: self.machine.block,
+                    span: self.span.clone(),
                     attempt,
                     timeout,
                     success,
@@ -138,6 +140,10 @@ impl Machine<'_> {
                 })
             })
             .transpose()?;
+        if let Some(poll) = self.polls.last() {
+            let origin = poll.span.clone();
+            self.trace_note(&origin, "poll retry");
+        }
         match target {
             RetryTarget::Local(owner) => {
                 self.prepare_retry(owner, message)?;

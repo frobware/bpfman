@@ -2,10 +2,13 @@ use std::collections::{BTreeMap, HashMap};
 
 use bpfman_shell_ir::{BlockId, CollectMode, LoopBindings, LoopId, Temp};
 
+use bpfman_shell_source::Span;
+
 use super::{Machine, Slot, Value};
 
 pub(super) struct Iteration {
     owner: LoopId,
+    span: Span,
     items: std::vec::IntoIter<Value>,
     names: Vec<String>,
     frame_depth: usize,
@@ -55,6 +58,7 @@ impl Machine<'_> {
         body: BlockId,
         exit: BlockId,
         collection: Option<Collection>,
+        span: &Span,
     ) -> Result<(), String> {
         let Value::List(items) = self.value(list)?.clone() else {
             return Err("foreach expects a list".to_owned());
@@ -63,6 +67,7 @@ impl Machine<'_> {
         self.step_iteration(
             Iteration {
                 owner,
+                span: span.clone(),
                 items: items.into_iter(),
                 names: bindings.names().to_vec(),
                 frame_depth: self.frames.len(),
@@ -88,8 +93,16 @@ impl Machine<'_> {
         if let Some(value) = (!exiting).then(|| state.items.next()).flatten() {
             self.frames.push(HashMap::new());
             match state.names.as_slice() {
-                [name] => self.bind(name, value)?,
-                names => self.destructure(names, value)?,
+                [name] => {
+                    if self.trace_enabled {
+                        self.trace_value(&state.span, format!("foreach {name} = "), &value);
+                    }
+                    self.bind(name, value)?;
+                }
+                names => {
+                    self.trace_bindings(&state.span, "foreach", names, &value);
+                    self.destructure(names, value)?;
+                }
             }
             self.jump(state.body);
             self.loops.push(state);
