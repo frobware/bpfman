@@ -285,7 +285,11 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                     name, "bpfman",
                     "only the composition root selects a persistence backend"
                 ),
-                "clap" | "anyhow" | "tracing-subscriber" | "tracing-chrome" => assert_eq!(
+                "clap" => assert!(
+                    matches!(name, "bpfman" | "bpfman-shell"),
+                    "CLI parsing belongs in the outer binaries"
+                ),
+                "anyhow" | "tracing-subscriber" | "tracing-chrome" => assert_eq!(
                     name, "bpfman",
                     "CLI parsing, reports, and telemetry collection belong in the binary"
                 ),
