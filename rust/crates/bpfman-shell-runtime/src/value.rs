@@ -80,6 +80,36 @@ impl KfuncHandle {
     }
 }
 
+/// A capability for a private LSM fixture and its stable projection.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LsmHandle {
+    id: NonZeroU64,
+    fields: BTreeMap<String, Value>,
+}
+
+impl LsmHandle {
+    /// Associate an owned marker and target file with the driver lease.
+    #[must_use]
+    pub fn new(id: NonZeroU64, marker: String, path: String, directory: String) -> Self {
+        let marker_hex = marker.bytes().map(|byte| format!("{byte:02x}")).collect();
+        Self {
+            id,
+            fields: BTreeMap::from([
+                ("marker".to_owned(), Value::String(marker)),
+                ("marker_hex".to_owned(), Value::String(marker_hex)),
+                ("file".to_owned(), Value::String(path)),
+                ("dir".to_owned(), Value::String(directory)),
+            ]),
+        }
+    }
+
+    /// Identify the fixture without accepting a path or marker as authority.
+    #[must_use]
+    pub fn id(&self) -> NonZeroU64 {
+        self.id
+    }
+}
+
 /// One endpoint of an isolated veth pair.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EndpointSide {
@@ -256,6 +286,8 @@ pub enum Value {
     Job(JobHandle),
     /// A capability for a leased kernel function fixture.
     Kfunc(KfuncHandle),
+    /// A capability for a private LSM fixture.
+    Lsm(LsmHandle),
     /// A capability for a network fixture or an endpoint of it.
     Network(NetworkHandle),
     /// Captured command outcome, with a distinct primary when supplied.
@@ -270,6 +302,7 @@ impl Value {
             Self::Record(fields) | Self::BpfmanRecord { fields, .. } => Some(fields),
             Self::Job(job) => Some(&job.fields),
             Self::Kfunc(function) => Some(&function.fields),
+            Self::Lsm(probe) => Some(&probe.fields),
             Self::Network(handle) => Some(&handle.fields),
             _ => None,
         }

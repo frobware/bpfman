@@ -9,6 +9,6 @@ pub use machine::{
     PauseContinuation, QueryContinuation, QueryInput, QueryRequest, Step, execute,
 };
 pub use value::{
-    Argument, EndpointSide, HostNetworkPair, JobHandle, KfuncHandle, NetworkEndpoint,
+    Argument, EndpointSide, HostNetworkPair, JobHandle, KfuncHandle, LsmHandle, NetworkEndpoint,
     NetworkHandle, NetworkRole, Number, Value,
 };

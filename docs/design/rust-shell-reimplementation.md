@@ -309,6 +309,10 @@ dotted-symbol and PID-filter traffic cases passed against the Go daemon.
 verifies that a pin refers to a program before reading its metadata. Four
 program inventory fixtures passed against the Go daemon, including the
 kernel-only rows created outside bpfman.
+LSM probes carry a typed handle to the driver's marker and owned temporary
+directory. The Rust worker opens the target under that marker. The Go
+daemon's LSM round-trip observed exactly 50 opens and no additional events
+after detach.
 
 ## Typestate and internal invariants
 

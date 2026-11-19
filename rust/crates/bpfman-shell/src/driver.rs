@@ -16,18 +16,25 @@ mod files;
 mod jobs;
 mod kernel;
 mod kfunc;
+mod lsm;
 mod net;
 mod process;
 mod query;
 mod slot_pool;
 mod uprobe;
 
+#[derive(Default)]
+struct Fixtures {
+    functions: kfunc::Pool,
+    network: net::Network,
+    probes: lsm::Probes,
+}
+
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
     let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
     let mut jobs = jobs::Jobs::default();
-    let mut functions = kfunc::Pool::default();
-    let mut network = net::Network::default();
+    let mut fixtures = Fixtures::default();
     let mut step = execute(program, HashMap::new());
     loop {
         step = match step {
@@ -39,8 +46,7 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
                 stdout,
                 &interrupt,
                 &mut jobs,
-                &mut functions,
-                &mut network,
+                &mut fixtures,
             )),
             Step::Output {
                 request,
@@ -90,8 +96,7 @@ fn dispatch(
     stdout: &mut impl Write,
     interrupt: &process::Interrupt,
     jobs: &mut jobs::Jobs,
-    functions: &mut kfunc::Pool,
-    network: &mut net::Network,
+    fixtures: &mut Fixtures,
 ) -> Result<CommandResponse, String> {
     interrupt.check()?;
     let head = argument(&request.head)?;
@@ -123,10 +128,17 @@ fn dispatch(
         return uprobe::invoke(&head, &request.arguments, interrupt);
     }
     if head == "kfunc" {
-        return functions.invoke(&request.arguments, cite(&request), interrupt);
+        return fixtures
+            .functions
+            .invoke(&request.arguments, cite(&request), interrupt);
     }
     if head == "net" {
-        return network.invoke(&request.arguments, cite(&request), interrupt, jobs);
+        return fixtures
+            .network
+            .invoke(&request.arguments, cite(&request), interrupt, jobs);
+    }
+    if head == "lsm" {
+        return fixtures.probes.invoke(&request.arguments, interrupt);
     }
     if head == "linkinfo" {
         return Ok(kernel::linkinfo(&request.arguments));
@@ -233,7 +245,6 @@ fn dispatch(
             head.as_str(),
             "defs"
                 | "import"
-                | "lsm"
                 | "process"
                 | "range"
                 | "registry"
