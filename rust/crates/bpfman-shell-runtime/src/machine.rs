@@ -9,6 +9,7 @@ mod calls;
 mod compare;
 mod loops;
 mod polls;
+mod pure;
 
 pub use polls::{ClockContinuation, PauseContinuation};
 
@@ -670,6 +671,9 @@ impl<'a> Machine<'a> {
                     .map(|item| self.eval(item))
                     .collect::<Result<_, _>>()?,
             ),
+            ir::ExpressionKind::PureCall { builtin, arguments } => {
+                self.pure_call(*builtin, arguments)?
+            }
             ir::ExpressionKind::Record(fields) => Value::Record(
                 fields
                     .iter()
@@ -1065,5 +1069,24 @@ mod tests {
             continuation.resume(result(0, Value::Absent)),
             Step::Finished { exit_code: 0 }
         ));
+    }
+
+    #[test]
+    fn deterministic_builtins_preserve_typed_lists_and_presence() {
+        let program = program(
+            "let r = record { field: null }\nlet xs = range 2\nlet pairs = zip $xs [one two]\nlet bytes = u32le \"0x12\"\nlet n = null $r.field\nlet m = missing r.other\nprint $pairs[1][1] $bytes $n $m",
+        );
+        let Step::Command { request, .. } = execute(&program, HashMap::new()) else {
+            unreachable!("expected builtin results");
+        };
+        assert_eq!(
+            request.arguments,
+            [
+                Argument::Value(Value::String("two".to_owned())),
+                Argument::Value(Value::String("12000000".to_owned())),
+                Argument::Value(Value::Bool(true)),
+                Argument::Value(Value::Bool(true)),
+            ]
+        );
     }
 }

@@ -154,9 +154,9 @@ enum LiteralKind {
     RangeBound,
 }
 
-// Go's strconv.ParseUint(text, 0, 64): base prefixes and legacy leading-zero
-// octal syntax are part of the current shell's literal contract.
-fn parse_go_unsigned(text: &str) -> Option<u64> {
+/// Parse a Go-style unsigned integer with base prefixes and legacy octal.
+#[must_use]
+pub fn parse_go_unsigned(text: &str) -> Option<u64> {
     if text.starts_with('+') {
         return None;
     }

@@ -434,6 +434,7 @@ dependencies = [
  "bpfman-shell-check",
  "bpfman-shell-ir",
  "bpfman-shell-lower",
+ "bpfman-shell-semantics",
  "bpfman-shell-source",
  "bpfman-shell-syntax",
  "num-bigint",
