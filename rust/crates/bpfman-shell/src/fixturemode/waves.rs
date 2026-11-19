@@ -19,6 +19,7 @@ use rustix::{
 pub(crate) enum Kind {
     Kill,
     UnlinkAt,
+    Uprobe,
 }
 
 impl Kind {
@@ -26,13 +27,19 @@ impl Kind {
         match self {
             Self::Kill => "kill-fire-worker",
             Self::UnlinkAt => "unlinkat-fire-worker",
+            Self::Uprobe => "uprobe-fire-worker",
         }
+    }
+
+    pub(crate) const fn publishes_binary(self) -> bool {
+        matches!(self, Self::Uprobe)
     }
 
     pub(super) fn from_mode(mode: &str) -> Option<Self> {
         match mode {
             "kill-fire-worker" => Some(Self::Kill),
             "unlinkat-fire-worker" => Some(Self::UnlinkAt),
+            "uprobe-fire-worker" => Some(Self::Uprobe),
             _ => None,
         }
     }
@@ -41,6 +48,7 @@ impl Kind {
         match name {
             "kill" => Some(Self::Kill),
             "unlinkat" => Some(Self::UnlinkAt),
+            "uprobe" => Some(Self::Uprobe),
             _ => None,
         }
     }
@@ -59,6 +67,7 @@ impl Kind {
                 std::env::set_current_dir(directory)
                     .map_err(|error| format!("chdir {}: {error}", directory.display()))?;
             }
+            Self::Uprobe => {}
         }
         Ok(())
     }
@@ -77,6 +86,10 @@ impl Kind {
                         .map_err(|error| error.to_string())?,
                 );
                 unlink_fixture_target()
+            }
+            Self::Uprobe => {
+                super::uprobe::fire_once();
+                Ok(())
             }
         }
     }

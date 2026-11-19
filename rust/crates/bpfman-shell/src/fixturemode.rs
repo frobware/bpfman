@@ -2,6 +2,7 @@
 
 use std::{ffi::OsStr, fs};
 
+pub(crate) mod uprobe;
 mod waves;
 pub(crate) use waves::Waves;
 

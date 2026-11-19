@@ -300,6 +300,11 @@ against both daemons. The Rust shell also launches `fire kill` and
 `fire unlinkat` workers through its own fixture entry point, with tests for
 multiple numbered acknowledgements. The private LSM open-worker entry point
 is available for the LSM adapter.
+The Rust executable exports both fixture symbols directly. Two scoped export
+attributes give the probes their fixed ELF names, and the workspace law
+confines the exception to those attributes. `uprobe target` resolves the
+file-backed offset through the existing ELF reader. Actual uprobe, uretprobe,
+dotted-symbol and PID-filter traffic cases passed against the Go daemon.
 
 ## Typestate and internal invariants
 

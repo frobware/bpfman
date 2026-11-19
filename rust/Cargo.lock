@@ -405,6 +405,7 @@ dependencies = [
  "jaq-json",
  "jaq-std",
  "jiff",
+ "object",
  "rustix",
  "serde_json",
  "signal-hook",

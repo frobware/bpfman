@@ -404,7 +404,9 @@ fn syscall_exception_keeps_all_other_workspace_lint_gates() {
     assert_eq!(section(&filesystem, "[lints]"), ["workspace = true"]);
     let binary =
         std::fs::read_to_string(root.join("crates/bpfman/Cargo.toml")).expect("binary manifest");
-    for manifest in [&kernel, &binary] {
+    let shell = std::fs::read_to_string(root.join("crates/bpfman-shell/Cargo.toml"))
+        .expect("shell manifest");
+    for manifest in [&kernel, &binary, &shell] {
         for category in ["rust", "clippy"] {
             let expected = section(&workspace, &format!("[workspace.lints.{category}]"));
             let actual = section(manifest, &format!("[lints.{category}]"));
@@ -453,23 +455,46 @@ fn kernel_unsafe_is_confined_to_syscall_boundaries() {
 }
 
 #[test]
-fn binary_unsafe_is_confined_to_helper_descriptor_inheritance() {
-    fn walk(path: &Path) {
+fn binary_unsafe_is_confined_to_platform_boundaries() {
+    fn walk(path: &Path, exception: &str, allowed: &[&str]) {
         for entry in std::fs::read_dir(path).expect("binary sources") {
             let path = entry.expect("entry").path();
             if path.is_dir() {
-                walk(&path);
+                walk(&path, exception, allowed);
             } else if path.extension().is_some_and(|s| s == "rs") {
                 let source = std::fs::read_to_string(&path).expect("source");
-                if path.ends_with("ns_helper/inherited.rs") {
-                    assert!(source.contains("#![allow(unsafe_code)]"));
+                if path.ends_with(exception) {
+                    for attribute in allowed {
+                        assert!(
+                            source.contains(attribute),
+                            "{}: {attribute}",
+                            path.display()
+                        );
+                    }
+                    if exception == "fixturemode/uprobe.rs" {
+                        assert_eq!(source.matches("#[unsafe(").count(), 2);
+                        assert!(!source.contains("unsafe {"));
+                    }
                 } else {
                     assert!(!source.contains("allow(unsafe_code)"), "{}", path.display());
                 }
             }
         }
     }
-    walk(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../bpfman/src"));
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    walk(
+        &root.join("bpfman/src"),
+        "ns_helper/inherited.rs",
+        &["#![allow(unsafe_code)]"],
+    );
+    walk(
+        &root.join("bpfman-shell/src"),
+        "fixturemode/uprobe.rs",
+        &[
+            "#[unsafe(export_name = \"bpfman_shell_uprobe_call_malloc\")]",
+            "#[unsafe(export_name = \"github.com/bpfman/bpfman/cmd/bpfman-shell/fixturemode.GoUprobeTarget\")]",
+        ],
+    );
 }
 
 #[test]

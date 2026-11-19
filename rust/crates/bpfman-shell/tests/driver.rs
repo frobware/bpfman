@@ -181,6 +181,25 @@ assert path-exists "${unlink_ack}.2"
 }
 
 #[test]
+fn uprobe_driver_resolves_the_same_shell_elf_in_both_target_forms() -> io::Result<()> {
+    let output = run(
+        &[],
+        r#"
+guard complete <- uprobe target
+guard attach <- uprobe-target
+assert $complete.symbol_offset > 0
+assert $complete.pid > 0
+assert $complete.path == $attach.path
+assert $complete.symbol == $attach.symbol
+assert contains $complete.go_symbol fixturemode.GoUprobeTarget
+uprobe fire 2
+"#,
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    Ok(())
+}
+
+#[test]
 fn embedded_jq_preserves_precision_result_stream_and_argument_origin() -> io::Result<()> {
     let output = run(
         &[],

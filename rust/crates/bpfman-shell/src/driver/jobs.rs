@@ -52,8 +52,16 @@ impl Jobs {
         arguments: &[Argument],
         origin: String,
         mode: &'static str,
+        publish_binary: bool,
     ) -> Result<CommandResponse, String> {
-        self.spawn(arguments, origin, Launch::Fixture(mode))
+        self.spawn(
+            arguments,
+            origin,
+            Launch::Fixture {
+                mode,
+                publish_binary,
+            },
+        )
     }
 
     fn spawn(
@@ -75,13 +83,21 @@ impl Jobs {
         let (executable, args) = argv.split_first().ok_or("start requires a command")?;
         let mut command = Command::new(executable);
         command.args(args);
-        if let Launch::Fixture(mode) = launch {
+        if let Launch::Fixture { mode, .. } = launch {
             command.env("BPFMAN_SHELL_MODE", mode);
         }
         let process = CapturedChild::spawn(&mut command)
             .map_err(|error| format!("start {executable}: {error}"))?;
         let pid = process.pid().ok_or("background child has no PID")?;
-        let target = matches!(launch, Launch::Executable).then(|| executable.clone());
+        let target = matches!(
+            launch,
+            Launch::Executable
+                | Launch::Fixture {
+                    publish_binary: true,
+                    ..
+                }
+        )
+        .then(|| executable.clone());
         let handle = JobHandle::new(id, pid, target);
         let job = Job::spawn(process, files, pid, argv.join(" "), origin)?;
 
@@ -206,7 +222,10 @@ impl Jobs {
 enum Launch {
     Executable,
     Namespace,
-    Fixture(&'static str),
+    Fixture {
+        mode: &'static str,
+        publish_binary: bool,
+    },
 }
 
 enum Control {

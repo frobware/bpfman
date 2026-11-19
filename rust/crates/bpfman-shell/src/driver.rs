@@ -20,6 +20,7 @@ mod net;
 mod process;
 mod query;
 mod slot_pool;
+mod uprobe;
 
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
@@ -116,7 +117,10 @@ fn dispatch(
             .chain(waves.argv())
             .map(Argument::Word)
             .collect::<Vec<_>>();
-        return jobs.start_fixture(&argv, cite(&request), kind.mode());
+        return jobs.start_fixture(&argv, cite(&request), kind.mode(), kind.publishes_binary());
+    }
+    if matches!(head.as_str(), "uprobe" | "uprobe-target") {
+        return uprobe::invoke(&head, &request.arguments, interrupt);
     }
     if head == "kfunc" {
         return functions.invoke(&request.arguments, cite(&request), interrupt);
@@ -234,8 +238,6 @@ fn dispatch(
                 | "trace"
                 | "u32le"
                 | "u64le"
-                | "uprobe"
-                | "uprobe-target"
                 | "zip"
         )
     {
