@@ -215,8 +215,11 @@ binds, and program-scope defers. The driver supplies command and output
 observations through consuming, type-specific continuations. Numbers retain
 their exact text and the interpreter shares syntax's pure JSON-number
 classifier. Unit tests drive the machine without processes or a clock and
-check LIFO capture and guard-failure cleanup. Definition execution, most
-expression evaluation, loops, polling, and the effectful driver are pending.
+check LIFO capture and guard-failure cleanup. Ordinary and collecting loops
+now execute through the same iterator state, with lexical frame unwinding,
+destructuring, and partial collection publication on break. Definition
+execution, most expression evaluation, polling, and the effectful driver are
+pending.
 
 ## Typestate and internal invariants
 

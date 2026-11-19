@@ -5,6 +5,8 @@ use bpfman_shell_source::Span;
 
 use crate::{Argument, Number, Value};
 
+mod loops;
+
 /// A suspended interpreter step or its final result.
 pub enum Step<'a> {
     /// Resolve and perform a command invocation.
@@ -174,6 +176,7 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         offset: 0,
         temps: (0..program.num_temps()).map(|_| None).collect(),
         frames: vec![bindings],
+        loops: Vec::new(),
         deferred: Vec::new(),
         draining: false,
         failure: None,
@@ -217,6 +220,7 @@ struct Machine<'a> {
     offset: usize,
     temps: Vec<Option<Slot>>,
     frames: Vec<HashMap<String, Value>>,
+    loops: Vec<loops::Iteration>,
     deferred: Vec<(Argv, Span)>,
     draining: bool,
     failure: Option<ExecutionError>,
@@ -330,7 +334,9 @@ impl<'a> Machine<'a> {
     fn instruction(&mut self, instruction: &ir::Located<Instruction>) -> Result<Action, String> {
         let span = &instruction.span;
         match &instruction.node {
-            Instruction::EnterProgramDefers | Instruction::TraceBranch(_) => {}
+            Instruction::EnterProgramDefers
+            | Instruction::TraceBranch(_)
+            | Instruction::TraceLoop(_) => {}
             Instruction::EnterIfFrame => self.frames.push(HashMap::new()),
             Instruction::ExitFrame => {
                 if self.frames.len() <= 1 {
@@ -343,6 +349,10 @@ impl<'a> Machine<'a> {
                 self.put(*dst, Slot::Value(self.eval(expression)?));
             }
             Instruction::BindName { name, src } => self.bind(name, self.value(*src)?.clone())?,
+            Instruction::BindDestructure { bindings, src } => {
+                let value = self.value(*src)?.clone();
+                self.destructure(bindings.names(), value)?;
+            }
             Instruction::EmitResult { src } => {
                 return Ok(Action::Output(OutputRequest {
                     value: self.value(*src)?.clone(),
@@ -440,6 +450,35 @@ impl<'a> Machine<'a> {
                 self.jump(if *value { on_true } else { on_false });
             }
             Terminator::PropagateError => return Err("missing active error".to_owned()),
+            Terminator::ForEach {
+                list,
+                ref bindings,
+                body,
+                exit,
+            } => {
+                self.start_loop(list, bindings, body, exit, None)?;
+            }
+            Terminator::ForEachCollect {
+                list,
+                ref bindings,
+                ref target,
+                mode,
+                body,
+                exit,
+            } => {
+                self.start_loop(
+                    list,
+                    bindings,
+                    body,
+                    exit,
+                    Some(loops::Collection::new(target.clone(), mode)),
+                )?;
+            }
+            Terminator::ForEachContinue(owner) => self.advance_loop(owner, false)?,
+            Terminator::ExitLoop(owner) => self.advance_loop(owner, true)?,
+            Terminator::CollectProduce { owner, result, .. } => {
+                self.collect_result(owner, result)?
+            }
             _ => return Err("terminator is not yet implemented".to_owned()),
         }
         Ok(Action::Next)
@@ -481,10 +520,11 @@ impl<'a> Machine<'a> {
                     .cloned()
                     .ok_or_else(|| format!("undefined variable: {}", variable.name))?;
                 for field in variable.path.split('.').filter(|field| !field.is_empty()) {
-                    let Value::Outcome(outcome) = value else {
-                        return Err(format!("cannot access field {field:?}"));
+                    value = match value {
+                        Value::Outcome(outcome) => outcome_field(&outcome, field)?,
+                        Value::Record(mut fields) => fields.remove(field).unwrap_or(Value::Absent),
+                        _ => return Err(format!("cannot access field {field:?}")),
                     };
-                    value = outcome_field(&outcome, field)?;
                 }
                 value
             }
@@ -492,6 +532,15 @@ impl<'a> Machine<'a> {
                 items
                     .iter()
                     .map(|item| self.eval(item))
+                    .collect::<Result<_, _>>()?,
+            ),
+            ir::ExpressionKind::Record(fields) => Value::Record(
+                fields
+                    .iter()
+                    .map(|field| {
+                        self.eval(&field.value)
+                            .map(|value| (field.name.clone(), value))
+                    })
                     .collect::<Result<_, _>>()?,
             ),
             _ => return Err("expression is not yet implemented".to_owned()),
@@ -623,5 +672,59 @@ mod tests {
         };
         assert_eq!(error.span.start().line(), 2);
         assert!(error.message.contains("exit 7"));
+    }
+
+    #[test]
+    fn collecting_loop_keeps_partial_results_and_unwinds_iteration_frames() {
+        let program = program(
+            "let item = \"outer\"\nlet batch <- foreach (stop item) in [[false 1] [false 2] [true 3]] { if $stop { break }\n echo $item }\nprint $item $batch.ok $batch.values",
+        );
+        let Step::Command {
+            request,
+            continuation,
+        } = execute(&program, HashMap::new())
+        else {
+            unreachable!("expected first producer");
+        };
+        assert_eq!(request.lane, DispatchLane::Bind);
+        assert_eq!(
+            request.arguments,
+            [Argument::Value(Value::Number(
+                Number::new("1".to_owned()).unwrap_or_else(|| unreachable!())
+            ))]
+        );
+        let Step::Command {
+            request,
+            continuation,
+        } = continuation.resume(result(1, Value::Absent))
+        else {
+            unreachable!("expected second producer");
+        };
+        assert_eq!(
+            request.arguments,
+            [Argument::Value(Value::Number(
+                Number::new("2".to_owned()).unwrap_or_else(|| unreachable!())
+            ))]
+        );
+        let Step::Command {
+            request,
+            continuation,
+        } = continuation.resume(result(0, Value::Null))
+        else {
+            unreachable!("expected output command");
+        };
+        assert_eq!(request.lane, DispatchLane::Command);
+        assert_eq!(
+            request.arguments,
+            [
+                Argument::Value(Value::String("outer".to_owned())),
+                Argument::Value(Value::Bool(false)),
+                Argument::Value(Value::List(vec![Value::Null])),
+            ]
+        );
+        assert!(matches!(
+            continuation.resume(result(0, Value::Absent)),
+            Step::Finished { exit_code: 0 }
+        ));
     }
 }

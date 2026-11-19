@@ -1,4 +1,6 @@
 use crate::CommandResponse;
+use std::collections::BTreeMap;
+
 use bpfman_shell_syntax::is_json_number;
 
 /// A validated JSON number that retains its exact spelling and precision.
@@ -34,6 +36,8 @@ pub enum Value {
     String(String),
     /// Ordered list.
     List(Vec<Value>),
+    /// Named fields.
+    Record(BTreeMap<String, Value>),
     /// Captured command outcome, with a distinct primary when supplied.
     Outcome(Box<CommandResponse>),
 }
