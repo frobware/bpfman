@@ -205,7 +205,11 @@ and retains positional destructuring names and discard slots. Bind-collect
 shares the iterator model and tracks guarded versus capturing aggregation.
 The producer retains both the trailing command span and the enclosing bind
 span. A Go fixture covers both policies and explicit loop control. Poll
-cleanup, the full golden dump, and execution are pending.
+lowering carries a positive schedule, attempt-local cleanup, and distinct
+success and timeout continuations. Retry identifies either the lexical poll
+or the dynamically enclosing poll of a caller. The complete Go
+`language.lowered` golden now matches after import expansion and preflight.
+The runtime and driver are pending.
 
 ## Typestate and internal invariants
 

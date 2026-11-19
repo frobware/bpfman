@@ -1,7 +1,8 @@
 //! Reserve branch joins independently of their final dump order.
 
 use bpfman_shell_ir::{
-    Block, BlockId, CollectMode, Instruction, Located, LoopBindings, LoopId, Temp, Terminator,
+    Block, BlockId, CollectMode, Instruction, Located, LoopBindings, LoopId, PollSchedule,
+    RetryTarget, Temp, Terminator,
 };
 use bpfman_shell_source::Span;
 
@@ -45,6 +46,17 @@ pub(super) enum Exit {
         epilogue: Label,
     },
     FinishDefinition,
+    Unreachable,
+    BeginPoll {
+        schedule: PollSchedule,
+        attempt: Label,
+        timeout: Label,
+        success: Label,
+    },
+    RetryPoll {
+        owner: Option<Label>,
+        message: Option<Temp>,
+    },
 }
 
 struct Draft {
@@ -141,6 +153,24 @@ impl Layout {
                         epilogue: resolve(epilogue),
                     },
                     Exit::FinishDefinition => Terminator::FinishDefinition,
+                    Exit::Unreachable => Terminator::Unreachable,
+                    Exit::BeginPoll {
+                        schedule,
+                        attempt,
+                        timeout,
+                        success,
+                    } => Terminator::BeginPoll {
+                        schedule,
+                        attempt: resolve(attempt),
+                        timeout: resolve(timeout),
+                        success: resolve(success),
+                    },
+                    Exit::RetryPoll { owner, message } => Terminator::RetryPoll {
+                        target: owner.map_or(RetryTarget::Caller, |label| {
+                            RetryTarget::Local(resolve(label))
+                        }),
+                        message,
+                    },
                     Exit::Jump(label) => Terminator::Jump(resolve(label)),
                     Exit::Branch {
                         condition,

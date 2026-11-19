@@ -12,6 +12,6 @@ pub use expr::{
 pub use loops::{LoopBindings, LoopId, LoopTrace};
 pub use model::{
     Assertion, BindPolicy, Block, BlockId, BranchTrace, CollectMode, Command, CommandStatus,
-    Definition, Instruction, Located, Parameter, ParameterType, Program, Temp, Terminator,
-    VerifyError,
+    Definition, Instruction, Located, Parameter, ParameterType, PollSchedule, PollTrace, Program,
+    RetryTarget, Temp, Terminator, VerifyError,
 };

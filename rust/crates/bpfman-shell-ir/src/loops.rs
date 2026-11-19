@@ -84,6 +84,14 @@ pub(super) fn verify_context(blocks: &[Block]) -> Result<(), VerifyError> {
                 follow(exit, &stack)?;
             }
             Terminator::ReturnValue { epilogue, .. } => follow(epilogue, &[])?,
+            Terminator::BeginPoll {
+                attempt, success, ..
+            } => {
+                follow(attempt, &stack)?;
+                follow(success, &stack)?;
+            }
+            Terminator::RetryPoll { .. } => {}
+            Terminator::Unreachable => return Err(VerifyError::ReachableDeadEnd(id)),
             Terminator::Stop | Terminator::FinishDefinition if !stack.is_empty() => {
                 return Err(VerifyError::InvalidLoopContext(id));
             }

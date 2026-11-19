@@ -52,17 +52,24 @@ fn dump_blocks(
         for instruction in &block.instructions {
             if matches!(
                 instruction.node,
-                Instruction::TraceBranch(_) | Instruction::TraceLoop(_)
+                Instruction::TraceBranch(_) | Instruction::TraceLoop(_) | Instruction::TracePoll(_)
             ) {
                 continue;
             }
             f.write_str("  ")?;
             match &instruction.node {
-                Instruction::TraceBranch(_) | Instruction::TraceLoop(_) => {}
+                Instruction::TraceBranch(_)
+                | Instruction::TraceLoop(_)
+                | Instruction::TracePoll(_) => {}
                 Instruction::EnterIfFrame => writeln!(f, "EnterFrame kind=if-branch")?,
                 Instruction::EnterDefinitionFrame => writeln!(f, "EnterFrame kind=def")?,
                 Instruction::EnterDefinitionDefers => writeln!(f, "EnterDeferScope kind=def")?,
                 Instruction::RunDefinitionDefers => writeln!(f, "RunDefers policy=def-local")?,
+                Instruction::EnterAttemptFrame => writeln!(f, "EnterFrame kind=poll-attempt")?,
+                Instruction::EnterAttemptDefers => {
+                    writeln!(f, "EnterDeferScope kind=poll-attempt")?
+                }
+                Instruction::RunAttemptDefers => writeln!(f, "RunDefers policy=attempt-fatal")?,
                 Instruction::ExitFrame => writeln!(f, "ExitFrame")?,
                 Instruction::EnterProgramDefers => {
                     writeln!(f, "EnterDeferScope kind=program")?;
@@ -215,9 +222,60 @@ fn dump_blocks(
                 writeln!(f, "  CollectProduce t{}", result.0)?
             }
             Terminator::ExitLoop(_) => writeln!(f, "  ExitLoop")?,
+            Terminator::Unreachable => {}
+            Terminator::BeginPoll {
+                schedule,
+                attempt,
+                timeout,
+                success,
+            } => {
+                write!(f, "  BeginPoll timeout=")?;
+                write_duration(f, schedule.timeout.get())?;
+                f.write_str(" every=")?;
+                write_duration(f, schedule.every.get())?;
+                writeln!(
+                    f,
+                    " attempt=bb{} timeout=bb{} success=bb{}",
+                    attempt.0, timeout.0, success.0
+                )?;
+            }
+            Terminator::RetryPoll { message, .. } => {
+                f.write_str("  RetryPoll")?;
+                if let Some(message) = message {
+                    write!(f, " message=t{}", message.0)?;
+                }
+                writeln!(f)?;
+            }
         }
     }
     Ok(())
+}
+
+fn write_duration(f: &mut fmt::Formatter<'_>, nanos: u64) -> fmt::Result {
+    const SECOND: u64 = 1_000_000_000;
+    let (nanos, unit, precision, suffix) = if nanos >= SECOND {
+        let hours = nanos / (SECOND * 3600);
+        let minutes = (nanos / (SECOND * 60)) % 60;
+        if hours != 0 {
+            write!(f, "{hours}h")?;
+        }
+        if hours != 0 || minutes != 0 {
+            write!(f, "{minutes}m")?;
+        }
+        (nanos % (SECOND * 60), SECOND, 9, "s")
+    } else if nanos >= 1_000_000 {
+        (nanos, 1_000_000, 6, "ms")
+    } else if nanos >= 1_000 {
+        (nanos, 1_000, 3, "µs")
+    } else {
+        return write!(f, "{nanos}ns");
+    };
+    write!(f, "{}", nanos / unit)?;
+    if nanos % unit != 0 {
+        let fraction = format!("{:0precision$}", nanos % unit);
+        write!(f, ".{}", fraction.trim_end_matches('0'))?;
+    }
+    f.write_str(suffix)
 }
 
 fn lane(command: &Command, definitions: &HashSet<&str>) -> String {

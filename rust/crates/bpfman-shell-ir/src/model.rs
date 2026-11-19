@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    num::NonZeroU64,
 };
 
 use bpfman_shell_source::Span;
@@ -67,6 +68,33 @@ pub enum CollectMode {
     Guard,
 }
 
+/// Where a retry is handled.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RetryTarget {
+    /// Poll header in the current unit.
+    Local(BlockId),
+    /// Dynamically enclosing poll of a calling unit.
+    Caller,
+}
+
+/// A positive timeout and retry interval in nanoseconds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PollSchedule {
+    /// Total time budget.
+    pub timeout: NonZeroU64,
+    /// Delay between attempts.
+    pub every: NonZeroU64,
+}
+
+/// Trace events for time-based control flow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PollTrace {
+    /// Enter an attempt.
+    Attempt,
+    /// The deadline expired.
+    Timeout,
+}
+
 /// Expected command status.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandStatus {
@@ -105,6 +133,14 @@ pub enum Instruction {
     EnterDefinitionDefers,
     /// Drain only the current definition’s deferred commands.
     RunDefinitionDefers,
+    /// Enter a fresh poll attempt frame.
+    EnterAttemptFrame,
+    /// Open a poll attempt defer scope.
+    EnterAttemptDefers,
+    /// Drain the current scope according to attempt-fatal policy.
+    RunAttemptDefers,
+    /// Trace the attempt or timeout.
+    TracePoll(PollTrace),
     /// Enter the lexical frame for a selected if branch.
     EnterIfFrame,
     /// Leave the current lexical frame.
@@ -253,6 +289,26 @@ pub enum Terminator {
     },
     /// Finish the callable definition and publish its bind result.
     FinishDefinition,
+    /// A block retained for dump compatibility with no executable predecessors.
+    Unreachable,
+    /// Read the clock, establish a deadline, and begin an attempt.
+    BeginPoll {
+        /// Timeout and interval.
+        schedule: PollSchedule,
+        /// First block of each attempt.
+        attempt: BlockId,
+        /// Failure continuation on deadline expiry.
+        timeout: BlockId,
+        /// Continuation when an attempt completes.
+        success: BlockId,
+    },
+    /// Retry after deferred cleanup, subject to the active deadline.
+    RetryPoll {
+        /// Poll that receives the retry signal.
+        target: RetryTarget,
+        /// Optional message value kept for timeout diagnostics.
+        message: Option<Temp>,
+    },
     /// Finish the program.
     Stop,
 }
@@ -301,6 +357,10 @@ pub enum VerifyError {
     InvalidGuardCleanup(BlockId),
     /// A callable and a program use incompatible return terminators.
     InvalidReturn(BlockId),
+    /// A poll control target or retry location is invalid.
+    InvalidPoll(BlockId),
+    /// A synthetic dead block has a reachable predecessor.
+    ReachableDeadEnd(BlockId),
     /// The definition table contains the same name twice.
     DuplicateDefinition(String),
 }
@@ -316,6 +376,8 @@ impl fmt::Display for VerifyError {
             Self::InvalidLoopContext(BlockId(id)) => write!(f, "invalid loop context at bb{id}"),
             Self::InvalidGuardCleanup(BlockId(id)) => write!(f, "invalid guard cleanup at bb{id}"),
             Self::InvalidReturn(BlockId(id)) => write!(f, "invalid return at bb{id}"),
+            Self::InvalidPoll(BlockId(id)) => write!(f, "invalid poll at bb{id}"),
+            Self::ReachableDeadEnd(BlockId(id)) => write!(f, "reachable dead block bb{id}"),
             Self::DuplicateDefinition(name) => write!(f, "duplicate definition {name:?}"),
         }
     }
@@ -517,6 +579,10 @@ impl Unit {
                     | Instruction::EnterDefinitionFrame
                     | Instruction::EnterDefinitionDefers
                     | Instruction::RunDefinitionDefers
+                    | Instruction::EnterAttemptFrame
+                    | Instruction::EnterAttemptDefers
+                    | Instruction::RunAttemptDefers
+                    | Instruction::TracePoll(_)
                     | Instruction::RunProgramDefers
                     | Instruction::EnterIfFrame
                     | Instruction::ExitFrame
@@ -582,7 +648,46 @@ impl Unit {
                 Terminator::Stop if parameters.is_some() => {
                     return Err(VerifyError::InvalidReturn(BlockId(index)));
                 }
-                Terminator::Stop | Terminator::PropagateError | Terminator::FinishDefinition => {}
+                Terminator::Stop
+                | Terminator::PropagateError
+                | Terminator::FinishDefinition
+                | Terminator::Unreachable => {}
+                Terminator::BeginPoll {
+                    attempt,
+                    timeout,
+                    success,
+                    ..
+                } => {
+                    verify_successor(attempt)?;
+                    verify_successor(timeout)?;
+                    verify_successor(success)?;
+                    if !matches!(
+                        blocks[timeout.0].terminator.node,
+                        Terminator::PropagateError
+                    ) {
+                        return Err(VerifyError::InvalidPoll(timeout));
+                    }
+                }
+                Terminator::RetryPoll { target, message } => {
+                    if let Some(message) = message {
+                        verify_operand(message, TempKind::Value, &kinds)?;
+                    }
+                    match target {
+                        RetryTarget::Local(owner) => {
+                            verify_successor(owner)?;
+                            if !matches!(
+                                blocks[owner.0].terminator.node,
+                                Terminator::BeginPoll { .. }
+                            ) {
+                                return Err(VerifyError::InvalidPoll(owner));
+                            }
+                        }
+                        RetryTarget::Caller if parameters.is_none() => {
+                            return Err(VerifyError::InvalidPoll(BlockId(index)));
+                        }
+                        RetryTarget::Caller => {}
+                    }
+                }
                 Terminator::ForEach {
                     list, body, exit, ..
                 }
@@ -651,6 +756,16 @@ fn verify_guard_cleanup(
                 ..
             },
         ] => definition,
+        [
+            Located {
+                node: Instruction::RunAttemptDefers,
+                ..
+            },
+            Located {
+                node: Instruction::ExitFrame,
+                ..
+            },
+        ] => true,
         _ => false,
     };
     if matches!(block.terminator.node, Terminator::PropagateError) && valid {

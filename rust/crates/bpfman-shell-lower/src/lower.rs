@@ -1,12 +1,12 @@
-use std::fmt;
+use std::{fmt, num::NonZeroU64};
 
 use crate::expr::{lower_expression, lower_expressions};
 use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
     Assertion, BindPolicy, BranchTrace, CollectMode, Command, CommandStatus, Definition,
-    Instruction, Located, LoopBindings, LoopTrace, Parameter, ParameterType, Program, Temp,
-    VerifyError,
+    Instruction, Located, LoopBindings, LoopTrace, Parameter, ParameterType, PollSchedule,
+    PollTrace, Program, Temp, VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -14,13 +14,6 @@ use bpfman_shell_syntax as syntax;
 /// A failure to lower the input into the supported IR.
 #[derive(Debug, Eq, PartialEq)]
 pub enum LowerError {
-    /// The input uses a form that has no lowering yet.
-    Unsupported {
-        /// Description of the unsupported form.
-        form: &'static str,
-        /// Extent of the source form.
-        span: Span,
-    },
     /// The generated IR failed structural verification.
     InvalidIr(VerifyError),
     /// A reserved block was left unpublished or unterminated.
@@ -38,21 +31,20 @@ pub enum LowerError {
     OutsideDefinition(Span),
     /// A status assertion is missing its command.
     MissingAssertionCommand(Span),
+    /// A retry appears outside a poll or definition.
+    OutsidePoll(Span),
 }
 
 impl fmt::Display for LowerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Unsupported { form, span } => {
-                let start = span.start();
-                write!(
-                    f,
-                    "{}:{}:{}: lowering {form} is not yet supported",
-                    start.name().as_str(),
-                    start.line(),
-                    start.column()
-                )
-            }
+            Self::OutsidePoll(span) => write!(
+                f,
+                "{}:{}:{}: retry outside any poll or helper def",
+                span.start().name().as_str(),
+                span.start().line(),
+                span.start().column()
+            ),
             Self::InvalidIr(error) => write!(f, "invalid lowered program: {error}"),
             Self::MissingAssertionCommand(span) => write!(
                 f,
@@ -96,12 +88,12 @@ impl std::error::Error for LowerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidIr(error) => Some(error),
-            Self::Unsupported { .. }
-            | Self::IncompleteLayout(_)
+            Self::IncompleteLayout(_)
             | Self::OutsideLoop { .. }
             | Self::NestedDefinition(_)
             | Self::OutsideDefinition(_)
-            | Self::MissingAssertionCommand(_) => None,
+            | Self::MissingAssertionCommand(_)
+            | Self::OutsidePoll(_) => None,
         }
     }
 }
@@ -110,7 +102,7 @@ impl std::error::Error for LowerError {
 ///
 /// # Errors
 ///
-/// Returns a source-located error for unsupported syntax or invalid IR.
+/// Returns a source-located error for invalid lowering or invalid IR.
 pub fn lower(program: &CheckedProgram) -> Result<Program, LowerError> {
     lower_body(program.span(), program.statements())
 }
@@ -120,7 +112,7 @@ pub fn lower(program: &CheckedProgram) -> Result<Program, LowerError> {
 ///
 /// # Errors
 ///
-/// Returns a source-located error for unsupported syntax or invalid IR.
+/// Returns a source-located error for invalid lowering or invalid IR.
 pub fn lower_unchecked(program: &ExpandedProgram) -> Result<Program, LowerError> {
     lower_body(program.span(), program.statements())
 }
@@ -130,6 +122,7 @@ fn lower_body(span: &Span, statements: &[syntax::Statement]) -> Result<Program, 
         layout: Layout::new(span),
         next_temp: 0,
         current_loop: None,
+        current_poll: None,
         epilogue: None,
     };
     let mut definitions = Vec::new();
@@ -169,6 +162,7 @@ fn lower_definition(
         layout,
         next_temp: parameters.len(),
         current_loop: None,
+        current_poll: None,
         epilogue: Some(epilogue),
     };
     body.emit(span, Instruction::EnterDefinitionFrame);
@@ -204,6 +198,7 @@ struct Body {
     layout: Layout,
     next_temp: usize,
     current_loop: Option<Label>,
+    current_poll: Option<Label>,
     epilogue: Option<Label>,
 }
 
@@ -251,8 +246,14 @@ impl Body {
             } => {
                 return self.foreach(span, bindings, list, body);
             }
-            S::Poll { .. } => return Err(unsupported(span, "poll")),
-            S::Retry { .. } => return Err(unsupported(span, "retry")),
+            S::Poll {
+                timeout,
+                every,
+                body,
+            } => return self.poll(span, *timeout, *every, body),
+            S::Retry { message, unless } => {
+                return self.retry(span, message.as_ref(), unless.as_ref());
+            }
             S::Assertion { mode, clause } => Instruction::Assert {
                 required: *mode == syntax::AssertionMode::Require,
                 clause: Box::new(lower_assertion(clause)?),
@@ -318,7 +319,10 @@ impl Body {
                 let success = self.layout.current();
                 let failure = self.layout.new_block(span);
                 self.layout.select(failure);
-                if self.epilogue.is_some() {
+                if self.current_poll.is_some() {
+                    self.emit(span, Instruction::RunAttemptDefers);
+                    self.emit(span, Instruction::ExitFrame);
+                } else if self.epilogue.is_some() {
                     self.emit(span, Instruction::RunDefinitionDefers);
                     self.emit(span, Instruction::ExitFrame);
                 } else {
@@ -419,6 +423,98 @@ impl Body {
         ));
         self.current_loop = outer;
         self.layout.select(exit);
+        Ok(())
+    }
+
+    fn poll(
+        &mut self,
+        span: &Span,
+        timeout: syntax::PositiveDuration,
+        every: syntax::PositiveDuration,
+        statements: &[syntax::Statement],
+    ) -> Result<(), LowerError> {
+        let owner = self.layout.current();
+        let attempt = self.layout.new_block(span);
+        let on_timeout = self.layout.new_block(span);
+        let success = self.layout.new_block(span);
+        let nanos = |duration: syntax::PositiveDuration| {
+            NonZeroU64::new(duration.as_nanos())
+                .ok_or_else(|| LowerError::IncompleteLayout(span.clone()))
+        };
+        let schedule = PollSchedule {
+            timeout: nanos(timeout)?,
+            every: nanos(every)?,
+        };
+        self.layout.terminate(located(
+            span,
+            Exit::BeginPoll {
+                schedule,
+                attempt,
+                timeout: on_timeout,
+                success,
+            },
+        ));
+        let outer = self.current_poll.replace(owner);
+        self.layout.select(attempt);
+        self.emit(span, Instruction::TracePoll(PollTrace::Attempt));
+        self.emit(span, Instruction::EnterAttemptFrame);
+        self.emit(span, Instruction::EnterAttemptDefers);
+        for statement in statements {
+            self.statement(statement)?;
+        }
+        self.emit(span, Instruction::RunAttemptDefers);
+        self.emit(span, Instruction::ExitFrame);
+        self.layout.terminate(located(span, Exit::Jump(success)));
+
+        self.current_poll = outer;
+        self.layout.select(on_timeout);
+        self.emit(span, Instruction::TracePoll(PollTrace::Timeout));
+        self.layout.terminate(located(span, Exit::PropagateError));
+        self.layout.select(success);
+        Ok(())
+    }
+
+    fn retry(
+        &mut self,
+        span: &Span,
+        message: Option<&syntax::Expression>,
+        unless: Option<&syntax::Expression>,
+    ) -> Result<(), LowerError> {
+        if self.current_poll.is_none() && self.epilogue.is_none() {
+            return Err(LowerError::OutsidePoll(span.clone()));
+        }
+        let skip = unless.map(|condition| {
+            let condition = self.eval(span, condition);
+            let on_true = self.layout.new_block(span);
+            let on_false = self.layout.new_block(span);
+            self.layout.terminate(located(
+                span,
+                Exit::Branch {
+                    condition,
+                    on_true,
+                    on_false,
+                },
+            ));
+            self.layout.select(on_false);
+            on_true
+        });
+        let message = message.map(|value| self.eval(span, value));
+        self.emit(span, Instruction::RunAttemptDefers);
+        self.emit(span, Instruction::ExitFrame);
+        self.layout.terminate(located(
+            span,
+            Exit::RetryPoll {
+                owner: self.current_poll,
+                message,
+            },
+        ));
+        let unreachable = self.layout.new_block(span);
+        self.layout.select(unreachable);
+        if let Some(skip) = skip {
+            // Go preserves the empty block left by conditional retry in its dump.
+            self.layout.terminate(located(span, Exit::Unreachable));
+            self.layout.select(skip);
+        }
         Ok(())
     }
 
@@ -560,13 +656,6 @@ impl Body {
     }
 }
 
-fn unsupported(span: &Span, form: &'static str) -> LowerError {
-    LowerError::Unsupported {
-        form,
-        span: span.clone(),
-    }
-}
-
 fn lower_bindings(span: &Span, names: &[syntax::Identifier]) -> Result<LoopBindings, LowerError> {
     LoopBindings::new(names.iter().map(|name| name.text().to_owned()).collect())
         .ok_or_else(|| LowerError::IncompleteLayout(span.clone()))
@@ -659,16 +748,15 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_entry_is_explicit_and_unsupported_forms_fail_with_spans() {
+    fn unchecked_entry_is_explicit_and_invalid_retry_fails_with_span() {
         let unknown = expand("print $missing");
         assert!(check(unknown.clone()).is_err());
         assert!(lower_unchecked(&unknown).is_ok());
 
-        let program = check(expand("print ok\npoll timeout 1s every 1s { print ok }"))
-            .unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let retry = expand("print ok\nretry");
         assert!(matches!(
-            lower(&program),
-            Err(LowerError::Unsupported { form: "poll", span }) if &span == program.statements()[1].span()
+            lower_unchecked(&retry),
+            Err(LowerError::OutsidePoll(span)) if &span == retry.statements()[1].span()
         ));
     }
 
@@ -763,6 +851,54 @@ mod tests {
         assert_eq!(
             ir.to_string(),
             include_str!("../testdata/assertions.lowered")
+        );
+    }
+
+    #[test]
+    fn full_go_language_golden_matches_after_import_expansion() {
+        let source =
+            include_str!("../../../../cmd/bpfman-shell/shell/lower/testdata/language.bpfman");
+        let library =
+            include_str!("../../../../cmd/bpfman-shell/shell/lower/testdata/language-lib.bpfman");
+        let expected =
+            include_str!("../../../../cmd/bpfman-shell/shell/lower/testdata/language.lowered");
+        let parsed =
+            parse("language.bpfman", source).unwrap_or_else(|error| unreachable!("{error}"));
+        let plan =
+            prepare_imports(parsed, Path::new(".")).unwrap_or_else(|error| unreachable!("{error}"));
+        let gathered = BTreeMap::from([(plan.requests()[0].path().to_owned(), library.to_owned())]);
+        let expanded =
+            expand_imports(plan, &gathered).unwrap_or_else(|error| unreachable!("{error}"));
+        let checked = check(expanded).unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&checked).unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(ir.to_string(), expected);
+    }
+
+    #[test]
+    fn retry_targets_the_lexical_poll_or_dynamic_caller() {
+        use bpfman_shell_ir::{BlockId, RetryTarget, Terminator};
+
+        let source =
+            "def helper() { retry \"wait\" }\npoll timeout 1m every 1.5ms { retry unless true }";
+        let program = check(expand(source)).unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+        assert!(matches!(
+            ir.definitions()[0].blocks()[0].terminator.node,
+            Terminator::RetryPoll {
+                target: RetryTarget::Caller,
+                message: Some(_)
+            }
+        ));
+        assert!(ir.blocks().iter().any(|block| matches!(
+            block.terminator.node,
+            Terminator::RetryPoll {
+                target: RetryTarget::Local(BlockId(0)),
+                message: None
+            }
+        )));
+        assert!(
+            ir.to_string()
+                .contains("BeginPoll timeout=1m0s every=1.5ms")
         );
     }
 
