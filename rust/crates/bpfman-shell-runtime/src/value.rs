@@ -92,6 +92,8 @@ pub enum EndpointSide {
 /// Which operation a network handle can authorise.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NetworkRole {
+    /// A pair with one host end and one namespaced peer.
+    HostPair,
     /// A pair can be released.
     Pair,
     /// An endpoint can run a command in its namespace.
@@ -113,6 +115,25 @@ pub struct NetworkEndpoint {
     pub namespace_id: u64,
 }
 
+/// The observed fields of the network fixture with one endpoint on the host.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostNetworkPair {
+    /// The peer's namespace.
+    pub namespace: String,
+    /// The host-side interface name.
+    pub host_link: String,
+    /// The peer-side interface name.
+    pub peer_link: String,
+    /// The host-side address.
+    pub host_address: Ipv4Addr,
+    /// The peer-side address.
+    pub peer_address: Ipv4Addr,
+    /// The host's interface index, or zero when unavailable.
+    pub host_interface_index: u32,
+    /// The host network namespace inode, or zero when unavailable.
+    pub host_namespace_id: u64,
+}
+
 /// An opaque capability and record projection for a network fixture.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkHandle {
@@ -122,6 +143,36 @@ pub struct NetworkHandle {
 }
 
 impl NetworkHandle {
+    /// Build the capability for a host and peer topology.
+    #[must_use]
+    pub fn host_pair(id: NonZeroU64, pair: HostNetworkPair) -> Self {
+        Self {
+            id,
+            role: NetworkRole::HostPair,
+            fields: BTreeMap::from([
+                ("ns".to_owned(), Value::String(pair.namespace)),
+                ("host_link".to_owned(), Value::String(pair.host_link)),
+                ("peer_link".to_owned(), Value::String(pair.peer_link)),
+                (
+                    "host_addr".to_owned(),
+                    Value::String(pair.host_address.to_string()),
+                ),
+                (
+                    "peer_addr".to_owned(),
+                    Value::String(pair.peer_address.to_string()),
+                ),
+                (
+                    "host_ifindex".to_owned(),
+                    Value::Number(Number(pair.host_interface_index.to_string())),
+                ),
+                (
+                    "host_nsid".to_owned(),
+                    Value::Number(Number(pair.host_namespace_id.to_string())),
+                ),
+            ]),
+        }
+    }
+
     /// Build a pair whose endpoints are tied to the same driver-issued lease.
     #[must_use]
     pub fn pair(id: NonZeroU64, a: NetworkEndpoint, b: NetworkEndpoint) -> Self {

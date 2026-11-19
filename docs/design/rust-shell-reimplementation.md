@@ -288,7 +288,13 @@ for rollback and writes release provenance only after teardown. The Rust
 daemon's XDP namespace round-trip and the Go daemon's TC and TCX namespace
 round-trips passed. A smoke test ran a namespace job, exchanged packets, and
 verified both namespaces were removed.
-Host-side veth pairs and policy routing remain pending.
+Host-side veth pairs accept complete explicit name and address groups or
+allocate them automatically. The shared TEST-NET-2 routing rule is installed
+only at an unoccupied preference and an existing rule must match the harness
+shape. Setup rolls back only resources it created, which protects existing
+names from being deleted on a collision. The Rust shell and Rust daemon
+passed the XDP link round-trip, TC ingress/egress independence, and TC egress
+traffic counting fixtures.
 
 ## Typestate and internal invariants
 

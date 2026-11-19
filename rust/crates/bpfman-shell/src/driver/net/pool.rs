@@ -11,13 +11,17 @@ use serde_json::{Map, Value as Json};
 
 use crate::driver::{process::Interrupt, slot_pool};
 
-use super::topology::PairNames;
-
 const POOL: &str = "/run/bpfman-net-pool";
 const SLOTS: u8 = 64;
 
+pub(super) struct ClaimNames<'a> {
+    pub namespace: &'a str,
+    pub second_namespace: Option<&'a str>,
+    pub root_link: &'a str,
+}
+
 pub(super) fn claim(
-    names: &PairNames,
+    names: ClaimNames<'_>,
     origin: String,
     interrupt: &Interrupt,
 ) -> Result<(slot_pool::Lease, [Ipv4Addr; 2]), String> {
@@ -37,16 +41,21 @@ pub(super) fn claim(
                 .previous()
                 .map_err(|error| format!("net pool: {error}"))?;
             verify_clean(slot.index, &previous)?;
-            let record = Map::from_iter([
+            let mut record = Map::from_iter([
                 ("origin".into(), Json::String(origin)),
-                ("ns_name".into(), Json::String(names.a.namespace.clone())),
-                ("ns_b_name".into(), Json::String(names.b.namespace.clone())),
-                ("link_a_name".into(), Json::String(names.a.link.clone())),
+                ("ns_name".into(), Json::String(names.namespace.to_owned())),
+                (
+                    "link_a_name".into(),
+                    Json::String(names.root_link.to_owned()),
+                ),
                 (
                     "acquired_at".into(),
                     Json::String(Timestamp::now().to_string()),
                 ),
             ]);
+            if let Some(namespace) = names.second_namespace {
+                record.insert("ns_b_name".into(), Json::String(namespace.to_owned()));
+            }
             let lease = lock
                 .claim(record)
                 .map_err(|error| format!("net pool: {error}"))?;

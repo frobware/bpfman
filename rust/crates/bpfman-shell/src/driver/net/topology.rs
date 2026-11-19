@@ -9,13 +9,15 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use bpfman_shell_runtime::NetworkEndpoint;
+use bpfman_shell_runtime::{HostNetworkPair, NetworkEndpoint};
 use serde_json::Value as Json;
 
 use crate::driver::{
     process::{self, Interrupt},
     slot_pool::Lease,
 };
+
+use super::config::Prefix;
 
 static NAME_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -31,12 +33,7 @@ pub(super) struct PairNames {
 
 impl PairNames {
     pub(super) fn isolated() -> Self {
-        let sequence = NAME_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
-        let label = format!("{}:{sequence}", std::process::id());
-        let hash = label.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
-            (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
-        });
-        let base = format!("B{:012x}N", hash & 0xffff_ffff_ffff);
+        let base = unique_base();
         let first = format!("{base}a");
         let second = format!("{base}b");
         Self {
@@ -49,6 +46,97 @@ impl PairNames {
                 link: second,
             },
         }
+    }
+}
+
+pub(super) fn unique_base() -> String {
+    let sequence = NAME_SEQUENCE
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1);
+    let label = format!("{}:{sequence}", std::process::id());
+    let hash = label.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    format!("B{:012x}N", hash & 0xffff_ffff_ffff)
+}
+
+pub(super) struct HostNames {
+    pub namespace: String,
+    pub host_link: String,
+    pub peer_link: String,
+}
+
+pub(super) struct HostPair {
+    pub names: HostNames,
+    resources: Resources,
+}
+
+impl HostPair {
+    pub(super) fn create(
+        names: HostNames,
+        lease: Option<Lease>,
+        [host, peer]: [Prefix; 2],
+        interrupt: &Interrupt,
+    ) -> Result<(Self, HostNetworkPair), String> {
+        let mut resources = Resources {
+            created: Vec::new(),
+            lease,
+        };
+        let namespace = names.namespace.as_str();
+        let host_link = names.host_link.as_str();
+        let peer_link = names.peer_link.as_str();
+        resources.create(
+            &["netns", "add", namespace],
+            Resource::Namespace(namespace.to_owned()),
+            interrupt,
+        )?;
+        resources.create(
+            &[
+                "link", "add", host_link, "type", "veth", "peer", "name", peer_link,
+            ],
+            Resource::HostLink(host_link.to_owned()),
+            interrupt,
+        )?;
+        let host_prefix = host.to_string();
+        let peer_prefix = peer.to_string();
+        for step in [
+            ["link", "set", peer_link, "netns", namespace].as_slice(),
+            &["link", "set", host_link, "up"],
+            &["addr", "add", &host_prefix, "dev", host_link],
+            &["-n", namespace, "link", "set", peer_link, "up"],
+            &[
+                "-n",
+                namespace,
+                "addr",
+                "add",
+                &peer_prefix,
+                "dev",
+                peer_link,
+            ],
+        ] {
+            require_ip(step, interrupt)?;
+        }
+        let index_path = Path::new("/sys/class/net").join(host_link).join("ifindex");
+        let index = fs::read_to_string(index_path)
+            .ok()
+            .and_then(|index| index.trim().parse().ok())
+            .unwrap_or(0);
+        let namespace_id = fs::metadata("/proc/self/ns/net").map_or(0, |metadata| metadata.ino());
+        interrupt.check()?;
+        let observed = HostNetworkPair {
+            namespace: namespace.to_owned(),
+            host_link: host_link.to_owned(),
+            peer_link: peer_link.to_owned(),
+            host_address: host.address,
+            peer_address: peer.address,
+            host_interface_index: index,
+            host_namespace_id: namespace_id,
+        };
+        Ok((Self { names, resources }, observed))
+    }
+
+    pub(super) fn release(&mut self) -> Result<(), String> {
+        self.resources.release()
     }
 }
 
