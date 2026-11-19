@@ -256,7 +256,10 @@ SIGTERM interrupt the current wait or poll and let the evaluator drain
 defers. `start` issues an opaque job handle and a driver reaper owns the
 process group and adapter files. `wait` observes and caches the exit
 envelope. Each script has one job registry, which reports and cleans up
-unmanaged jobs after defers. Job signaling and inspection, second-signal
+unmanaged jobs after defers. `kill` resolves signals through the same typed
+names used by preflight. The reaper sends signals while it still owns the
+process. `jobs` reads status without marking jobs managed, and `reap` hides
+completed jobs while existing handles retain their outcomes. Second-signal
 behavior, remaining typed builtins, and the remaining inspection modes
 are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently

@@ -11,6 +11,9 @@ use bpfman_shell_syntax::{
     parse_go_duration,
 };
 
+mod job;
+pub use job::JobSignal;
+
 /// Check a literal argument against one annotated definition parameter.
 /// Computed values remain runtime checked.
 #[must_use]
@@ -54,12 +57,7 @@ pub fn kill_flag_issue(argument: &Expression) -> Option<String> {
         _ => return None,
     };
     if let Some(name) = text.strip_prefix("--signal=") {
-        let normalized = name.trim().to_ascii_uppercase();
-        let normalized = normalized.strip_prefix("SIG").unwrap_or(&normalized);
-        if !matches!(
-            normalized,
-            "TERM" | "KILL" | "INT" | "QUIT" | "HUP" | "USR1" | "USR2" | "STOP" | "CONT"
-        ) {
+        if JobSignal::parse(name).is_none() {
             return Some(format!("kill --signal: unknown signal {name:?}"));
         }
     } else if let Some(duration) = text.strip_prefix("--grace=") {

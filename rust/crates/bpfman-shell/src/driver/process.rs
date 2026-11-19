@@ -14,6 +14,7 @@ use std::{
 };
 
 use bpfman_shell_runtime::{CommandResponse, Value};
+use bpfman_shell_semantics::JobSignal;
 use rustix::process::{Pid, Signal, kill_process_group};
 use signal_hook::{
     SigId,
@@ -93,7 +94,7 @@ pub(super) fn response(output: Output) -> CommandResponse {
         exit_code: u8::try_from(code).unwrap_or(1),
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        signal: signal.map(|value| value.to_string()),
+        signal: signal.map(signal_name),
         ..CommandResponse::success(Value::Absent)
     }
 }
@@ -130,6 +131,17 @@ impl CapturedChild {
             .and_then(|child| NonZeroU32::new(child.id()))
     }
 
+    pub(super) fn signal(&self, signal: JobSignal) -> Result<bool, String> {
+        let Some(pid) = self.group.pid() else {
+            return Ok(false);
+        };
+        match kill_process_group(pid, syscall_signal(signal)) {
+            Ok(()) => Ok(true),
+            Err(rustix::io::Errno::SRCH) => Ok(false),
+            Err(error) => Err(format!("kill process group {pid}: {error}")),
+        }
+    }
+
     pub(super) fn try_output(&mut self) -> io::Result<Option<Output>> {
         let Some(status) = self.group.try_wait()? else {
             return Ok(None);
@@ -153,6 +165,11 @@ fn read_capture(file: &NamedTempFile) -> io::Result<Vec<u8>> {
 struct Group(Option<Child>);
 
 impl Group {
+    fn pid(&self) -> Option<Pid> {
+        let child = self.0.as_ref()?;
+        i32::try_from(child.id()).ok().and_then(Pid::from_raw)
+    }
+
     fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         let child = self
             .0
@@ -168,14 +185,36 @@ impl Group {
 
 impl Drop for Group {
     fn drop(&mut self) {
+        let pid = self.pid();
         let Some(child) = self.0.as_mut() else {
             return;
         };
-        if let Some(pid) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) {
+        if let Some(pid) = pid {
             let _ = kill_process_group(pid, Signal::KILL);
         } else {
             let _ = child.kill();
         }
         let _ = child.wait();
     }
+}
+
+fn syscall_signal(signal: JobSignal) -> Signal {
+    match signal {
+        JobSignal::Term => Signal::TERM,
+        JobSignal::Kill => Signal::KILL,
+        JobSignal::Int => Signal::INT,
+        JobSignal::Quit => Signal::QUIT,
+        JobSignal::Hup => Signal::HUP,
+        JobSignal::Usr1 => Signal::USR1,
+        JobSignal::Usr2 => Signal::USR2,
+        JobSignal::Stop => Signal::STOP,
+        JobSignal::Cont => Signal::CONT,
+    }
+}
+
+fn signal_name(raw: i32) -> String {
+    JobSignal::ALL
+        .into_iter()
+        .find(|signal| syscall_signal(*signal).as_raw() == raw)
+        .map_or_else(|| raw.to_string(), |signal| signal.name().to_owned())
 }

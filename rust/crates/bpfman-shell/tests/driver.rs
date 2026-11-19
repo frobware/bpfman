@@ -111,6 +111,51 @@ fn script_exit_cleans_up_an_unmanaged_background_job() -> io::Result<()> {
 }
 
 #[test]
+fn termination_and_reap_preserve_the_job_outcome() -> io::Result<()> {
+    let output = run(
+        &[],
+        r#"
+guard worker <- start sleep 30
+let before <- jobs
+assert contains $before.stdout running
+kill --signal=sigstop $worker
+let paused <- jobs
+assert contains $paused.stdout killing
+kill --signal=CONT $worker
+kill --grace=0 $worker
+let after <- jobs
+assert contains $after.stdout "killed KILL"
+reap
+let remaining <- jobs
+assert $remaining.stdout == ""
+let result <- wait $worker
+assert $result.killed
+assert $result.signal == KILL
+print done
+"#,
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"done\n");
+    Ok(())
+}
+
+#[test]
+fn deferred_kill_manages_the_job_after_an_error() -> io::Result<()> {
+    let output = run(
+        &[],
+        "guard worker <- start sleep 30\ndefer kill $worker\nprint $worker.pid\nrequire false",
+    )?;
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("require failed"), "{output:?}");
+    assert!(!stderr.contains("unmanaged job"), "{output:?}");
+    let pid = String::from_utf8_lossy(&output.stdout);
+    assert!(!pid.trim().is_empty(), "{output:?}");
+    assert!(!std::path::Path::new("/proc").join(pid.trim()).exists());
+    Ok(())
+}
+
+#[test]
 fn embedded_jq_preserves_precision_result_stream_and_argument_origin() -> io::Result<()> {
     let output = run(
         &[],

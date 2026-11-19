@@ -83,10 +83,29 @@ fn dispatch(
         return bpfman::invoke(request.arguments, interrupt);
     }
     if head == "start" {
-        return jobs.start(&request.arguments);
+        let position = request.span.start();
+        let origin = format!(
+            "{}:{}:{}",
+            position.name().as_str(),
+            position.line(),
+            position.column()
+        );
+        return jobs.start(&request.arguments, origin);
     }
     if head == "wait" {
         return jobs.wait(&request.arguments, interrupt);
+    }
+    if head == "kill" {
+        return jobs.kill(&request.arguments, interrupt);
+    }
+    if matches!(head.as_str(), "jobs" | "reap") && !request.arguments.is_empty() {
+        return Err(format!("{head} takes no arguments"));
+    }
+    if head == "jobs" {
+        return jobs.list((request.lane == DispatchLane::Command).then_some(stdout));
+    }
+    if head == "reap" {
+        return jobs.reap();
     }
     if head == "jq" {
         let [filter, input] = <[Argument; 2]>::try_from(request.arguments)
@@ -173,16 +192,13 @@ fn dispatch(
             "defs"
                 | "fire"
                 | "import"
-                | "jobs"
                 | "kfunc"
-                | "kill"
                 | "linkinfo"
                 | "lsm"
                 | "net"
                 | "process"
                 | "proginfo"
                 | "range"
-                | "reap"
                 | "registry"
                 | "trace"
                 | "u32le"
