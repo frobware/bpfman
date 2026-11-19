@@ -30,12 +30,8 @@ import (
 
 // TestBPFManScripts discovers every .bpfman script under
 // e2e/scripts/ and runs each one as a subtest by invoking
-// bpfman-shell from PATH. The caller is responsible for
-// putting bpfman-shell on PATH; the test does no binary
-// discovery or PATH manipulation. Under sudo this means the
-// invocation has to bypass secure_path itself (the make recipe
-// uses `sudo env PATH=...`; a developer invoking the binary
-// directly should arrange their PATH similarly).
+// the shell selected by BPFMAN_SHELL_BIN, defaulting to
+// bpfman-shell from PATH for direct invocations.
 //
 // The package's TestMain already enforces root and takes the
 // suite-wide flock, so each subtest just runs the script
@@ -587,7 +583,11 @@ func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration,
 		defer stop()
 	}
 
-	cmd := exec.CommandContext(ctx, "bpfman-shell", script)
+	shell := os.Getenv("BPFMAN_SHELL_BIN")
+	if shell == "" {
+		shell = "bpfman-shell"
+	}
+	cmd := exec.CommandContext(ctx, shell, script)
 	// Script paths inside the corpus reference testdata
 	// relative to e2e/, so the child has to run with cwd at
 	// the package dir regardless of where the test binary was

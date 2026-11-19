@@ -960,6 +960,7 @@ E2E_SCRIPTS_TEST_BIN := $(BIN_DIR)/e2e-scripts.test
 # Both the typed shell builtin and raw `exec bpfman` must reach this binary.
 # Use a path to an executable named bpfman, not a command with arguments.
 BPFMAN_UNDER_TEST ?= $(BIN_DIR)/bpfman
+BPFMAN_SHELL_UNDER_TEST ?= $(BIN_DIR)/bpfman-shell
 # Explicit identity for rust-only script admission; never infer it from a path.
 BPFMAN_E2E_IMPLEMENTATION ?= go
 E2E_SCRIPTS_TEST_PKG := github.com/bpfman/bpfman/e2e/scriptrunner
@@ -1046,20 +1047,18 @@ bpfman-shell-fmt: bpfman-shell-compile
 .PHONY: build-e2e-scripts
 build-e2e-scripts: bpfman-compile bpfman-shell-compile $(E2E_SCRIPTS_TEST_BIN) $(BIN_DIR)/xdp-delivery-probe
 
-# PATH is arranged via `sudo env PATH=...` so the script test
-# binary can resolve bpfman-shell regardless of how sudo's
-# secure_path is configured on the host. Using `env` as the
-# sudo'd program means the PATH assignment is an ordinary exec-
-# time setting rather than a sudo env passthrough, so it works
-# under any sudoers configuration. The test process trusts
-# whatever PATH it inherits; no in-code path manipulation.
+# Select the shell independently of the daemon. PATH puts the daemon
+# first for raw script commands, while the runner invokes the shell by
+# its absolute path.
 .PHONY: run-e2e-scripts
 run-e2e-scripts:
 	@test "$(BPFMAN_E2E_IMPLEMENTATION)" = go -o "$(BPFMAN_E2E_IMPLEMENTATION)" = rust || { echo "BPFMAN_E2E_IMPLEMENTATION must be go or rust" >&2; exit 1; }
 	@test "$(notdir $(BPFMAN_UNDER_TEST))" = bpfman || { echo "BPFMAN_UNDER_TEST must name an executable called bpfman" >&2; exit 1; }
 	@test -x "$(abspath $(BPFMAN_UNDER_TEST))" || { echo "BPFMAN_UNDER_TEST is not executable: $(abspath $(BPFMAN_UNDER_TEST))" >&2; exit 1; }
+	@test -x "$(abspath $(BPFMAN_SHELL_UNDER_TEST))" || { echo "BPFMAN_SHELL_UNDER_TEST is not executable: $(abspath $(BPFMAN_SHELL_UNDER_TEST))" >&2; exit 1; }
 	sudo env PATH="$(patsubst %/,%,$(dir $(abspath $(BPFMAN_UNDER_TEST)))):$(abspath $(BIN_DIR)):$$PATH" \
 	    BPFMAN_BIN="$(abspath $(BPFMAN_UNDER_TEST))" \
+	    BPFMAN_SHELL_BIN="$(abspath $(BPFMAN_SHELL_UNDER_TEST))" \
 	    BPFMAN_E2E_DIR=$(abspath e2e) \
 	    BPFMAN_LOCK_TIMEOUT=$(if $(BPFMAN_LOCK_TIMEOUT),$(BPFMAN_LOCK_TIMEOUT),5m) \
 	    $(call forward-env,$(E2E_SCRIPTS_FORWARD_VARS)) \

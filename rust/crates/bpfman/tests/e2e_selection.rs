@@ -36,7 +36,8 @@ impl Fixture {
         executable(&tools.join("sudo"), "exec \"$@\"\n")?;
         executable(&go.join("bpfman"), "echo go\n")?;
         executable(&rust.join("bpfman"), "echo rust\n")?;
-        executable(&go.join("e2e-scripts.test"), "exec bpfman-shell\n")?;
+        executable(&go.join("e2e-scripts.test"), "exec \"$BPFMAN_SHELL_BIN\"\n")?;
+        executable(&rust.join("bpfman-shell"), "exit 99\n")?;
         executable(
             &go.join("bpfman-shell"),
             "\"$BPFMAN_BIN\"\nbpfman\nsh -c 'exec bpfman'\n",
@@ -67,6 +68,7 @@ impl Fixture {
             .arg(format!("BIN_DIR={}", self.go.display()))
             .env("BPFMAN_BIN", self.go.join("bpfman"))
             .env_remove("BPFMAN_UNDER_TEST")
+            .env_remove("BPFMAN_SHELL_UNDER_TEST")
             .env_remove("BPFMAN_E2E_IMPLEMENTATION")
             .env_remove("E2E_SCRIPTS_TEST_BIN");
         let path = std::env::var_os("PATH").unwrap_or_default();

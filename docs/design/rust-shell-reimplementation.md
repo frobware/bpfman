@@ -235,7 +235,9 @@ as in Go. The interpreter alone admits the pure arithmetic closure
 MIT or Apache-2.0. Cross-call retry,
 match and call evaluation, typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
-still uses the Go shell.
+still uses the Go shell. The Make runner now selects the shell independently
+via `BPFMAN_SHELL_UNDER_TEST` because the Rust daemon's directory can also
+contain the Rust shell. The selected daemon still comes first on script PATH.
 
 ## Typestate and internal invariants
 
