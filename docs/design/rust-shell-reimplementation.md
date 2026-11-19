@@ -217,9 +217,12 @@ their exact text and the interpreter shares syntax's pure JSON-number
 classifier. Unit tests drive the machine without processes or a clock and
 check LIFO capture and guard-failure cleanup. Ordinary and collecting loops
 now execute through the same iterator state, with lexical frame unwinding,
-destructuring, and partial collection publication on break. Definition
-execution, most expression evaluation, polling, and the effectful driver are
-pending.
+destructuring, and partial collection publication on break. Definition calls
+resolve before driver dispatch, bind typed parameters, and run with their
+own temporary slots and defer boundary. Tests exercise nested returns,
+both cleanup scopes, and an error in a deferred definition while another
+error is already active. Most expression evaluation, polling, and the
+effectful driver are pending.
 
 ## Typestate and internal invariants
 

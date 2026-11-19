@@ -5,6 +5,7 @@ use bpfman_shell_source::Span;
 
 use crate::{Argument, Number, Value};
 
+mod calls;
 mod loops;
 
 /// A suspended interpreter step or its final result.
@@ -105,13 +106,13 @@ impl<'a> CommandContinuation<'a> {
                 CommandPurpose::Bind(dst) => self.machine.put(dst, Slot::Result(response)),
                 CommandPurpose::Cleanup => {
                     if response.exit_code != 0 {
-                        self.machine.exit_code = 1;
+                        self.machine.cleanup_failed();
                     }
                 }
             },
             Err(message) => {
                 if matches!(self.purpose, CommandPurpose::Cleanup) {
-                    self.machine.exit_code = 1;
+                    self.machine.cleanup_failed();
                 } else {
                     self.machine.error(&self.span, message);
                 }
@@ -164,12 +165,6 @@ impl std::error::Error for ExecutionError {}
 
 /// Start the verified program using an explicit initial environment.
 pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> {
-    if let Some(definition) = program.definitions().first() {
-        return Step::Failed(ExecutionError {
-            span: definition.span().clone(),
-            message: "definition execution is not yet implemented".to_owned(),
-        });
-    }
     Machine {
         program,
         block: program.entry(),
@@ -178,7 +173,11 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         frames: vec![bindings],
         loops: Vec::new(),
         deferred: Vec::new(),
-        draining: false,
+        draining: None,
+        unit: None,
+        callers: Vec::new(),
+        returned: Value::Absent,
+        local_cleanup_failed: false,
         failure: None,
         exit_code: 0,
     }
@@ -222,7 +221,11 @@ struct Machine<'a> {
     frames: Vec<HashMap<String, Value>>,
     loops: Vec<loops::Iteration>,
     deferred: Vec<(Argv, Span)>,
-    draining: bool,
+    draining: Option<usize>,
+    unit: Option<usize>,
+    callers: Vec<calls::Caller>,
+    returned: Value,
+    local_cleanup_failed: bool,
     failure: Option<ExecutionError>,
     exit_code: u8,
 }
@@ -237,20 +240,32 @@ enum Action {
 impl<'a> Machine<'a> {
     fn advance(mut self) -> Step<'a> {
         loop {
-            if self.draining {
-                if let Some((argv, span)) = self.deferred.pop() {
-                    return self.suspend_command(
-                        argv.request(DispatchLane::Deferred, span),
-                        CommandPurpose::Cleanup,
-                    );
+            if let Some(base) = self.draining {
+                if self.deferred.len() > base {
+                    if let Some((argv, span)) = self.deferred.pop() {
+                        let request = argv.request(DispatchLane::Deferred, span);
+                        match self.start_definition(&request, CommandPurpose::Cleanup) {
+                            Ok(Some(purpose)) => return self.suspend_command(request, purpose),
+                            Ok(None) => {}
+                            Err(_) => self.cleanup_failed(),
+                        }
+                        continue;
+                    }
                 }
-                self.draining = false;
+                self.draining = None;
                 if let Some(failure) = self.failure.take() {
-                    return Step::Failed(failure);
+                    if let Err(failure) = self.unwind_failed_definition(failure) {
+                        return Step::Failed(failure);
+                    }
+                    continue;
                 }
             }
 
-            let block = &self.program.blocks()[self.block.0];
+            let blocks = self.unit.map_or_else(
+                || self.program.blocks(),
+                |index| self.program.definitions()[index].blocks(),
+            );
+            let block = &blocks[self.block.0];
             let (action, span) = if let Some(instruction) = block.instructions.get(self.offset) {
                 self.offset += 1;
                 (self.instruction(instruction), &instruction.span)
@@ -268,7 +283,11 @@ impl<'a> Machine<'a> {
                     };
                 }
                 Ok(Action::Command(request, purpose)) => {
-                    return self.suspend_command(request, purpose);
+                    match self.start_definition(&request, purpose) {
+                        Ok(Some(purpose)) => return self.suspend_command(request, purpose),
+                        Ok(None) => {}
+                        Err(message) => self.error(&request.span, message),
+                    }
                 }
                 Ok(Action::Output(request)) => {
                     let span = request.span.clone();
@@ -290,7 +309,7 @@ impl<'a> Machine<'a> {
             span: span.clone(),
             message,
         });
-        self.draining = true;
+        self.draining = Some(self.callers.last().map_or(0, |caller| caller.deferred_base));
     }
 
     fn suspend_command(self, request: CommandRequest, purpose: CommandPurpose) -> Step<'a> {
@@ -337,14 +356,20 @@ impl<'a> Machine<'a> {
             Instruction::EnterProgramDefers
             | Instruction::TraceBranch(_)
             | Instruction::TraceLoop(_) => {}
-            Instruction::EnterIfFrame => self.frames.push(HashMap::new()),
+            Instruction::EnterIfFrame | Instruction::EnterDefinitionFrame => {
+                self.frames.push(HashMap::new())
+            }
+            Instruction::EnterDefinitionDefers => {}
             Instruction::ExitFrame => {
                 if self.frames.len() <= 1 {
                     return Err("cannot leave the program frame".to_owned());
                 }
                 self.frames.pop();
             }
-            Instruction::RunProgramDefers => self.draining = true,
+            Instruction::RunProgramDefers => self.draining = Some(0),
+            Instruction::RunDefinitionDefers => {
+                self.draining = self.callers.last().map(|caller| caller.deferred_base);
+            }
             Instruction::Eval { dst, expression } => {
                 self.put(*dst, Slot::Value(self.eval(expression)?));
             }
@@ -449,6 +474,17 @@ impl<'a> Machine<'a> {
                 };
                 self.jump(if *value { on_true } else { on_false });
             }
+            Terminator::ReturnValue { src, epilogue } => {
+                self.returned = self.value(src)?.clone();
+                let caller = self
+                    .callers
+                    .last()
+                    .ok_or("return has no definition caller")?;
+                self.frames.truncate(caller.frame_depth + 1);
+                self.loops.clear();
+                self.jump(epilogue);
+            }
+            Terminator::FinishDefinition => self.finish_definition()?,
             Terminator::PropagateError => return Err("missing active error".to_owned()),
             Terminator::ForEach {
                 list,
@@ -726,5 +762,72 @@ mod tests {
             continuation.resume(result(0, Value::Absent)),
             Step::Finished { exit_code: 0 }
         ));
+    }
+
+    #[test]
+    fn hoisted_definition_returns_to_its_caller_after_local_defers() {
+        let program = program(
+            "defer echo global\nguard n <- helper 7\nprint $n\ndef helper(arg: number) { defer echo local\n foreach n in [1] { return $arg } }",
+        );
+        let Step::Command {
+            request,
+            continuation,
+        } = execute(&program, HashMap::new())
+        else {
+            unreachable!("expected definition-local defer");
+        };
+        assert_eq!(request.lane, DispatchLane::Deferred);
+        assert_eq!(request.arguments, [Argument::Word("local".to_owned())]);
+        let Step::Command {
+            request,
+            continuation,
+        } = continuation.resume(result(0, Value::Absent))
+        else {
+            unreachable!("expected caller command");
+        };
+        assert_eq!(request.head, Argument::Word("print".to_owned()));
+        let [Argument::Value(Value::Number(number))] = request.arguments.as_slice() else {
+            unreachable!("expected numeric return");
+        };
+        assert_eq!(number.as_str(), "7");
+        let Step::Command {
+            request,
+            continuation,
+        } = continuation.resume(result(0, Value::Absent))
+        else {
+            unreachable!("expected program defer");
+        };
+        assert_eq!(request.arguments, [Argument::Word("global".to_owned())]);
+        assert!(matches!(
+            continuation.resume(result(0, Value::Absent)),
+            Step::Finished { exit_code: 0 }
+        ));
+    }
+
+    #[test]
+    fn failed_deferred_definition_preserves_the_original_error_and_other_defers() {
+        let program = program(
+            "def cleanup() { guard _ <- exec false }\ndefer echo last\ndefer cleanup\nguard _ <- exec false",
+        );
+        let Step::Command { continuation, .. } = execute(&program, HashMap::new()) else {
+            unreachable!("expected main guard");
+        };
+        let Step::Command { continuation, .. } = continuation.resume(result(7, Value::Absent))
+        else {
+            unreachable!("expected deferred definition guard");
+        };
+        let Step::Command {
+            request,
+            continuation,
+        } = continuation.resume(result(9, Value::Absent))
+        else {
+            unreachable!("expected remaining program defer");
+        };
+        assert_eq!(request.arguments, [Argument::Word("last".to_owned())]);
+        let Step::Failed(error) = continuation.resume(result(0, Value::Absent)) else {
+            unreachable!("expected failure");
+        };
+        assert!(error.message.contains("exit 7"));
+        assert_eq!(error.span.start().line(), 4);
     }
 }
