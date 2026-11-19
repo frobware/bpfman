@@ -130,72 +130,80 @@ impl From<SyntaxError> for ImportError {
 /// Validate all import sites and return paths to gather at the driver edge.
 /// Relative main-file imports use that file's directory; stdin uses `base_dir`.
 pub fn prepare_imports(main: ParsedProgram, base_dir: &Path) -> Result<ImportPlan, ImportError> {
-    let mut requests = Vec::new();
+    let requests = direct_imports(&main, base_dir)
+        .into_iter()
+        .collect::<Result<_, _>>()?;
+    Ok(ImportPlan { main, requests })
+}
+
+/// Plan direct imports independently at each statement, retaining site errors
+/// so an editor can inspect valid imports even when another one is broken.
+#[must_use]
+pub fn direct_imports(
+    main: &ParsedProgram,
+    base_dir: &Path,
+) -> Vec<Result<ImportRequest, ImportError>> {
+    let mut output = Vec::new();
     for (index, statement) in main.statements().iter().enumerate() {
-        visit_imports(
+        let mut requests = Vec::new();
+        match visit_imports(
             statement,
             0,
             index,
             main.source().as_str(),
             base_dir,
             &mut requests,
-        )?;
+        ) {
+            Ok(()) => output.extend(requests.into_iter().map(Ok)),
+            Err(error) => output.push(Err(error)),
+        }
     }
-    Ok(ImportPlan { main, requests })
+    output
 }
 
-/// Parse supplied library text and splice definitions in source order.
-///
-/// `gathered` is keyed by the exact paths returned from `ImportPlan::requests`.
-/// It is read only; this function never accesses the filesystem. Missing bytes,
-/// invalid library syntax, non-definition statements, and duplicate visible
-/// definitions stop expansion before an expanded program is produced.
-pub fn expand_imports(
-    plan: ImportPlan,
-    gathered: &BTreeMap<PathBuf, String>,
-) -> Result<ExpandedProgram, ImportError> {
-    let mut definitions = HashMap::<String, Span>::new();
-    for statement in plan.main.statements() {
-        if let StatementKind::Definition(definition) = statement.kind() {
-            definitions
-                .entry(definition.name().text().to_owned())
-                .or_insert_with(|| definition.name().span().clone());
-        }
-    }
-    let mut out = Vec::new();
-    let mut requests = plan.requests.iter().peekable();
-    for (index, statement) in plan.main.statements().iter().enumerate() {
-        let Some(request) = requests
-            .peek()
-            .filter(|request| request.statement_index == index)
-        else {
-            out.push(statement.clone());
-            continue;
-        };
-        let request = *request;
-        requests.next();
-        let Some(text) = gathered.get(&request.path) else {
-            return Err(ImportError::new(
-                &request.span,
-                format!("import source was not gathered: {}", request.path.display()),
-            ));
-        };
-        let library = parse(request.path.to_string_lossy().into_owned(), text)?;
-        for statement in library.statements() {
-            if !matches!(statement.kind(), StatementKind::Definition(_)) {
-                return Err(ImportError::new(
-                    statement.span(),
-                    "imported files may contain only top-level def statements",
-                ));
+/// Tracks visible top-level definitions while validating direct library inputs.
+pub struct ImportDefinitions {
+    visible: HashMap<String, Span>,
+}
+
+impl ImportDefinitions {
+    /// Start with the declarations already hoisted from the main file.
+    #[must_use]
+    pub fn new(main: &ParsedProgram) -> Self {
+        let mut visible = HashMap::new();
+        for statement in main.statements() {
+            if let StatementKind::Definition(definition) = statement.kind() {
+                visible
+                    .entry(definition.name().text().to_owned())
+                    .or_insert_with(|| definition.name().span().clone());
             }
         }
+        Self { visible }
+    }
+
+    /// Validate supplied library text and add its declarations atomically.
+    pub fn add(
+        &mut self,
+        request: &ImportRequest,
+        text: &str,
+    ) -> Result<ParsedProgram, ImportError> {
+        let library = parse(request.path.to_string_lossy().into_owned(), text)?;
+        let declarations = library
+            .statements()
+            .iter()
+            .map(|statement| match statement.kind() {
+                StatementKind::Definition(definition) => Ok(definition),
+                _ => Err(ImportError::new(
+                    statement.span(),
+                    "imported files may contain only top-level def statements",
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let mut local_definitions = HashMap::<String, Span>::new();
-        for statement in library.statements() {
-            let StatementKind::Definition(definition) = statement.kind() else {
-                unreachable!()
-            };
+        for definition in declarations {
             let name = definition.name();
-            if let Some(previous) = definitions
+            if let Some(previous) = self
+                .visible
                 .get(name.text())
                 .or_else(|| local_definitions.get(name.text()))
             {
@@ -215,10 +223,42 @@ pub fn expand_imports(
         if let Some(issue) = analyze_scopes(&library).into_iter().next() {
             return Err(ImportError::new(&issue.span, issue.message));
         }
-        definitions.extend(local_definitions);
-        for statement in library.statements() {
+        self.visible.extend(local_definitions);
+        Ok(library)
+    }
+}
+
+/// Parse supplied library text and splice definitions in source order.
+///
+/// `gathered` is keyed by the exact paths returned from `ImportPlan::requests`.
+/// It is read only; this function never accesses the filesystem. Missing bytes,
+/// invalid library syntax, non-definition statements, and duplicate visible
+/// definitions stop expansion before an expanded program is produced.
+pub fn expand_imports(
+    plan: ImportPlan,
+    gathered: &BTreeMap<PathBuf, String>,
+) -> Result<ExpandedProgram, ImportError> {
+    let mut definitions = ImportDefinitions::new(&plan.main);
+    let mut out = Vec::new();
+    let mut requests = plan.requests.iter().peekable();
+    for (index, statement) in plan.main.statements().iter().enumerate() {
+        let Some(request) = requests
+            .peek()
+            .filter(|request| request.statement_index == index)
+        else {
             out.push(statement.clone());
-        }
+            continue;
+        };
+        let request = *request;
+        requests.next();
+        let Some(text) = gathered.get(&request.path) else {
+            return Err(ImportError::new(
+                &request.span,
+                format!("import source was not gathered: {}", request.path.display()),
+            ));
+        };
+        let library = definitions.add(request, text)?;
+        out.extend(library.statements().iter().cloned());
     }
     Ok(ExpandedProgram {
         source: plan.main.source().clone(),

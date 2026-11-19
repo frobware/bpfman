@@ -329,6 +329,40 @@ fn inspection_never_dispatches_and_execution_drives_external_commands() -> io::R
 }
 
 #[test]
+fn symbols_keep_valid_imports_and_local_bindings_when_an_import_is_missing() -> io::Result<()> {
+    let directory = tempfile::tempdir()?;
+    let main = directory.path().join("main.bpfman");
+    let library = directory.path().join("lib.bpfman");
+    fs::write(
+        &main,
+        "import ./absent.bpfman\nimport ./lib.bpfman\nlet local = 1\n",
+    )?;
+    fs::write(&library, "def imported(x) {\n    return $x\n}\n")?;
+    let result = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"))
+        .arg("--symbols")
+        .arg(&main)
+        .output()?;
+    assert!(result.status.success(), "{result:?}");
+    let document: serde_json::Value = serde_json::from_slice(&result.stdout)?;
+    assert_eq!(document["version"], 1);
+    assert_eq!(document["symbols"][0]["name"], "local");
+    assert_eq!(document["symbols"][1]["name"], "imported");
+    assert_eq!(
+        document["symbols"][1]["def"]["file"],
+        library.display().to_string()
+    );
+    assert_eq!(document["symbols"][1]["scope"]["end"]["line"], 3);
+    assert_eq!(document["errors"][0]["line"], 1);
+    assert_eq!(document["errors"][0]["col"], 8);
+    assert!(
+        document["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("absent.bpfman"))
+    );
+    Ok(())
+}
+
+#[test]
 fn assertions_use_stderr_continue_and_require_stops_after_cleanup() -> io::Result<()> {
     let source = "let r = record { nested: record { n: 2 } }\nassert $r matches exhaustive { nested: matches { n: 2 } }\nassert false\nassert fail exec false\nprint continued\nrequire false\nprint unreachable";
     let output = run(&[], source)?;

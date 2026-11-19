@@ -18,6 +18,7 @@ mod compound;
 mod duration;
 mod expr;
 mod parse;
+mod symbols;
 mod token;
 
 pub use ast::{
@@ -29,6 +30,7 @@ pub use ast::{
 pub use duration::{PositiveDuration, parse_go_duration};
 pub use expr::is_json_number;
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};
+pub use symbols::{Symbol, SymbolKind, program_scope, symbols};
 
 pub use token::{
     Interpolation, LexError, Segment, Token, TokenKind, VariableRef, tokenise, tokenise_at,

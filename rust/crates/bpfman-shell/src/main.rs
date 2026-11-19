@@ -10,11 +10,12 @@ use std::{
 
 use bpfman_shell_check::{ExpandedProgram, check, expand_imports, prepare_imports};
 use bpfman_shell_lower::{lower, lower_unchecked};
-use bpfman_shell_syntax::parse;
+use bpfman_shell_syntax::{ParsedProgram, parse};
 use clap::Parser;
 
 mod driver;
 mod fixturemode;
+mod symbols;
 
 #[derive(Parser)]
 #[command(version, about, max_term_width = 80)]
@@ -31,6 +32,9 @@ struct Options {
     /// Print the lowered IR without executing.
     #[arg(long)]
     lowered: bool,
+    /// Print the parsed program's editor symbol table as JSON.
+    #[arg(long, conflicts_with_all = ["check", "no_check", "lowered"])]
+    symbols: bool,
     /// Script paths. With no paths or a single dash, read stdin.
     scripts: Vec<PathBuf>,
 }
@@ -76,7 +80,20 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
     let mut status = 0;
     let mut registry = driver::ImageRegistry::default();
     for path in scripts {
-        let program = gather(&cwd, &path)?;
+        let (name, source, base) = read_source(&cwd, &path)?;
+        if options.symbols && source.trim().is_empty() {
+            return Ok(0);
+        }
+        let parsed = parse(name, &source).map_err(|error| error.to_string())?;
+        if options.symbols {
+            symbols::write(
+                &parsed,
+                (path != Path::new("-")).then_some(base.as_path()),
+                stdout,
+            )?;
+            return Ok(0);
+        }
+        let program = gather(parsed, &base)?;
         let ir = if options.no_check {
             lower_unchecked(&program)
         } else {
@@ -103,23 +120,25 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
     Ok(status)
 }
 
-fn gather(cwd: &Path, path: &Path) -> Result<ExpandedProgram, String> {
-    let (name, source, base) = if path == Path::new("-") {
+fn read_source(cwd: &Path, path: &Path) -> Result<(String, String, PathBuf), String> {
+    if path == Path::new("-") {
         let mut source = String::new();
         io::stdin()
             .lock()
             .read_to_string(&mut source)
             .map_err(|error| format!("<stdin>: {error}"))?;
-        ("<stdin>".to_owned(), source, cwd.to_path_buf())
+        Ok(("<stdin>".to_owned(), source, cwd.to_path_buf()))
     } else {
         let full = cwd.join(path);
         let source =
             fs::read_to_string(&full).map_err(|error| format!("{}: {error}", path.display()))?;
         let base = full.parent().unwrap_or(cwd).to_path_buf();
-        (path.display().to_string(), source, base)
-    };
-    let parsed = parse(name, &source).map_err(|error| error.to_string())?;
-    let plan = prepare_imports(parsed, &base).map_err(|error| error.to_string())?;
+        Ok((path.display().to_string(), source, base))
+    }
+}
+
+fn gather(parsed: ParsedProgram, base: &Path) -> Result<ExpandedProgram, String> {
+    let plan = prepare_imports(parsed, base).map_err(|error| error.to_string())?;
     let mut gathered = BTreeMap::new();
     for request in plan.requests() {
         if !gathered.contains_key(request.path()) {

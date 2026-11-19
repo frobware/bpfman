@@ -323,6 +323,18 @@ process-owned loopback registry. Build, inspect, load and attach passed with
 both backends against the Go daemon. A regression test checks that a digest
 mismatch leaves the upload available for retry.
 
+The isolated file-mode matrix passed for all four shell and daemon
+combinations. With the Go daemon, each shell passed 158 fixture entries
+under `!external`. With the Rust daemon, each passed 170 under
+`rust=ok,!external`. External-image scenarios and the CLI behavior fixtures
+are still outside that result.
+
+`--symbols` reports local bindings and direct imported definitions without
+executing the program. Syntax owns the binding walk, and editor mode shares
+the checker's import validation. A missing import is reported in the JSON
+while valid imports and local symbols remain available. The stdin JSON was
+compared byte for byte with the Go shell.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and

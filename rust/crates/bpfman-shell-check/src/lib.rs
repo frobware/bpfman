@@ -20,7 +20,8 @@ mod shapes;
 
 pub use calls::analyze_calls;
 pub use imports::{
-    ExpandedProgram, ImportError, ImportPlan, ImportRequest, expand_imports, prepare_imports,
+    ExpandedProgram, ImportDefinitions, ImportError, ImportPlan, ImportRequest, direct_imports,
+    expand_imports, prepare_imports,
 };
 pub use jobs::analyze_jobs;
 pub use preflight::{CheckedProgram, check};
