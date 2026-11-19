@@ -48,6 +48,26 @@ func TestJQ_IdentityOnJSONNumber(t *testing.T) {
 	assert.Equal(t, "42", s)
 }
 
+func TestJQ_ExactLargeIntegerResult(t *testing.T) {
+	t.Parallel()
+
+	args := []runtime.Arg{
+		runtime.QuotedArg{Text: ". * ."},
+		runtime.WordArg{Text: "100000000000000000000"},
+	}
+	const want = "10000000000000000000000000000000000000000"
+	v, err := jqCall(t, args)
+	require.NoError(t, err)
+	scalar, err := v.Scalar()
+	require.NoError(t, err)
+	assert.Equal(t, want, scalar)
+
+	args[0] = runtime.QuotedArg{Text: "{value: [. * .]}"}
+	v, err = jqCall(t, args)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"value": []any{json.Number(want)}}, v.Raw())
+}
+
 func TestJQ_ScalarNotValidJSONIsError(t *testing.T) {
 	t.Parallel()
 

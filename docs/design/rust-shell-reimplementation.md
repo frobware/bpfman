@@ -417,5 +417,13 @@ boundary. `Decoder.More()` treated those delimiters as the end of a container
 even at top level. The Go boundary now requires EOF after decoding one value
 and has regression tests for both unmatched delimiters and a second value.
 The Rust adapter will enforce the same single-value boundary.
-Also check whether gojq's arbitrary-size integer results are converted by
-the existing wrapper before treating large-integer output as compatible.
+Both engines computed the exact 41-digit result of squaring `10^20`.
+The Go wrapper previously passed the resulting `*big.Int` through and
+the shell could not print it as a scalar. It now normalizes large integers
+to `json.Number`, including inside objects and arrays, with regression
+tests for both output shapes.
+
+The pinned jaq probe confirmed two remaining adapter requirements. Go
+rejects `"1 2" | fromjson` while jaq emits two values. Go's `tojson`
+sorts object keys while jaq preserves their insertion order. The adapter
+needs compatible implementations for both filters before admission.

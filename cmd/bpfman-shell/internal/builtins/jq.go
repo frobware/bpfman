@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -176,6 +177,8 @@ func normaliseJQValue(x any) any {
 		return json.Number(strconv.Itoa(v))
 	case int64:
 		return json.Number(strconv.FormatInt(v, 10))
+	case *big.Int:
+		return json.Number(v.String())
 	case []any:
 		out := make([]any, len(v))
 		for i, e := range v {
