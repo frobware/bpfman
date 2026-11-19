@@ -5,6 +5,7 @@ use bpfman_shell_source::Span;
 
 use crate::{Argument, Number, Value};
 
+mod assertions;
 mod calls;
 mod compare;
 mod loops;
@@ -250,6 +251,7 @@ pub fn execute_with_trace(
         local_cleanup_failed: false,
         failure: None,
         exit_code: 0,
+        assert_failures: 0,
     };
     machine.trace_definitions();
     machine.advance()
@@ -316,6 +318,7 @@ struct Machine<'a> {
     local_cleanup_failed: bool,
     failure: Option<ExecutionError>,
     exit_code: u8,
+    assert_failures: usize,
 }
 
 enum Event {
@@ -442,9 +445,14 @@ impl<'a> Machine<'a> {
             match action {
                 Ok(Action::Next) => {}
                 Ok(Action::Stop) => {
-                    return Step::Finished {
-                        exit_code: self.exit_code,
-                    };
+                    let offenses = std::mem::take(&mut self.assert_failures);
+                    if offenses > 0 {
+                        self.report(span, format!("{offenses} assertion(s) failed"));
+                    } else {
+                        return Step::Finished {
+                            exit_code: self.exit_code,
+                        };
+                    }
                 }
                 Ok(Action::Clock(purpose)) => {
                     self.pending_effect = Some(PendingEffect::Clock(purpose, span.clone()));
@@ -665,35 +673,42 @@ impl<'a> Machine<'a> {
                     stream: OutputStream::Stdout,
                 }));
             }
-            Instruction::Assert { required, clause } => match clause.as_ref() {
-                ir::Assertion::Expression(expression) => {
-                    let truth = boolean(self.eval(expression)?)?;
-                    self.assertion_result(truth, *required, expression.to_string(), span);
+            Instruction::Assert { required, clause } => {
+                match clause.as_ref() {
+                    ir::Assertion::Expression(expression) => {
+                        if !required && self.in_poll() {
+                            return Err("assert is not valid inside poll; use retry unless ... or require ...".into());
+                        }
+                        self.assert_expression(expression, *required, span)?;
+                    }
+                    ir::Assertion::Command {
+                        expected,
+                        command,
+                        negated,
+                        ..
+                    } => {
+                        if !required && self.in_poll() {
+                            return Err("assert is not valid inside poll; use retry unless ... or require ...".into());
+                        }
+                        let argv = self.build_argv(command)?;
+                        let expected_ok = (*expected == ir::CommandStatus::Ok) != *negated;
+                        let text = format!(
+                            "expected command to {}",
+                            if expected_ok { "succeed" } else { "fail" }
+                        );
+                        let request = argv.request(DispatchLane::Assertion, span.clone());
+                        return Ok(Action::Command(
+                            Box::new(request),
+                            CommandPurpose::Assertion {
+                                expected_ok,
+                                required: *required,
+                                text,
+                                span: span.clone(),
+                            },
+                        ));
+                    }
                 }
-                ir::Assertion::Command {
-                    expected,
-                    command,
-                    negated,
-                    ..
-                } => {
-                    let argv = self.build_argv(command)?;
-                    let expected_ok = (*expected == ir::CommandStatus::Ok) != *negated;
-                    let text = format!(
-                        "expected command to {}",
-                        if expected_ok { "succeed" } else { "fail" }
-                    );
-                    let request = argv.request(DispatchLane::Assertion, span.clone());
-                    return Ok(Action::Command(
-                        Box::new(request),
-                        CommandPurpose::Assertion {
-                            expected_ok,
-                            required: *required,
-                            text,
-                            span: span.clone(),
-                        },
-                    ));
-                }
-            },
+            }
             Instruction::BuildArgs { dst, command } => {
                 let argv = self.build_argv(command)?;
                 self.put(*dst, Slot::Args(argv));
@@ -817,26 +832,12 @@ impl<'a> Machine<'a> {
         self.expression_observations.insert(key, value);
     }
 
-    fn assertion_result(&mut self, truth: bool, required: bool, text: String, span: &Span) {
-        if truth {
-            return;
-        }
-        if required {
-            self.error(span, format!("require failed: {text}"));
-        } else {
-            self.exit_code = 1;
-            let position = span.start();
-            self.output.push_back(Event::Output(OutputRequest {
-                value: Value::String(format!(
-                    "{}:{}:{}: assertion failed: {text}",
-                    position.name().as_str(),
-                    position.line(),
-                    position.column()
-                )),
-                span: span.clone(),
-                stream: OutputStream::Stderr,
-            }));
-        }
+    fn report(&mut self, span: &Span, message: String) {
+        self.output.push_back(Event::Output(OutputRequest {
+            value: Value::String(message),
+            span: span.clone(),
+            stream: OutputStream::Stderr,
+        }));
     }
 
     fn jump(&mut self, block: BlockId) {
@@ -1039,7 +1040,7 @@ impl<'a> Machine<'a> {
                     .collect::<Result<_, _>>()?,
             ),
             ir::ExpressionKind::Matches { target, block } => {
-                Value::Bool(self.matches(self.eval(target)?, block)?)
+                Value::Bool(self.matches(self.eval(target)?, block)?.passed())
             }
             ir::ExpressionKind::PureCall {
                 builtin: ir::PureBuiltin::PathExists,
@@ -1145,6 +1146,11 @@ impl<'a> Machine<'a> {
         }
         Ok(value)
     }
+}
+
+fn location(span: &Span) -> String {
+    let pos = span.start();
+    format!("{}:{}:{}", pos.name().as_str(), pos.line(), pos.column())
 }
 
 fn boolean(value: Value) -> Result<bool, String> {

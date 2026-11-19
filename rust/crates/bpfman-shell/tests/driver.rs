@@ -147,7 +147,7 @@ fn deferred_kill_manages_the_job_after_an_error() -> io::Result<()> {
     )?;
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("require failed"), "{output:?}");
+    assert!(stderr.contains("[require] FAIL"), "{output:?}");
     assert!(!stderr.contains("unmanaged job"), "{output:?}");
     let pid = String::from_utf8_lossy(&output.stdout);
     assert!(!pid.trim().is_empty(), "{output:?}");
@@ -403,8 +403,8 @@ fn assertions_use_stderr_continue_and_require_stops_after_cleanup() -> io::Resul
     assert!(!output.status.success());
     assert_eq!(output.stdout, b"continued\n");
     let errors = String::from_utf8_lossy(&output.stderr);
-    assert_eq!(errors.matches("assertion failed").count(), 1);
-    assert!(errors.contains("require failed"));
+    assert_eq!(errors.matches("[assert] FAIL").count(), 1);
+    assert!(errors.contains("[require] FAIL"));
     Ok(())
 }
 
@@ -456,5 +456,30 @@ fn trace_toggles_apply_when_defers_fire() -> io::Result<()> {
         output.stderr,
         b"+ <stdin>:1: let name = cleanup\n+ <stdin>:2: trace off\n+ <stdin>:5: print before-exit\n+ <stdin>:3: defer fire: print cleanup\n"
     );
+    Ok(())
+}
+
+#[test]
+fn matches_reports_nested_failures_and_unclaimed_fields() -> io::Result<()> {
+    let output = run(
+        &[],
+        "let doc = ('{\"left\":{\"keep\":2,\"extra\":3}}' |> jq .)\nassert $doc matches {\n  left: matches exhaustive {\n    keep: 1\n  }\n}\nprint still-running\n",
+    )?;
+    assert!(!output.status.success());
+    assert_eq!(output.stdout, b"still-running\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("[assert] FAIL: matches: 2 mismatches"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("<stdin>:4:5: left.keep: expected \"1\", got \"2\""),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("left.extra: present in value but unclaimed"),
+        "{stderr}"
+    );
+    assert!(stderr.ends_with("1 assertion(s) failed\n"), "{stderr}");
     Ok(())
 }

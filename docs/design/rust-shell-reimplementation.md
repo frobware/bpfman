@@ -356,6 +356,11 @@ arguments and values. The driver renders the events before the next effect.
 A defer records its argv and source location and observes the tracing
 setting again when it fires. Successful deferred prints and subprocesses
 publish their output.
+The runtime reports assertion failures at the source statement and
+structural mismatches at individual rows or nested exhaustive blocks.
+It evaluates assertion operands once, retains ordinary assertion failures
+through later statements, and rejects assertions in helpers called under
+a poll.
 
 ## Typestate and internal invariants
 

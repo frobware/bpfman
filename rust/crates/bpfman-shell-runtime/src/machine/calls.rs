@@ -199,6 +199,10 @@ impl Machine<'_> {
         Ok(())
     }
 
+    pub(super) fn in_poll(&self) -> bool {
+        !self.polls.is_empty() || self.callers.iter().any(|caller| !caller.polls.is_empty())
+    }
+
     pub(super) fn propagate_retry(&mut self, retry: super::polls::RetrySignal) {
         let Some(caller) = self.callers.pop() else {
             self.error(&retry.span, "retry outside any active poll".to_owned());
