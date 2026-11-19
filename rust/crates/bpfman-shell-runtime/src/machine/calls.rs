@@ -4,7 +4,7 @@ use bpfman_shell_ir::{BlockId, Expression, ParameterType};
 
 use super::{
     Argument, CommandPurpose, CommandRequest, CommandResponse, ExecutionError, Machine, Number,
-    Slot, Value, loops,
+    OutputRequest, OutputStream, Slot, Value, loops,
 };
 
 const MAX_DEPTH: usize = 256;
@@ -29,7 +29,7 @@ pub(super) struct Caller {
 }
 
 impl Machine<'_> {
-    pub(super) fn start_definition(
+    pub(super) fn start_call(
         &mut self,
         request: &CommandRequest,
         purpose: CommandPurpose,
@@ -47,7 +47,7 @@ impl Machine<'_> {
             .enumerate()
             .find(|(_, def)| def.name() == head)
         else {
-            return Ok(Some(purpose));
+            return self.session_call(head, request, purpose);
         };
         if self.callers.len() >= MAX_DEPTH {
             return Err(format!(
@@ -91,6 +91,57 @@ impl Machine<'_> {
             purpose,
         });
         self.jump(BlockId(0));
+        Ok(None)
+    }
+
+    fn session_call(
+        &mut self,
+        head: &str,
+        request: &CommandRequest,
+        purpose: CommandPurpose,
+    ) -> Result<Option<CommandPurpose>, String> {
+        use bpfman_shell_ir::PureBuiltin;
+        let builtin = match head {
+            "range" => Some(PureBuiltin::Range),
+            "zip" => Some(PureBuiltin::Zip),
+            "u32le" => Some(PureBuiltin::U32Le),
+            "u64le" => Some(PureBuiltin::U64Le),
+            _ => None,
+        };
+        if let Some(builtin) = builtin {
+            let value = super::pure::evaluate(self, builtin, &request.arguments)?;
+            self.complete_command(purpose, &request.span, Ok(CommandResponse::success(value)));
+            return Ok(None);
+        }
+        if head != "defs" {
+            return Ok(Some(purpose));
+        }
+        let mut signatures = self.program.definitions().iter().collect::<Vec<_>>();
+        signatures.sort_unstable_by_key(|def| def.name());
+        if !signatures.is_empty() {
+            let listing = signatures
+                .into_iter()
+                .map(|def| {
+                    let names = def
+                        .parameters()
+                        .iter()
+                        .map(|param| param.name.as_str())
+                        .collect::<Vec<_>>();
+                    format!("  {}({})", def.name(), names.join(", "))
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.output.push_back(OutputRequest {
+                value: Value::String(listing),
+                span: request.span.clone(),
+                stream: OutputStream::Stdout,
+            });
+        }
+        self.complete_command(
+            purpose,
+            &request.span,
+            Ok(CommandResponse::success(Value::Absent)),
+        );
         Ok(None)
     }
 

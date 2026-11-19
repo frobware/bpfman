@@ -17,7 +17,7 @@ impl Machine<'_> {
     }
 }
 
-fn evaluate(
+pub(super) fn evaluate(
     machine: &Machine<'_>,
     builtin: PureBuiltin,
     arguments: &[Argument],
@@ -68,7 +68,11 @@ fn evaluate(
             ],
         ) => {
             if left.len() != right.len() {
-                return Err("zip lists must have equal lengths".to_owned());
+                return Err(format!(
+                    "zip: length mismatch (arg 0 has {}, arg 1 has {})",
+                    left.len(),
+                    right.len()
+                ));
             }
             Ok(Value::List(
                 left.iter()

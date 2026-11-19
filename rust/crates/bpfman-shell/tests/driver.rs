@@ -432,3 +432,14 @@ fn fixture_files_and_external_adapters_have_distinct_lifetimes() -> io::Result<(
     assert_eq!(dir.path().read_dir()?.count(), 0);
     Ok(())
 }
+
+#[test]
+fn definitions_and_direct_pure_calls_share_command_dispatch() -> io::Result<()> {
+    let output = run(
+        &[],
+        "def z(name) { print $name }\ndef a() { print a }\nrange 2\nu64le 5\ndefs\nz hello\n",
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"  a()\n  z(name)\nhello\n");
+    Ok(())
+}

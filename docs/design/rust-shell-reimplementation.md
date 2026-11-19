@@ -348,6 +348,9 @@ source in both shells.
 selector. Header parsing bounds input to the first twenty lines, merges
 the three label forms, and validates parameterized cases before filtering
 scripts. Ordinary execution accepts one source file or stdin.
+The runtime lists hoisted local and imported definitions in sorted order
+with `defs`. Direct calls to `range`, `zip`, `u32le` and `u64le` use
+the same pure implementation as their expression counterparts.
 
 ## Typestate and internal invariants
 

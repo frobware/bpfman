@@ -161,45 +161,8 @@ pub struct CommandContinuation<'a> {
 impl<'a> CommandContinuation<'a> {
     /// Continue with a command result or transport failure.
     pub fn resume(mut self, observation: Result<CommandResponse, String>) -> Step<'a> {
-        match observation {
-            Ok(response) => match self.purpose {
-                CommandPurpose::Ordinary => {
-                    if response.exit_code != 0 {
-                        let message = format!("command exited with status {}", response.exit_code);
-                        self.machine.error(&self.span, message);
-                    }
-                }
-                CommandPurpose::Bind(dst) => self.machine.put(dst, Slot::Result(response)),
-                CommandPurpose::Thread { key, span } => {
-                    self.machine.finish_thread(key, &span, response);
-                }
-                CommandPurpose::Assertion {
-                    expected_ok,
-                    required,
-                    text,
-                    span,
-                } => {
-                    self.machine.assertion_result(
-                        (response.exit_code == 0) == expected_ok,
-                        required,
-                        text,
-                        &span,
-                    );
-                }
-                CommandPurpose::Cleanup => {
-                    if response.exit_code != 0 {
-                        self.machine.cleanup_failed();
-                    }
-                }
-            },
-            Err(message) => {
-                if matches!(self.purpose, CommandPurpose::Cleanup) {
-                    self.machine.cleanup_failed();
-                } else {
-                    self.machine.error(&self.span, message);
-                }
-            }
-        }
+        self.machine
+            .complete_command(self.purpose, &self.span, observation);
         self.machine.advance()
     }
 }
@@ -256,7 +219,7 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         loops: Vec::new(),
         polls: Vec::new(),
         attempt_cleanup: None,
-        diagnostic: None,
+        output: Default::default(),
         pending_retry: None,
         expression_observations: HashMap::new(),
         deferred: Vec::new(),
@@ -319,7 +282,7 @@ struct Machine<'a> {
     loops: Vec<loops::Iteration>,
     polls: Vec<polls::Poll>,
     attempt_cleanup: Option<Span>,
-    diagnostic: Option<OutputRequest>,
+    output: std::collections::VecDeque<OutputRequest>,
     pending_retry: Option<polls::RetrySignal>,
     expression_observations: HashMap<*const ir::Expression, Value>,
     deferred: Vec<(Argv, Span)>,
@@ -343,7 +306,7 @@ enum Action {
 impl<'a> Machine<'a> {
     fn advance(mut self) -> Step<'a> {
         loop {
-            if let Some(request) = self.diagnostic.take() {
+            if let Some(request) = self.output.pop_front() {
                 let span = request.span.clone();
                 return Step::Output {
                     request,
@@ -357,7 +320,7 @@ impl<'a> Machine<'a> {
                 if self.deferred.len() > base {
                     if let Some((argv, span)) = self.deferred.pop() {
                         let request = argv.request(DispatchLane::Deferred, span);
-                        match self.start_definition(&request, CommandPurpose::Cleanup) {
+                        match self.start_call(&request, CommandPurpose::Cleanup) {
                             Ok(Some(purpose)) => return self.suspend_command(request, purpose),
                             Ok(None) => {}
                             Err(_) => self.cleanup_failed(),
@@ -430,13 +393,11 @@ impl<'a> Machine<'a> {
                         span: span.clone(),
                     });
                 }
-                Ok(Action::Command(request, purpose)) => {
-                    match self.start_definition(&request, purpose) {
-                        Ok(Some(purpose)) => return self.suspend_command(request, purpose),
-                        Ok(None) => {}
-                        Err(message) => self.error(&request.span, message),
-                    }
-                }
+                Ok(Action::Command(request, purpose)) => match self.start_call(&request, purpose) {
+                    Ok(Some(purpose)) => return self.suspend_command(request, purpose),
+                    Ok(None) => {}
+                    Err(message) => self.error(&request.span, message),
+                },
                 Ok(Action::Output(request)) => {
                     let span = request.span.clone();
                     return Step::Output {
@@ -479,7 +440,7 @@ impl<'a> Machine<'a> {
                         key,
                         span: request.span.clone(),
                     };
-                    match self.start_definition(&request, purpose) {
+                    match self.start_call(&request, purpose) {
                         Ok(Some(purpose)) => return self.suspend_command(*request, purpose),
                         Ok(None) => {}
                         Err(message) => self.error(&request.span, message),
@@ -495,6 +456,53 @@ impl<'a> Machine<'a> {
             message,
         });
         self.draining = Some(self.callers.last().map_or(0, |caller| caller.deferred_base));
+    }
+
+    fn complete_command(
+        &mut self,
+        purpose: CommandPurpose,
+        span: &Span,
+        observation: Result<CommandResponse, String>,
+    ) {
+        match observation {
+            Ok(response) => match purpose {
+                CommandPurpose::Ordinary => {
+                    if response.exit_code != 0 {
+                        let message = format!("command exited with status {}", response.exit_code);
+                        self.error(span, message);
+                    }
+                }
+                CommandPurpose::Bind(dst) => self.put(dst, Slot::Result(response)),
+                CommandPurpose::Thread { key, span } => {
+                    self.finish_thread(key, &span, response);
+                }
+                CommandPurpose::Assertion {
+                    expected_ok,
+                    required,
+                    text,
+                    span,
+                } => {
+                    self.assertion_result(
+                        (response.exit_code == 0) == expected_ok,
+                        required,
+                        text,
+                        &span,
+                    );
+                }
+                CommandPurpose::Cleanup => {
+                    if response.exit_code != 0 {
+                        self.cleanup_failed();
+                    }
+                }
+            },
+            Err(message) => {
+                if matches!(purpose, CommandPurpose::Cleanup) {
+                    self.cleanup_failed();
+                } else {
+                    self.error(span, message);
+                }
+            }
+        }
     }
 
     fn suspend_command(self, request: CommandRequest, purpose: CommandPurpose) -> Step<'a> {
@@ -733,7 +741,7 @@ impl<'a> Machine<'a> {
         } else {
             self.exit_code = 1;
             let position = span.start();
-            self.diagnostic = Some(OutputRequest {
+            self.output.push_back(OutputRequest {
                 value: Value::String(format!(
                     "{}:{}:{}: assertion failed: {text}",
                     position.name().as_str(),

@@ -254,14 +254,7 @@ fn dispatch(
     } else {
         (head.as_str(), arguments.as_slice())
     };
-    // The Rust driver currently supplies only print and subprocess effects.
-    // Refuse known typed builtins until their adapters are implemented.
-    if head != "exec"
-        && matches!(
-            head.as_str(),
-            "defs" | "import" | "range" | "trace" | "u32le" | "u64le" | "zip"
-        )
-    {
+    if head != "exec" && matches!(head.as_str(), "import" | "trace") {
         return Err(format!("{head}: builtin is not yet implemented"));
     }
     let output = process::capture(Command::new(executable).args(arguments), interrupt)
