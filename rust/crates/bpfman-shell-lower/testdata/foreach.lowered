@@ -1,0 +1,57 @@
+body entry=bb0
+
+bb0:
+  EnterDeferScope kind=program
+  Eval t0 = [[1 2] [3 4]]
+  ForEach list=t0 names=[n _] body=bb1 exit=bb2
+
+bb1:
+  Eval t1 = [1 2]
+  ForEach list=t1 names=[m] body=bb3 exit=bb4
+
+bb2:
+  BuildArgs t5 = [print done]
+  DispatchCommand argv=t5 policy=def-then-exec-command lane=builtin(print)
+  RunDefers policy=program
+  Stop
+
+bb3:
+  Eval t2 = $m == 1
+  Branch cond=t2 true=bb5 false=bb6
+
+bb4:
+  Eval t3 = $n == 3
+  Branch cond=t3 true=bb10 false=bb11
+
+bb5:
+  EnterFrame kind=if-branch
+  ForEachContinue
+
+bb6:
+  Jump bb8
+
+bb7:
+  ExitFrame
+  Jump bb8
+
+bb8:
+  ExitLoop
+
+bb9:
+  ForEachContinue
+
+bb10:
+  EnterFrame kind=if-branch
+  ExitLoop
+
+bb11:
+  Jump bb13
+
+bb12:
+  ExitFrame
+  Jump bb13
+
+bb13:
+  BuildArgs t4 = [print $n]
+  DispatchCommand argv=t4 policy=def-then-exec-command lane=builtin(print)
+  ForEachContinue

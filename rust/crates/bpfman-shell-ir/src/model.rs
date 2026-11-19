@@ -5,6 +5,8 @@ use std::{
 
 use bpfman_shell_source::Span;
 
+use crate::{LoopBindings, LoopId, LoopTrace, loops};
+
 /// A node together with its original source extent.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Located<T> {
@@ -112,6 +114,8 @@ pub enum Instruction {
     ExitFrame,
     /// Record a trace event omitted by the canonical dump.
     TraceBranch(BranchTrace),
+    /// Record an explicit loop exit or continue.
+    TraceLoop(LoopTrace),
     /// Evaluate a value.
     Eval {
         /// Destination value temporary.
@@ -166,6 +170,21 @@ pub enum Terminator {
         /// Successor when the condition is false.
         on_false: BlockId,
     },
+    /// Initialize an iterator and select the first body or exit successor.
+    ForEach {
+        /// Evaluated list temporary.
+        list: Temp,
+        /// Slots bound in each iteration frame.
+        bindings: LoopBindings,
+        /// Body entered with a fresh iteration frame.
+        body: BlockId,
+        /// Successor when the iterator has no remaining elements.
+        exit: BlockId,
+    },
+    /// Unwind through the current iteration frame and advance its iterator.
+    ForEachContinue(LoopId),
+    /// Unwind through the iteration frame and leave the loop.
+    ExitLoop(LoopId),
     /// Finish the program.
     Stop,
 }
@@ -200,6 +219,10 @@ pub enum VerifyError {
     InvalidDestination(Temp),
     /// A use has no prior definition of the required kind in its block.
     InvalidOperand(Temp),
+    /// A loop action refers to a block without a foreach terminator.
+    InvalidLoopOwner(LoopId),
+    /// A reachable block cannot run with the incoming iterator stack.
+    InvalidLoopContext(BlockId),
 }
 
 impl fmt::Display for VerifyError {
@@ -209,6 +232,8 @@ impl fmt::Display for VerifyError {
             Self::InvalidSuccessor(BlockId(id)) => write!(f, "invalid successor bb{id}"),
             Self::InvalidDestination(Temp(id)) => write!(f, "invalid destination t{id}"),
             Self::InvalidOperand(Temp(id)) => write!(f, "invalid operand t{id}"),
+            Self::InvalidLoopOwner(LoopId(BlockId(id))) => write!(f, "invalid loop owner bb{id}"),
+            Self::InvalidLoopContext(BlockId(id)) => write!(f, "invalid loop context at bb{id}"),
         }
     }
 }
@@ -259,7 +284,8 @@ impl Program {
                     | Instruction::RunProgramDefers
                     | Instruction::EnterIfFrame
                     | Instruction::ExitFrame
-                    | Instruction::TraceBranch(_) => {}
+                    | Instruction::TraceBranch(_)
+                    | Instruction::TraceLoop(_) => {}
                 }
             }
             let verify_successor = |id: BlockId| {
@@ -281,6 +307,16 @@ impl Program {
                     verify_successor(on_false)?;
                 }
                 Terminator::Stop => {}
+                Terminator::ForEach {
+                    list, body, exit, ..
+                } => {
+                    verify_operand(list, TempKind::Value, &kinds)?;
+                    verify_successor(body)?;
+                    verify_successor(exit)?;
+                }
+                Terminator::ForEachContinue(owner) | Terminator::ExitLoop(owner) => {
+                    loops::targets(&blocks, owner)?;
+                }
             }
         }
         let num_temps = destinations.len();
@@ -291,6 +327,7 @@ impl Program {
         {
             return Err(VerifyError::InvalidDestination(temp));
         }
+        loops::verify_context(&blocks)?;
         Ok(Self {
             span,
             blocks,
@@ -429,6 +466,40 @@ mod tests {
         assert_eq!(
             Program::new(span, vec![block(vec![], branch(0, 0))]),
             Err(VerifyError::InvalidOperand(Temp(0)))
+        );
+    }
+
+    #[test]
+    fn foreach_controls_require_a_real_and_active_owner() {
+        use crate::{LoopBindings, LoopId};
+
+        let span = located(()).span;
+        let owner = LoopId(BlockId(1));
+        let entry = block(vec![], Terminator::ExitLoop(owner));
+        assert_eq!(
+            Program::new(span.clone(), vec![entry]),
+            Err(VerifyError::InvalidLoopOwner(owner))
+        );
+        let entry = block(vec![], Terminator::Jump(BlockId(2)));
+        let bindings = LoopBindings::new(vec!["item".to_owned()])
+            .unwrap_or_else(|| unreachable!("valid bindings"));
+        let header = block(
+            vec![located(Instruction::Eval {
+                dst: Temp(0),
+                expression: located(ExpressionKind::List(vec![])),
+            })],
+            Terminator::ForEach {
+                list: Temp(0),
+                bindings,
+                body: BlockId(2),
+                exit: BlockId(3),
+            },
+        );
+        let body = block(vec![], Terminator::ForEachContinue(owner));
+        let stop = block(vec![], Terminator::Stop);
+        assert_eq!(
+            Program::new(span, vec![entry, header, body, stop]),
+            Err(VerifyError::InvalidLoopContext(BlockId(2)))
         );
     }
 }

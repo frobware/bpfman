@@ -1,6 +1,8 @@
 //! Reserve branch joins independently of their final dump order.
 
-use bpfman_shell_ir::{Block, BlockId, Instruction, Located, Temp, Terminator};
+use bpfman_shell_ir::{
+    Block, BlockId, Instruction, Located, LoopBindings, LoopId, Temp, Terminator,
+};
 use bpfman_shell_source::Span;
 
 use crate::LowerError;
@@ -16,6 +18,14 @@ pub(super) enum Exit {
         on_true: Label,
         on_false: Label,
     },
+    ForEach {
+        list: Temp,
+        bindings: LoopBindings,
+        body: Label,
+        exit: Label,
+    },
+    ForEachContinue(Label),
+    BreakLoop(Label),
 }
 
 struct Draft {
@@ -68,6 +78,10 @@ impl Layout {
         self.current = label;
     }
 
+    pub(super) fn current(&self) -> Label {
+        self.current
+    }
+
     pub(super) fn emit(&mut self, instruction: Located<Instruction>) {
         self.blocks[self.current.0].instructions.push(instruction);
     }
@@ -105,6 +119,21 @@ impl Layout {
                         on_true: resolve(on_true),
                         on_false: resolve(on_false),
                     },
+                    Exit::ForEach {
+                        list,
+                        bindings,
+                        body,
+                        exit,
+                    } => Terminator::ForEach {
+                        list,
+                        bindings,
+                        body: resolve(body),
+                        exit: resolve(exit),
+                    },
+                    Exit::ForEachContinue(owner) => {
+                        Terminator::ForEachContinue(LoopId(resolve(owner)))
+                    }
+                    Exit::BreakLoop(owner) => Terminator::ExitLoop(LoopId(resolve(owner))),
                 };
                 Ok(Block {
                     span: block.span.clone(),

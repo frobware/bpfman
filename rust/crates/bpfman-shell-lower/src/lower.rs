@@ -4,7 +4,7 @@ use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
     BinaryOperator, BranchTrace, Command, Expression, ExpressionKind, Instruction, Located,
-    Program, Temp, VerifyError,
+    LoopBindings, LoopTrace, Program, Temp, VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -23,6 +23,13 @@ pub enum LowerError {
     InvalidIr(VerifyError),
     /// A reserved block was left unpublished or unterminated.
     IncompleteLayout(Span),
+    /// A loop-control statement was encountered outside any foreach.
+    OutsideLoop {
+        /// Control keyword.
+        keyword: &'static str,
+        /// Source extent.
+        span: Span,
+    },
 }
 
 impl fmt::Display for LowerError {
@@ -39,6 +46,13 @@ impl fmt::Display for LowerError {
                 )
             }
             Self::InvalidIr(error) => write!(f, "invalid lowered program: {error}"),
+            Self::OutsideLoop { keyword, span } => write!(
+                f,
+                "{}:{}:{}: {keyword} outside any foreach loop",
+                span.start().name().as_str(),
+                span.start().line(),
+                span.start().column(),
+            ),
             Self::IncompleteLayout(span) => write!(
                 f,
                 "incomplete block layout at {}:{}",
@@ -53,7 +67,7 @@ impl std::error::Error for LowerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidIr(error) => Some(error),
-            Self::Unsupported { .. } | Self::IncompleteLayout(_) => None,
+            Self::Unsupported { .. } | Self::IncompleteLayout(_) | Self::OutsideLoop { .. } => None,
         }
     }
 }
@@ -81,6 +95,7 @@ fn lower_body(span: &Span, statements: &[syntax::Statement]) -> Result<Program, 
     let mut body = Body {
         layout: Layout::new(span),
         next_temp: 0,
+        current_loop: None,
     };
     body.emit(span, Instruction::EnterProgramDefers);
     for statement in statements {
@@ -94,6 +109,7 @@ fn lower_body(span: &Span, statements: &[syntax::Statement]) -> Result<Program, 
 struct Body {
     layout: Layout,
     next_temp: usize,
+    current_loop: Option<Label>,
 }
 
 impl Body {
@@ -133,17 +149,86 @@ impl Body {
             } => {
                 return self.conditional(span, first, elif, else_body.as_deref());
             }
-            S::Foreach { .. } => return Err(unsupported(span, "foreach")),
+            S::Foreach {
+                bindings,
+                list,
+                body,
+            } => {
+                return self.foreach(span, bindings, list, body);
+            }
             S::Poll { .. } => return Err(unsupported(span, "poll")),
             S::Retry { .. } => return Err(unsupported(span, "retry")),
             S::Assertion { .. } => return Err(unsupported(span, "assertion")),
             S::LetDestructure { .. } => return Err(unsupported(span, "destructuring")),
             S::Bind { .. } => return Err(unsupported(span, "command bind")),
             S::BindCollect { .. } => return Err(unsupported(span, "collect")),
-            S::Break => return Err(unsupported(span, "break")),
-            S::Continue => return Err(unsupported(span, "continue")),
+            S::Break => return self.loop_control(span, LoopTrace::Break),
+            S::Continue => return self.loop_control(span, LoopTrace::Continue),
         };
         self.emit(span, instruction);
+        Ok(())
+    }
+
+    fn foreach(
+        &mut self,
+        span: &Span,
+        bindings: &syntax::LoopBindings,
+        list: &syntax::Expression,
+        statements: &[syntax::Statement],
+    ) -> Result<(), LowerError> {
+        let owner = self.layout.current();
+        let list = self.eval(span, list)?;
+        let bindings = LoopBindings::new(
+            bindings
+                .names()
+                .iter()
+                .map(|name| name.text().to_owned())
+                .collect(),
+        )
+        .ok_or_else(|| LowerError::IncompleteLayout(span.clone()))?;
+        let body = self.layout.new_block(span);
+        let exit = self.layout.new_block(span);
+        self.layout.terminate(located(
+            span,
+            Exit::ForEach {
+                list,
+                bindings,
+                body,
+                exit,
+            },
+        ));
+
+        let outer = self.current_loop.replace(owner);
+        self.layout.select(body);
+        for statement in statements {
+            self.statement(statement)?;
+        }
+        self.layout
+            .terminate(located(span, Exit::ForEachContinue(owner)));
+        self.current_loop = outer;
+        self.layout.select(exit);
+        Ok(())
+    }
+
+    fn loop_control(&mut self, span: &Span, trace: LoopTrace) -> Result<(), LowerError> {
+        let Some(owner) = self.current_loop else {
+            let keyword = match trace {
+                LoopTrace::Break => "break",
+                LoopTrace::Continue => "continue",
+            };
+            return Err(LowerError::OutsideLoop {
+                keyword,
+                span: span.clone(),
+            });
+        };
+        let exit = match trace {
+            LoopTrace::Break => Exit::BreakLoop(owner),
+            LoopTrace::Continue => Exit::ForEachContinue(owner),
+        };
+        self.emit(span, Instruction::TraceLoop(trace));
+        self.layout.terminate(located(span, exit));
+        let unreachable = self.layout.new_block(span);
+        self.layout.select(unreachable);
         Ok(())
     }
 
@@ -343,11 +428,11 @@ mod tests {
         assert!(check(unknown.clone()).is_err());
         assert!(lower_unchecked(&unknown).is_ok());
 
-        let program = check(expand("print ok\nforeach n in [1] { print $n }"))
+        let program = check(expand("print ok\ndef later() { print ok }"))
             .unwrap_or_else(|issues| unreachable!("{issues:?}"));
         assert!(matches!(
             lower(&program),
-            Err(LowerError::Unsupported { form: "foreach", span }) if &span == program.statements()[1].span()
+            Err(LowerError::Unsupported { form: "definition", span }) if &span == program.statements()[1].span()
         ));
     }
 
@@ -382,5 +467,44 @@ mod tests {
             Instruction::TraceBranch(BranchTrace::Skip)
         );
         assert_eq!(ir.blocks()[4].instructions[0].span.start().line(), 3);
+    }
+
+    #[test]
+    fn nested_foreach_matches_go_and_uses_the_innermost_loop_owner() {
+        use bpfman_shell_ir::{BlockId, LoopId, LoopTrace, Terminator};
+
+        let source = include_str!("../testdata/foreach.bpfman");
+        let program = check(expand(source)).unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(ir.to_string(), include_str!("../testdata/foreach.lowered"));
+        assert_eq!(
+            ir.blocks()[5].terminator.node,
+            Terminator::ForEachContinue(LoopId(BlockId(1)))
+        );
+        assert_eq!(
+            ir.blocks()[8].terminator.node,
+            Terminator::ExitLoop(LoopId(BlockId(1)))
+        );
+        assert_eq!(
+            ir.blocks()[10].terminator.node,
+            Terminator::ExitLoop(LoopId(BlockId(0)))
+        );
+        assert_eq!(ir.blocks()[10].terminator.span.start().line(), 6);
+        assert_eq!(
+            ir.blocks()[10].instructions[2].node,
+            Instruction::TraceLoop(LoopTrace::Break)
+        );
+    }
+
+    #[test]
+    fn unchecked_loop_control_still_requires_a_lexical_owner() {
+        for keyword in ["break", "continue"] {
+            let program = expand(keyword);
+            assert!(matches!(
+                lower_unchecked(&program),
+                Err(LowerError::OutsideLoop { keyword: actual, span })
+                    if actual == keyword && &span == program.statements()[0].span()
+            ));
+        }
     }
 }

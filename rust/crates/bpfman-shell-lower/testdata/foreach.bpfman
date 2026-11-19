@@ -1,0 +1,9 @@
+foreach (n _) in [[1 2] [3 4]] {
+  foreach m in [1 2] {
+    if $m == 1 { continue }
+    break
+  }
+  if $n == 3 { break }
+  print $n
+}
+print done

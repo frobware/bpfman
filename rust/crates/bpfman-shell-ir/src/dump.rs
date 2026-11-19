@@ -11,11 +11,15 @@ impl fmt::Display for Program {
             let mut heads = BTreeMap::new();
             writeln!(f, "\nbb{id}:")?;
             for instruction in &block.instructions {
-                if !matches!(instruction.node, Instruction::TraceBranch(_)) {
-                    f.write_str("  ")?;
+                if matches!(
+                    instruction.node,
+                    Instruction::TraceBranch(_) | Instruction::TraceLoop(_)
+                ) {
+                    continue;
                 }
+                f.write_str("  ")?;
                 match &instruction.node {
-                    Instruction::TraceBranch(_) => {}
+                    Instruction::TraceBranch(_) | Instruction::TraceLoop(_) => {}
                     Instruction::EnterIfFrame => writeln!(f, "EnterFrame kind=if-branch")?,
                     Instruction::ExitFrame => writeln!(f, "ExitFrame")?,
                     Instruction::EnterProgramDefers => {
@@ -67,6 +71,21 @@ impl fmt::Display for Program {
                     condition.0, on_true.0, on_false.0
                 )?,
                 Terminator::Stop => writeln!(f, "  Stop")?,
+                Terminator::ForEach {
+                    list,
+                    ref bindings,
+                    body,
+                    exit,
+                } => writeln!(
+                    f,
+                    "  ForEach list=t{} names=[{}] body=bb{} exit=bb{}",
+                    list.0,
+                    bindings.names().join(" "),
+                    body.0,
+                    exit.0,
+                )?,
+                Terminator::ForEachContinue(_) => writeln!(f, "  ForEachContinue")?,
+                Terminator::ExitLoop(_) => writeln!(f, "  ExitLoop")?,
             }
         }
         Ok(())

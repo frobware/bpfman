@@ -184,7 +184,12 @@ Conditional lowering now emits a typed branch, a lexical frame for each
 selected body, trace events, and a shared continuation. Blocks keep Go's
 publication order even when nested bodies allocate temporaries before a
 previously published block is filled. A nested conditional fixture compares
-the dump with Go. Loops, the full golden dump, and execution are pending.
+the dump with Go. Ordinary foreach lowering identifies each iterator by its
+header block. Break and continue target the innermost iterator and carry the
+contract to unwind its iteration frame. Verification checks reachable loop
+contexts, and a nested-loop fixture matches Go's dump, including the
+unreachable blocks emitted after explicit loop control. Bind-collect, the
+full golden dump, and execution are pending.
 
 ## Typestate and internal invariants
 
