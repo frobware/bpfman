@@ -42,9 +42,8 @@ const PURE: &[&str] = &[
     "bpfman-shell-runtime",
 ];
 
-// No external normal dependencies are admitted to the pure crates. In
-// particular Aya's std-enabled thiserror must not unify into their closure.
-const PURE_EXTERNAL: &[&str] = &[];
+// Only the shell interpreter admits the reviewed pure arithmetic closure.
+const SHELL_ARITHMETIC: &[&str] = &["num-bigint", "num-integer", "num-traits"];
 
 fn metadata() -> &'static Value {
     static METADATA: OnceLock<Value> = OnceLock::new();
@@ -350,7 +349,8 @@ fn pure_closures_have_only_reviewed_dependencies_and_features() {
             let dep = string(&package(meta, id)["name"]);
 
             assert!(
-                PURE.contains(&dep) || PURE_EXTERNAL.contains(&dep),
+                PURE.contains(&dep)
+                    || (*name == "bpfman-shell-runtime" && SHELL_ARITHMETIC.contains(&dep)),
                 "{name} reaches unreviewed {dep}"
             );
 

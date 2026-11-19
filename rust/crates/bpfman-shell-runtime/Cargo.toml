@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+num-bigint = { version = "=0.4.6", default-features = false }
 bpfman-shell-ir = { path = "../bpfman-shell-ir" }
 bpfman-shell-source = { path = "../bpfman-shell-source" }
 

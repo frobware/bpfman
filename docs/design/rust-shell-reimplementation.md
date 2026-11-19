@@ -228,8 +228,12 @@ imports, supports checked and explicitly unchecked lowering, and drives
 the initial print, subprocess, output, and clock effects. Effect coverage is
 partial. The interpreter now evaluates nested paths, interpolation, unary
 predicates, short-circuit operations, and compatible scalar comparisons.
-Integer comparisons do not round through floating point. Cross-call retry,
-arithmetic, match and call evaluation, typed builtins, signals, process-group
+Integer comparisons and integral addition, subtraction, multiplication, and
+remainder are exact. Division and mixed arithmetic use finite floating point,
+as in Go. The interpreter alone admits the pure arithmetic closure
+`num-bigint` 0.4.6, `num-integer` 0.1.47, and `num-traits` 0.2.19, all
+MIT or Apache-2.0. Cross-call retry,
+match and call evaluation, typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell.
 
