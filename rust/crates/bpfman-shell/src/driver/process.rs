@@ -1,9 +1,14 @@
 //! Owned process groups and interruptible waiting for shell commands.
 
 use std::{
+    env, fs,
     io::{self, Read},
     num::NonZeroU32,
-    os::unix::process::{CommandExt, ExitStatusExt},
+    os::unix::{
+        fs::PermissionsExt,
+        process::{CommandExt, ExitStatusExt},
+    },
+    path::Path,
     process::{Child, Command, ExitStatus, Output, Stdio},
     sync::{
         Arc,
@@ -78,7 +83,14 @@ impl Drop for Interrupt {
 
 pub(super) fn capture(command: &mut Command, interrupt: &Interrupt) -> Result<Output, String> {
     interrupt.check()?;
-    let mut child = CapturedChild::spawn(command).map_err(|error| error.to_string())?;
+    let mut child = CapturedChild::spawn(command).map_err(|error| {
+        let executable = command.get_program().to_string_lossy();
+        if error.kind() == io::ErrorKind::NotFound {
+            format!("{executable}: command not found")
+        } else {
+            format!("{executable}: {error}")
+        }
+    })?;
     loop {
         interrupt.check()?;
         if let Some(output) = child.try_output().map_err(|error| error.to_string())? {
@@ -86,6 +98,18 @@ pub(super) fn capture(command: &mut Command, interrupt: &Interrupt) -> Result<Ou
         }
         thread::sleep(POLL);
     }
+}
+
+pub(super) fn has_executable(executable: &str) -> bool {
+    let runnable = |path: &Path| {
+        fs::metadata(path)
+            .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+    };
+    if executable.contains('/') {
+        return runnable(Path::new(executable));
+    }
+    env::var_os("PATH")
+        .is_some_and(|paths| env::split_paths(&paths).any(|path| runnable(&path.join(executable))))
 }
 
 pub(super) fn response(output: Output) -> CommandResponse {

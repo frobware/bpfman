@@ -361,6 +361,9 @@ structural mismatches at individual rows or nested exhaustive blocks.
 It evaluates assertion operands once, retains ordinary assertion failures
 through later statements, and rejects assertions in helpers called under
 a poll.
+Command failure reports preserve resolved argv, captured output and the
+enclosing statement location. Deferred failures are reported while
+draining, and job leaks cite the declaration that created the job.
 
 ## Typestate and internal invariants
 

@@ -104,6 +104,9 @@ pub struct CommandRequest {
     pub lane: DispatchLane,
     /// Invocation source extent.
     pub span: Span,
+    /// Extent of the containing statement, used for job provenance.
+    pub statement_span: Span,
+    display: String,
 }
 
 /// The driver's observation of an invocation.
@@ -165,14 +168,14 @@ pub enum OutputStream {
 pub struct CommandContinuation<'a> {
     machine: Machine<'a>,
     purpose: CommandPurpose,
-    span: Span,
+    origin: Box<Invocation>,
 }
 
 impl<'a> CommandContinuation<'a> {
     /// Continue with a command result or transport failure.
     pub fn resume(mut self, observation: Result<CommandResponse, String>) -> Step<'a> {
         self.machine
-            .complete_command(self.purpose, &self.span, observation);
+            .complete_command(self.purpose, &self.origin, observation);
         self.machine.advance()
     }
 }
@@ -200,6 +203,23 @@ pub struct ExecutionError {
     pub span: Span,
     /// Explanation without location formatting.
     pub message: String,
+    reported: bool,
+}
+
+impl ExecutionError {
+    fn new(span: &Span, message: String) -> Self {
+        Self {
+            span: span.clone(),
+            message,
+            reported: false,
+        }
+    }
+
+    /// Whether a diagnostic for this failure has already been emitted.
+    #[must_use]
+    pub fn was_reported(&self) -> bool {
+        self.reported
+    }
 }
 
 impl fmt::Display for ExecutionError {
@@ -252,6 +272,7 @@ pub fn execute_with_trace(
         failure: None,
         exit_code: 0,
         assert_failures: 0,
+        defer_failures: 0,
     };
     machine.trace_definitions();
     machine.advance()
@@ -261,6 +282,37 @@ pub fn execute_with_trace(
 struct Argv {
     head: Argument,
     arguments: Vec<Argument>,
+    display: String,
+}
+
+struct Invocation {
+    span: Span,
+    display: String,
+}
+
+impl Invocation {
+    fn from_request(request: &CommandRequest) -> Self {
+        Self {
+            span: request.statement_span.clone(),
+            display: request.display.clone(),
+        }
+    }
+
+    fn describe_failure(&self, label: &str, response: &CommandResponse) -> String {
+        let mut message = format!(
+            "[{label}] FAIL at {}\ncommand:\n  {}\nexit:\n  {}",
+            location(&self.span),
+            self.display,
+            response.exit_code,
+        );
+        for (label, stream) in [("stdout", &response.stdout), ("stderr", &response.stderr)] {
+            message.push_str(&format!("\n{label}:"));
+            for line in stream.lines() {
+                message.push_str(&format!("\n  {line}"));
+            }
+        }
+        message
+    }
 }
 
 impl Argv {
@@ -269,7 +321,9 @@ impl Argv {
             head: self.head,
             arguments: self.arguments,
             lane,
+            statement_span: span.clone(),
             span,
+            display: self.display,
         }
     }
 }
@@ -319,6 +373,7 @@ struct Machine<'a> {
     failure: Option<ExecutionError>,
     exit_code: u8,
     assert_failures: usize,
+    defer_failures: usize,
 }
 
 enum Event {
@@ -327,7 +382,7 @@ enum Event {
 }
 
 enum PendingEffect {
-    Command(CommandRequest, CommandPurpose),
+    Command(Box<CommandRequest>, CommandPurpose),
     Clock(polls::ClockPurpose, Span),
 }
 
@@ -368,7 +423,7 @@ impl<'a> Machine<'a> {
             if let Some(effect) = self.pending_effect.take() {
                 return match effect {
                     PendingEffect::Command(request, purpose) => {
-                        self.suspend_command(request, purpose)
+                        self.suspend_command(*request, purpose)
                     }
                     PendingEffect::Clock(purpose, span) => Step::ReadClock(ClockContinuation {
                         machine: self,
@@ -384,10 +439,18 @@ impl<'a> Machine<'a> {
                         let request = argv.request(DispatchLane::Deferred, span);
                         match self.start_call(&request, CommandPurpose::Cleanup) {
                             Ok(Some(purpose)) => {
-                                self.pending_effect = Some(PendingEffect::Command(request, purpose))
+                                self.pending_effect =
+                                    Some(PendingEffect::Command(Box::new(request), purpose))
                             }
                             Ok(None) => {}
-                            Err(_) => self.cleanup_failed(),
+                            Err(error) => self.defer_failure(
+                                &Invocation::from_request(&request),
+                                &CommandResponse {
+                                    exit_code: 1,
+                                    stderr: error,
+                                    ..CommandResponse::success(Value::Absent)
+                                },
+                            ),
                         }
                         continue;
                     }
@@ -445,9 +508,15 @@ impl<'a> Machine<'a> {
             match action {
                 Ok(Action::Next) => {}
                 Ok(Action::Stop) => {
-                    let offenses = std::mem::take(&mut self.assert_failures);
-                    if offenses > 0 {
-                        self.report(span, format!("{offenses} assertion(s) failed"));
+                    let asserts = std::mem::take(&mut self.assert_failures);
+                    let defers = std::mem::take(&mut self.defer_failures);
+                    if asserts + defers > 0 {
+                        if asserts != 0 {
+                            self.report(span, format!("{asserts} assertion(s) failed"));
+                        }
+                        if defers != 0 {
+                            self.report(span, format!("{defers} defer(s) failed"));
+                        }
                     } else {
                         return Step::Finished {
                             exit_code: self.exit_code,
@@ -459,10 +528,10 @@ impl<'a> Machine<'a> {
                 }
                 Ok(Action::Command(request, purpose)) => match self.start_call(&request, purpose) {
                     Ok(Some(purpose)) => {
-                        self.pending_effect = Some(PendingEffect::Command(*request, purpose))
+                        self.pending_effect = Some(PendingEffect::Command(request, purpose))
                     }
                     Ok(None) => {}
-                    Err(message) => self.error(&request.span, message),
+                    Err(message) => self.error(&request.statement_span, message),
                 },
                 Err(EvalError::Message(message)) => self.error(span, message),
                 Err(EvalError::Path { key, request }) => {
@@ -498,10 +567,10 @@ impl<'a> Machine<'a> {
                     };
                     match self.start_call(&request, purpose) {
                         Ok(Some(purpose)) => {
-                            self.pending_effect = Some(PendingEffect::Command(*request, purpose))
+                            self.pending_effect = Some(PendingEffect::Command(request, purpose))
                         }
                         Ok(None) => {}
-                        Err(message) => self.error(&request.span, message),
+                        Err(message) => self.error(&request.statement_span, message),
                     }
                 }
             }
@@ -509,19 +578,27 @@ impl<'a> Machine<'a> {
     }
 
     fn error(&mut self, span: &Span, message: String) {
-        self.failure = Some(ExecutionError {
-            span: span.clone(),
-            message,
-        });
+        self.abort(ExecutionError::new(span, message));
+    }
+
+    fn abort(&mut self, failure: ExecutionError) {
+        self.failure = Some(failure);
         self.draining = Some(self.callers.last().map_or(0, |caller| caller.deferred_base));
+    }
+
+    fn defer_failure(&mut self, origin: &Invocation, response: &CommandResponse) {
+        self.defer_failures += 1;
+        self.report(&origin.span, origin.describe_failure("defer", response));
+        self.cleanup_failed();
     }
 
     fn complete_command(
         &mut self,
         purpose: CommandPurpose,
-        span: &Span,
+        origin: &Invocation,
         observation: Result<CommandResponse, String>,
     ) {
+        let span = &origin.span;
         match observation {
             Ok(response) => match purpose {
                 CommandPurpose::Ordinary => {
@@ -549,13 +626,20 @@ impl<'a> Machine<'a> {
                 }
                 CommandPurpose::Cleanup => {
                     if response.exit_code != 0 {
-                        self.cleanup_failed();
+                        self.defer_failure(origin, &response);
                     }
                 }
             },
             Err(message) => {
                 if matches!(purpose, CommandPurpose::Cleanup) {
-                    self.cleanup_failed();
+                    self.defer_failure(
+                        origin,
+                        &CommandResponse {
+                            exit_code: 1,
+                            stderr: message,
+                            ..CommandResponse::success(Value::Absent)
+                        },
+                    );
                 } else {
                     self.error(span, message);
                 }
@@ -564,13 +648,13 @@ impl<'a> Machine<'a> {
     }
 
     fn suspend_command(self, request: CommandRequest, purpose: CommandPurpose) -> Step<'a> {
-        let span = request.span.clone();
+        let origin = Invocation::from_request(&request);
         Step::Command {
             request,
             continuation: CommandContinuation {
                 machine: self,
                 purpose,
-                span,
+                origin: Box::new(origin),
             },
         }
     }
@@ -729,7 +813,8 @@ impl<'a> Machine<'a> {
                 if self.trace_enabled {
                     self.trace_argv(span, &format!("{trace_header} <- "), &argv);
                 }
-                let request = argv.request(DispatchLane::Bind, call_span.clone());
+                let mut request = argv.request(DispatchLane::Bind, call_span.clone());
+                request.statement_span = span.clone();
                 return Ok(Action::Command(
                     Box::new(request),
                     CommandPurpose::Bind(*dst),
@@ -737,9 +822,9 @@ impl<'a> Machine<'a> {
             }
             Instruction::ApplyBind {
                 src,
+                argv,
                 target,
                 policy,
-                ..
             } => {
                 let Some(Slot::Result(response)) = self.temps.get(src.0).and_then(Option::as_ref)
                 else {
@@ -758,13 +843,21 @@ impl<'a> Machine<'a> {
                         self.bind(target, value)?;
                     }
                     ir::BindPolicy::Guard { on_failure } if response.exit_code != 0 => {
-                        self.failure = Some(ExecutionError {
+                        let origin = Invocation {
                             span: span.clone(),
-                            message: format!(
+                            display: self.argv(*argv)?.display,
+                        };
+                        let report = origin.describe_failure("guard", response);
+                        let mut failure = ExecutionError::new(
+                            span,
+                            format!(
                                 "guard {target}: command failed (exit {})",
                                 response.exit_code
                             ),
-                        });
+                        );
+                        failure.reported = true;
+                        self.failure = Some(failure);
+                        self.report(span, report);
                         self.jump(*on_failure);
                     }
                     ir::BindPolicy::Guard { .. } => return Err("invalid guard outcome".into()),
@@ -780,13 +873,27 @@ impl<'a> Machine<'a> {
     }
 
     fn build_argv(&self, command: &ir::Command) -> EvalResult<Argv> {
+        let head = self.argument(&command.head)?;
+        let arguments = command
+            .arguments
+            .iter()
+            .map(|value| self.argument(value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let display = std::iter::once((&head, &command.head))
+            .chain(arguments.iter().zip(&command.arguments))
+            .map(|(argument, expression)| match argument {
+                Argument::Word(text) | Argument::Quoted(text) => text.clone(),
+                Argument::Value(value) => value
+                    .scalar_text()
+                    .unwrap_or_else(|| expression.to_string()),
+                Argument::Adapter { .. } => expression.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
         Ok(Argv {
-            head: self.argument(&command.head)?,
-            arguments: command
-                .arguments
-                .iter()
-                .map(|value| self.argument(value))
-                .collect::<Result<_, _>>()?,
+            head,
+            arguments,
+            display,
         })
     }
 
@@ -1291,6 +1398,18 @@ mod tests {
         ));
     }
 
+    fn acknowledge_diagnostics(mut step: Step<'_>) -> Step<'_> {
+        while let Step::Output {
+            request,
+            continuation,
+        } = step
+        {
+            assert_eq!(request.stream, OutputStream::Stderr);
+            step = continuation.resume(Ok(()));
+        }
+        step
+    }
+
     #[test]
     fn guard_failure_drains_deferred_work_before_reporting_original_error() {
         let program =
@@ -1301,13 +1420,14 @@ mod tests {
         let Step::Command {
             request,
             continuation,
-        } = continuation.resume(result(7, Value::Absent))
+        } = acknowledge_diagnostics(continuation.resume(result(7, Value::Absent)))
         else {
             unreachable!("expected defer")
         };
         assert_eq!(request.lane, DispatchLane::Deferred);
-        let Step::Failed(error) = continuation.resume(Err("cleanup transport failure".to_owned()))
-        else {
+        let Step::Failed(error) = acknowledge_diagnostics(
+            continuation.resume(Err("cleanup transport failure".to_owned())),
+        ) else {
             unreachable!("expected original guard failure")
         };
         assert_eq!(error.span.start().line(), 2);
@@ -1416,14 +1536,15 @@ mod tests {
         let Step::Command { continuation, .. } = execute(&program, HashMap::new()) else {
             unreachable!("expected main guard");
         };
-        let Step::Command { continuation, .. } = continuation.resume(result(7, Value::Absent))
+        let Step::Command { continuation, .. } =
+            acknowledge_diagnostics(continuation.resume(result(7, Value::Absent)))
         else {
             unreachable!("expected deferred definition guard");
         };
         let Step::Command {
             request,
             continuation,
-        } = continuation.resume(result(9, Value::Absent))
+        } = acknowledge_diagnostics(continuation.resume(result(9, Value::Absent)))
         else {
             unreachable!("expected remaining program defer");
         };

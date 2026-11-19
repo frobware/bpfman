@@ -115,7 +115,13 @@ pub(super) fn run(
                 continuation,
             } => continuation.resume(interrupt.pause(duration)),
             Step::Finished { exit_code } => return jobs.finish(Ok(exit_code)),
-            Step::Failed(error) => return jobs.finish(Err(error.to_string())),
+            Step::Failed(error) => {
+                return jobs.finish(if error.was_reported() {
+                    Ok(1)
+                } else {
+                    Err(error.to_string())
+                });
+            }
         };
     }
 }
@@ -260,25 +266,27 @@ fn dispatch(
             pid: None,
         });
     }
-    let mut files = Vec::new();
-    let arguments = request
-        .arguments
-        .iter()
-        .map(|value| files::external_argument(value, &mut files))
-        .collect::<Result<Vec<_>, _>>()?;
     let (executable, arguments) = if head == "exec" {
-        let Some((executable, remaining)) = arguments.split_first() else {
+        let Some((executable, remaining)) = request.arguments.split_first() else {
             return Err("exec: expected a command".to_owned());
         };
-        (executable.as_str(), remaining)
+        (argument(executable)?, remaining)
     } else {
-        (head.as_str(), arguments.as_slice())
+        (head, request.arguments.as_slice())
     };
-    if head != "exec" && head == "import" {
-        return Err(format!("{head}: builtin is not yet implemented"));
-    }
-    let output = process::capture(Command::new(executable).args(arguments), interrupt)
-        .map_err(|error| format!("{executable}: {error}"))?;
+    let mut files = Vec::new();
+    let arguments = arguments
+        .iter()
+        .map(|value| files::external_argument(value, &mut files))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            if process::has_executable(&executable) {
+                error
+            } else {
+                format!("{executable}: command not found")
+            }
+        })?;
+    let output = process::capture(Command::new(&executable).args(arguments), interrupt)?;
     if request.lane == DispatchLane::Command
         || (request.lane == DispatchLane::Deferred && output.status.success())
     {
@@ -312,7 +320,7 @@ fn builtin_response(result: Result<Value, String>) -> CommandResponse {
 }
 
 fn cite(request: &CommandRequest) -> String {
-    let position = request.span.start();
+    let position = request.statement_span.start();
     format!(
         "{}:{}:{}",
         position.name().as_str(),

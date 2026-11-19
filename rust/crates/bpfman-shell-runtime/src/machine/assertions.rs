@@ -3,7 +3,7 @@ use bpfman_shell_ir::{
 };
 use bpfman_shell_source::Span;
 
-use super::{EvalResult, Machine, Value, boolean, compare, location};
+use super::{EvalResult, ExecutionError, Machine, Value, boolean, compare, location};
 
 pub(super) fn label(required: bool) -> &'static str {
     if required { "require" } else { "assert" }
@@ -90,12 +90,14 @@ impl Machine<'_> {
             return;
         }
         let message = format!("[{}] FAIL: {reason}", label(required));
+        self.report(span, format!("{}: {message}", location(span)));
         if required {
-            self.error(span, message);
+            let mut failure = ExecutionError::new(span, message);
+            failure.reported = true;
+            self.abort(failure);
         } else {
             self.assert_failures += 1;
             self.exit_code = 1;
-            self.report(span, format!("{}: {message}", location(span)));
         }
     }
 }

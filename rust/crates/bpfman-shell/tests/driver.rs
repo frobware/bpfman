@@ -101,7 +101,7 @@ fn script_exit_cleans_up_an_unmanaged_background_job() -> io::Result<()> {
     )?;
     assert!(!output.status.success(), "{output:?}");
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("unmanaged job"),
+        String::from_utf8_lossy(&output.stderr).contains("[job] FAIL"),
         "{output:?}"
     );
     let pid = String::from_utf8_lossy(&output.stdout);
@@ -148,7 +148,7 @@ fn deferred_kill_manages_the_job_after_an_error() -> io::Result<()> {
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("[require] FAIL"), "{output:?}");
-    assert!(!stderr.contains("unmanaged job"), "{output:?}");
+    assert!(!stderr.contains("[job] FAIL"), "{output:?}");
     let pid = String::from_utf8_lossy(&output.stdout);
     assert!(!pid.trim().is_empty(), "{output:?}");
     assert!(!std::path::Path::new("/proc").join(pid.trim()).exists());

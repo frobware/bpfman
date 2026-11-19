@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bpfman_shell_ir::{BlockId, Expression, ParameterType};
 
 use super::{
-    Argument, CommandPurpose, CommandRequest, CommandResponse, ExecutionError, Machine, Number,
-    OutputRequest, OutputStream, Slot, Value, loops,
+    Argument, CommandPurpose, CommandRequest, CommandResponse, ExecutionError, Invocation, Machine,
+    Number, OutputRequest, OutputStream, Slot, Value, loops,
 };
 
 const MAX_DEPTH: usize = 256;
@@ -110,14 +110,18 @@ impl Machine<'_> {
         };
         if let Some(builtin) = builtin {
             let value = super::pure::evaluate(self, builtin, &request.arguments)?;
-            self.complete_command(purpose, &request.span, Ok(CommandResponse::success(value)));
+            self.complete_command(
+                purpose,
+                &Invocation::from_request(request),
+                Ok(CommandResponse::success(value)),
+            );
             return Ok(None);
         }
         if head == "trace" {
             self.set_trace(&request.arguments)?;
             self.complete_command(
                 purpose,
-                &request.span,
+                &Invocation::from_request(request),
                 Ok(CommandResponse::success(Value::Absent)),
             );
             return Ok(None);
@@ -148,7 +152,7 @@ impl Machine<'_> {
         }
         self.complete_command(
             purpose,
-            &request.span,
+            &Invocation::from_request(request),
             Ok(CommandResponse::success(Value::Absent)),
         );
         Ok(None)
@@ -194,7 +198,7 @@ impl Machine<'_> {
         if matches!(purpose, CommandPurpose::Cleanup) {
             self.cleanup_failed();
         } else {
-            self.error(&failure.span, failure.message);
+            self.abort(failure);
         }
         Ok(())
     }
@@ -244,10 +248,10 @@ impl Machine<'_> {
         self.exit_code = 1;
         if self.failure.is_none() {
             if let Some(span) = &self.attempt_cleanup {
-                self.failure = Some(ExecutionError {
-                    span: span.clone(),
-                    message: "poll attempt deferred cleanup failed".to_owned(),
-                });
+                self.failure = Some(ExecutionError::new(
+                    span,
+                    "poll attempt deferred cleanup failed".to_owned(),
+                ));
                 self.draining = Some(self.callers.last().map_or(0, |caller| caller.deferred_base));
             }
         }

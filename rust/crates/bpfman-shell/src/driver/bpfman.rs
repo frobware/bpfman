@@ -48,8 +48,7 @@ pub(super) fn invoke(
     let executable = env::var_os("BPFMAN_BIN")
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "bpfman".into());
-    let output = super::process::capture(Command::new(&executable).args(argv), interrupt)
-        .map_err(|error| format!("{}: {error}", executable.to_string_lossy()))?;
+    let output = super::process::capture(Command::new(&executable).args(argv), interrupt)?;
     let primary = if output.status.success() {
         shape.decode(&output.stdout)?
     } else {

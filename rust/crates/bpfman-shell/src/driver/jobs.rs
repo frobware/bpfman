@@ -208,13 +208,22 @@ impl Jobs {
             .entries
             .values()
             .filter(|job| job.listed && !job.managed)
-            .map(|job| format!("{}: unmanaged job {} ({})", job.origin, job.pid, job.argv))
+            .map(|job| {
+                format!(
+                    "[job] FAIL {}: never waited or killed: {}",
+                    job.origin, job.argv
+                )
+            })
             .collect();
         if leaks.is_empty() {
             return result;
         }
         let mut message = result.err().into_iter().collect::<Vec<_>>();
+        let count = leaks.len();
         message.extend(leaks);
+        if message.len() == count {
+            message.push(format!("{count} job(s) leaked"));
+        }
         Err(message.join("\n"))
     }
 }
