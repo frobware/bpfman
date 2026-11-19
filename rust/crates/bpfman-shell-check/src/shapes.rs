@@ -14,7 +14,8 @@ use bpfman_shell_syntax::{
 
 use crate::{ExpandedProgram, Issue};
 
-/// Report field-access mistakes on shapes the checker can prove sealed.
+/// Report field-access mistakes and incompatible comparison operands when
+/// their shapes are known.
 /// Unknown and domain shapes without a verified Rust JSON projection stay open.
 /// An empty result does not certify execution.
 #[must_use]
@@ -208,8 +209,18 @@ impl Analysis {
             ExpressionKind::Variable(variable) | ExpressionKind::Adapter { variable, .. } => {
                 self.path_shape(variable, value.span());
             }
-            ExpressionKind::Binary { left, right, .. }
-            | ExpressionKind::Logical { left, right, .. } => {
+            ExpressionKind::Binary { left, right, .. } => {
+                if let Some(issue) = crate::comparison::issue(
+                    value,
+                    |operand| self.infer(operand),
+                    |name| self.defs.contains(name),
+                ) {
+                    self.issues.push(issue);
+                }
+                self.expression(left);
+                self.expression(right);
+            }
+            ExpressionKind::Logical { left, right, .. } => {
                 self.expression(left);
                 self.expression(right);
             }
@@ -459,5 +470,39 @@ mod tests {
         assert_eq!(found.len(), 2);
         assert!(found[0].contains("kind job"));
         assert!(found[1].contains("kind job"));
+    }
+
+    #[test]
+    fn comparison_checks_known_shapes_and_leaves_open_values_to_runtime() {
+        let setup = "let r = record { id: 1 }\nlet flag = true\nlet open = jq . 1";
+        for expression in [
+            "$r == null",
+            "null == $r",
+            "$r != null",
+            "null != $r",
+            "$open == $r",
+            "$flag == false",
+        ] {
+            assert!(messages(&format!("{setup}\nlet result = {expression}")).is_empty());
+        }
+        for (expression, expected) in [
+            ("$r < null", "null supports only == and !="),
+            ("null >= $r", "null supports only == and !="),
+            ("$r == $r", "only scalars"),
+            ("$flag == 1", "cannot compare boolean to scalar"),
+            ("$flag < true", "booleans support only == and !="),
+        ] {
+            let found = messages(&format!("{setup}\nlet result = {expression}"));
+            assert_eq!(found.len(), 1, "{expression}: {found:?}");
+            assert!(found[0].contains(expected), "{expression}: {found:?}");
+        }
+    }
+
+    #[test]
+    fn comparison_hints_at_hoisted_definition_calls() {
+        let found = messages("let result = two == 2\ndef two() { return 2 }");
+        assert_eq!(found.len(), 1);
+        assert!(found[0].contains("call it via `let v <- two`"));
+        assert!(messages("let result = \"two\" == \"2\"\ndef two() { return 2 }").is_empty());
     }
 }

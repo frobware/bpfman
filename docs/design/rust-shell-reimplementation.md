@@ -146,8 +146,14 @@ The semantics crate now holds an origin and structural-shape vocabulary. A
 separate pure shape pass in the checker propagates proved record, list, native
 bind, and bind-collect shapes through lexical bindings and reports invalid
 fields only on sealed parents. Unknown and bpfman program/link payloads stay
-open pending verification against Rust's JSON projection. This pass is still
-partial: definition return shapes and the full preflight gate are pending.
+open pending verification against Rust's JSON projection. The same pass checks
+comparison operands using their lexical shapes. Known records can be compared
+to null for equality and inequality. Rust also diagnoses record-to-record
+comparisons during preflight when it has a sealed record shape. Go leaves
+literal records' origin unknown and diagnoses this at runtime. Unknown operands
+defer to runtime. A bare definition name in a comparison gets a call-site hint
+at the operand span. Definition return shapes and the full preflight gate are
+pending.
 
 ## Typestate and internal invariants
 

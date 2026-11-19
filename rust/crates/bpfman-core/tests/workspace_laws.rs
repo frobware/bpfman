@@ -10,6 +10,8 @@ use serde_json::Value;
 const TIERS: &[(&str, u64)] = &[
     ("bpfman-shell-source", 0),
     ("bpfman-shell-syntax", 1),
+    ("bpfman-shell-semantics", 2),
+    ("bpfman-shell-check", 3),
     ("bpfman-model", 0),
     ("bpfman-core", 1),
     ("bpfman-lock", 1),
@@ -24,7 +26,14 @@ const TIERS: &[(&str, u64)] = &[
     ("bpfman-api", 5),
     ("bpfman", 6),
 ];
-const PURE: &[&str] = &["bpfman-model", "bpfman-core"];
+const PURE: &[&str] = &[
+    "bpfman-model",
+    "bpfman-core",
+    "bpfman-shell-source",
+    "bpfman-shell-syntax",
+    "bpfman-shell-semantics",
+    "bpfman-shell-check",
+];
 
 // No external normal dependencies are admitted to the pure crates. In
 // particular Aya's std-enabled thiserror must not unify into their closure.

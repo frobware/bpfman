@@ -13,6 +13,7 @@ use bpfman_shell_syntax::{
 };
 
 mod calls;
+mod comparison;
 mod imports;
 mod shapes;
 
