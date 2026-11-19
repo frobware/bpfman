@@ -375,6 +375,28 @@ fn ast_mode_matches_the_go_tree_shape_and_preserves_group_extent() -> io::Result
 }
 
 #[test]
+fn formatter_preserves_import_and_comments_and_can_write_a_file() -> io::Result<()> {
+    let source = "# intro\nimport  ./missing.bpfman\n\ndef helper(x){print  $x} # retained\n";
+    let expected =
+        "# intro\nimport ./missing.bpfman\n\ndef helper(x) {\n    print $x\n} # retained\n";
+    let formatted = run(&["--fmt"], source)?;
+    assert!(formatted.status.success(), "{formatted:?}");
+    assert_eq!(formatted.stdout, expected.as_bytes());
+
+    let directory = tempfile::tempdir()?;
+    let file = directory.path().join("source.bpfman");
+    fs::write(&file, source)?;
+    let written = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"))
+        .args(["fmt", "-w"])
+        .arg(&file)
+        .output()?;
+    assert!(written.status.success(), "{written:?}");
+    assert!(written.stdout.is_empty());
+    assert_eq!(fs::read_to_string(file)?, expected);
+    Ok(())
+}
+
+#[test]
 fn assertions_use_stderr_continue_and_require_stops_after_cleanup() -> io::Result<()> {
     let source = "let r = record { nested: record { n: 2 } }\nassert $r matches exhaustive { nested: matches { n: 2 } }\nassert false\nassert fail exec false\nprint continued\nrequire false\nprint unreachable";
     let output = run(&[], source)?;

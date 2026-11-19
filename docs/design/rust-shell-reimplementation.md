@@ -338,6 +338,11 @@ compared byte for byte with the Go shell.
 expanded. Parent expression spans retain consumed closing delimiters, while
 inner nodes keep their own byte ranges. The complete Go language fixture
 and all 191 checked-in end-to-end scripts matched the Go dump byte for byte.
+`fmt`, `--fmt` and `fmt -w` share a pure formatter that preserves imports,
+comments and command continuation groups. Before any file write, Rust
+reparses the result and compares the syntax with source positions omitted.
+All 191 checked-in end-to-end scripts produced byte-identical canonical
+source in both shells.
 
 ## Typestate and internal invariants
 

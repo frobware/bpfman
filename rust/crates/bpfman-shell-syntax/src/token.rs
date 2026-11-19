@@ -200,7 +200,7 @@ fn lex_error(
     }
 }
 
-fn strip_comments(input: &str) -> String {
+pub(crate) fn strip_comments(input: &str) -> String {
     let mut bytes = input.as_bytes().to_vec();
     let mut single = false;
     let mut double = false;

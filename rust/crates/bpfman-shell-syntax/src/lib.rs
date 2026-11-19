@@ -18,7 +18,9 @@ mod compound;
 mod dump;
 mod duration;
 mod expr;
+mod format;
 mod parse;
+mod spelling;
 mod symbols;
 mod token;
 
@@ -31,6 +33,7 @@ pub use ast::{
 pub use dump::dump_ast;
 pub use duration::{PositiveDuration, parse_go_duration};
 pub use expr::is_json_number;
+pub use format::{FormatError, format_source};
 pub use parse::{SyntaxError, SyntaxErrorKind, parse};
 pub use symbols::{Symbol, SymbolKind, program_scope, symbols};
 

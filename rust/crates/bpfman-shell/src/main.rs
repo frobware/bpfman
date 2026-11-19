@@ -11,7 +11,7 @@ use std::{
 use bpfman_shell_check::{ExpandedProgram, check, expand_imports, prepare_imports};
 use bpfman_shell_lower::{lower, lower_unchecked};
 use bpfman_shell_source::Span;
-use bpfman_shell_syntax::{ParsedProgram, dump_ast, parse};
+use bpfman_shell_syntax::{ParsedProgram, dump_ast, format_source, parse};
 use clap::Parser;
 
 mod driver;
@@ -36,6 +36,12 @@ struct Options {
     /// Print the whole program's parsed AST without executing.
     #[arg(long, conflicts_with_all = ["check", "no_check", "lowered", "symbols"])]
     ast: bool,
+    /// Print canonical source without expanding imports or executing.
+    #[arg(long, conflicts_with_all = ["check", "no_check", "lowered", "symbols", "ast"])]
+    fmt: bool,
+    /// Write formatted source back to the input file.
+    #[arg(short = 'w', long, requires = "fmt")]
+    write: bool,
     /// Print the parsed program's editor symbol table as JSON.
     #[arg(long, conflicts_with_all = ["check", "no_check", "lowered"])]
     symbols: bool,
@@ -61,7 +67,13 @@ fn main() -> ExitCode {
             }
         };
     }
-    let options = Options::parse();
+    let options = Options::parse_from(std::env::args_os().enumerate().map(|(index, argument)| {
+        if index == 1 && argument == "fmt" {
+            "--fmt".into()
+        } else {
+            argument
+        }
+    }));
     match run(options, &mut io::stdout().lock()) {
         Ok(status) => ExitCode::from(status),
         Err(error) => {
@@ -84,11 +96,28 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
     let mut status = 0;
     let mut registry = driver::ImageRegistry::default();
     for path in scripts {
+        if options.write && path == Path::new("-") {
+            return Err("fmt --write requires a script file".to_owned());
+        }
         let (name, source, base) = read_source(&cwd, &path)?;
-        if (options.symbols || options.ast) && source.trim().is_empty() {
+        if (options.symbols || options.ast || options.fmt) && source.trim().is_empty() {
             return Ok(0);
         }
         let parsed = parse(name, &source).map_err(|error| error.to_string())?;
+        if options.fmt {
+            let formatted = format_source(&source, &parsed).map_err(|error| error.to_string())?;
+            if options.write {
+                if formatted != source {
+                    fs::write(cwd.join(&path), formatted)
+                        .map_err(|error| format!("{}: {error}", path.display()))?;
+                }
+            } else {
+                stdout
+                    .write_all(formatted.as_bytes())
+                    .map_err(|error| error.to_string())?;
+            }
+            return Ok(0);
+        }
         if options.symbols {
             symbols::write(
                 &parsed,

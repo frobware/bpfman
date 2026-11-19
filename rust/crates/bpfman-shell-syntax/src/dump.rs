@@ -5,16 +5,29 @@ use std::fmt::Write as _;
 use bpfman_shell_source::{Position, Span};
 
 use crate::{
-    AssertionClause, AssertionMode, BinaryOperator, BindMode, Command, CommandOutcome, Expression,
-    ExpressionKind, Identifier, InterpolatedPart, LogicalOperator, LoopBindings, MatchPattern,
-    MatchPredicate, MatchesBlock, ParameterType, PositiveDuration, PureBuiltin, Statement,
-    StatementKind,
+    AssertionClause, AssertionMode, BindMode, Command, CommandOutcome, Expression, ExpressionKind,
+    Identifier, InterpolatedPart, LoopBindings, MatchPattern, MatchPredicate, MatchesBlock,
+    ParameterType, Statement, StatementKind,
 };
+
+use crate::spelling::{binary, builtin, duration, logical};
 
 /// Render statements as the shell's AST tree using the main source extent.
 #[must_use]
 pub fn dump_ast(statements: &[Statement], span: Option<&Span>) -> String {
-    let mut dumper = Dumper::default();
+    render(statements, span, true)
+}
+
+pub(crate) fn semantic_shape(statements: &[Statement]) -> String {
+    render(statements, None, false)
+}
+
+fn render(statements: &[Statement], span: Option<&Span>, positions: bool) -> String {
+    let mut dumper = Dumper {
+        positions,
+        text: String::new(),
+        depth: 0,
+    };
     dumper.structure("", "Program", |out| {
         out.statements("Stmts", statements);
         if let Some(span) = span {
@@ -24,8 +37,8 @@ pub fn dump_ast(statements: &[Statement], span: Option<&Span>) -> String {
     dumper.text
 }
 
-#[derive(Default)]
 struct Dumper {
+    positions: bool,
     text: String,
     depth: usize,
 }
@@ -84,6 +97,9 @@ impl Dumper {
     }
 
     fn span(&mut self, span: &Span) {
+        if !self.positions {
+            return;
+        }
         self.line(
             "Span",
             &format!("{}-{}", coordinate(span.start()), coordinate(span.end())),
@@ -362,7 +378,9 @@ impl Dumper {
                 } => {
                     out.expression("LHS", value);
                     out.args(Some(command.head()), command.arguments());
-                    out.line("PipePos", &coordinate(pipe));
+                    if out.positions {
+                        out.line("PipePos", &coordinate(pipe));
+                    }
                 }
                 ExpressionKind::PureCall {
                     builtin: function,
@@ -430,74 +448,6 @@ impl Dumper {
 
 fn coordinate(position: &Position) -> String {
     format!("{}:{}", position.line(), position.column())
-}
-
-pub(crate) const fn binary(operator: BinaryOperator) -> &'static str {
-    match operator {
-        BinaryOperator::Equal => "==",
-        BinaryOperator::NotEqual => "!=",
-        BinaryOperator::Less => "<",
-        BinaryOperator::LessEqual => "<=",
-        BinaryOperator::Greater => ">",
-        BinaryOperator::GreaterEqual => ">=",
-        BinaryOperator::Add => "+",
-        BinaryOperator::Subtract => "-",
-        BinaryOperator::Multiply => "*",
-        BinaryOperator::Divide => "/",
-        BinaryOperator::Remainder => "%",
-    }
-}
-
-pub(crate) const fn logical(operator: LogicalOperator) -> &'static str {
-    match operator {
-        LogicalOperator::And => "and",
-        LogicalOperator::Or => "or",
-    }
-}
-
-pub(crate) const fn builtin(builtin: PureBuiltin) -> &'static str {
-    match builtin {
-        PureBuiltin::Jq => "jq",
-        PureBuiltin::U32Le => "u32le",
-        PureBuiltin::U64Le => "u64le",
-        PureBuiltin::Range => "range",
-        PureBuiltin::Zip => "zip",
-        PureBuiltin::PathExists => "path-exists",
-        PureBuiltin::Contains => "contains",
-        PureBuiltin::Null => "null",
-        PureBuiltin::Present => "present",
-        PureBuiltin::Missing => "missing",
-        PureBuiltin::Empty => "empty",
-    }
-}
-
-pub(crate) fn duration(duration: PositiveDuration) -> String {
-    let nanos = duration.as_nanos();
-    match nanos {
-        0..1_000 => format!("{nanos}ns"),
-        1_000..1_000_000 => fractional(nanos / 1_000, nanos % 1_000, 3, "µs"),
-        1_000_000..1_000_000_000 => fractional(nanos / 1_000_000, nanos % 1_000_000, 6, "ms"),
-        _ => {
-            let seconds = nanos / 1_000_000_000;
-            let mut out = String::new();
-            if seconds >= 3600 {
-                let _ = write!(out, "{}h", seconds / 3600);
-            }
-            if seconds >= 60 {
-                let _ = write!(out, "{}m", (seconds / 60) % 60);
-            }
-            out.push_str(&fractional(seconds % 60, nanos % 1_000_000_000, 9, "s"));
-            out
-        }
-    }
-}
-
-fn fractional(integer: u64, fraction: u64, digits: usize, unit: &str) -> String {
-    if fraction == 0 {
-        return format!("{integer}{unit}");
-    }
-    let fraction = format!("{fraction:0digits$}");
-    format!("{integer}.{}{unit}", fraction.trim_end_matches('0'))
 }
 
 pub(crate) fn quoted(value: &str) -> String {
