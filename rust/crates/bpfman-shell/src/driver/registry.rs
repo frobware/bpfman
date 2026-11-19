@@ -7,6 +7,7 @@ use std::{
 
 use bpfman_shell_runtime::{Argument, Value};
 
+mod broker;
 mod loopback;
 
 const ALIAS: &str = "bpfman-e2e-registry.example.com";
@@ -16,6 +17,7 @@ static REFERENCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 #[derive(Default)]
 pub(crate) struct Registry {
     server: Option<loopback::Registry>,
+    broker: broker::Cache,
 }
 
 impl Registry {
@@ -36,6 +38,29 @@ impl Registry {
             _ => return Err(format!("registry: unknown subcommand {mode:?}")),
         };
         Ok(Value::String(value))
+    }
+
+    pub(super) fn broker_load(
+        &mut self,
+        argv: &mut Vec<String>,
+        executable: &std::ffi::OsStr,
+        interrupt: &super::process::Interrupt,
+    ) -> Result<(), String> {
+        let Some(load) = broker::Load::from_environment(argv)? else {
+            return Ok(());
+        };
+        let host = self.endpoint()?.authority;
+        let reference = self.broker.resolve(load, &host, executable, interrupt)?;
+        argv.splice(
+            2..4,
+            [
+                "image".to_owned(),
+                reference,
+                "--pull-policy".to_owned(),
+                "Always".to_owned(),
+            ],
+        );
+        Ok(())
     }
 
     pub(super) fn rewrite(&mut self, argv: &mut [String]) -> Result<(), String> {
@@ -160,22 +185,30 @@ fn reference(name: &str) -> Result<String, String> {
     if name.trim().is_empty() {
         return Err("registry ref: name must not be empty".to_owned());
     }
+    let repository = repository(name);
+    let sequence = next_sequence();
+    Ok(format!(
+        "{ALIAS}/bpfman-e2e/{repository}:{}-{sequence}",
+        std::process::id()
+    ))
+}
+
+fn repository(name: &str) -> String {
     let sanitized = name
         .to_lowercase()
         .split(|ch: char| !ch.is_ascii_alphanumeric())
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    let repository = if sanitized.is_empty() {
-        "bytecode"
+    if sanitized.is_empty() {
+        "bytecode".to_owned()
     } else {
-        &sanitized
-    };
-    let sequence = REFERENCE_SEQUENCE
+        sanitized
+    }
+}
+
+fn next_sequence() -> u64 {
+    REFERENCE_SEQUENCE
         .fetch_add(1, Ordering::Relaxed)
-        .wrapping_add(1);
-    Ok(format!(
-        "{ALIAS}/bpfman-e2e/{repository}:{}-{sequence}",
-        std::process::id()
-    ))
+        .wrapping_add(1)
 }

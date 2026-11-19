@@ -15,6 +15,10 @@ pub(super) fn invoke(
             argument => super::argument(&argument),
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let executable = env::var_os("BPFMAN_BIN")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "bpfman".into());
+    registry.broker_load(&mut argv, &executable, interrupt)?;
     registry.rewrite(&mut argv)?;
     if argv.is_empty() {
         return Err("missing command after bpfman".to_owned());
@@ -45,9 +49,6 @@ pub(super) fn invoke(
         argv.extend(["-o".to_owned(), "json".to_owned()]);
     }
 
-    let executable = env::var_os("BPFMAN_BIN")
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "bpfman".into());
     let output = super::process::capture(Command::new(&executable).args(argv), interrupt)?;
     let primary = if output.status.success() {
         shape.decode(&output.stdout)?

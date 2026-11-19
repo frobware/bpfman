@@ -236,7 +236,7 @@ MIT or Apache-2.0. Deterministic expression builtins now cover range, zip,
 little-endian conversion, containment, and presence predicates. Structural
 matches evaluate nested and exhaustive rows. Expression and command-status
 assertions distinguish nonfatal diagnostics from requirements that unwind
-the program. Go's detailed match and assertion diagnostics are still pending.
+the program and report located details.
 The shell can invoke the CLI selected by `BPFMAN_BIN`, preserve exact JSON
 integers, and project program and link records to IDs for later command
 arguments. A retry from a helper now unwinds each callable's defers and the
@@ -322,6 +322,11 @@ bpfman invocation boundary, and uses either the harness override or a
 process-owned loopback registry. Build, inspect, load and attach passed with
 both backends against the Go daemon. A regression test checks that a digest
 mismatch leaves the upload available for retry.
+In image-bytecode mode, the registry adapter builds a repository-scoped
+image once per script and rewrites file loads to use that image. The Rust
+shell and Go daemon passed all 158 non-external image-mode fixture entries.
+The Rust daemon does not yet supply the image build and load commands that
+this mode requires.
 
 The isolated file-mode matrix passed for all four shell and daemon
 combinations. With the Go daemon, each shell passed 158 fixture entries
