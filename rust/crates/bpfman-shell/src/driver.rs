@@ -100,6 +100,24 @@ fn dispatch(
     if head == "start" {
         return jobs.start(&request.arguments, cite(&request));
     }
+    if head == "fire" {
+        let words = request
+            .arguments
+            .iter()
+            .map(argument)
+            .collect::<Result<Vec<_>, _>>()?;
+        let (kind, waves) = crate::fixturemode::Waves::builtin(&words)?;
+        let executable = std::env::current_exe().map_err(|error| format!("fire: {error}"))?;
+        let program = executable
+            .into_os_string()
+            .into_string()
+            .map_err(|_| "fire: shell path must be UTF-8")?;
+        let argv = std::iter::once(program)
+            .chain(waves.argv())
+            .map(Argument::Word)
+            .collect::<Vec<_>>();
+        return jobs.start_fixture(&argv, cite(&request), kind.mode());
+    }
     if head == "kfunc" {
         return functions.invoke(&request.arguments, cite(&request), interrupt);
     }
@@ -207,7 +225,6 @@ fn dispatch(
         && matches!(
             head.as_str(),
             "defs"
-                | "fire"
                 | "import"
                 | "lsm"
                 | "process"

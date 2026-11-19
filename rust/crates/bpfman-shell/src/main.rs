@@ -14,6 +14,7 @@ use bpfman_shell_syntax::parse;
 use clap::Parser;
 
 mod driver;
+mod fixturemode;
 
 #[derive(Parser)]
 #[command(version, about, max_term_width = 80)]
@@ -35,6 +36,23 @@ struct Options {
 }
 
 fn main() -> ExitCode {
+    if let Some(mode) = std::env::var_os("BPFMAN_SHELL_MODE").filter(|mode| !mode.is_empty()) {
+        let args = std::env::args_os()
+            .skip(1)
+            .map(|argument| {
+                argument
+                    .into_string()
+                    .map_err(|_| "fixture arguments must be UTF-8".to_owned())
+            })
+            .collect::<Result<Vec<_>, _>>();
+        return match args.and_then(|args| fixturemode::run(&mode, &args)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("bpfman-shell: {error}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let options = Options::parse();
     match run(options, &mut io::stdout().lock()) {
         Ok(status) => ExitCode::from(status),

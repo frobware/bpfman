@@ -156,6 +156,31 @@ fn deferred_kill_manages_the_job_after_an_error() -> io::Result<()> {
 }
 
 #[test]
+fn fixture_workers_acknowledge_each_requested_wave() -> io::Result<()> {
+    let output = run(
+        &[],
+        r#"
+guard fixture <- tempdir wave
+defer rm -r $fixture.path
+let ready = "${fixture.path}/ready"
+let signal_ack = "${fixture.path}/signal"
+let unlink_ack = "${fixture.path}/unlink"
+exec touch "${ready}.1" "${ready}.2"
+guard signaller <- fire kill $ready $signal_ack --count=3 --waves 2
+guard unlinker <- fire unlinkat $ready $unlink_ack --count 3 --waves=2
+guard _ <- wait $signaller
+guard _ <- wait $unlinker
+assert path-exists "${signal_ack}.1"
+assert path-exists "${signal_ack}.2"
+assert path-exists "${unlink_ack}.1"
+assert path-exists "${unlink_ack}.2"
+"#,
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    Ok(())
+}
+
+#[test]
 fn embedded_jq_preserves_precision_result_stream_and_argument_origin() -> io::Result<()> {
     let output = run(
         &[],

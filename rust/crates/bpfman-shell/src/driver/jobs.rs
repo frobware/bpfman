@@ -36,7 +36,7 @@ impl Jobs {
         arguments: &[Argument],
         origin: String,
     ) -> Result<CommandResponse, String> {
-        self.spawn(arguments, origin, true)
+        self.spawn(arguments, origin, Launch::Executable)
     }
 
     pub(super) fn start_in_namespace(
@@ -44,14 +44,23 @@ impl Jobs {
         arguments: &[Argument],
         origin: String,
     ) -> Result<CommandResponse, String> {
-        self.spawn(arguments, origin, false)
+        self.spawn(arguments, origin, Launch::Namespace)
+    }
+
+    pub(super) fn start_fixture(
+        &mut self,
+        arguments: &[Argument],
+        origin: String,
+        mode: &'static str,
+    ) -> Result<CommandResponse, String> {
+        self.spawn(arguments, origin, Launch::Fixture(mode))
     }
 
     fn spawn(
         &mut self,
         arguments: &[Argument],
         origin: String,
-        expose_executable: bool,
+        launch: Launch,
     ) -> Result<CommandResponse, String> {
         let id = self
             .last_id
@@ -64,10 +73,15 @@ impl Jobs {
             .map(|argument| files::external_argument(argument, &mut files))
             .collect::<Result<Vec<_>, _>>()?;
         let (executable, args) = argv.split_first().ok_or("start requires a command")?;
-        let process = CapturedChild::spawn(Command::new(executable).args(args))
+        let mut command = Command::new(executable);
+        command.args(args);
+        if let Launch::Fixture(mode) = launch {
+            command.env("BPFMAN_SHELL_MODE", mode);
+        }
+        let process = CapturedChild::spawn(&mut command)
             .map_err(|error| format!("start {executable}: {error}"))?;
         let pid = process.pid().ok_or("background child has no PID")?;
-        let target = expose_executable.then(|| executable.clone());
+        let target = matches!(launch, Launch::Executable).then(|| executable.clone());
         let handle = JobHandle::new(id, pid, target);
         let job = Job::spawn(process, files, pid, argv.join(" "), origin)?;
 
@@ -187,6 +201,12 @@ impl Jobs {
         message.extend(leaks);
         Err(message.join("\n"))
     }
+}
+
+enum Launch {
+    Executable,
+    Namespace,
+    Fixture(&'static str),
 }
 
 enum Control {

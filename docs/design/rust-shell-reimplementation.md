@@ -295,6 +295,11 @@ shape. Setup rolls back only resources it created, which protects existing
 names from being deleted on a collision. The Rust shell and Rust daemon
 passed the XDP link round-trip, TC ingress/egress independence, and TC egress
 traffic counting fixtures.
+The whole isolated `rust=ok,!external` subset now passes with the Rust shell
+against both daemons. The Rust shell also launches `fire kill` and
+`fire unlinkat` workers through its own fixture entry point, with tests for
+multiple numbered acknowledgements. The private LSM open-worker entry point
+is available for the LSM adapter.
 
 ## Typestate and internal invariants
 
