@@ -25,6 +25,7 @@ mod registry;
 mod slot_pool;
 mod uprobe;
 
+pub(super) use process::Interrupt;
 pub(super) use registry::Registry as ImageRegistry;
 
 #[derive(Default)]
@@ -39,9 +40,10 @@ pub(super) fn run(
     stdout: &mut impl Write,
     registry: &mut ImageRegistry,
     trace: bool,
+    interrupt: &Interrupt,
 ) -> Result<u8, String> {
     let start = Instant::now();
-    let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
+    interrupt.check()?;
     let mut jobs = jobs::Jobs::default();
     let mut fixtures = Fixtures::default();
     let mut step = execute_with_trace(program, HashMap::new(), trace);
@@ -53,7 +55,7 @@ pub(super) fn run(
             } => continuation.resume(dispatch(
                 request,
                 stdout,
-                &interrupt,
+                interrupt,
                 &mut jobs,
                 &mut fixtures,
                 registry,

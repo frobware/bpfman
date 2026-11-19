@@ -4,6 +4,7 @@ use std::{
     env, fs,
     io::{self, Read},
     num::NonZeroU32,
+    os::fd::AsFd,
     os::unix::{
         fs::PermissionsExt,
         process::{CommandExt, ExitStatusExt},
@@ -20,7 +21,10 @@ use std::{
 
 use bpfman_shell_runtime::{CommandResponse, Value};
 use bpfman_shell_semantics::JobSignal;
-use rustix::process::{Pid, Signal, kill_process_group};
+use rustix::{
+    event::{PollFd, PollFlags, Timespec, poll},
+    process::{Pid, Signal, kill_process_group},
+};
 use signal_hook::{
     SigId,
     consts::{SIGINT, SIGTERM},
@@ -30,15 +34,24 @@ use tempfile::NamedTempFile;
 
 const POLL: Duration = Duration::from_millis(5);
 
-pub(super) struct Interrupt {
+pub(crate) struct Interrupt {
     pending: Arc<AtomicBool>,
     handlers: Vec<SigId>,
 }
 
 impl Interrupt {
-    pub(super) fn register() -> io::Result<Self> {
+    pub(crate) fn register() -> io::Result<Self> {
         let mut interrupt = Self::unregistered();
+        let seen = Arc::new(AtomicBool::new(false));
         for signal in [SIGINT, SIGTERM] {
+            interrupt.handlers.push(flag::register_conditional_shutdown(
+                signal,
+                1,
+                Arc::clone(&seen),
+            )?);
+            interrupt
+                .handlers
+                .push(flag::register(signal, Arc::clone(&seen))?);
             interrupt
                 .handlers
                 .push(flag::register(signal, Arc::clone(&interrupt.pending))?);
@@ -53,11 +66,39 @@ impl Interrupt {
         }
     }
 
-    pub(super) fn check(&self) -> Result<(), String> {
+    pub(crate) fn check(&self) -> Result<(), String> {
         if self.pending.swap(false, Ordering::Relaxed) {
             return Err("interrupted by signal".to_owned());
         }
         Ok(())
+    }
+
+    pub(crate) fn read_program(&self, mut input: impl AsFd + Read) -> Result<String, String> {
+        let timeout = Timespec {
+            tv_sec: 0,
+            tv_nsec: 20_000_000,
+        };
+        let mut bytes = Vec::new();
+        let mut buffer = [0; 8192];
+        loop {
+            self.check()?;
+            let mut descriptors = [PollFd::new(&input, PollFlags::IN)];
+            match poll(&mut descriptors, Some(&timeout)) {
+                Ok(0) | Err(rustix::io::Errno::INTR) => continue,
+                Ok(_) => {}
+                Err(error) => return Err(error.to_string()),
+            }
+            self.check()?;
+            let count = match input.read(&mut buffer) {
+                Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => return Err(error.to_string()),
+            };
+            if count == 0 {
+                return String::from_utf8(bytes).map_err(|error| error.utf8_error().to_string());
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+        }
     }
 
     pub(super) fn pause(&self, duration: Duration) -> Result<(), String> {

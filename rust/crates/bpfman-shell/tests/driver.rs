@@ -4,7 +4,8 @@ use std::{
     fs,
     io::{self, Write},
     os::unix::fs::PermissionsExt,
-    process::{Command, Output, Stdio},
+    path::Path,
+    process::{Child, Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -47,19 +48,8 @@ fn interrupt_cancels_foreground_process_and_drains_defers() -> io::Result<()> {
         .ok_or_else(|| io::Error::other("stdin"))?;
     stdin.write_all(b"defer touch cleaned\nexec sh -c 'echo $$ > started; sleep 30 & wait'\n")?;
     drop(stdin);
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while fs::read_to_string(&marker).map_or(true, |text| text.trim().is_empty()) {
-        if Instant::now() >= deadline {
-            shell.kill()?;
-            let output = shell.wait_with_output()?;
-            return Err(io::Error::other(format!("child never started: {output:?}")));
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    let pid = i32::try_from(shell.id())
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-        .ok_or_else(|| io::Error::other("invalid shell PID"))?;
+    wait_for_pid_file(&mut shell, &marker)?;
+    let pid = process_id(shell.id())?;
     rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
     let output = shell.wait_with_output()?;
     assert!(!output.status.success(), "{output:?}");
@@ -71,6 +61,61 @@ fn interrupt_cancels_foreground_process_and_drains_defers() -> io::Result<()> {
     let worker = fs::read_to_string(&marker)?;
     assert!(!std::path::Path::new("/proc").join(worker.trim()).exists());
     Ok(())
+}
+
+#[test]
+fn second_signal_exits_during_a_deferred_command() -> io::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut shell = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"))
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    let mut stdin = shell
+        .stdin
+        .take()
+        .ok_or_else(|| io::Error::other("stdin"))?;
+    stdin.write_all(b"defer exec sh -c 'echo $$ > cleanup; exec sleep 5'\nexec sh -c 'echo $$ > main; exec sleep 5'\n")?;
+    drop(stdin);
+    let pid = process_id(shell.id())?;
+    wait_for_pid_file(&mut shell, &dir.path().join("main"))?;
+    rustix::process::kill_process(pid, rustix::process::Signal::INT)?;
+    let cleanup = wait_for_pid_file(&mut shell, &dir.path().join("cleanup"))?;
+    let start = Instant::now();
+    rustix::process::kill_process(pid, rustix::process::Signal::TERM)?;
+    let status = shell.wait();
+    let _ = rustix::process::kill_process_group(cleanup, rustix::process::Signal::KILL);
+    assert_eq!(status?.code(), Some(1));
+    assert!(start.elapsed() < Duration::from_secs(4));
+    Ok(())
+}
+
+fn process_id(raw: u32) -> io::Result<rustix::process::Pid> {
+    i32::try_from(raw)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .ok_or_else(|| io::Error::other("invalid PID"))
+}
+
+fn wait_for_pid_file(shell: &mut Child, marker: &Path) -> io::Result<rustix::process::Pid> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(text) = fs::read_to_string(marker)
+            && let Ok(pid) = text.trim().parse()
+        {
+            return process_id(pid);
+        }
+        if Instant::now() >= deadline {
+            let _ = shell.kill();
+            let _ = shell.wait();
+            return Err(io::Error::other(format!(
+                "{} was never written",
+                marker.display()
+            )));
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]

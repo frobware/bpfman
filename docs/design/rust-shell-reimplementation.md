@@ -259,10 +259,11 @@ envelope. Each script has one job registry, which reports and cleans up
 unmanaged jobs after defers. `kill` resolves signals through the same typed
 names used by preflight. The reaper sends signals while it still owns the
 process. `jobs` reads status without marking jobs managed, and `reap` hides
-completed jobs while existing handles retain their outcomes. Second-signal
-behavior, remaining typed builtins, and the remaining inspection modes
-are pending. The Go harness
-still uses the Go shell. The Make runner now selects the shell independently
+completed jobs while existing handles retain their outcomes. Cancellation
+starts during whole-program input. An initial signal interrupts an input
+or process wait and runs registered defers. A second signal exits with
+status 1 even if a defer is still running. The Go harness still defaults to
+the Go shell. The Make runner now selects the shell independently
 via `BPFMAN_SHELL_UNDER_TEST` because the Rust daemon's directory can also
 contain the Rust shell. A temporary directory exposes just the selected daemon
 first on script PATH. The selected shell's directory follows it so scripts
@@ -375,7 +376,8 @@ attempt count and last retry reason.
 Command-status assertions can inspect a shell definition's guard outcome
 after its local defers drain. The signed-release fixture exercises the
 actual failed load through its helper, including the wrong-signer
-rejections for each pull policy.
+rejections for each pull policy. The signed fixture passed on rerun with the
+Rust shell and Go daemon, completing the eleven external fixture cases.
 
 ## Typestate and internal invariants
 

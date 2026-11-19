@@ -3,7 +3,7 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     process::ExitCode,
 };
@@ -84,7 +84,10 @@ fn main() -> ExitCode {
             argument
         }
     }));
-    match run(options, &mut io::stdout().lock()) {
+    let result = driver::Interrupt::register()
+        .map_err(|error| error.to_string())
+        .and_then(|interrupt| run(options, &mut io::stdout().lock(), &interrupt));
+    match result {
         Ok(status) => ExitCode::from(status),
         Err(error) => {
             eprintln!("{error}");
@@ -93,7 +96,12 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
+fn run(
+    options: Options,
+    stdout: &mut impl Write,
+    interrupt: &driver::Interrupt,
+) -> Result<u8, String> {
+    interrupt.check()?;
     if let Some(path) = options.directory {
         std::env::set_current_dir(&path).map_err(|error| format!("{}: {error}", path.display()))?;
     }
@@ -113,7 +121,7 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
     if options.write && path == Path::new("-") {
         return Err("fmt --write requires a script file".to_owned());
     }
-    let (name, source, base) = read_source(&cwd, path)?;
+    let (name, source, base) = read_source(&cwd, path, interrupt)?;
     if (options.symbols || options.ast || options.fmt) && source.trim().is_empty() {
         return Ok(0);
     }
@@ -179,22 +187,28 @@ fn run(options: Options, stdout: &mut impl Write) -> Result<u8, String> {
             stdout,
             &mut driver::ImageRegistry::default(),
             options.trace,
+            interrupt,
         )
     }
 }
 
-fn read_source(cwd: &Path, path: &Path) -> Result<(String, String, PathBuf), String> {
+fn read_source(
+    cwd: &Path,
+    path: &Path,
+    interrupt: &driver::Interrupt,
+) -> Result<(String, String, PathBuf), String> {
     if path == Path::new("-") {
-        let mut source = String::new();
-        io::stdin()
-            .lock()
-            .read_to_string(&mut source)
+        let stdin = rustix::io::dup(io::stdin()).map_err(|error| format!("<stdin>: {error}"))?;
+        let source = interrupt
+            .read_program(fs::File::from(stdin))
             .map_err(|error| format!("<stdin>: {error}"))?;
         Ok(("<stdin>".to_owned(), source, cwd.to_path_buf()))
     } else {
         let full = cwd.join(path);
-        let source =
-            fs::read_to_string(&full).map_err(|error| format!("{}: {error}", path.display()))?;
+        let file = fs::File::open(&full).map_err(|error| format!("{}: {error}", path.display()))?;
+        let source = interrupt
+            .read_program(file)
+            .map_err(|error| format!("{}: {error}", path.display()))?;
         let base = full.parent().unwrap_or(cwd).to_path_buf();
         Ok((path.display().to_string(), source, base))
     }
