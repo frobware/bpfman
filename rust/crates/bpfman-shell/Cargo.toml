@@ -20,7 +20,7 @@ jaq-core = "=3.1.2"
 jaq-json = "=2.0.3"
 jaq-std = "=3.0.4"
 jiff = { version = "0.2", default-features = false, features = ["tz-system", "tzdb-zoneinfo"] }
-rustix = { version = "1", default-features = false, features = ["process", "std"] }
+rustix = { version = "1", default-features = false, features = ["fs", "process", "std"] }
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
 signal-hook.workspace = true
 tempfile.workspace = true

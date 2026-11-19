@@ -8,4 +8,4 @@ pub use machine::{
     ExecutionError, OutputContinuation, OutputRequest, OutputStream, PathContinuation, PathRequest,
     PauseContinuation, QueryContinuation, QueryInput, QueryRequest, Step, execute,
 };
-pub use value::{Argument, JobHandle, Number, Value};
+pub use value::{Argument, JobHandle, KfuncHandle, Number, Value};

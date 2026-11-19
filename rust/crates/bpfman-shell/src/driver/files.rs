@@ -26,23 +26,9 @@ pub(super) fn render_argument(argument: &Argument, pretty: bool) -> Result<Strin
 
 fn file_contents(argument: &Argument) -> Result<String, String> {
     let mut contents = render_argument(argument, true)?;
-    if matches!(
-        argument,
-        Argument::Value(
-            Value::List(_)
-                | Value::Record(_)
-                | Value::Outcome(_)
-                | Value::BpfmanRecord { .. }
-                | Value::Job(_)
-        ) | Argument::Adapter {
-            value: Value::List(_)
-                | Value::Record(_)
-                | Value::Outcome(_)
-                | Value::BpfmanRecord { .. }
-                | Value::Job(_),
-            ..
-        }
-    ) {
+    if let Argument::Value(value) | Argument::Adapter { value, .. } = argument
+        && (value.record_fields().is_some() || matches!(value, Value::List(_) | Value::Outcome(_)))
+    {
         contents.push('\n');
     }
     Ok(contents)
@@ -122,8 +108,6 @@ pub(super) fn to_json(value: &Value) -> Result<Json, String> {
         ),
         Value::String(value) => Json::String(value.clone()),
         Value::List(items) => Json::Array(items.iter().map(to_json).collect::<Result<_, _>>()?),
-        Value::Record(fields) | Value::BpfmanRecord { fields, .. } => json_object(fields)?,
-        Value::Job(job) => json_object(job.fields())?,
         Value::Outcome(outcome) => {
             let mut fields = Map::from_iter([
                 ("ok".to_owned(), Json::Bool(outcome.exit_code == 0)),
@@ -144,6 +128,11 @@ pub(super) fn to_json(value: &Value) -> Result<Json, String> {
             }
             Json::Object(fields)
         }
+        record => json_object(
+            record
+                .record_fields()
+                .ok_or("value has no record projection")?,
+        )?,
     })
 }
 

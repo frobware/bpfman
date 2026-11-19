@@ -14,6 +14,7 @@ use bpfman_shell_runtime::{
 mod bpfman;
 mod files;
 mod jobs;
+mod kfunc;
 mod process;
 mod query;
 
@@ -21,13 +22,20 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
     let start = Instant::now();
     let interrupt = process::Interrupt::register().map_err(|error| error.to_string())?;
     let mut jobs = jobs::Jobs::default();
+    let mut functions = kfunc::Pool::default();
     let mut step = execute(program, HashMap::new());
     loop {
         step = match step {
             Step::Command {
                 request,
                 continuation,
-            } => continuation.resume(dispatch(request, stdout, &interrupt, &mut jobs)),
+            } => continuation.resume(dispatch(
+                request,
+                stdout,
+                &interrupt,
+                &mut jobs,
+                &mut functions,
+            )),
             Step::Output {
                 request,
                 continuation,
@@ -76,6 +84,7 @@ fn dispatch(
     stdout: &mut impl Write,
     interrupt: &process::Interrupt,
     jobs: &mut jobs::Jobs,
+    functions: &mut kfunc::Pool,
 ) -> Result<CommandResponse, String> {
     interrupt.check()?;
     let head = argument(&request.head)?;
@@ -83,14 +92,10 @@ fn dispatch(
         return bpfman::invoke(request.arguments, interrupt);
     }
     if head == "start" {
-        let position = request.span.start();
-        let origin = format!(
-            "{}:{}:{}",
-            position.name().as_str(),
-            position.line(),
-            position.column()
-        );
-        return jobs.start(&request.arguments, origin);
+        return jobs.start(&request.arguments, cite(&request));
+    }
+    if head == "kfunc" {
+        return functions.invoke(&request.arguments, cite(&request), interrupt);
     }
     if head == "wait" {
         return jobs.wait(&request.arguments, interrupt);
@@ -192,7 +197,6 @@ fn dispatch(
             "defs"
                 | "fire"
                 | "import"
-                | "kfunc"
                 | "linkinfo"
                 | "lsm"
                 | "net"
@@ -229,6 +233,16 @@ fn argument(argument: &Argument) -> Result<String, String> {
         Argument::Word(text) | Argument::Quoted(text) => Ok(text.clone()),
         Argument::Value(value) | Argument::Adapter { value, .. } => scalar(value),
     }
+}
+
+fn cite(request: &CommandRequest) -> String {
+    let position = request.span.start();
+    format!(
+        "{}:{}:{}",
+        position.name().as_str(),
+        position.line(),
+        position.column()
+    )
 }
 
 fn scalar(value: &Value) -> Result<String, String> {

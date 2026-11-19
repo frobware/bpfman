@@ -1074,11 +1074,13 @@ fn is_empty(value: &Value) -> bool {
 fn field_value(value: Value, field: &str) -> Result<Value, String> {
     match value {
         Value::Outcome(outcome) => outcome_field(&outcome, field),
-        Value::Job(job) => Ok(job.fields().get(field).cloned().unwrap_or(Value::Absent)),
         Value::Record(mut fields) | Value::BpfmanRecord { mut fields, .. } => {
             Ok(fields.remove(field).unwrap_or(Value::Absent))
         }
-        _ => Err(format!("cannot access field {field:?}")),
+        value => value
+            .record_fields()
+            .map(|fields| fields.get(field).cloned().unwrap_or(Value::Absent))
+            .ok_or_else(|| format!("cannot access field {field:?}")),
     }
 }
 

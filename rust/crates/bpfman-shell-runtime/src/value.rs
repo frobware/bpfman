@@ -49,11 +49,34 @@ impl JobHandle {
     pub fn id(&self) -> NonZeroU64 {
         self.id
     }
+}
 
-    /// Fields visible to scripts and JSON rendering.
+/// A leased kernel function fixture and its immutable script-visible fields.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KfuncHandle {
+    id: NonZeroU64,
+    fields: BTreeMap<String, Value>,
+}
+
+impl KfuncHandle {
+    /// Associate a driver lease with the module's target fields.
     #[must_use]
-    pub fn fields(&self) -> &BTreeMap<String, Value> {
-        &self.fields
+    pub fn new(id: NonZeroU64, index: u8, name: String, trigger: String, count: String) -> Self {
+        Self {
+            id,
+            fields: BTreeMap::from([
+                ("index".to_owned(), Value::Number(Number(index.to_string()))),
+                ("name".to_owned(), Value::String(name)),
+                ("trigger".to_owned(), Value::String(trigger)),
+                ("count".to_owned(), Value::String(count)),
+            ]),
+        }
+    }
+
+    /// Identify this lease independently of the reused slot index.
+    #[must_use]
+    pub fn id(&self) -> NonZeroU64 {
+        self.id
     }
 }
 
@@ -83,11 +106,24 @@ pub enum Value {
     },
     /// A capability for a background process owned by the driver.
     Job(JobHandle),
+    /// A capability for a leased kernel function fixture.
+    Kfunc(KfuncHandle),
     /// Captured command outcome, with a distinct primary when supplied.
     Outcome(Box<CommandResponse>),
 }
 
 impl Value {
+    /// Named fields of a record or a typed value with a record projection.
+    #[must_use]
+    pub fn record_fields(&self) -> Option<&BTreeMap<String, Self>> {
+        match self {
+            Self::Record(fields) | Self::BpfmanRecord { fields, .. } => Some(fields),
+            Self::Job(job) => Some(&job.fields),
+            Self::Kfunc(function) => Some(&function.fields),
+            _ => None,
+        }
+    }
+
     /// Render a scalar while preserving exact number spellings.
     #[must_use]
     pub fn scalar_text(&self) -> Option<String> {

@@ -4,14 +4,7 @@ use super::{EvalResult, Machine, Value, is_empty};
 
 impl Machine<'_> {
     pub(super) fn matches(&self, value: Value, block: &MatchBlock) -> EvalResult<bool> {
-        if !matches!(
-            value,
-            Value::Record(_)
-                | Value::BpfmanRecord { .. }
-                | Value::List(_)
-                | Value::Outcome(_)
-                | Value::Job(_)
-        ) {
+        if value.record_fields().is_none() && !matches!(value, Value::List(_) | Value::Outcome(_)) {
             return Err("matches requires a structured value".into());
         }
         self.matches_block(&value, block)
@@ -22,10 +15,6 @@ impl Machine<'_> {
         if block.exhaustive {
             let claimed = |name: &str| block.entries.iter().any(|entry| entry.path == name);
             matched = match value {
-                Value::Record(fields) | Value::BpfmanRecord { fields, .. } => {
-                    fields.keys().all(|key| claimed(key))
-                }
-                Value::Job(job) => job.fields().keys().all(|key| claimed(key)),
                 Value::Outcome(outcome) => {
                     ["ok", "exit_code", "stdout", "stderr", "killed", "signal"]
                         .into_iter()
@@ -33,7 +22,9 @@ impl Machine<'_> {
                         && (outcome.pid.is_none() || claimed("pid"))
                         && (outcome.primary == Value::Absent || claimed("value"))
                 }
-                _ => false,
+                value => value
+                    .record_fields()
+                    .is_some_and(|fields| fields.keys().all(|key| claimed(key))),
             };
         }
 

@@ -273,6 +273,10 @@ metadata and global-data fixture. The latter verified that elements of
 `program load`'s `programs` list retain the program ID capability when passed
 back to `bpfman`. The first broader isolated run exposed missing network
 topology and kernel-function adapters, which account for most early failures.
+The kernel-function adapter now uses the same lock files, slot ordering and
+provenance format as the Go shell. A real-kernel smoke test verified three
+events on a leased slot. The tracepoint round-trip advanced to its next
+missing dependency, `linkinfo`.
 
 ## Typestate and internal invariants
 
