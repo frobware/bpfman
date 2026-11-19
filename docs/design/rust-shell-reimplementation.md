@@ -239,7 +239,9 @@ assertions distinguish nonfatal diagnostics from requirements that unwind
 the program. Go's detailed match and assertion diagnostics are still pending.
 The shell can invoke the CLI selected by `BPFMAN_BIN`, preserve exact JSON
 integers, and project program and link records to IDs for later command
-arguments. Cross-call retry, threaded calls, jq and path effects, remaining
+arguments. A retry from a helper now unwinds each callable's defers and the
+enclosing attempt before it asks the driver for another clock reading.
+Threaded calls, jq and path effects, remaining
 typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently

@@ -21,6 +21,7 @@ pub(super) struct Caller {
     returned: Value,
     cleanup_failed: bool,
     prior_failure: Option<ExecutionError>,
+    pending_retry: Option<super::polls::RetrySignal>,
     purpose: CommandPurpose,
 }
 
@@ -82,6 +83,7 @@ impl Machine<'_> {
             returned: std::mem::replace(&mut self.returned, Value::Absent),
             cleanup_failed: std::mem::take(&mut self.local_cleanup_failed),
             prior_failure: self.failure.take(),
+            pending_retry: self.pending_retry.take(),
             purpose,
         });
         self.jump(BlockId(0));
@@ -135,6 +137,24 @@ impl Machine<'_> {
         Ok(())
     }
 
+    pub(super) fn propagate_retry(&mut self, retry: super::polls::RetrySignal) {
+        let Some(caller) = self.callers.pop() else {
+            self.error(&retry.span, "retry outside any active poll".to_owned());
+            return;
+        };
+        let (purpose, _, _) = self.restore_caller(caller);
+        if matches!(purpose, CommandPurpose::Cleanup) {
+            self.cleanup_failed();
+            return;
+        }
+        let base = self.polls.last().map_or_else(
+            || self.callers.last().map_or(0, |caller| caller.deferred_base),
+            |poll| poll.deferred_base,
+        );
+        self.pending_retry = Some(retry);
+        self.draining = Some(base);
+    }
+
     fn restore_caller(&mut self, caller: Caller) -> (CommandPurpose, Value, bool) {
         let returned = std::mem::replace(&mut self.returned, caller.returned);
         let cleanup_failed =
@@ -149,6 +169,7 @@ impl Machine<'_> {
         self.attempt_cleanup = caller.attempt_cleanup;
         self.draining = caller.draining;
         self.failure = caller.prior_failure;
+        self.pending_retry = caller.pending_retry;
         (caller.purpose, returned, cleanup_failed)
     }
 

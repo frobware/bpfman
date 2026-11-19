@@ -6,7 +6,7 @@ use bpfman_shell_source::Span;
 use super::{Action, Machine, Step, Value};
 
 pub(super) struct Poll {
-    owner: BlockId,
+    pub(super) owner: BlockId,
     attempt: BlockId,
     timeout: BlockId,
     pub(super) success: BlockId,
@@ -17,6 +17,11 @@ pub(super) struct Poll {
     pub(super) deferred_base: usize,
     attempts: usize,
     last_message: Option<String>,
+}
+
+pub(super) struct RetrySignal {
+    pub(super) message: Option<String>,
+    pub(super) span: Span,
 }
 
 pub(super) enum ClockPurpose {
@@ -119,10 +124,8 @@ impl Machine<'_> {
         &mut self,
         target: RetryTarget,
         message: Option<Temp>,
+        span: &Span,
     ) -> Result<Action, String> {
-        let RetryTarget::Local(owner) = target else {
-            return Err("retry through a calling definition is not yet implemented".to_owned());
-        };
         let message = message
             .map(|temp| {
                 self.value(temp).map(|value| match value {
@@ -135,6 +138,26 @@ impl Machine<'_> {
                 })
             })
             .transpose()?;
+        match target {
+            RetryTarget::Local(owner) => {
+                self.prepare_retry(owner, message)?;
+                Ok(Action::Clock(ClockPurpose::Retry))
+            }
+            RetryTarget::Caller => {
+                self.propagate_retry(RetrySignal {
+                    message,
+                    span: span.clone(),
+                });
+                Ok(Action::Next)
+            }
+        }
+    }
+
+    pub(super) fn prepare_retry(
+        &mut self,
+        owner: BlockId,
+        message: Option<String>,
+    ) -> Result<(), String> {
         let poll = self
             .polls
             .last_mut()
@@ -143,7 +166,7 @@ impl Machine<'_> {
         poll.last_message = message;
         self.frames.truncate(poll.frames);
         self.loops.truncate(poll.loops);
-        Ok(Action::Clock(ClockPurpose::Retry))
+        Ok(())
     }
 
     pub(super) fn poll_timeout(&mut self) -> Option<String> {

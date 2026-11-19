@@ -216,6 +216,7 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         polls: Vec::new(),
         attempt_cleanup: None,
         diagnostic: None,
+        pending_retry: None,
         deferred: Vec::new(),
         draining: None,
         unit: None,
@@ -273,6 +274,7 @@ struct Machine<'a> {
     polls: Vec<polls::Poll>,
     attempt_cleanup: Option<Span>,
     diagnostic: Option<OutputRequest>,
+    pending_retry: Option<polls::RetrySignal>,
     deferred: Vec<(Argv, Span)>,
     draining: Option<usize>,
     unit: Option<usize>,
@@ -319,8 +321,26 @@ impl<'a> Machine<'a> {
                 self.draining = None;
                 self.attempt_cleanup = None;
                 if let Some(failure) = self.failure.take() {
+                    self.pending_retry = None;
                     if let Err(failure) = self.unwind_failed_definition(failure) {
                         return Step::Failed(failure);
+                    }
+                    continue;
+                }
+                if let Some(retry) = self.pending_retry.take() {
+                    if let Some(owner) = self.polls.last().map(|poll| poll.owner) {
+                        match self.prepare_retry(owner, retry.message) {
+                            Ok(()) => {
+                                return Step::ReadClock(ClockContinuation {
+                                    machine: self,
+                                    purpose: polls::ClockPurpose::Retry,
+                                    span: retry.span,
+                                });
+                            }
+                            Err(message) => self.error(&retry.span, message),
+                        }
+                    } else {
+                        self.propagate_retry(retry);
                     }
                     continue;
                 }
@@ -335,10 +355,7 @@ impl<'a> Machine<'a> {
                 self.offset += 1;
                 (self.instruction(instruction), &instruction.span)
             } else {
-                (
-                    self.terminate(&block.terminator.node),
-                    &block.terminator.span,
-                )
+                (self.terminate(&block.terminator), &block.terminator.span)
             };
             match action {
                 Ok(Action::Next) => {}
@@ -596,8 +613,8 @@ impl<'a> Machine<'a> {
         self.offset = 0;
     }
 
-    fn terminate(&mut self, terminator: &Terminator) -> Result<Action, String> {
-        match *terminator {
+    fn terminate(&mut self, terminator: &ir::Located<Terminator>) -> Result<Action, String> {
+        match terminator.node {
             Terminator::Stop => return Ok(Action::Stop),
             Terminator::Jump(target) => {
                 if self.polls.last().is_some_and(|poll| poll.success == target) {
@@ -618,7 +635,9 @@ impl<'a> Machine<'a> {
                     success,
                 }));
             }
-            Terminator::RetryPoll { target, message } => return self.retry_poll(target, message),
+            Terminator::RetryPoll { target, message } => {
+                return self.retry_poll(target, message, &terminator.span);
+            }
             Terminator::Branch {
                 condition,
                 on_true,
@@ -1201,5 +1220,37 @@ mod tests {
                 Argument::Value(Value::Bool(true)),
             ]
         );
+    }
+
+    #[test]
+    fn helper_retry_unwinds_all_definition_and_attempt_defers_before_clock() {
+        use std::time::Duration;
+
+        let program = program(
+            "def inner() { defer echo inner\n retry \"waiting\" }\ndef outer() { defer echo outer\n inner }\npoll timeout 1s every 1ms { defer echo attempt\n outer }",
+        );
+        let Step::ReadClock(clock) = execute(&program, HashMap::new()) else {
+            unreachable!("expected initial clock");
+        };
+        let mut step = clock.resume(Ok(Duration::ZERO));
+        for argument in ["inner", "outer", "attempt"] {
+            let Step::Command {
+                request,
+                continuation,
+            } = step
+            else {
+                unreachable!("expected {argument} cleanup");
+            };
+            assert_eq!(request.lane, DispatchLane::Deferred);
+            assert_eq!(request.arguments, [Argument::Word(argument.to_owned())]);
+            step = continuation.resume(result(0, Value::Absent));
+        }
+        let Step::ReadClock(clock) = step else {
+            unreachable!("expected retry clock");
+        };
+        let Step::Failed(error) = clock.resume(Ok(Duration::from_secs(1))) else {
+            unreachable!("expected timeout");
+        };
+        assert!(error.message.ends_with(": waiting"));
     }
 }
