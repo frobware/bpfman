@@ -26,6 +26,7 @@ pub(super) enum Exit {
     },
     ForEachContinue(Label),
     BreakLoop(Label),
+    PropagateError,
 }
 
 struct Draft {
@@ -82,6 +83,13 @@ impl Layout {
         self.current
     }
 
+    pub(super) fn published_id(&self, label: Label) -> Result<BlockId, LowerError> {
+        let block = &self.blocks[label.0];
+        block
+            .id
+            .ok_or_else(|| LowerError::IncompleteLayout(block.span.clone()))
+    }
+
     pub(super) fn emit(&mut self, instruction: Located<Instruction>) {
         self.blocks[self.current.0].instructions.push(instruction);
     }
@@ -109,6 +117,7 @@ impl Layout {
                 let resolve = |label: Label| ids[label.0];
                 let node = match exit.node {
                     Exit::Stop => Terminator::Stop,
+                    Exit::PropagateError => Terminator::PropagateError,
                     Exit::Jump(label) => Terminator::Jump(resolve(label)),
                     Exit::Branch {
                         condition,

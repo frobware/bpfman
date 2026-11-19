@@ -103,6 +103,18 @@ pub struct Command {
     pub arguments: Vec<Expression>,
 }
 
+/// How the shell exposes a command result at a bind site.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BindPolicy {
+    /// Bind the entire command outcome.
+    Capture,
+    /// Bind the primary value on success, or transfer control to cleanup.
+    Guard {
+        /// Cleanup block entered with the guard failure.
+        on_failure: BlockId,
+    },
+}
+
 /// An operation with fallthrough to the next instruction.
 #[derive(Debug, Eq, PartialEq)]
 pub enum Instruction {
@@ -147,6 +159,28 @@ pub enum Instruction {
         /// Source argv temporary.
         argv: Temp,
     },
+    /// Dispatch in bind position using the definition-then-exec bind policy.
+    DispatchBind {
+        /// Destination command-result temporary.
+        dst: Temp,
+        /// Source argv temporary.
+        argv: Temp,
+        /// Source extent of the producer invocation.
+        call_span: Span,
+        /// Trace header rendered before dispatch.
+        trace_header: String,
+    },
+    /// Consume a command result and apply the requested binding policy.
+    ApplyBind {
+        /// Command-result temporary.
+        src: Temp,
+        /// The argv that produced this result.
+        argv: Temp,
+        /// Binding name, or `_` for a discarded result.
+        target: String,
+        /// Capture or guarded binding.
+        policy: BindPolicy,
+    },
     /// Register an evaluated argv for deferred bind-policy dispatch.
     RegisterDefer {
         /// Source argv temporary.
@@ -185,6 +219,8 @@ pub enum Terminator {
     ForEachContinue(LoopId),
     /// Unwind through the iteration frame and leave the loop.
     ExitLoop(LoopId),
+    /// Report the active error after cleanup and unwind the program.
+    PropagateError,
     /// Finish the program.
     Stop,
 }
@@ -223,6 +259,8 @@ pub enum VerifyError {
     InvalidLoopOwner(LoopId),
     /// A reachable block cannot run with the incoming iterator stack.
     InvalidLoopContext(BlockId),
+    /// A guarded bind's failure target is not a program cleanup block.
+    InvalidGuardCleanup(BlockId),
 }
 
 impl fmt::Display for VerifyError {
@@ -234,6 +272,7 @@ impl fmt::Display for VerifyError {
             Self::InvalidOperand(Temp(id)) => write!(f, "invalid operand t{id}"),
             Self::InvalidLoopOwner(LoopId(BlockId(id))) => write!(f, "invalid loop owner bb{id}"),
             Self::InvalidLoopContext(BlockId(id)) => write!(f, "invalid loop context at bb{id}"),
+            Self::InvalidGuardCleanup(BlockId(id)) => write!(f, "invalid guard cleanup at bb{id}"),
         }
     }
 }
@@ -244,6 +283,7 @@ impl std::error::Error for VerifyError {}
 enum TempKind {
     Value,
     Args,
+    BindResult(Temp),
 }
 
 impl Program {
@@ -261,31 +301,42 @@ impl Program {
         for block in &blocks {
             let mut kinds = HashMap::new();
             for instruction in &block.instructions {
-                match &instruction.node {
-                    Instruction::Eval { dst, .. } | Instruction::BuildArgs { dst, .. } => {
-                        if !destinations.insert(*dst) {
-                            return Err(VerifyError::InvalidDestination(*dst));
-                        }
-                        kinds.insert(
-                            *dst,
-                            match instruction.node {
-                                Instruction::Eval { .. } => TempKind::Value,
-                                _ => TempKind::Args,
-                            },
-                        );
+                let definition = match &instruction.node {
+                    Instruction::Eval { dst, .. } => Some((*dst, TempKind::Value)),
+                    Instruction::BuildArgs { dst, .. } => Some((*dst, TempKind::Args)),
+                    Instruction::DispatchBind { dst, argv, .. } => {
+                        verify_operand(*argv, TempKind::Args, &kinds)?;
+                        Some((*dst, TempKind::BindResult(*argv)))
                     }
                     Instruction::BindName { src, .. } | Instruction::EmitResult { src } => {
                         verify_operand(*src, TempKind::Value, &kinds)?;
+                        None
                     }
                     Instruction::DispatchCommand { argv } | Instruction::RegisterDefer { argv } => {
                         verify_operand(*argv, TempKind::Args, &kinds)?;
+                        None
+                    }
+                    Instruction::ApplyBind {
+                        src, argv, policy, ..
+                    } => {
+                        verify_operand(*src, TempKind::BindResult(*argv), &kinds)?;
+                        if let BindPolicy::Guard { on_failure } = policy {
+                            verify_guard_cleanup(&blocks, *on_failure)?;
+                        }
+                        None
                     }
                     Instruction::EnterProgramDefers
                     | Instruction::RunProgramDefers
                     | Instruction::EnterIfFrame
                     | Instruction::ExitFrame
                     | Instruction::TraceBranch(_)
-                    | Instruction::TraceLoop(_) => {}
+                    | Instruction::TraceLoop(_) => None,
+                };
+                if let Some((dst, kind)) = definition {
+                    if !destinations.insert(dst) {
+                        return Err(VerifyError::InvalidDestination(dst));
+                    }
+                    kinds.insert(dst, kind);
                 }
             }
             let verify_successor = |id: BlockId| {
@@ -306,7 +357,7 @@ impl Program {
                     verify_successor(on_true)?;
                     verify_successor(on_false)?;
                 }
-                Terminator::Stop => {}
+                Terminator::Stop | Terminator::PropagateError => {}
                 Terminator::ForEach {
                     list, body, exit, ..
                 } => {
@@ -357,6 +408,25 @@ impl Program {
     #[must_use]
     pub fn num_temps(&self) -> usize {
         self.num_temps
+    }
+}
+
+fn verify_guard_cleanup(blocks: &[Block], target: BlockId) -> Result<(), VerifyError> {
+    let block = blocks
+        .get(target.0)
+        .ok_or(VerifyError::InvalidSuccessor(target))?;
+    if matches!(block.terminator.node, Terminator::PropagateError)
+        && matches!(
+            block.instructions.as_slice(),
+            [Located {
+                node: Instruction::RunProgramDefers,
+                ..
+            }]
+        )
+    {
+        Ok(())
+    } else {
+        Err(VerifyError::InvalidGuardCleanup(target))
     }
 }
 
@@ -501,5 +571,65 @@ mod tests {
             Program::new(span, vec![entry, header, body, stop]),
             Err(VerifyError::InvalidLoopContext(BlockId(2)))
         );
+    }
+
+    #[test]
+    fn bind_results_keep_their_argv_and_guards_require_failure_cleanup() {
+        use crate::{BindPolicy, Command};
+
+        let span = located(()).span;
+        let entry = |argv, policy| {
+            let build = |dst, word: &str| {
+                located(Instruction::BuildArgs {
+                    dst: Temp(dst),
+                    command: Command {
+                        head: located(ExpressionKind::Word(word.to_owned())),
+                        arguments: vec![],
+                    },
+                })
+            };
+            block(
+                vec![
+                    build(0, "false"),
+                    build(1, "true"),
+                    located(Instruction::DispatchBind {
+                        dst: Temp(2),
+                        argv: Temp(0),
+                        call_span: span.clone(),
+                        trace_header: "guard item".to_owned(),
+                    }),
+                    located(Instruction::ApplyBind {
+                        src: Temp(2),
+                        argv: Temp(argv),
+                        target: "item".to_owned(),
+                        policy,
+                    }),
+                ],
+                Terminator::Stop,
+            )
+        };
+        assert_eq!(
+            Program::new(span.clone(), vec![entry(1, BindPolicy::Capture)]),
+            Err(VerifyError::InvalidOperand(Temp(2)))
+        );
+        let policy = BindPolicy::Guard {
+            on_failure: BlockId(1),
+        };
+        assert_eq!(
+            Program::new(span.clone(), vec![entry(0, policy)]),
+            Err(VerifyError::InvalidSuccessor(BlockId(1)))
+        );
+        assert_eq!(
+            Program::new(
+                span.clone(),
+                vec![entry(0, policy), block(vec![], Terminator::PropagateError)]
+            ),
+            Err(VerifyError::InvalidGuardCleanup(BlockId(1)))
+        );
+        let cleanup = block(
+            vec![located(Instruction::RunProgramDefers)],
+            Terminator::PropagateError,
+        );
+        assert!(Program::new(span.clone(), vec![entry(0, policy), cleanup]).is_ok());
     }
 }

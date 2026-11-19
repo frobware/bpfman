@@ -1,0 +1,48 @@
+body entry=bb0
+
+bb0:
+  EnterDeferScope kind=program
+  BuildArgs t0 = [echo cleanup]
+  RegisterDefer argv=t0 policy=def-then-exec-bind lane=exec
+  BuildArgs t1 = [echo hello]
+  DispatchBind t2 = t1 policy=def-then-exec-bind lane=exec
+  ApplyBind src=t2 argv=t1 target=captured guard=false
+  Eval t3 = "echo"
+  BindName head = t3
+  BuildArgs t4 = [$head ready]
+  DispatchBind t5 = t4 policy=def-then-exec-bind lane=unresolved-head
+  ApplyBind src=t5 argv=t4 target=value guard=true fail=bb1
+  Eval t6 = [1 2]
+  ForEach list=t6 names=[item] body=bb2 exit=bb3
+
+bb1:
+  RunDefers policy=program
+  PropagateError
+
+bb2:
+  Eval t7 = $item == 1
+  Branch cond=t7 true=bb4 false=bb5
+
+bb3:
+  BuildArgs t10 = [print done]
+  DispatchCommand argv=t10 policy=def-then-exec-command lane=builtin(print)
+  RunDefers policy=program
+  Stop
+
+bb4:
+  EnterFrame kind=if-branch
+  BuildArgs t8 = [exec true]
+  DispatchBind t9 = t8 policy=def-then-exec-bind lane=builtin(exec)
+  ApplyBind src=t9 argv=t8 target=_ guard=true fail=bb6
+  ExitFrame
+  Jump bb7
+
+bb5:
+  Jump bb7
+
+bb6:
+  RunDefers policy=program
+  PropagateError
+
+bb7:
+  ForEachContinue

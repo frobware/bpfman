@@ -188,8 +188,13 @@ the dump with Go. Ordinary foreach lowering identifies each iterator by its
 header block. Break and continue target the innermost iterator and carry the
 contract to unwind its iteration frame. Verification checks reachable loop
 contexts, and a nested-loop fixture matches Go's dump, including the
-unreachable blocks emitted after explicit loop control. Bind-collect, the
-full golden dump, and execution are pending.
+unreachable blocks emitted after explicit loop control. Command-form binds
+now distinguish capturing an outcome from guarding its primary value. Each
+program-scope guard gets a defer-cleanup block, including guards inside
+conditionals and loops. Verification checks that the applied result came
+from the same argv and that the failure target drains defers before propagating
+the error. Bind-collect, definition and poll cleanup scopes, the full golden
+dump, and execution are pending.
 
 ## Typestate and internal invariants
 

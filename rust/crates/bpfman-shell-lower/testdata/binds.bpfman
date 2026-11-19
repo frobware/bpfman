@@ -1,0 +1,8 @@
+defer echo cleanup
+let captured <- echo hello
+let head = "echo"
+guard value <- $head ready
+foreach item in [1 2] {
+  if $item == 1 { guard _ <- exec true }
+}
+print done

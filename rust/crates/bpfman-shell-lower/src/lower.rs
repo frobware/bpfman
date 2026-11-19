@@ -3,8 +3,8 @@ use std::fmt;
 use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
-    BinaryOperator, BranchTrace, Command, Expression, ExpressionKind, Instruction, Located,
-    LoopBindings, LoopTrace, Program, Temp, VerifyError,
+    BinaryOperator, BindPolicy, BranchTrace, Command, Expression, ExpressionKind, Instruction,
+    Located, LoopBindings, LoopTrace, Program, Temp, VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -160,12 +160,66 @@ impl Body {
             S::Retry { .. } => return Err(unsupported(span, "retry")),
             S::Assertion { .. } => return Err(unsupported(span, "assertion")),
             S::LetDestructure { .. } => return Err(unsupported(span, "destructuring")),
-            S::Bind { .. } => return Err(unsupported(span, "command bind")),
+            S::Bind {
+                mode,
+                name,
+                command,
+            } => {
+                return self.bind_command(span, *mode, name.text(), command);
+            }
             S::BindCollect { .. } => return Err(unsupported(span, "collect")),
             S::Break => return self.loop_control(span, LoopTrace::Break),
             S::Continue => return self.loop_control(span, LoopTrace::Continue),
         };
         self.emit(span, instruction);
+        Ok(())
+    }
+
+    fn bind_command(
+        &mut self,
+        span: &Span,
+        mode: syntax::BindMode,
+        target: &str,
+        command: &syntax::Command,
+    ) -> Result<(), LowerError> {
+        let argv = self.build_args(command.span(), command)?;
+        let result = self.allocate();
+        let keyword = match mode {
+            syntax::BindMode::Let => "let",
+            syntax::BindMode::Guard => "guard",
+        };
+        self.emit(
+            span,
+            Instruction::DispatchBind {
+                dst: result,
+                argv,
+                call_span: command.span().clone(),
+                trace_header: format!("{keyword} {target}"),
+            },
+        );
+        let policy = match mode {
+            syntax::BindMode::Let => BindPolicy::Capture,
+            syntax::BindMode::Guard => {
+                let success = self.layout.current();
+                let failure = self.layout.new_block(span);
+                self.layout.select(failure);
+                self.emit(span, Instruction::RunProgramDefers);
+                self.layout.terminate(located(span, Exit::PropagateError));
+                self.layout.select(success);
+                BindPolicy::Guard {
+                    on_failure: self.layout.published_id(failure)?,
+                }
+            }
+        };
+        self.emit(
+            span,
+            Instruction::ApplyBind {
+                src: result,
+                argv,
+                target: target.to_owned(),
+                policy,
+            },
+        );
         Ok(())
     }
 
@@ -506,5 +560,32 @@ mod tests {
                     if actual == keyword && &span == program.statements()[0].span()
             ));
         }
+    }
+
+    #[test]
+    fn command_binds_match_go_and_keep_failure_cleanup_separate() {
+        use bpfman_shell_ir::{BindPolicy, BlockId, Terminator};
+
+        let source = include_str!("../testdata/binds.bpfman");
+        let program = check(expand(source)).unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(ir.to_string(), include_str!("../testdata/binds.lowered"));
+
+        let entry = &ir.blocks()[0];
+        assert!(entry.instructions.iter().any(|instruction| matches!(
+            &instruction.node,
+            Instruction::DispatchBind { call_span, trace_header, .. }
+                if trace_header == "guard value" && call_span.start().column() == 16
+        )));
+        let nested = &ir.blocks()[4];
+        assert!(nested.instructions.iter().any(|instruction| matches!(
+            &instruction.node,
+            Instruction::ApplyBind { policy: BindPolicy::Guard { on_failure: BlockId(6) }, target, .. }
+                if target == "_"
+        )));
+        let failure = &ir.blocks()[6];
+        assert_eq!(failure.instructions[0].node, Instruction::RunProgramDefers);
+        assert_eq!(failure.terminator.node, Terminator::PropagateError);
+        assert_eq!(failure.terminator.span.start().line(), 6);
     }
 }

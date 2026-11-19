@@ -6,6 +6,6 @@ mod model;
 
 pub use loops::{LoopBindings, LoopId, LoopTrace};
 pub use model::{
-    BinaryOperator, Block, BlockId, BranchTrace, Command, Expression, ExpressionKind, Instruction,
-    Located, Program, Temp, Terminator, VerifyError,
+    BinaryOperator, BindPolicy, Block, BlockId, BranchTrace, Command, Expression, ExpressionKind,
+    Instruction, Located, Program, Temp, Terminator, VerifyError,
 };

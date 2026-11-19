@@ -1,7 +1,8 @@
 use std::{collections::BTreeMap, fmt};
 
 use crate::{
-    BinaryOperator, Command, Expression, ExpressionKind, Instruction, Program, Terminator,
+    BinaryOperator, BindPolicy, Command, Expression, ExpressionKind, Instruction, Program,
+    Terminator,
 };
 
 impl fmt::Display for Program {
@@ -49,6 +50,32 @@ impl fmt::Display for Program {
                             heads.get(&argv.0).ok_or(fmt::Error)?,
                         )?;
                     }
+                    Instruction::DispatchBind { dst, argv, .. } => {
+                        writeln!(
+                            f,
+                            "DispatchBind t{} = t{} policy=def-then-exec-bind lane={}",
+                            dst.0,
+                            argv.0,
+                            heads.get(&argv.0).ok_or(fmt::Error)?,
+                        )?;
+                    }
+                    Instruction::ApplyBind {
+                        src,
+                        argv,
+                        target,
+                        policy,
+                    } => {
+                        let guard = matches!(policy, BindPolicy::Guard { .. });
+                        write!(
+                            f,
+                            "ApplyBind src=t{} argv=t{} target={target} guard={guard}",
+                            src.0, argv.0
+                        )?;
+                        if let BindPolicy::Guard { on_failure } = policy {
+                            write!(f, " fail=bb{}", on_failure.0)?;
+                        }
+                        writeln!(f)?;
+                    }
                     Instruction::RegisterDefer { argv } => {
                         writeln!(
                             f,
@@ -71,6 +98,7 @@ impl fmt::Display for Program {
                     condition.0, on_true.0, on_false.0
                 )?,
                 Terminator::Stop => writeln!(f, "  Stop")?,
+                Terminator::PropagateError => writeln!(f, "  PropagateError")?,
                 Terminator::ForEach {
                     list,
                     ref bindings,

@@ -81,6 +81,7 @@ pub(super) fn verify_context(blocks: &[Block]) -> Result<(), VerifyError> {
             Terminator::Stop if !stack.is_empty() => {
                 return Err(VerifyError::InvalidLoopContext(id));
             }
+            Terminator::PropagateError => return Err(VerifyError::InvalidGuardCleanup(id)),
             Terminator::Stop => {}
         }
     }
