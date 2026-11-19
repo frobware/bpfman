@@ -9,8 +9,12 @@ mod calls;
 mod compare;
 mod loops;
 mod matches;
+mod observations;
 mod polls;
 mod pure;
+
+use observations::{EvalError, EvalResult};
+pub use observations::{PathContinuation, PathRequest};
 
 pub use polls::{ClockContinuation, PauseContinuation};
 
@@ -29,6 +33,13 @@ pub enum Step<'a> {
         request: OutputRequest,
         /// State that accepts the output observation.
         continuation: OutputContinuation<'a>,
+    },
+    /// Request a filesystem path observation.
+    PathExists {
+        /// Path to observe.
+        request: PathRequest,
+        /// State that accepts the filesystem observation.
+        continuation: PathContinuation<'a>,
     },
     /// Request the driver's current monotonic time.
     ReadClock(ClockContinuation<'a>),
@@ -217,6 +228,7 @@ pub fn execute(program: &Program, bindings: HashMap<String, Value>) -> Step<'_> 
         attempt_cleanup: None,
         diagnostic: None,
         pending_retry: None,
+        observed_paths: HashMap::new(),
         deferred: Vec::new(),
         draining: None,
         unit: None,
@@ -275,6 +287,7 @@ struct Machine<'a> {
     attempt_cleanup: Option<Span>,
     diagnostic: Option<OutputRequest>,
     pending_retry: Option<polls::RetrySignal>,
+    observed_paths: HashMap<*const ir::Expression, bool>,
     deferred: Vec<(Argv, Span)>,
     draining: Option<usize>,
     unit: Option<usize>,
@@ -355,8 +368,14 @@ impl<'a> Machine<'a> {
                 self.offset += 1;
                 (self.instruction(instruction), &instruction.span)
             } else {
-                (self.terminate(&block.terminator), &block.terminator.span)
+                (
+                    self.terminate(&block.terminator).map_err(EvalError::from),
+                    &block.terminator.span,
+                )
             };
+            if !matches!(&action, Err(EvalError::Path { .. })) {
+                self.observed_paths.clear();
+            }
             match action {
                 Ok(Action::Next) => {}
                 Ok(Action::Stop) => {
@@ -388,7 +407,19 @@ impl<'a> Machine<'a> {
                         },
                     };
                 }
-                Err(message) => self.error(span, message),
+                Err(EvalError::Message(message)) => self.error(span, message),
+                Err(EvalError::Path { key, request }) => {
+                    self.offset -= 1;
+                    let span = request.span.clone();
+                    return Step::PathExists {
+                        request,
+                        continuation: PathContinuation {
+                            machine: self,
+                            key,
+                            span,
+                        },
+                    };
+                }
             }
         }
     }
@@ -439,7 +470,7 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
-    fn instruction(&mut self, instruction: &ir::Located<Instruction>) -> Result<Action, String> {
+    fn instruction(&mut self, instruction: &ir::Located<Instruction>) -> EvalResult<Action> {
         let span = &instruction.span;
         match &instruction.node {
             Instruction::EnterProgramDefers
@@ -453,7 +484,7 @@ impl<'a> Machine<'a> {
             | Instruction::TracePoll(_) => {}
             Instruction::ExitFrame => {
                 if self.frames.len() <= 1 {
-                    return Err("cannot leave the program frame".to_owned());
+                    return Err("cannot leave the program frame".into());
                 }
                 self.frames.pop();
             }
@@ -541,7 +572,7 @@ impl<'a> Machine<'a> {
             } => {
                 let Some(Slot::Result(response)) = self.temps.get(src.0).and_then(Option::as_ref)
                 else {
-                    return Err(format!("expected command result at t{}", src.0));
+                    return Err(format!("expected command result at t{}", src.0).into());
                 };
                 match policy {
                     ir::BindPolicy::Capture => {
@@ -565,7 +596,7 @@ impl<'a> Machine<'a> {
                         });
                         self.jump(*on_failure);
                     }
-                    ir::BindPolicy::Guard { .. } => return Err("invalid guard outcome".to_owned()),
+                    ir::BindPolicy::Guard { .. } => return Err("invalid guard outcome".into()),
                 }
             }
             Instruction::RegisterDefer { argv } => {
@@ -575,7 +606,7 @@ impl<'a> Machine<'a> {
         Ok(Action::Next)
     }
 
-    fn build_argv(&self, command: &ir::Command) -> Result<Argv, String> {
+    fn build_argv(&self, command: &ir::Command) -> EvalResult<Argv> {
         Ok(Argv {
             head: self.argument(&command.head)?,
             arguments: command
@@ -698,7 +729,7 @@ impl<'a> Machine<'a> {
         Ok(Action::Next)
     }
 
-    fn argument(&self, expression: &ir::Expression) -> Result<Argument, String> {
+    fn argument(&self, expression: &ir::Expression) -> EvalResult<Argument> {
         Ok(match &expression.node {
             ir::ExpressionKind::Word(text) => Argument::Word(text.clone()),
             ir::ExpressionKind::Quoted(text) => Argument::Quoted(text.clone()),
@@ -706,10 +737,9 @@ impl<'a> Machine<'a> {
             ir::ExpressionKind::Adapter { name, variable } => {
                 let value = self.lookup(variable, false)?;
                 if matches!(value, Value::Null | Value::Absent) {
-                    return Err(format!(
-                        "adapter {name}: variable {} is null",
-                        variable.name
-                    ));
+                    return Err(
+                        format!("adapter {name}: variable {} is null", variable.name).into(),
+                    );
                 }
                 Argument::Adapter {
                     name: name.clone(),
@@ -720,7 +750,7 @@ impl<'a> Machine<'a> {
         })
     }
 
-    fn eval(&self, expression: &ir::Expression) -> Result<Value, String> {
+    fn eval(&self, expression: &ir::Expression) -> EvalResult<Value> {
         Ok(match &expression.node {
             ir::ExpressionKind::Word(word) => match word.as_str() {
                 "true" => Value::Bool(true),
@@ -732,7 +762,7 @@ impl<'a> Machine<'a> {
                         let bytes = text.as_bytes();
                         let index = usize::from(matches!(bytes.first(), Some(b'-' | b'+')));
                         if bytes.get(index).is_some_and(u8::is_ascii_digit) {
-                            return Err(format!("invalid numeric literal {text:?}"));
+                            return Err(format!("invalid numeric literal {text:?}").into());
                         }
                         Value::String(text.to_owned())
                     }
@@ -768,7 +798,7 @@ impl<'a> Machine<'a> {
                     ir::UnaryOperator::NotEmpty => Value::Bool(!is_empty(&value)),
                     ir::UnaryOperator::Negate => {
                         let Value::Number(number) = value else {
-                            return Err("negation requires a number".to_owned());
+                            return Err("negation requires a number".into());
                         };
                         let text = number.as_str();
                         let negated = if let Some(positive) = text.strip_prefix('-') {
@@ -806,6 +836,10 @@ impl<'a> Machine<'a> {
             ir::ExpressionKind::Matches { target, block } => {
                 Value::Bool(self.matches(self.eval(target)?, block)?)
             }
+            ir::ExpressionKind::PureCall {
+                builtin: ir::PureBuiltin::PathExists,
+                arguments,
+            } => self.path_exists(expression, arguments)?,
             ir::ExpressionKind::PureCall { builtin, arguments } => {
                 self.pure_call(*builtin, arguments)?
             }
@@ -818,7 +852,7 @@ impl<'a> Machine<'a> {
                     })
                     .collect::<Result<_, _>>()?,
             ),
-            _ => return Err("expression is not yet implemented".to_owned()),
+            _ => return Err("expression is not yet implemented".into()),
         })
     }
     fn lookup(&self, variable: &ir::VariableRef, soft: bool) -> Result<Value, String> {
@@ -1265,5 +1299,33 @@ mod tests {
             unreachable!("expected timeout");
         };
         assert!(error.message.ends_with(": waiting"));
+    }
+
+    #[test]
+    fn two_queries_in_one_expression_resume_in_order_without_reissuing_the_first() {
+        let program = program("if (path-exists first) and (path-exists second) { print present }");
+        let Step::PathExists {
+            request,
+            continuation,
+        } = execute(&program, HashMap::new())
+        else {
+            unreachable!("expected first query");
+        };
+        assert_eq!(request.path, "first");
+        let Step::PathExists {
+            request,
+            continuation,
+        } = continuation.resume(Ok(true))
+        else {
+            unreachable!("expected second query");
+        };
+        assert_eq!(request.path, "second");
+        let Step::Command { continuation, .. } = continuation.resume(Ok(true)) else {
+            unreachable!("expected branch action");
+        };
+        assert!(matches!(
+            continuation.resume(result(0, Value::Absent)),
+            Step::Finished { exit_code: 0 }
+        ));
     }
 }

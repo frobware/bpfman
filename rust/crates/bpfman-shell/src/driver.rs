@@ -33,6 +33,15 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
                 }
                 .map_err(|error| error.to_string())
             })),
+            Step::PathExists {
+                request,
+                continuation,
+            } => {
+                let present = std::path::Path::new(&request.path)
+                    .try_exists()
+                    .map_err(|error| error.to_string());
+                continuation.resume(present)
+            }
             Step::ReadClock(continuation) => continuation.resume(Ok(start.elapsed())),
             Step::Pause {
                 duration,

@@ -243,7 +243,9 @@ arguments. A retry from a helper now unwinds each callable's defers and the
 enclosing attempt before it asks the driver for another clock reading.
 The driver also supports caller-owned temporary files and directories,
 structured rendering, and subprocess-scoped `file:$value` adapters.
-Threaded calls, jq and path effects, remaining
+The `path-exists` expression requests a typed filesystem observation. Multiple
+queries in one expression resume in order, with observations reused only
+until that instruction completes. Threaded calls, jq, remaining
 typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness
 still uses the Go shell. The Make runner now selects the shell independently

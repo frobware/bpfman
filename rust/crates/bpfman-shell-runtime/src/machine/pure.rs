@@ -1,93 +1,100 @@
 use bpfman_shell_ir::{Expression, PureBuiltin, VariableRef};
 use bpfman_shell_semantics::parse_go_unsigned;
 
-use super::{Argument, Machine, Number, Value};
+use super::{Argument, EvalResult, Machine, Number, Value};
 
 impl Machine<'_> {
     pub(super) fn pure_call(
         &self,
         builtin: PureBuiltin,
         arguments: &[Expression],
-    ) -> Result<Value, String> {
-        use PureBuiltin as B;
-
+    ) -> EvalResult<Value> {
         let arguments = arguments
             .iter()
             .map(|value| self.argument(value))
             .collect::<Result<Vec<_>, _>>()?;
-        match (builtin, arguments.as_slice()) {
-            (B::Null | B::Present | B::Missing | B::Empty, [arg]) => {
-                let value = match arg {
-                    Argument::Word(path) => {
-                        let boundary = path.find(['.', '[']).unwrap_or(path.len());
-                        let (name, path) = path.split_at(boundary);
-                        if self.frames.iter().any(|frame| frame.contains_key(name)) {
-                            self.lookup(
-                                &VariableRef {
-                                    name: name.to_owned(),
-                                    path: path.to_owned(),
-                                },
-                                true,
-                            )?
-                        } else {
-                            Value::Absent
-                        }
+        evaluate(self, builtin, &arguments).map_err(Into::into)
+    }
+}
+
+fn evaluate(
+    machine: &Machine<'_>,
+    builtin: PureBuiltin,
+    arguments: &[Argument],
+) -> Result<Value, String> {
+    use PureBuiltin as B;
+    match (builtin, arguments) {
+        (B::Null | B::Present | B::Missing | B::Empty, [arg]) => {
+            let value = match arg {
+                Argument::Word(path) => {
+                    let boundary = path.find(['.', '[']).unwrap_or(path.len());
+                    let (name, path) = path.split_at(boundary);
+                    if machine.frames.iter().any(|frame| frame.contains_key(name)) {
+                        machine.lookup(
+                            &VariableRef {
+                                name: name.to_owned(),
+                                path: path.to_owned(),
+                            },
+                            true,
+                        )?
+                    } else {
+                        Value::Absent
                     }
-                    Argument::Quoted(text) => Value::String(text.clone()),
-                    Argument::Value(value) | Argument::Adapter { value, .. } => value.clone(),
-                };
-                Ok(Value::Bool(match builtin {
-                    B::Null => value == Value::Null,
-                    B::Present => value != Value::Absent,
-                    B::Missing => value == Value::Absent,
-                    B::Empty => match value {
-                        Value::String(text) => text.is_empty(),
-                        Value::List(items) => items.is_empty(),
-                        Value::Record(fields) => fields.is_empty(),
-                        _ => false,
-                    },
-                    _ => return Err("expected a presence predicate".to_owned()),
-                }))
-            }
-            (B::Contains, [haystack, needle]) => {
-                Ok(Value::Bool(text(haystack)?.contains(&text(needle)?)))
-            }
-            (
-                B::Zip,
-                [
-                    Argument::Value(Value::List(left)),
-                    Argument::Value(Value::List(right)),
-                ],
-            ) => {
-                if left.len() != right.len() {
-                    return Err("zip lists must have equal lengths".to_owned());
                 }
-                Ok(Value::List(
-                    left.iter()
-                        .zip(right)
-                        .map(|(a, b)| Value::List(vec![a.clone(), b.clone()]))
-                        .collect(),
-                ))
-            }
-            (B::Zip, [_, _]) => Err("zip requires lists".to_owned()),
-            (B::U32Le | B::U64Le | B::Range, [arg]) => {
-                let text = text(arg)?;
-                let n = parse_go_unsigned(text.trim())
-                    .ok_or_else(|| format!("invalid unsigned integer {text:?}"))?;
-                match builtin {
-                    B::U32Le => u32::try_from(n)
-                        .map(|n| hexadecimal(&n.to_le_bytes()))
-                        .map_err(|_| format!("value {n} does not fit in 32 bits")),
-                    B::U64Le => Ok(hexadecimal(&n.to_le_bytes())),
-                    B::Range => range(n),
-                    _ => Err("expected an unsigned builtin".to_owned()),
-                }
-            }
-            (B::Jq | B::PathExists, _) => {
-                Err("builtin requires an effect adapter that is not yet implemented".to_owned())
-            }
-            _ => Err("invalid builtin argument count".to_owned()),
+                Argument::Quoted(text) => Value::String(text.clone()),
+                Argument::Value(value) | Argument::Adapter { value, .. } => value.clone(),
+            };
+            Ok(Value::Bool(match builtin {
+                B::Null => value == Value::Null,
+                B::Present => value != Value::Absent,
+                B::Missing => value == Value::Absent,
+                B::Empty => match value {
+                    Value::String(text) => text.is_empty(),
+                    Value::List(items) => items.is_empty(),
+                    Value::Record(fields) => fields.is_empty(),
+                    _ => false,
+                },
+                _ => return Err("expected a presence predicate".to_owned()),
+            }))
         }
+        (B::Contains, [haystack, needle]) => {
+            Ok(Value::Bool(text(haystack)?.contains(&text(needle)?)))
+        }
+        (
+            B::Zip,
+            [
+                Argument::Value(Value::List(left)),
+                Argument::Value(Value::List(right)),
+            ],
+        ) => {
+            if left.len() != right.len() {
+                return Err("zip lists must have equal lengths".to_owned());
+            }
+            Ok(Value::List(
+                left.iter()
+                    .zip(right)
+                    .map(|(a, b)| Value::List(vec![a.clone(), b.clone()]))
+                    .collect(),
+            ))
+        }
+        (B::Zip, [_, _]) => Err("zip requires lists".to_owned()),
+        (B::U32Le | B::U64Le | B::Range, [arg]) => {
+            let text = text(arg)?;
+            let n = parse_go_unsigned(text.trim())
+                .ok_or_else(|| format!("invalid unsigned integer {text:?}"))?;
+            match builtin {
+                B::U32Le => u32::try_from(n)
+                    .map(|n| hexadecimal(&n.to_le_bytes()))
+                    .map_err(|_| format!("value {n} does not fit in 32 bits")),
+                B::U64Le => Ok(hexadecimal(&n.to_le_bytes())),
+                B::Range => range(n),
+                _ => Err("expected an unsigned builtin".to_owned()),
+            }
+        }
+        (B::Jq | B::PathExists, _) => {
+            Err("builtin requires an effect adapter that is not yet implemented".to_owned())
+        }
+        _ => Err("invalid builtin argument count".to_owned()),
     }
 }
 

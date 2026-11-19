@@ -1,19 +1,19 @@
 use bpfman_shell_ir::{MatchBlock, MatchPattern, MatchPredicate};
 
-use super::{Machine, Value, is_empty};
+use super::{EvalResult, Machine, Value, is_empty};
 
 impl Machine<'_> {
-    pub(super) fn matches(&self, value: Value, block: &MatchBlock) -> Result<bool, String> {
+    pub(super) fn matches(&self, value: Value, block: &MatchBlock) -> EvalResult<bool> {
         if !matches!(
             value,
             Value::Record(_) | Value::BpfmanRecord { .. } | Value::List(_) | Value::Outcome(_)
         ) {
-            return Err("matches requires a structured value".to_owned());
+            return Err("matches requires a structured value".into());
         }
         self.matches_block(&value, block)
     }
 
-    fn matches_block(&self, value: &Value, block: &MatchBlock) -> Result<bool, String> {
+    fn matches_block(&self, value: &Value, block: &MatchBlock) -> EvalResult<bool> {
         let mut matched = true;
         if block.exhaustive {
             let claimed = |name: &str| block.entries.iter().any(|entry| entry.path == name);
