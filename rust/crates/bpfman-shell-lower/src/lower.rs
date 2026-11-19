@@ -1,9 +1,10 @@
 use std::fmt;
 
+use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
-    Block, Command, Expression, ExpressionKind, Instruction, Located, Program, Temp, Terminator,
-    VerifyError,
+    BinaryOperator, BranchTrace, Command, Expression, ExpressionKind, Instruction, Located,
+    Program, Temp, VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -20,6 +21,8 @@ pub enum LowerError {
     },
     /// The generated IR failed structural verification.
     InvalidIr(VerifyError),
+    /// A reserved block was left unpublished or unterminated.
+    IncompleteLayout(Span),
 }
 
 impl fmt::Display for LowerError {
@@ -36,6 +39,12 @@ impl fmt::Display for LowerError {
                 )
             }
             Self::InvalidIr(error) => write!(f, "invalid lowered program: {error}"),
+            Self::IncompleteLayout(span) => write!(
+                f,
+                "incomplete block layout at {}:{}",
+                span.start().line(),
+                span.start().column()
+            ),
         }
     }
 }
@@ -44,7 +53,7 @@ impl std::error::Error for LowerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidIr(error) => Some(error),
-            Self::Unsupported { .. } => None,
+            Self::Unsupported { .. } | Self::IncompleteLayout(_) => None,
         }
     }
 }
@@ -70,7 +79,7 @@ pub fn lower_unchecked(program: &ExpandedProgram) -> Result<Program, LowerError>
 
 fn lower_body(span: &Span, statements: &[syntax::Statement]) -> Result<Program, LowerError> {
     let mut body = Body {
-        instructions: Vec::new(),
+        layout: Layout::new(span),
         next_temp: 0,
     };
     body.emit(span, Instruction::EnterProgramDefers);
@@ -78,16 +87,12 @@ fn lower_body(span: &Span, statements: &[syntax::Statement]) -> Result<Program, 
         body.statement(statement)?;
     }
     body.emit(span, Instruction::RunProgramDefers);
-    let block = Block {
-        span: span.clone(),
-        instructions: body.instructions,
-        terminator: located(span, Terminator::Stop),
-    };
-    Program::new(span.clone(), vec![block]).map_err(LowerError::InvalidIr)
+    body.layout.terminate(located(span, Exit::Stop));
+    Program::new(span.clone(), body.layout.finish()?).map_err(LowerError::InvalidIr)
 }
 
 struct Body {
-    instructions: Vec<Located<Instruction>>,
+    layout: Layout,
     next_temp: usize,
 }
 
@@ -99,7 +104,7 @@ impl Body {
     }
 
     fn emit(&mut self, span: &Span, instruction: Instruction) {
-        self.instructions.push(located(span, instruction));
+        self.layout.emit(located(span, instruction));
     }
 
     fn statement(&mut self, statement: &syntax::Statement) -> Result<(), LowerError> {
@@ -121,7 +126,13 @@ impl Body {
             },
             S::Definition(_) => return Err(unsupported(span, "definition")),
             S::Return(_) => return Err(unsupported(span, "return")),
-            S::If { .. } => return Err(unsupported(span, "if")),
+            S::If {
+                first,
+                elif,
+                else_body,
+            } => {
+                return self.conditional(span, first, elif, else_body.as_deref());
+            }
             S::Foreach { .. } => return Err(unsupported(span, "foreach")),
             S::Poll { .. } => return Err(unsupported(span, "poll")),
             S::Retry { .. } => return Err(unsupported(span, "retry")),
@@ -133,6 +144,70 @@ impl Body {
             S::Continue => return Err(unsupported(span, "continue")),
         };
         self.emit(span, instruction);
+        Ok(())
+    }
+
+    fn conditional(
+        &mut self,
+        span: &Span,
+        first: &syntax::IfBranch,
+        elif: &[syntax::IfBranch],
+        else_body: Option<&[syntax::Statement]>,
+    ) -> Result<(), LowerError> {
+        let merge = self.layout.reserve(span);
+        for (index, branch) in std::iter::once(first).chain(elif).enumerate() {
+            let branch_span = if index == 0 { span } else { branch.span() };
+            let condition = self.eval(branch_span, branch.condition())?;
+            let on_true = self.layout.new_block(branch_span);
+            let next_span = elif.get(index).map_or(branch_span, syntax::IfBranch::span);
+            let on_false = self.layout.new_block(next_span);
+            self.layout.terminate(located(
+                branch_span,
+                Exit::Branch {
+                    condition,
+                    on_true,
+                    on_false,
+                },
+            ));
+
+            self.layout.select(on_true);
+            let trace = if index == 0 {
+                BranchTrace::Then
+            } else {
+                BranchTrace::Elif
+            };
+            self.branch_body(span, branch_span, trace, branch.body(), merge)?;
+            self.layout.select(on_false);
+        }
+        if let Some(body) = else_body {
+            let else_span = elif.last().map_or(span, syntax::IfBranch::span);
+            self.branch_body(span, else_span, BranchTrace::Else, body, merge)?;
+        } else {
+            self.emit(span, Instruction::TraceBranch(BranchTrace::Skip));
+            self.layout.terminate(located(span, Exit::Jump(merge)));
+        }
+
+        self.layout.publish(merge);
+        self.layout.select(merge);
+        Ok(())
+    }
+
+    fn branch_body(
+        &mut self,
+        trace_span: &Span,
+        frame_span: &Span,
+        trace: BranchTrace,
+        body: &[syntax::Statement],
+        merge: Label,
+    ) -> Result<(), LowerError> {
+        self.emit(trace_span, Instruction::TraceBranch(trace));
+        self.emit(frame_span, Instruction::EnterIfFrame);
+        for statement in body {
+            self.statement(statement)?;
+        }
+        self.emit(frame_span, Instruction::ExitFrame);
+        self.layout
+            .terminate(located(frame_span, Exit::Jump(merge)));
         Ok(())
     }
 
@@ -168,9 +243,35 @@ fn lower_expression(value: &syntax::Expression) -> Result<Expression, LowerError
             path: variable.path.clone(),
         },
         E::List(items) => ExpressionKind::List(lower_expressions(items)?),
+        E::Binary {
+            left,
+            operator,
+            right,
+        } => ExpressionKind::Binary {
+            left: Box::new(lower_expression(left)?),
+            operator: lower_operator(*operator),
+            right: Box::new(lower_expression(right)?),
+        },
         _ => return Err(unsupported(value.span(), "expression")),
     };
     Ok(located(value.span(), node))
+}
+
+fn lower_operator(operator: syntax::BinaryOperator) -> BinaryOperator {
+    use syntax::BinaryOperator as O;
+    match operator {
+        O::Add => BinaryOperator::Add,
+        O::Subtract => BinaryOperator::Subtract,
+        O::Multiply => BinaryOperator::Multiply,
+        O::Divide => BinaryOperator::Divide,
+        O::Remainder => BinaryOperator::Remainder,
+        O::Equal => BinaryOperator::Equal,
+        O::NotEqual => BinaryOperator::NotEqual,
+        O::Less => BinaryOperator::Less,
+        O::LessEqual => BinaryOperator::LessEqual,
+        O::Greater => BinaryOperator::Greater,
+        O::GreaterEqual => BinaryOperator::GreaterEqual,
+    }
 }
 
 fn unsupported(span: &Span, form: &'static str) -> LowerError {
@@ -242,11 +343,44 @@ mod tests {
         assert!(check(unknown.clone()).is_err());
         assert!(lower_unchecked(&unknown).is_ok());
 
-        let program = check(expand("print ok\nif true { print later }"))
+        let program = check(expand("print ok\nforeach n in [1] { print $n }"))
             .unwrap_or_else(|issues| unreachable!("{issues:?}"));
         assert!(matches!(
             lower(&program),
-            Err(LowerError::Unsupported { form: "if", span }) if &span == program.statements()[1].span()
+            Err(LowerError::Unsupported { form: "foreach", span }) if &span == program.statements()[1].span()
         ));
+    }
+
+    #[test]
+    fn nested_if_chain_matches_go_dump_and_preserves_trace_and_condition_spans() {
+        use bpfman_shell_ir::{BlockId, BranchTrace, Temp, Terminator};
+
+        let source = include_str!("../testdata/conditionals.bpfman");
+        let program = check(expand(source)).unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+
+        assert_eq!(
+            ir.to_string(),
+            include_str!("../testdata/conditionals.lowered")
+        );
+        assert_eq!(ir.num_temps(), 9);
+        assert_eq!(
+            ir.blocks()[0].terminator.node,
+            Terminator::Branch {
+                condition: Temp(1),
+                on_true: BlockId(1),
+                on_false: BlockId(2),
+            }
+        );
+        assert_eq!(
+            &ir.blocks()[0].terminator.span,
+            program.statements()[1].span()
+        );
+        assert_eq!(ir.blocks()[2].terminator.span.start().line(), 5);
+        assert_eq!(
+            ir.blocks()[4].instructions[0].node,
+            Instruction::TraceBranch(BranchTrace::Skip)
+        );
+        assert_eq!(ir.blocks()[4].instructions[0].span.start().line(), 3);
     }
 }

@@ -1,0 +1,10 @@
+let n = 1
+if $n > 0 {
+  if false { print inner }
+  print first
+} elif $n == 0 {
+  print second
+} else {
+  print third
+}
+print done

@@ -1,4 +1,7 @@
-use std::fmt;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 use bpfman_shell_source::Span;
 
@@ -16,7 +19,7 @@ pub struct Located<T> {
 pub struct BlockId(pub usize);
 
 /// A temporary index in its owning program, numbered in emission order.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Temp(pub usize);
 
 /// A lowered expression with source coordinates.
@@ -38,6 +41,55 @@ pub enum ExpressionKind {
     },
     /// A list evaluated left to right.
     List(Vec<Expression>),
+    /// Apply an arithmetic or comparison operator.
+    Binary {
+        /// Left operand.
+        left: Box<Expression>,
+        /// Operator.
+        operator: BinaryOperator,
+        /// Right operand.
+        right: Box<Expression>,
+    },
+}
+
+/// Arithmetic and comparison operators understood by the IR.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BinaryOperator {
+    /// Addition.
+    Add,
+    /// Subtraction.
+    Subtract,
+    /// Multiplication.
+    Multiply,
+    /// Division.
+    Divide,
+    /// Remainder.
+    Remainder,
+    /// Equality.
+    Equal,
+    /// Inequality.
+    NotEqual,
+    /// Less than.
+    Less,
+    /// Less than or equal.
+    LessEqual,
+    /// Greater than.
+    Greater,
+    /// Greater than or equal.
+    GreaterEqual,
+}
+
+/// Trace event emitted when control selects an if-chain path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BranchTrace {
+    /// The initial condition matched.
+    Then,
+    /// An elif condition matched.
+    Elif,
+    /// The else body was selected.
+    Else,
+    /// All conditions failed and there was no else.
+    Skip,
 }
 
 /// A nonempty argv description.
@@ -54,6 +106,12 @@ pub struct Command {
 pub enum Instruction {
     /// Open the program's defer scope.
     EnterProgramDefers,
+    /// Enter the lexical frame for a selected if branch.
+    EnterIfFrame,
+    /// Leave the current lexical frame.
+    ExitFrame,
+    /// Record a trace event omitted by the canonical dump.
+    TraceBranch(BranchTrace),
     /// Evaluate a value.
     Eval {
         /// Destination value temporary.
@@ -99,6 +157,15 @@ pub enum Instruction {
 pub enum Terminator {
     /// Transfer control within the current program.
     Jump(BlockId),
+    /// Select a successor using an evaluated condition.
+    Branch {
+        /// Condition value temporary.
+        condition: Temp,
+        /// Successor when the condition is true.
+        on_true: BlockId,
+        /// Successor when the condition is false.
+        on_false: BlockId,
+    },
     /// Finish the program.
     Stop,
 }
@@ -127,9 +194,9 @@ pub struct Program {
 pub enum VerifyError {
     /// The program has no entry block.
     MissingEntry,
-    /// A jump leaves the program's block table.
+    /// A successor leaves the program's block table.
     InvalidSuccessor(BlockId),
-    /// A destination is out of emission order or already allocated.
+    /// A destination is outside the dense temporary range or already allocated.
     InvalidDestination(Temp),
     /// A use has no prior definition of the required kind in its block.
     InvalidOperand(Temp),
@@ -165,36 +232,64 @@ impl Program {
         if blocks.is_empty() {
             return Err(VerifyError::MissingEntry);
         }
-        let mut num_temps = 0;
+        let mut destinations = HashSet::new();
         for block in &blocks {
-            if let Terminator::Jump(id) = block.terminator.node {
-                if id.0 >= blocks.len() {
-                    return Err(VerifyError::InvalidSuccessor(id));
-                }
-            }
-            let base = num_temps;
-            let mut kinds = Vec::new();
+            let mut kinds = HashMap::new();
             for instruction in &block.instructions {
                 match &instruction.node {
                     Instruction::Eval { dst, .. } | Instruction::BuildArgs { dst, .. } => {
-                        if dst.0 != num_temps {
+                        if !destinations.insert(*dst) {
                             return Err(VerifyError::InvalidDestination(*dst));
                         }
-                        kinds.push(match instruction.node {
-                            Instruction::Eval { .. } => TempKind::Value,
-                            _ => TempKind::Args,
-                        });
-                        num_temps += 1;
+                        kinds.insert(
+                            *dst,
+                            match instruction.node {
+                                Instruction::Eval { .. } => TempKind::Value,
+                                _ => TempKind::Args,
+                            },
+                        );
                     }
                     Instruction::BindName { src, .. } | Instruction::EmitResult { src } => {
-                        verify_operand(*src, TempKind::Value, base, &kinds)?;
+                        verify_operand(*src, TempKind::Value, &kinds)?;
                     }
                     Instruction::DispatchCommand { argv } | Instruction::RegisterDefer { argv } => {
-                        verify_operand(*argv, TempKind::Args, base, &kinds)?;
+                        verify_operand(*argv, TempKind::Args, &kinds)?;
                     }
-                    Instruction::EnterProgramDefers | Instruction::RunProgramDefers => {}
+                    Instruction::EnterProgramDefers
+                    | Instruction::RunProgramDefers
+                    | Instruction::EnterIfFrame
+                    | Instruction::ExitFrame
+                    | Instruction::TraceBranch(_) => {}
                 }
             }
+            let verify_successor = |id: BlockId| {
+                if id.0 < blocks.len() {
+                    Ok(())
+                } else {
+                    Err(VerifyError::InvalidSuccessor(id))
+                }
+            };
+            match block.terminator.node {
+                Terminator::Jump(id) => verify_successor(id)?,
+                Terminator::Branch {
+                    condition,
+                    on_true,
+                    on_false,
+                } => {
+                    verify_operand(condition, TempKind::Value, &kinds)?;
+                    verify_successor(on_true)?;
+                    verify_successor(on_false)?;
+                }
+                Terminator::Stop => {}
+            }
+        }
+        let num_temps = destinations.len();
+        if let Some(temp) = destinations
+            .into_iter()
+            .filter(|temp| temp.0 >= num_temps)
+            .min_by_key(|temp| temp.0)
+        {
+            return Err(VerifyError::InvalidDestination(temp));
         }
         Ok(Self {
             span,
@@ -231,10 +326,9 @@ impl Program {
 fn verify_operand(
     temp: Temp,
     kind: TempKind,
-    base: usize,
-    kinds: &[TempKind],
+    kinds: &HashMap<Temp, TempKind>,
 ) -> Result<(), VerifyError> {
-    if temp.0.checked_sub(base).and_then(|index| kinds.get(index)) == Some(&kind) {
+    if kinds.get(&temp) == Some(&kind) {
         Ok(())
     } else {
         Err(VerifyError::InvalidOperand(temp))
@@ -313,6 +407,28 @@ mod tests {
         assert_eq!(
             Program::new(span, vec![duplicate]),
             Err(VerifyError::InvalidDestination(Temp(0)))
+        );
+    }
+
+    #[test]
+    fn branch_checks_both_successors_and_its_condition() {
+        let span = located(()).span;
+        let condition = located(Instruction::Eval {
+            dst: Temp(0),
+            expression: located(ExpressionKind::Word("true".to_owned())),
+        });
+        let branch = |condition, on_false| Terminator::Branch {
+            condition: Temp(condition),
+            on_true: BlockId(0),
+            on_false: BlockId(on_false),
+        };
+        assert_eq!(
+            Program::new(span.clone(), vec![block(vec![condition], branch(0, 1))]),
+            Err(VerifyError::InvalidSuccessor(BlockId(1)))
+        );
+        assert_eq!(
+            Program::new(span, vec![block(vec![], branch(0, 0))]),
+            Err(VerifyError::InvalidOperand(Temp(0)))
         );
     }
 }

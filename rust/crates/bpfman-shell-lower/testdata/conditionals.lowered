@@ -1,0 +1,53 @@
+body entry=bb0
+
+bb0:
+  EnterDeferScope kind=program
+  Eval t0 = 1
+  BindName n = t0
+  Eval t1 = $n > 0
+  Branch cond=t1 true=bb1 false=bb2
+
+bb1:
+  EnterFrame kind=if-branch
+  Eval t2 = false
+  Branch cond=t2 true=bb3 false=bb4
+
+bb2:
+  Eval t5 = $n == 0
+  Branch cond=t5 true=bb6 false=bb7
+
+bb3:
+  EnterFrame kind=if-branch
+  BuildArgs t3 = [print inner]
+  DispatchCommand argv=t3 policy=def-then-exec-command lane=builtin(print)
+  ExitFrame
+  Jump bb5
+
+bb4:
+  Jump bb5
+
+bb5:
+  BuildArgs t4 = [print first]
+  DispatchCommand argv=t4 policy=def-then-exec-command lane=builtin(print)
+  ExitFrame
+  Jump bb8
+
+bb6:
+  EnterFrame kind=if-branch
+  BuildArgs t6 = [print second]
+  DispatchCommand argv=t6 policy=def-then-exec-command lane=builtin(print)
+  ExitFrame
+  Jump bb8
+
+bb7:
+  EnterFrame kind=if-branch
+  BuildArgs t7 = [print third]
+  DispatchCommand argv=t7 policy=def-then-exec-command lane=builtin(print)
+  ExitFrame
+  Jump bb8
+
+bb8:
+  BuildArgs t8 = [print done]
+  DispatchCommand argv=t8 policy=def-then-exec-command lane=builtin(print)
+  RunDefers policy=program
+  Stop

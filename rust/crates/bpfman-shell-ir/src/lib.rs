@@ -4,6 +4,6 @@ mod dump;
 mod model;
 
 pub use model::{
-    Block, BlockId, Command, Expression, ExpressionKind, Instruction, Located, Program, Temp,
-    Terminator, VerifyError,
+    BinaryOperator, Block, BlockId, BranchTrace, Command, Expression, ExpressionKind, Instruction,
+    Located, Program, Temp, Terminator, VerifyError,
 };

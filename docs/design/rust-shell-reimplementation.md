@@ -180,7 +180,11 @@ successor indices and block-local temporary definitions and uses. The initial
 dump matches Go's straight-line output. `lower(&CheckedProgram)` is the normal
 entry point, and `lower_unchecked(&ExpandedProgram)` is the explicit bypass.
 Both verify their output and report unsupported syntax at its source span.
-Compound control flow, the full golden dump, and execution are pending.
+Conditional lowering now emits a typed branch, a lexical frame for each
+selected body, trace events, and a shared continuation. Blocks keep Go's
+publication order even when nested bodies allocate temporaries before a
+previously published block is filled. A nested conditional fixture compares
+the dump with Go. Loops, the full golden dump, and execution are pending.
 
 ## Typestate and internal invariants
 
