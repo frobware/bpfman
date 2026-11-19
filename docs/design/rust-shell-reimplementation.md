@@ -152,8 +152,11 @@ to null for equality and inequality. Rust also diagnoses record-to-record
 comparisons during preflight when it has a sealed record shape. Go leaves
 literal records' origin unknown and diagnoses this at runtime. Unknown operands
 defer to runtime. A bare definition name in a comparison gets a call-site hint
-at the operand span. Definition return shapes and the full preflight gate are
-pending.
+at the operand span. Binary arithmetic checks each literal operand against
+the JSON-number grammar, including operands inside interpolation. Variable
+operands use lexical binding evidence, including known nonnumeric literal
+assignments and proved nonnumeric kinds. Dynamic operands remain runtime
+checked. Definition return shapes and the full preflight gate are pending.
 
 ## Typestate and internal invariants
 

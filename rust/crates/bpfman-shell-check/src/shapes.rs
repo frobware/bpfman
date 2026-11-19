@@ -9,13 +9,13 @@ use bpfman_shell_semantics::{
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax::{
     AssertionClause, BinaryOperator, Command, Expression, ExpressionKind, InterpolatedPart,
-    MatchPattern, MatchesBlock, Statement, StatementKind, VariableRef,
+    MatchPattern, MatchesBlock, Statement, StatementKind, VariableRef, is_json_number,
 };
 
 use crate::{ExpandedProgram, Issue};
 
-/// Report field-access mistakes and incompatible comparison operands when
-/// their shapes are known.
+/// Report proved field-access mistakes, incompatible comparison operands, and
+/// provably nonnumeric arithmetic operands.
 /// Unknown and domain shapes without a verified Rust JSON projection stay open.
 /// An empty result does not certify execution.
 #[must_use]
@@ -38,9 +38,14 @@ pub fn analyze_shapes(program: &ExpandedProgram) -> Vec<Issue> {
 }
 
 struct Analysis {
-    frames: Vec<HashMap<String, Shape>>,
+    frames: Vec<HashMap<String, Binding>>,
     defs: HashSet<String>,
     issues: Vec<Issue>,
+}
+
+struct Binding {
+    shape: Shape,
+    nonnumeric_literal: Option<String>,
 }
 
 impl Analysis {
@@ -52,14 +57,24 @@ impl Analysis {
     }
 
     fn define(&mut self, name: &str, shape: Shape) {
+        self.bind(name, shape, None);
+    }
+
+    fn bind(&mut self, name: &str, shape: Shape, nonnumeric_literal: Option<String>) {
         if name != "_" {
             if let Some(frame) = self.frames.last_mut() {
-                frame.insert(name.to_owned(), shape);
+                frame.insert(
+                    name.to_owned(),
+                    Binding {
+                        shape,
+                        nonnumeric_literal,
+                    },
+                );
             }
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<&Shape> {
+    fn lookup(&self, name: &str) -> Option<&Binding> {
         self.frames.iter().rev().find_map(|frame| frame.get(name))
     }
 
@@ -89,7 +104,16 @@ impl Analysis {
             StatementKind::Let { name, value } => {
                 self.expression(value);
                 let shape = self.infer(value);
-                self.define(name.text(), shape);
+                let nonnumeric_literal = match value.kind() {
+                    ExpressionKind::Quoted(text) => Some(text.clone()),
+                    ExpressionKind::Word(text)
+                        if shape.origin() == OriginKind::Scalar && !is_json_number(text) =>
+                    {
+                        Some(text.clone())
+                    }
+                    _ => None,
+                };
+                self.bind(name.text(), shape, nonnumeric_literal);
             }
             StatementKind::LetDestructure { names, value } => {
                 self.expression(value);
@@ -209,7 +233,20 @@ impl Analysis {
             ExpressionKind::Variable(variable) | ExpressionKind::Adapter { variable, .. } => {
                 self.path_shape(variable, value.span());
             }
-            ExpressionKind::Binary { left, right, .. } => {
+            ExpressionKind::Binary {
+                operator,
+                left,
+                right,
+            } => {
+                let mut arithmetic_issues = Vec::new();
+                crate::arithmetic::check(
+                    *operator,
+                    [left, right],
+                    |name| self.defs.contains(name),
+                    |operand| self.arithmetic_variable_issue(operand),
+                    &mut arithmetic_issues,
+                );
+                self.issues.extend(arithmetic_issues);
                 if let Some(issue) = crate::comparison::issue(
                     value,
                     |operand| self.infer(operand),
@@ -318,8 +355,37 @@ impl Analysis {
         }
     }
 
+    fn arithmetic_variable_issue(&self, operand: &Expression) -> Option<String> {
+        let ExpressionKind::Variable(variable) = operand.kind() else {
+            return None;
+        };
+        let separator = if variable.path.is_empty() || variable.path.starts_with('[') {
+            ""
+        } else {
+            "."
+        };
+        let name = format!("{}{separator}{}", variable.name, variable.path);
+        let shape = self.path_shape_readonly(variable);
+        match shape.origin() {
+            OriginKind::Scalar | OriginKind::Unknown => {
+                if variable.path.is_empty() {
+                    if let Some(text) = &self.lookup(&variable.name)?.nonnumeric_literal {
+                        return Some(format!("{name} is {text:?}, not a number"));
+                    }
+                }
+                None
+            }
+            OriginKind::Bool => Some(format!("{name} is a boolean, not a number")),
+            OriginKind::Null => Some(format!("{name} is null, not a number")),
+            kind => Some(format!("{name} has kind {kind}, not a number")),
+        }
+    }
+
     fn path_shape_readonly(&self, variable: &VariableRef) -> Shape {
-        let Some(mut shape) = self.lookup(&variable.name).cloned() else {
+        let Some(mut shape) = self
+            .lookup(&variable.name)
+            .map(|binding| binding.shape.clone())
+        else {
             return Shape::unknown();
         };
         for segment in path_segments(&variable.path) {
@@ -335,7 +401,10 @@ impl Analysis {
     }
 
     fn path_shape(&mut self, variable: &VariableRef, span: &Span) -> Shape {
-        let Some(mut shape) = self.lookup(&variable.name).cloned() else {
+        let Some(mut shape) = self
+            .lookup(&variable.name)
+            .map(|binding| binding.shape.clone())
+        else {
             return Shape::unknown();
         };
         let mut current_name = variable.name.clone();
@@ -417,7 +486,7 @@ mod tests {
     use crate::{analyze_shapes, expand_imports, prepare_imports};
 
     fn messages(source: &str) -> Vec<String> {
-        let parsed = parse("shape.bpfman", source).unwrap_or_else(|_| unreachable!());
+        let parsed = parse("shape.bpfman", source).unwrap_or_else(|error| unreachable!("{error}"));
         let plan = prepare_imports(parsed, Path::new(".")).unwrap_or_else(|_| unreachable!());
         let expanded = expand_imports(plan, &BTreeMap::new()).unwrap_or_else(|_| unreachable!());
         analyze_shapes(&expanded)
@@ -504,5 +573,39 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert!(found[0].contains("call it via `let v <- two`"));
         assert!(messages("let result = \"two\" == \"2\"\ndef two() { return 2 }").is_empty());
+    }
+
+    #[test]
+    fn arithmetic_checks_each_literal_including_inside_interpolation() {
+        let found = messages("let result = bad * bogus\ndef bad() { return 3 }");
+        assert_eq!(found.len(), 2);
+        assert!(found[0].contains("call it via `let v <- bad`"));
+        assert_eq!(found[1], "arithmetic *: operand \"bogus\" is not numeric");
+        assert_eq!(
+            messages("print \"${4 * bogus}\""),
+            ["arithmetic *: operand \"bogus\" is not numeric"]
+        );
+    }
+
+    #[test]
+    fn arithmetic_accepts_numeric_literals_and_leaves_dynamic_inputs_open() {
+        assert!(messages("let result = 1.5 + 2e3\nlet n = $input * 3").is_empty());
+        assert_eq!(messages("let result = \"NaN\" / 2").len(), 1);
+    }
+
+    #[test]
+    fn arithmetic_uses_lexical_binding_evidence() {
+        let found = messages(
+            "let n = word\nif true { let n = 2\n let local = $n * 3 }\nlet outer = $n * 3\nlet quoted = \"4\"\nlet result = $quoted + 1\nlet data = record { flag: true }\nlet flag = $data.flag - 1\nlet nothing = null\nlet n = $nothing / 2\nlet open = jq . 1\nlet dynamic = $open * 2",
+        );
+        assert_eq!(
+            found,
+            [
+                "arithmetic *: n is \"word\", not a number",
+                "arithmetic +: quoted is \"4\", not a number",
+                "arithmetic -: data.flag is a boolean, not a number",
+                "arithmetic /: nothing is null, not a number",
+            ]
+        );
     }
 }

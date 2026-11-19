@@ -12,6 +12,7 @@ use bpfman_shell_syntax::{
     MatchPattern, MatchesBlock, ParsedProgram, Statement, StatementKind,
 };
 
+mod arithmetic;
 mod calls;
 mod comparison;
 mod imports;
