@@ -1,132 +1,180 @@
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt,
+};
 
 use crate::{
-    BinaryOperator, BindPolicy, Command, Expression, ExpressionKind, Instruction, InterpolatedPart,
-    LogicalOperator, MatchBlock, MatchPattern, MatchPredicate, Program, PureBuiltin, Terminator,
-    UnaryOperator, VariableRef,
+    BinaryOperator, BindPolicy, Block, Command, Expression, ExpressionKind, Instruction,
+    InterpolatedPart, LogicalOperator, MatchBlock, MatchPattern, MatchPredicate, ParameterType,
+    Program, PureBuiltin, Terminator, UnaryOperator, VariableRef,
 };
 
 impl fmt::Display for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "body entry=bb{}", self.entry().0)?;
-        for (id, block) in self.blocks().iter().enumerate() {
-            let mut heads = BTreeMap::new();
-            writeln!(f, "\nbb{id}:")?;
-            for instruction in &block.instructions {
-                if matches!(
-                    instruction.node,
-                    Instruction::TraceBranch(_) | Instruction::TraceLoop(_)
-                ) {
-                    continue;
+        let names = self
+            .definitions()
+            .iter()
+            .map(crate::Definition::name)
+            .collect();
+        for def in self.definitions() {
+            write!(f, "def {}(", def.name())?;
+            for (index, parameter) in def.parameters().iter().enumerate() {
+                if index > 0 {
+                    f.write_str(" ")?;
                 }
-                f.write_str("  ")?;
-                match &instruction.node {
-                    Instruction::TraceBranch(_) | Instruction::TraceLoop(_) => {}
-                    Instruction::EnterIfFrame => writeln!(f, "EnterFrame kind=if-branch")?,
-                    Instruction::ExitFrame => writeln!(f, "ExitFrame")?,
-                    Instruction::EnterProgramDefers => {
-                        writeln!(f, "EnterDeferScope kind=program")?;
-                    }
-                    Instruction::RunProgramDefers => writeln!(f, "RunDefers policy=program")?,
-                    Instruction::Eval { dst, expression } => {
-                        writeln!(f, "Eval t{} = {expression}", dst.0)?;
-                    }
-                    Instruction::BindName { name, src } => {
-                        writeln!(f, "BindName {name} = t{}", src.0)?;
-                    }
-                    Instruction::EmitResult { src } => writeln!(f, "EmitResult t{}", src.0)?,
-                    Instruction::BuildArgs { dst, command } => {
-                        heads.insert(dst.0, lane(command));
-                        write!(f, "BuildArgs t{} = [{}", dst.0, command.head)?;
-                        for argument in &command.arguments {
-                            write!(f, " {argument}")?;
-                        }
-                        writeln!(f, "]")?;
-                    }
-                    Instruction::DispatchCommand { argv } => {
-                        writeln!(
-                            f,
-                            "DispatchCommand argv=t{} policy=def-then-exec-command lane={}",
-                            argv.0,
-                            heads.get(&argv.0).ok_or(fmt::Error)?,
-                        )?;
-                    }
-                    Instruction::DispatchBind { dst, argv, .. } => {
-                        writeln!(
-                            f,
-                            "DispatchBind t{} = t{} policy=def-then-exec-bind lane={}",
-                            dst.0,
-                            argv.0,
-                            heads.get(&argv.0).ok_or(fmt::Error)?,
-                        )?;
-                    }
-                    Instruction::ApplyBind {
-                        src,
-                        argv,
-                        target,
-                        policy,
-                    } => {
-                        let guard = matches!(policy, BindPolicy::Guard { .. });
-                        write!(
-                            f,
-                            "ApplyBind src=t{} argv=t{} target={target} guard={guard}",
-                            src.0, argv.0
-                        )?;
-                        if let BindPolicy::Guard { on_failure } = policy {
-                            write!(f, " fail=bb{}", on_failure.0)?;
-                        }
-                        writeln!(f)?;
-                    }
-                    Instruction::RegisterDefer { argv } => {
-                        writeln!(
-                            f,
-                            "RegisterDefer argv=t{} policy=def-then-exec-bind lane={}",
-                            argv.0,
-                            heads.get(&argv.0).ok_or(fmt::Error)?,
-                        )?;
-                    }
+                f.write_str(&parameter.name)?;
+                if let Some(annotation) = parameter.annotation {
+                    let name = match annotation {
+                        ParameterType::Number => "number",
+                        ParameterType::String => "string",
+                        ParameterType::Bool => "bool",
+                    };
+                    write!(f, ": {name}")?;
                 }
             }
-            match block.terminator.node {
-                Terminator::Jump(target) => writeln!(f, "  Jump bb{}", target.0)?,
-                Terminator::Branch {
-                    condition,
-                    on_true,
-                    on_false,
-                } => writeln!(
-                    f,
-                    "  Branch cond=t{} true=bb{} false=bb{}",
-                    condition.0, on_true.0, on_false.0
-                )?,
-                Terminator::Stop => writeln!(f, "  Stop")?,
-                Terminator::PropagateError => writeln!(f, "  PropagateError")?,
-                Terminator::ForEach {
-                    list,
-                    ref bindings,
-                    body,
-                    exit,
-                } => writeln!(
-                    f,
-                    "  ForEach list=t{} names=[{}] body=bb{} exit=bb{}",
-                    list.0,
-                    bindings.names().join(" "),
-                    body.0,
-                    exit.0,
-                )?,
-                Terminator::ForEachContinue(_) => writeln!(f, "  ForEachContinue")?,
-                Terminator::ExitLoop(_) => writeln!(f, "  ExitLoop")?,
-            }
+            writeln!(f, ") entry=bb0")?;
+            dump_blocks(f, def.blocks(), &names)?;
+            writeln!(f)?;
         }
-        Ok(())
+        writeln!(f, "body entry=bb{}", self.entry().0)?;
+        dump_blocks(f, self.blocks(), &names)
     }
 }
 
-fn lane(command: &Command) -> String {
+fn dump_blocks(
+    f: &mut fmt::Formatter<'_>,
+    blocks: &[Block],
+    definitions: &HashSet<&str>,
+) -> fmt::Result {
+    for (id, block) in blocks.iter().enumerate() {
+        let mut heads = BTreeMap::new();
+        writeln!(f, "\nbb{id}:")?;
+        for instruction in &block.instructions {
+            if matches!(
+                instruction.node,
+                Instruction::TraceBranch(_) | Instruction::TraceLoop(_)
+            ) {
+                continue;
+            }
+            f.write_str("  ")?;
+            match &instruction.node {
+                Instruction::TraceBranch(_) | Instruction::TraceLoop(_) => {}
+                Instruction::EnterIfFrame => writeln!(f, "EnterFrame kind=if-branch")?,
+                Instruction::EnterDefinitionFrame => writeln!(f, "EnterFrame kind=def")?,
+                Instruction::EnterDefinitionDefers => writeln!(f, "EnterDeferScope kind=def")?,
+                Instruction::RunDefinitionDefers => writeln!(f, "RunDefers policy=def-local")?,
+                Instruction::ExitFrame => writeln!(f, "ExitFrame")?,
+                Instruction::EnterProgramDefers => {
+                    writeln!(f, "EnterDeferScope kind=program")?;
+                }
+                Instruction::RunProgramDefers => writeln!(f, "RunDefers policy=program")?,
+                Instruction::Eval { dst, expression } => {
+                    writeln!(f, "Eval t{} = {expression}", dst.0)?;
+                }
+                Instruction::BindName { name, src } => {
+                    writeln!(f, "BindName {name} = t{}", src.0)?;
+                }
+                Instruction::EmitResult { src } => writeln!(f, "EmitResult t{}", src.0)?,
+                Instruction::BuildArgs { dst, command } => {
+                    heads.insert(dst.0, lane(command, definitions));
+                    write!(f, "BuildArgs t{} = [{}", dst.0, command.head)?;
+                    for argument in &command.arguments {
+                        write!(f, " {argument}")?;
+                    }
+                    writeln!(f, "]")?;
+                }
+                Instruction::DispatchCommand { argv } => {
+                    writeln!(
+                        f,
+                        "DispatchCommand argv=t{} policy=def-then-exec-command lane={}",
+                        argv.0,
+                        heads.get(&argv.0).ok_or(fmt::Error)?,
+                    )?;
+                }
+                Instruction::DispatchBind { dst, argv, .. } => {
+                    writeln!(
+                        f,
+                        "DispatchBind t{} = t{} policy=def-then-exec-bind lane={}",
+                        dst.0,
+                        argv.0,
+                        heads.get(&argv.0).ok_or(fmt::Error)?,
+                    )?;
+                }
+                Instruction::ApplyBind {
+                    src,
+                    argv,
+                    target,
+                    policy,
+                } => {
+                    let guard = matches!(policy, BindPolicy::Guard { .. });
+                    write!(
+                        f,
+                        "ApplyBind src=t{} argv=t{} target={target} guard={guard}",
+                        src.0, argv.0
+                    )?;
+                    if let BindPolicy::Guard { on_failure } = policy {
+                        write!(f, " fail=bb{}", on_failure.0)?;
+                    }
+                    writeln!(f)?;
+                }
+                Instruction::RegisterDefer { argv } => {
+                    writeln!(
+                        f,
+                        "RegisterDefer argv=t{} policy=def-then-exec-bind lane={}",
+                        argv.0,
+                        heads.get(&argv.0).ok_or(fmt::Error)?,
+                    )?;
+                }
+            }
+        }
+        match block.terminator.node {
+            Terminator::Jump(target) => writeln!(f, "  Jump bb{}", target.0)?,
+            Terminator::Branch {
+                condition,
+                on_true,
+                on_false,
+            } => writeln!(
+                f,
+                "  Branch cond=t{} true=bb{} false=bb{}",
+                condition.0, on_true.0, on_false.0
+            )?,
+            Terminator::ReturnValue { src, epilogue } => {
+                writeln!(f, "  ReturnValue t{} to=bb{}", src.0, epilogue.0)?
+            }
+            Terminator::FinishDefinition => {
+                writeln!(f, "  EmitBindResult rc=synthetic primary=nil")?
+            }
+            Terminator::Stop => writeln!(f, "  Stop")?,
+            Terminator::PropagateError => writeln!(f, "  PropagateError")?,
+            Terminator::ForEach {
+                list,
+                ref bindings,
+                body,
+                exit,
+            } => writeln!(
+                f,
+                "  ForEach list=t{} names=[{}] body=bb{} exit=bb{}",
+                list.0,
+                bindings.names().join(" "),
+                body.0,
+                exit.0,
+            )?,
+            Terminator::ForEachContinue(_) => writeln!(f, "  ForEachContinue")?,
+            Terminator::ExitLoop(_) => writeln!(f, "  ExitLoop")?,
+        }
+    }
+    Ok(())
+}
+
+fn lane(command: &Command, definitions: &HashSet<&str>) -> String {
     let head = match &command.head.node {
         ExpressionKind::Word(head) | ExpressionKind::Quoted(head) => head.as_str(),
         _ => return "unresolved-head".to_owned(),
     };
-    // This is the Go IR dumper's command vocabulary.
+    if definitions.contains(head) {
+        return format!("def({head})");
+    }
+    // This is the Go IR dumper’s command vocabulary.
     match head {
         "defs" | "exec" | "file" | "import" | "jobs" | "jq" | "kill" | "print" | "registry"
         | "trace" | "reap" | "tempdir" | "start" | "fire" | "net" | "kfunc" | "bpfman"

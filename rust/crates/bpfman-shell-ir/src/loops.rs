@@ -78,11 +78,12 @@ pub(super) fn verify_context(blocks: &[Block]) -> Result<(), VerifyError> {
                 stack.pop();
                 follow(exit, &stack)?;
             }
-            Terminator::Stop if !stack.is_empty() => {
+            Terminator::ReturnValue { epilogue, .. } => follow(epilogue, &[])?,
+            Terminator::Stop | Terminator::FinishDefinition if !stack.is_empty() => {
                 return Err(VerifyError::InvalidLoopContext(id));
             }
             Terminator::PropagateError => return Err(VerifyError::InvalidGuardCleanup(id)),
-            Terminator::Stop => {}
+            Terminator::Stop | Terminator::FinishDefinition => {}
         }
     }
     Ok(())

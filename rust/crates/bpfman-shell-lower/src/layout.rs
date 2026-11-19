@@ -27,6 +27,11 @@ pub(super) enum Exit {
     ForEachContinue(Label),
     BreakLoop(Label),
     PropagateError,
+    ReturnValue {
+        src: Temp,
+        epilogue: Label,
+    },
+    FinishDefinition,
 }
 
 struct Draft {
@@ -118,6 +123,11 @@ impl Layout {
                 let node = match exit.node {
                     Exit::Stop => Terminator::Stop,
                     Exit::PropagateError => Terminator::PropagateError,
+                    Exit::ReturnValue { src, epilogue } => Terminator::ReturnValue {
+                        src,
+                        epilogue: resolve(epilogue),
+                    },
+                    Exit::FinishDefinition => Terminator::FinishDefinition,
                     Exit::Jump(label) => Terminator::Jump(resolve(label)),
                     Exit::Branch {
                         condition,

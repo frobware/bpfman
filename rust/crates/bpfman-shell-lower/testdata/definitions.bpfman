@@ -1,0 +1,13 @@
+let result <- calculate 2
+report $result.value
+def calculate(n: number) {
+  defer echo local
+  foreach x in [1] {
+    guard _ <- exec true
+    return $n + $x
+  }
+  return $n
+}
+def report(result) {
+  print $result
+}

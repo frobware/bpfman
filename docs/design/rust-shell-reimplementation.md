@@ -196,8 +196,11 @@ from the same argv and that the failure target drains defers before propagating
 the error. Every current syntax expression now lowers to IR-owned operands,
 including interpolation, adapters, records, nested matches, calls, and logical
 operators. The expression fixture checks Go's dump and preserves source spans
-in the IR. Bind-collect, definition and poll cleanup scopes, the full golden
-dump, and execution are pending.
+in the IR. Hoisted definitions now have independent block and temporary
+tables, typed parameters, and a shared return epilogue. Definition guards
+drain their local deferred commands before propagating failure. A Go fixture
+covers forward dispatch, returns from loops, and definition-local cleanup.
+Bind-collect, poll cleanup, the full golden dump, and execution are pending.
 
 ## Typestate and internal invariants
 

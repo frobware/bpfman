@@ -4,8 +4,8 @@ use crate::expr::{lower_expression, lower_expressions};
 use crate::layout::{Exit, Label, Layout};
 use bpfman_shell_check::{CheckedProgram, ExpandedProgram};
 use bpfman_shell_ir::{
-    BindPolicy, BranchTrace, Command, Instruction, Located, LoopBindings, LoopTrace, Program, Temp,
-    VerifyError,
+    BindPolicy, BranchTrace, Command, Definition, Instruction, Located, LoopBindings, LoopTrace,
+    Parameter, ParameterType, Program, Temp, VerifyError,
 };
 use bpfman_shell_source::Span;
 use bpfman_shell_syntax as syntax;
@@ -31,6 +31,10 @@ pub enum LowerError {
         /// Source extent.
         span: Span,
     },
+    /// A definition appears inside another body.
+    NestedDefinition(Span),
+    /// A return appears outside any definition.
+    OutsideDefinition(Span),
 }
 
 impl fmt::Display for LowerError {
@@ -47,6 +51,20 @@ impl fmt::Display for LowerError {
                 )
             }
             Self::InvalidIr(error) => write!(f, "invalid lowered program: {error}"),
+            Self::NestedDefinition(span) => write!(
+                f,
+                "{}:{}:{}: def must be declared at top level",
+                span.start().name().as_str(),
+                span.start().line(),
+                span.start().column()
+            ),
+            Self::OutsideDefinition(span) => write!(
+                f,
+                "{}:{}:{}: return outside a def body",
+                span.start().name().as_str(),
+                span.start().line(),
+                span.start().column()
+            ),
             Self::OutsideLoop { keyword, span } => write!(
                 f,
                 "{}:{}:{}: {keyword} outside any foreach loop",
@@ -68,7 +86,11 @@ impl std::error::Error for LowerError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::InvalidIr(error) => Some(error),
-            Self::Unsupported { .. } | Self::IncompleteLayout(_) | Self::OutsideLoop { .. } => None,
+            Self::Unsupported { .. }
+            | Self::IncompleteLayout(_)
+            | Self::OutsideLoop { .. }
+            | Self::NestedDefinition(_)
+            | Self::OutsideDefinition(_) => None,
         }
     }
 }
@@ -97,20 +119,81 @@ fn lower_body(span: &Span, statements: &[syntax::Statement]) -> Result<Program, 
         layout: Layout::new(span),
         next_temp: 0,
         current_loop: None,
+        epilogue: None,
     };
+    let mut definitions = Vec::new();
     body.emit(span, Instruction::EnterProgramDefers);
     for statement in statements {
-        body.statement(statement)?;
+        if let syntax::StatementKind::Definition(definition) = statement.kind() {
+            definitions.push(lower_definition(definition, statement.span())?);
+        } else {
+            body.statement(statement)?;
+        }
     }
     body.emit(span, Instruction::RunProgramDefers);
     body.layout.terminate(located(span, Exit::Stop));
-    Program::new(span.clone(), body.layout.finish()?).map_err(LowerError::InvalidIr)
+    Program::with_definitions(span.clone(), body.layout.finish()?, definitions)
+        .map_err(LowerError::InvalidIr)
+}
+
+fn lower_definition(
+    definition: &syntax::Definition,
+    span: &Span,
+) -> Result<Definition, LowerError> {
+    let parameters: Vec<_> = definition
+        .parameters()
+        .iter()
+        .map(|parameter| Parameter {
+            name: parameter.name().text().to_owned(),
+            annotation: parameter.annotation().map(|annotation| match annotation {
+                syntax::ParameterType::Number => ParameterType::Number,
+                syntax::ParameterType::String => ParameterType::String,
+                syntax::ParameterType::Bool => ParameterType::Bool,
+            }),
+        })
+        .collect();
+    let mut layout = Layout::new(span);
+    let epilogue = layout.reserve(span);
+    let mut body = Body {
+        layout,
+        next_temp: parameters.len(),
+        current_loop: None,
+        epilogue: Some(epilogue),
+    };
+    body.emit(span, Instruction::EnterDefinitionFrame);
+    body.emit(span, Instruction::EnterDefinitionDefers);
+    for (index, parameter) in parameters.iter().enumerate() {
+        body.emit(
+            span,
+            Instruction::BindName {
+                name: parameter.name.clone(),
+                src: Temp(index),
+            },
+        );
+    }
+    for statement in definition.body() {
+        body.statement(statement)?;
+    }
+    body.layout.terminate(located(span, Exit::Jump(epilogue)));
+    body.layout.publish(epilogue);
+    body.layout.select(epilogue);
+    body.emit(span, Instruction::RunDefinitionDefers);
+    body.emit(span, Instruction::ExitFrame);
+    body.layout.terminate(located(span, Exit::FinishDefinition));
+    Definition::new(
+        definition.name().text().to_owned(),
+        parameters,
+        span.clone(),
+        body.layout.finish()?,
+    )
+    .map_err(LowerError::InvalidIr)
 }
 
 struct Body {
     layout: Layout,
     next_temp: usize,
     current_loop: Option<Label>,
+    epilogue: Option<Label>,
 }
 
 impl Body {
@@ -141,8 +224,8 @@ impl Body {
             S::Defer(command) => Instruction::RegisterDefer {
                 argv: self.build_args(command.span(), command),
             },
-            S::Definition(_) => return Err(unsupported(span, "definition")),
-            S::Return(_) => return Err(unsupported(span, "return")),
+            S::Definition(_) => return Err(LowerError::NestedDefinition(span.clone())),
+            S::Return(value) => return self.return_value(span, value),
             S::If {
                 first,
                 elif,
@@ -176,6 +259,18 @@ impl Body {
         Ok(())
     }
 
+    fn return_value(&mut self, span: &Span, value: &syntax::Expression) -> Result<(), LowerError> {
+        let Some(epilogue) = self.epilogue else {
+            return Err(LowerError::OutsideDefinition(span.clone()));
+        };
+        let src = self.eval(span, value);
+        self.layout
+            .terminate(located(span, Exit::ReturnValue { src, epilogue }));
+        let unreachable = self.layout.new_block(span);
+        self.layout.select(unreachable);
+        Ok(())
+    }
+
     fn bind_command(
         &mut self,
         span: &Span,
@@ -204,7 +299,12 @@ impl Body {
                 let success = self.layout.current();
                 let failure = self.layout.new_block(span);
                 self.layout.select(failure);
-                self.emit(span, Instruction::RunProgramDefers);
+                if self.epilogue.is_some() {
+                    self.emit(span, Instruction::RunDefinitionDefers);
+                    self.emit(span, Instruction::ExitFrame);
+                } else {
+                    self.emit(span, Instruction::RunProgramDefers);
+                }
                 self.layout.terminate(located(span, Exit::PropagateError));
                 self.layout.select(success);
                 BindPolicy::Guard {
@@ -438,11 +538,11 @@ mod tests {
         assert!(check(unknown.clone()).is_err());
         assert!(lower_unchecked(&unknown).is_ok());
 
-        let program = check(expand("print ok\ndef later() { print ok }"))
+        let program = check(expand("print ok\nlet r <- foreach n in [1] { echo $n }"))
             .unwrap_or_else(|issues| unreachable!("{issues:?}"));
         assert!(matches!(
             lower(&program),
-            Err(LowerError::Unsupported { form: "definition", span }) if &span == program.statements()[1].span()
+            Err(LowerError::Unsupported { form: "collect", span }) if &span == program.statements()[1].span()
         ));
     }
 
@@ -527,6 +627,39 @@ mod tests {
             ir.to_string(),
             include_str!("../testdata/expressions.lowered")
         );
+    }
+
+    #[test]
+    fn definitions_have_unit_local_ids_and_match_go_cleanup() {
+        use bpfman_shell_ir::{BlockId, ParameterType, Temp, Terminator};
+
+        let program = check(expand(include_str!("../testdata/definitions.bpfman")))
+            .unwrap_or_else(|issues| unreachable!("{issues:?}"));
+        let ir = lower(&program).unwrap_or_else(|error| unreachable!("{error}"));
+        assert_eq!(
+            ir.to_string(),
+            include_str!("../testdata/definitions.lowered")
+        );
+        let def = &ir.definitions()[0];
+        assert_eq!(def.parameters()[0].annotation, Some(ParameterType::Number));
+        assert_eq!(def.num_temps(), 7);
+        assert_eq!(
+            def.blocks()[1].terminator.node,
+            Terminator::ReturnValue {
+                src: Temp(5),
+                epilogue: BlockId(6),
+            }
+        );
+        assert_eq!(ir.definitions()[1].num_temps(), 2);
+        assert_eq!(ir.num_temps(), 3);
+        assert!(matches!(
+            lower_unchecked(&expand("return 1")),
+            Err(LowerError::OutsideDefinition(_))
+        ));
+        assert!(matches!(
+            lower_unchecked(&expand("if true { def nested() { print bad } }")),
+            Err(LowerError::NestedDefinition(_))
+        ));
     }
 
     #[test]

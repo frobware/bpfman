@@ -63,6 +63,12 @@ pub enum BindPolicy {
 pub enum Instruction {
     /// Open the program's defer scope.
     EnterProgramDefers,
+    /// Enter the callable definition frame.
+    EnterDefinitionFrame,
+    /// Open a definition-local defer scope.
+    EnterDefinitionDefers,
+    /// Drain only the current definition’s deferred commands.
+    RunDefinitionDefers,
     /// Enter the lexical frame for a selected if branch.
     EnterIfFrame,
     /// Leave the current lexical frame.
@@ -164,6 +170,15 @@ pub enum Terminator {
     ExitLoop(LoopId),
     /// Report the active error after cleanup and unwind the program.
     PropagateError,
+    /// Publish the value and unwind to the definition epilogue.
+    ReturnValue {
+        /// Result temporary.
+        src: Temp,
+        /// Definition cleanup successor.
+        epilogue: BlockId,
+    },
+    /// Finish the callable definition and publish its bind result.
+    FinishDefinition,
     /// Finish the program.
     Stop,
 }
@@ -182,6 +197,12 @@ pub struct Block {
 /// An immutable verified program body.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Program {
+    body: Unit,
+    definitions: Vec<Definition>,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct Unit {
     span: Span,
     blocks: Vec<Block>,
     num_temps: usize,
@@ -204,6 +225,10 @@ pub enum VerifyError {
     InvalidLoopContext(BlockId),
     /// A guarded bind's failure target is not a program cleanup block.
     InvalidGuardCleanup(BlockId),
+    /// A callable and a program use incompatible return terminators.
+    InvalidReturn(BlockId),
+    /// The definition table contains the same name twice.
+    DuplicateDefinition(String),
 }
 
 impl fmt::Display for VerifyError {
@@ -216,6 +241,8 @@ impl fmt::Display for VerifyError {
             Self::InvalidLoopOwner(LoopId(BlockId(id))) => write!(f, "invalid loop owner bb{id}"),
             Self::InvalidLoopContext(BlockId(id)) => write!(f, "invalid loop context at bb{id}"),
             Self::InvalidGuardCleanup(BlockId(id)) => write!(f, "invalid guard cleanup at bb{id}"),
+            Self::InvalidReturn(BlockId(id)) => write!(f, "invalid return at bb{id}"),
+            Self::DuplicateDefinition(name) => write!(f, "duplicate definition {name:?}"),
         }
     }
 }
@@ -230,19 +257,161 @@ enum TempKind {
 }
 
 impl Program {
-    /// Verify block references and temporary definitions and uses. In this
-    /// slice, temporary operands must be defined earlier in their own block.
+    /// Verify a program without definitions.
     ///
     /// # Errors
     ///
-    /// Returns a verification error for an invalid entry, successor or operand.
+    /// Returns a verification error if the body is invalid.
     pub fn new(span: Span, blocks: Vec<Block>) -> Result<Self, VerifyError> {
+        Self::with_definitions(span, blocks, Vec::new())
+    }
+
+    /// Verify a program body and attach its hoisted definitions in source order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a verification error if the body or definition table is invalid.
+    pub fn with_definitions(
+        span: Span,
+        blocks: Vec<Block>,
+        definitions: Vec<Definition>,
+    ) -> Result<Self, VerifyError> {
+        let mut names = HashSet::new();
+        for definition in &definitions {
+            if !names.insert(definition.name()) {
+                return Err(VerifyError::DuplicateDefinition(
+                    definition.name().to_owned(),
+                ));
+            }
+        }
+        Ok(Self {
+            body: Unit::new(span, blocks, None)?,
+            definitions,
+        })
+    }
+
+    /// Hoisted callable definitions in source order.
+    #[must_use]
+    pub fn definitions(&self) -> &[Definition] {
+        &self.definitions
+    }
+
+    /// Source extent of the lowered program.
+    #[must_use]
+    pub fn span(&self) -> &Span {
+        &self.body.span
+    }
+
+    /// Entry block ID.
+    #[must_use]
+    pub fn entry(&self) -> BlockId {
+        BlockId(0)
+    }
+
+    /// Immutable blocks in deterministic emission order.
+    #[must_use]
+    pub fn blocks(&self) -> &[Block] {
+        &self.body.blocks
+    }
+
+    /// Number of temporary slots in the program.
+    #[must_use]
+    pub fn num_temps(&self) -> usize {
+        self.body.num_temps
+    }
+}
+
+/// Type annotation checked when a definition is invoked.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ParameterType {
+    /// JSON number.
+    Number,
+    /// Text string.
+    String,
+    /// Boolean.
+    Bool,
+}
+
+/// One definition parameter.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Parameter {
+    /// Lexical name.
+    pub name: String,
+    /// Optional call-time type requirement.
+    pub annotation: Option<ParameterType>,
+}
+
+/// A verified callable with its own block and temporary namespace.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Definition {
+    name: String,
+    parameters: Vec<Parameter>,
+    unit: Unit,
+}
+
+impl Definition {
+    /// Verify a callable body. The leading temporary slots are its parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structural verification error for an invalid definition body.
+    pub fn new(
+        name: String,
+        parameters: Vec<Parameter>,
+        span: Span,
+        blocks: Vec<Block>,
+    ) -> Result<Self, VerifyError> {
+        let unit = Unit::new(span, blocks, Some(parameters.len()))?;
+        Ok(Self {
+            name,
+            parameters,
+            unit,
+        })
+    }
+
+    /// Invocation name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Parameters in declaration order.
+    #[must_use]
+    pub fn parameters(&self) -> &[Parameter] {
+        &self.parameters
+    }
+
+    /// Definition source extent.
+    #[must_use]
+    pub fn span(&self) -> &Span {
+        &self.unit.span
+    }
+
+    /// Blocks in deterministic emission order, starting at the entry.
+    #[must_use]
+    pub fn blocks(&self) -> &[Block] {
+        &self.unit.blocks
+    }
+
+    /// Number of temporary slots including the parameters.
+    #[must_use]
+    pub fn num_temps(&self) -> usize {
+        self.unit.num_temps
+    }
+}
+
+impl Unit {
+    fn new(span: Span, blocks: Vec<Block>, parameters: Option<usize>) -> Result<Self, VerifyError> {
         if blocks.is_empty() {
             return Err(VerifyError::MissingEntry);
         }
-        let mut destinations = HashSet::new();
-        for block in &blocks {
+        let mut destinations: HashSet<_> = (0..parameters.unwrap_or(0)).map(Temp).collect();
+        for (index, block) in blocks.iter().enumerate() {
             let mut kinds = HashMap::new();
+            if index == 0 {
+                kinds
+                    .extend((0..parameters.unwrap_or(0)).map(|slot| (Temp(slot), TempKind::Value)));
+            }
             for instruction in &block.instructions {
                 let definition = match &instruction.node {
                     Instruction::Eval { dst, .. } => Some((*dst, TempKind::Value)),
@@ -264,11 +433,14 @@ impl Program {
                     } => {
                         verify_operand(*src, TempKind::BindResult(*argv), &kinds)?;
                         if let BindPolicy::Guard { on_failure } = policy {
-                            verify_guard_cleanup(&blocks, *on_failure)?;
+                            verify_guard_cleanup(&blocks, *on_failure, parameters.is_some())?;
                         }
                         None
                     }
                     Instruction::EnterProgramDefers
+                    | Instruction::EnterDefinitionFrame
+                    | Instruction::EnterDefinitionDefers
+                    | Instruction::RunDefinitionDefers
                     | Instruction::RunProgramDefers
                     | Instruction::EnterIfFrame
                     | Instruction::ExitFrame
@@ -300,7 +472,40 @@ impl Program {
                     verify_successor(on_true)?;
                     verify_successor(on_false)?;
                 }
-                Terminator::Stop | Terminator::PropagateError => {}
+                Terminator::ReturnValue { src, epilogue } => {
+                    verify_operand(src, TempKind::Value, &kinds)?;
+                    verify_successor(epilogue)?;
+                    if parameters.is_none()
+                        || !matches!(
+                            blocks[epilogue.0].terminator.node,
+                            Terminator::FinishDefinition
+                        )
+                    {
+                        return Err(VerifyError::InvalidReturn(BlockId(index)));
+                    }
+                }
+                Terminator::FinishDefinition
+                    if parameters.is_none()
+                        || !matches!(
+                            block.instructions.as_slice(),
+                            [
+                                Located {
+                                    node: Instruction::RunDefinitionDefers,
+                                    ..
+                                },
+                                Located {
+                                    node: Instruction::ExitFrame,
+                                    ..
+                                },
+                            ]
+                        ) =>
+                {
+                    return Err(VerifyError::InvalidReturn(BlockId(index)));
+                }
+                Terminator::Stop if parameters.is_some() => {
+                    return Err(VerifyError::InvalidReturn(BlockId(index)));
+                }
+                Terminator::Stop | Terminator::PropagateError | Terminator::FinishDefinition => {}
                 Terminator::ForEach {
                     list, body, exit, ..
                 } => {
@@ -328,45 +533,36 @@ impl Program {
             num_temps,
         })
     }
-
-    /// Source extent of the lowered program.
-    #[must_use]
-    pub fn span(&self) -> &Span {
-        &self.span
-    }
-
-    /// Entry block ID.
-    #[must_use]
-    pub fn entry(&self) -> BlockId {
-        BlockId(0)
-    }
-
-    /// Immutable blocks in deterministic emission order.
-    #[must_use]
-    pub fn blocks(&self) -> &[Block] {
-        &self.blocks
-    }
-
-    /// Number of temporary slots in the program.
-    #[must_use]
-    pub fn num_temps(&self) -> usize {
-        self.num_temps
-    }
 }
 
-fn verify_guard_cleanup(blocks: &[Block], target: BlockId) -> Result<(), VerifyError> {
+fn verify_guard_cleanup(
+    blocks: &[Block],
+    target: BlockId,
+    definition: bool,
+) -> Result<(), VerifyError> {
     let block = blocks
         .get(target.0)
         .ok_or(VerifyError::InvalidSuccessor(target))?;
-    if matches!(block.terminator.node, Terminator::PropagateError)
-        && matches!(
-            block.instructions.as_slice(),
-            [Located {
+    let valid = match block.instructions.as_slice() {
+        [
+            Located {
                 node: Instruction::RunProgramDefers,
                 ..
-            }]
-        )
-    {
+            },
+        ] => !definition,
+        [
+            Located {
+                node: Instruction::RunDefinitionDefers,
+                ..
+            },
+            Located {
+                node: Instruction::ExitFrame,
+                ..
+            },
+        ] => definition,
+        _ => false,
+    };
+    if matches!(block.terminator.node, Terminator::PropagateError) && valid {
         Ok(())
     } else {
         Err(VerifyError::InvalidGuardCleanup(target))

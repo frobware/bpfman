@@ -1,0 +1,64 @@
+def calculate(n: number) entry=bb0
+
+bb0:
+  EnterFrame kind=def
+  EnterDeferScope kind=def
+  BindName n = t0
+  BuildArgs t1 = [echo local]
+  RegisterDefer argv=t1 policy=def-then-exec-bind lane=exec
+  Eval t2 = [1]
+  ForEach list=t2 names=[x] body=bb1 exit=bb2
+
+bb1:
+  BuildArgs t3 = [exec true]
+  DispatchBind t4 = t3 policy=def-then-exec-bind lane=builtin(exec)
+  ApplyBind src=t4 argv=t3 target=_ guard=true fail=bb3
+  Eval t5 = $n + $x
+  ReturnValue t5 to=bb6
+
+bb2:
+  Eval t6 = $n
+  ReturnValue t6 to=bb6
+
+bb3:
+  RunDefers policy=def-local
+  ExitFrame
+  PropagateError
+
+bb4:
+  ForEachContinue
+
+bb5:
+  Jump bb6
+
+bb6:
+  RunDefers policy=def-local
+  ExitFrame
+  EmitBindResult rc=synthetic primary=nil
+
+def report(result) entry=bb0
+
+bb0:
+  EnterFrame kind=def
+  EnterDeferScope kind=def
+  BindName result = t0
+  BuildArgs t1 = [print $result]
+  DispatchCommand argv=t1 policy=def-then-exec-command lane=builtin(print)
+  Jump bb1
+
+bb1:
+  RunDefers policy=def-local
+  ExitFrame
+  EmitBindResult rc=synthetic primary=nil
+
+body entry=bb0
+
+bb0:
+  EnterDeferScope kind=program
+  BuildArgs t0 = [calculate 2]
+  DispatchBind t1 = t0 policy=def-then-exec-bind lane=def(calculate)
+  ApplyBind src=t1 argv=t0 target=result guard=false
+  BuildArgs t2 = [report $result.value]
+  DispatchCommand argv=t2 policy=def-then-exec-command lane=def(report)
+  RunDefers policy=program
+  Stop
