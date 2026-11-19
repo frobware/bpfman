@@ -72,4 +72,11 @@ pub enum Argument {
     Quoted(String),
     /// An evaluated value.
     Value(Value),
+    /// Driver adapter with its already resolved value.
+    Adapter {
+        /// Adapter name.
+        name: String,
+        /// Value that the adapter will render or consume.
+        value: Value,
+    },
 }

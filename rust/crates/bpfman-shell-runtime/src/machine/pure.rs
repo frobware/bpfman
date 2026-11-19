@@ -34,7 +34,7 @@ impl Machine<'_> {
                         }
                     }
                     Argument::Quoted(text) => Value::String(text.clone()),
-                    Argument::Value(value) => value.clone(),
+                    Argument::Value(value) | Argument::Adapter { value, .. } => value.clone(),
                 };
                 Ok(Value::Bool(match builtin {
                     B::Null => value == Value::Null,
@@ -94,7 +94,7 @@ impl Machine<'_> {
 fn text(arg: &Argument) -> Result<String, String> {
     match arg {
         Argument::Word(text) | Argument::Quoted(text) => Ok(text.clone()),
-        Argument::Value(value) => value
+        Argument::Value(value) | Argument::Adapter { value, .. } => value
             .scalar_text()
             .ok_or_else(|| "expected a scalar argument".to_owned()),
     }

@@ -703,6 +703,19 @@ impl<'a> Machine<'a> {
             ir::ExpressionKind::Word(text) => Argument::Word(text.clone()),
             ir::ExpressionKind::Quoted(text) => Argument::Quoted(text.clone()),
             ir::ExpressionKind::Variable(variable) => Argument::Value(self.lookup(variable, true)?),
+            ir::ExpressionKind::Adapter { name, variable } => {
+                let value = self.lookup(variable, false)?;
+                if matches!(value, Value::Null | Value::Absent) {
+                    return Err(format!(
+                        "adapter {name}: variable {} is null",
+                        variable.name
+                    ));
+                }
+                Argument::Adapter {
+                    name: name.clone(),
+                    value,
+                }
+            }
             _ => Argument::Value(self.eval(expression)?),
         })
     }

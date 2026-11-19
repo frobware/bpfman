@@ -241,6 +241,8 @@ The shell can invoke the CLI selected by `BPFMAN_BIN`, preserve exact JSON
 integers, and project program and link records to IDs for later command
 arguments. A retry from a helper now unwinds each callable's defers and the
 enclosing attempt before it asks the driver for another clock reading.
+The driver also supports caller-owned temporary files and directories,
+structured rendering, and subprocess-scoped `file:$value` adapters.
 Threaded calls, jq and path effects, remaining
 typed builtins, signals, process-group
 ownership, and the remaining inspection modes are pending. The Go harness

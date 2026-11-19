@@ -1,0 +1,147 @@
+use std::{collections::BTreeMap, io::Write};
+
+use bpfman_shell_runtime::{Argument, Value};
+use serde_json::{Map, Value as Json};
+use tempfile::{Builder, NamedTempFile};
+
+pub(super) fn render(value: &Value, pretty: bool) -> Result<String, String> {
+    if let Some(value) = value.scalar_text() {
+        return Ok(value);
+    }
+    let json = to_json(value)?;
+    if pretty {
+        serde_json::to_string_pretty(&json)
+    } else {
+        serde_json::to_string(&json)
+    }
+    .map_err(|error| error.to_string())
+}
+
+pub(super) fn render_argument(argument: &Argument, pretty: bool) -> Result<String, String> {
+    match argument {
+        Argument::Word(text) | Argument::Quoted(text) => Ok(text.clone()),
+        Argument::Value(value) | Argument::Adapter { value, .. } => render(value, pretty),
+    }
+}
+
+fn file_contents(argument: &Argument) -> Result<String, String> {
+    let mut contents = render_argument(argument, true)?;
+    if matches!(
+        argument,
+        Argument::Value(
+            Value::List(_) | Value::Record(_) | Value::Outcome(_) | Value::BpfmanRecord { .. }
+        ) | Argument::Adapter {
+            value: Value::List(_)
+                | Value::Record(_)
+                | Value::Outcome(_)
+                | Value::BpfmanRecord { .. },
+            ..
+        }
+    ) {
+        contents.push('\n');
+    }
+    Ok(contents)
+}
+
+pub(super) fn external_argument(
+    argument: &Argument,
+    files: &mut Vec<NamedTempFile>,
+) -> Result<String, String> {
+    if let Argument::Adapter { name, .. } = argument {
+        if name != "file" {
+            return Err(format!("unknown adapter {name:?}"));
+        }
+        let mut file = new_file(argument)?;
+        file.flush().map_err(|error| error.to_string())?;
+        let path = file.path().to_string_lossy().into_owned();
+        files.push(file);
+        Ok(path)
+    } else {
+        super::argument(argument)
+    }
+}
+
+pub(super) fn tempdir(arguments: &[Argument]) -> Result<Value, String> {
+    let [prefix] = arguments else {
+        return Err("tempdir requires exactly one prefix".to_owned());
+    };
+    let prefix = super::argument(prefix)?;
+    let prefix = prefix.trim();
+    if prefix.is_empty() || prefix.contains('/') {
+        return Err("tempdir requires a nonempty filename prefix".to_owned());
+    }
+    let dir = Builder::new()
+        .prefix(&format!("{prefix}."))
+        .tempdir()
+        .map_err(|error| format!("tempdir: {error}"))?;
+    let path = dir.keep().to_string_lossy().into_owned();
+    Ok(Value::Record(BTreeMap::from([(
+        "path".to_owned(),
+        Value::String(path),
+    )])))
+}
+
+pub(super) fn tempfile(arguments: &[Argument]) -> Result<Value, String> {
+    let [command, value] = arguments else {
+        return Err("usage: file temp VALUE".to_owned());
+    };
+    if super::argument(command)? != "temp" {
+        return Err("usage: file temp VALUE".to_owned());
+    }
+    let (_, path) = new_file(value)?
+        .keep()
+        .map_err(|error| format!("file temp: {error}"))?;
+    Ok(Value::String(path.to_string_lossy().into_owned()))
+}
+
+fn new_file(argument: &Argument) -> Result<NamedTempFile, String> {
+    let contents = file_contents(argument)?;
+    let mut file = Builder::new()
+        .prefix("bpfman-driver-")
+        .tempfile()
+        .map_err(|error| format!("create temp file: {error}"))?;
+    file.write_all(contents.as_bytes())
+        .map_err(|error| format!("write temp file: {error}"))?;
+    Ok(file)
+}
+
+fn to_json(value: &Value) -> Result<Json, String> {
+    Ok(match value {
+        Value::Absent | Value::Null => Json::Null,
+        Value::Bool(value) => Json::Bool(*value),
+        Value::Number(value) => Json::Number(
+            value
+                .as_str()
+                .parse()
+                .map_err(|error| format!("render number: {error}"))?,
+        ),
+        Value::String(value) => Json::String(value.clone()),
+        Value::List(items) => Json::Array(items.iter().map(to_json).collect::<Result<_, _>>()?),
+        Value::Record(fields) | Value::BpfmanRecord { fields, .. } => Json::Object(
+            fields
+                .iter()
+                .map(|(key, value)| to_json(value).map(|value| (key.clone(), value)))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Outcome(outcome) => {
+            let mut fields = Map::from_iter([
+                ("ok".to_owned(), Json::Bool(outcome.exit_code == 0)),
+                ("exit_code".to_owned(), Json::from(outcome.exit_code)),
+                ("stdout".to_owned(), Json::String(outcome.stdout.clone())),
+                ("stderr".to_owned(), Json::String(outcome.stderr.clone())),
+                ("killed".to_owned(), Json::Bool(outcome.killed)),
+                (
+                    "signal".to_owned(),
+                    Json::String(outcome.signal.clone().unwrap_or_default()),
+                ),
+            ]);
+            if let Some(pid) = outcome.pid {
+                fields.insert("pid".to_owned(), Json::from(pid));
+            }
+            if outcome.primary != Value::Absent {
+                fields.insert("value".to_owned(), to_json(&outcome.primary)?);
+            }
+            Json::Object(fields)
+        }
+    })
+}

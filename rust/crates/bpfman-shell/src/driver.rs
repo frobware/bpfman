@@ -12,6 +12,7 @@ use bpfman_shell_runtime::{
 };
 
 mod bpfman;
+mod files;
 
 pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, String> {
     let start = Instant::now();
@@ -25,7 +26,7 @@ pub(super) fn run(program: &Program, stdout: &mut impl Write) -> Result<u8, Stri
             Step::Output {
                 request,
                 continuation,
-            } => continuation.resume(scalar(&request.value).and_then(|value| {
+            } => continuation.resume(files::render(&request.value, true).and_then(|value| {
                 match request.stream {
                     OutputStream::Stdout => writeln!(stdout, "{value}"),
                     OutputStream::Stderr => writeln!(io::stderr().lock(), "{value}"),
@@ -51,13 +52,14 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
     if head == "bpfman" {
         return bpfman::invoke(request.arguments);
     }
-    let arguments = request
-        .arguments
-        .iter()
-        .map(argument)
-        .collect::<Result<Vec<_>, _>>()?;
     if head == "print" {
-        let line = arguments.join(" ");
+        let pretty = request.arguments.len() == 1;
+        let line = request
+            .arguments
+            .iter()
+            .map(|argument| files::render_argument(argument, pretty))
+            .collect::<Result<Vec<_>, _>>()?
+            .join(" ");
         if request.lane == DispatchLane::Command {
             writeln!(stdout, "{line}").map_err(|error| error.to_string())?;
         }
@@ -71,6 +73,31 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
             pid: None,
         });
     }
+    if head == "tempdir" || head == "file" {
+        let primary = if head == "tempdir" {
+            files::tempdir(&request.arguments)?
+        } else {
+            files::tempfile(&request.arguments)?
+        };
+        if head == "file" && request.lane == DispatchLane::Command {
+            writeln!(stdout, "{}", scalar(&primary)?).map_err(|error| error.to_string())?;
+        }
+        return Ok(CommandResponse {
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            primary,
+            killed: false,
+            signal: None,
+            pid: None,
+        });
+    }
+    let mut files = Vec::new();
+    let arguments = request
+        .arguments
+        .iter()
+        .map(|value| files::external_argument(value, &mut files))
+        .collect::<Result<Vec<_>, _>>()?;
     let (executable, arguments) = if head == "exec" {
         let Some((executable, remaining)) = arguments.split_first() else {
             return Err("exec: expected a command".to_owned());
@@ -82,30 +109,32 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
     // The Rust driver currently supplies only print and subprocess effects.
     // Refuse known typed builtins until their adapters are implemented.
     if head != "exec"
-        && matches!(head.as_str(), |"defs"| "file"
-            | "fire"
-            | "import"
-            | "jobs"
-            | "jq"
-            | "kfunc"
-            | "kill"
-            | "linkinfo"
-            | "lsm"
-            | "net"
-            | "process"
-            | "proginfo"
-            | "range"
-            | "reap"
-            | "registry"
-            | "start"
-            | "tempdir"
-            | "trace"
-            | "u32le"
-            | "u64le"
-            | "uprobe"
-            | "uprobe-target"
-            | "wait"
-            | "zip")
+        && matches!(
+            head.as_str(),
+            "defs"
+                | "fire"
+                | "import"
+                | "jobs"
+                | "jq"
+                | "kfunc"
+                | "kill"
+                | "linkinfo"
+                | "lsm"
+                | "net"
+                | "process"
+                | "proginfo"
+                | "range"
+                | "reap"
+                | "registry"
+                | "start"
+                | "trace"
+                | "u32le"
+                | "u64le"
+                | "uprobe"
+                | "uprobe-target"
+                | "wait"
+                | "zip"
+        )
     {
         return Err(format!("{head}: builtin is not yet implemented"));
     }
@@ -141,7 +170,7 @@ fn dispatch(request: CommandRequest, stdout: &mut impl Write) -> Result<CommandR
 fn argument(argument: &Argument) -> Result<String, String> {
     match argument {
         Argument::Word(text) | Argument::Quoted(text) => Ok(text.clone()),
-        Argument::Value(value) => scalar(value),
+        Argument::Value(value) | Argument::Adapter { value, .. } => scalar(value),
     }
 }
 

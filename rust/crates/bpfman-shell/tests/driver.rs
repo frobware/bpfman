@@ -92,3 +92,28 @@ fn assertions_use_stderr_continue_and_require_stops_after_cleanup() -> io::Resul
     assert!(errors.contains("require failed"));
     Ok(())
 }
+
+#[test]
+fn fixture_files_and_external_adapters_have_distinct_lifetimes() -> io::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let mut command = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"));
+    command.env("TMPDIR", dir.path());
+    let output = run_command(
+        &mut command,
+        concat!(
+            "guard dir <- tempdir fixture\n",
+            "defer rm -r $dir.path\n",
+            "guard path <- file temp \"contents\"\n",
+            "defer rm $path\n",
+            "exec cat $path\n",
+            "let payload = \"adapter\"\n",
+            "let seen <- exec sh -c 'test -f \"$1\" && printf %s \"$1\"' sh file:$payload\n",
+            "assert $seen.ok\n",
+            "exec test ! -e $seen.stdout\n",
+        ),
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"contents");
+    assert_eq!(dir.path().read_dir()?.count(), 0);
+    Ok(())
+}

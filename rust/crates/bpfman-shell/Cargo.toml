@@ -16,8 +16,6 @@ bpfman-shell-runtime = { path = "../bpfman-shell-runtime" }
 bpfman-shell-syntax = { path = "../bpfman-shell-syntax" }
 clap.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision"] }
-
-[dev-dependencies]
 tempfile.workspace = true
 
 [lints]
