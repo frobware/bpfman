@@ -543,6 +543,19 @@ fn command_status_assertion_observes_guard_failure_in_definition() -> io::Result
 }
 
 #[test]
+fn lowered_inspection_bypasses_preflight_and_skips_blank_input() -> io::Result<()> {
+    let source = "print $unknown\n";
+    let output = run(&["--lowered"], source)?;
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("BuildArgs t0 = [print $unknown]"));
+    let output = run(&["--check"], source)?;
+    assert!(!output.status.success(), "{output:?}");
+    let output = run(&["--lowered"], "\n")?;
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    Ok(())
+}
+#[test]
 fn version_reports_build_information_without_opening_input() -> io::Result<()> {
     let output = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"))
         .args([

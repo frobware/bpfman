@@ -350,7 +350,10 @@ and all 191 checked-in end-to-end scripts matched the Go dump byte for byte.
 comments and command continuation groups. Before any file write, Rust
 reparses the result and compares the syntax with source positions omitted.
 All 191 checked-in end-to-end scripts produced byte-identical canonical
-source in both shells.
+source in both shells. The same 191 files produced byte-identical
+`--symbols` and `--lowered` output. Lowered inspection ends after lowering,
+before the execution preflight gate, so it can inspect a program with
+unresolved references without dispatching anything.
 
 `--list-scripts` walks script paths and evaluates a typed Kubernetes label
 selector. Header parsing bounds input to the first twenty lines, merges

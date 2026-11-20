@@ -133,7 +133,9 @@ fn run(
         return Err("fmt --write requires a script file".to_owned());
     }
     let (name, source, base) = read_source(&cwd, path, interrupt)?;
-    if (options.symbols || options.ast || options.fmt) && source.trim().is_empty() {
+    if (options.symbols || options.ast || options.fmt || options.lowered)
+        && source.trim().is_empty()
+    {
         return Ok(0);
     }
     let parsed = parse(name, &source).map_err(|error| error.to_string())?;
@@ -172,6 +174,11 @@ fn run(
         return Ok(0);
     }
     let program = gather(parsed, &base)?;
+    if options.lowered {
+        let ir = lower_unchecked(&program).map_err(|error| error.to_string())?;
+        write!(stdout, "{ir}").map_err(|error| error.to_string())?;
+        return Ok(0);
+    }
     let ir = if options.no_check {
         lower_unchecked(&program)
     } else {
@@ -189,18 +196,13 @@ fn run(
     }
     .map_err(|error| error.to_string())?;
 
-    if options.lowered {
-        write!(stdout, "{ir}").map_err(|error| error.to_string())?;
-        Ok(0)
-    } else {
-        driver::run(
-            &ir,
-            stdout,
-            &mut driver::ImageRegistry::default(),
-            options.trace,
-            interrupt,
-        )
-    }
+    driver::run(
+        &ir,
+        stdout,
+        &mut driver::ImageRegistry::default(),
+        options.trace,
+        interrupt,
+    )
 }
 
 fn read_source(
