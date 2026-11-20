@@ -225,8 +225,8 @@ error is already active. Local polls request monotonic time and delay
 through separate continuations. Fake-clock tests cover cleanup before retry
 and deadline handling. The Rust CLI gathers stdin, script files, and direct
 imports, supports checked and explicitly unchecked lowering, and drives
-the initial print, subprocess, output, and clock effects. Effect coverage is
-partial. The interpreter now evaluates nested paths, interpolation, unary
+the output, subprocess, and clock effects. The interpreter evaluates nested
+paths, interpolation, unary
 predicates, short-circuit operations, and compatible scalar comparisons.
 Integer comparisons and integral addition, subtraction, multiplication, and
 remainder are exact. Division and mixed arithmetic use finite floating point,
@@ -395,7 +395,11 @@ defer and job-leak counts.
 The Rust kernel acceptance gate uses the Rust shell for its script corpus
 and namespace worker. The Go runner still owns fixture scheduling and
 keeps its Go shell default for the Go CI bundle. To run the Rust gate with
-the Go shell as a reference, set `RUST_SHELL_BINARY=bin/bpfman-shell`.
+the Go shell as a reference, build it with `make bpfman-shell-compile`
+and set `RUST_SHELL_BINARY=bin/bpfman-shell`. The default Rust gate has no
+Go shell executable prerequisite. `make rust-check` passed with the Rust
+shell selected, including all 92 real-kernel tests and the fixture cleanup
+check.
 
 ## Typestate and internal invariants
 
@@ -552,7 +556,7 @@ The Go shell accepted `1]` and `1}` as the number `1` at the jq input
 boundary. `Decoder.More()` treated those delimiters as the end of a container
 even at top level. The Go boundary now requires EOF after decoding one value
 and has regression tests for both unmatched delimiters and a second value.
-The Rust adapter will enforce the same single-value boundary.
+The Rust adapter enforces the same single-value boundary.
 Both query forms preserve the argument origin. A quoted token goes through
 JSON decoding, while a shell variable containing the same text goes through
 as a string. The runtime tests cover both paths.
@@ -562,10 +566,9 @@ the shell could not print it as a scalar. It now normalizes large integers
 to `json.Number`, including inside objects and arrays, with regression
 tests for both output shapes.
 
-The pinned jaq probe confirmed two remaining adapter requirements. Go
-rejects `"1 2" | fromjson` while jaq emits two values. Go's `tojson`
-sorts object keys while jaq preserves their insertion order. The adapter
-needs compatible implementations for both filters before admission.
+The pinned jaq probe exposed differences in `fromjson` and `tojson`. The
+Rust adapter overrides both filters. It rejects more than one JSON value
+in `fromjson` and sorts object keys in `tojson`, matching the Go shell.
 
 A temporary probe using jaq-core 3.1.2, jaq-std 3.0.4 and jaq-json 2.0.3
 compiled all 197 distinct literal filters found by tokenizing the checked-in
@@ -579,8 +582,10 @@ An instrumented Go shell recorded both literal and computed queries while
 running the scripts against Go and Rust daemons. The shared Go run had
 fixture failures. The isolated Rust run with the `rust=ok,!external`
 selector passed. Across both captures, all 3,482 distinct filter/input pairs
-produced the same result streams in gojq and the candidate. Exact error text
-and the four-way shell/daemon acceptance matrix remain open.
+produced the same result streams in gojq and the Rust adapter. The four-way
+file-mode matrix confirmed the Rust shell against both daemons. Exact jq
+error wording and negative indexing on non-array values remain differences
+outside the checked-in script corpus.
 
 The Go embed returns an empty object from `env`, allows `now`, rejects
 `input`, and exposes neither `debug` nor `stderr`. The probe replaces
