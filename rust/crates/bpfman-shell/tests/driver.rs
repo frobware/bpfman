@@ -46,7 +46,7 @@ fn interrupt_cancels_foreground_process_and_drains_defers() -> io::Result<()> {
         .stdin
         .take()
         .ok_or_else(|| io::Error::other("stdin"))?;
-    stdin.write_all(b"defer touch cleaned\nexec sh -c 'echo $$ > started; sleep 30 & wait'\n")?;
+    stdin.write_all(b"defer touch cleaned\nexec sh -c 'trap \"sleep 0.05; touch cooperated; exit 0\" INT; echo $$ > started; sleep 30 & wait'\n")?;
     drop(stdin);
     wait_for_pid_file(&mut shell, &marker)?;
     let pid = process_id(shell.id())?;
@@ -58,6 +58,7 @@ fn interrupt_cancels_foreground_process_and_drains_defers() -> io::Result<()> {
         "{output:?}"
     );
     assert!(dir.path().join("cleaned").exists());
+    assert!(dir.path().join("cooperated").exists());
     let worker = fs::read_to_string(&marker)?;
     assert!(!std::path::Path::new("/proc").join(worker.trim()).exists());
     Ok(())

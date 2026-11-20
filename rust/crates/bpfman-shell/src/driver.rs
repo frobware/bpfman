@@ -268,6 +268,21 @@ fn dispatch(
             pid: None,
         });
     }
+    if matches!(
+        head.as_str(),
+        "program" | "show" | "image" | "link" | "dispatcher" | "audit"
+    ) {
+        let mut suggested = format!("bpfman {head}");
+        for argument in &request.arguments {
+            if let Ok(text) = files::render_argument(argument, false) {
+                suggested.push(' ');
+                suggested.push_str(&text);
+            }
+        }
+        return Err(format!(
+            "domain commands require a \"bpfman\" prefix: try {suggested:?}"
+        ));
+    }
     let (executable, arguments) = if head == "exec" {
         let Some((executable, remaining)) = request.arguments.split_first() else {
             return Err("exec: expected a command".to_owned());
@@ -288,10 +303,14 @@ fn dispatch(
                 format!("{executable}: command not found")
             }
         })?;
-    let output = process::capture(Command::new(&executable).args(arguments), interrupt)?;
-    if request.lane == DispatchLane::Command
-        || (request.lane == DispatchLane::Deferred && output.status.success())
-    {
+    let mut command = Command::new(&executable);
+    command.args(arguments);
+    if request.lane == DispatchLane::Command {
+        stdout.flush().map_err(|error| error.to_string())?;
+        return process::foreground(&mut command, interrupt);
+    }
+    let output = process::capture(&mut command, interrupt)?;
+    if request.lane == DispatchLane::Deferred && output.status.success() {
         stdout
             .write_all(&output.stdout)
             .map_err(|error| error.to_string())?;

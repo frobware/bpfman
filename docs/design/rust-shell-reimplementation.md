@@ -251,9 +251,11 @@ An in-process jq adapter is available for expression, thread and standalone
 calls. Thread expressions can also call local definitions or dispatch an
 invocation to the driver. They preserve the caller's observations across
 definition frames and use the command envelope when no primary value is
-returned. Foreground commands run in owned process groups. SIGINT and
-SIGTERM interrupt the current wait or poll and let the evaluator drain
-defers. `start` issues an opaque job handle and a driver reaper owns the
+returned. Foreground commands inherit stdio and use owned process groups,
+including terminal handoff and restoration. SIGINT and SIGTERM interrupt the
+current wait or poll and let the evaluator drain defers. A foreground child
+receives group-wide SIGINT and up to two seconds for its own cleanup before
+escalation. `start` issues an opaque job handle and a driver reaper owns the
 process group and adapter files. `wait` observes and caches the exit
 envelope. Each script has one job registry, which reports and cleans up
 unmanaged jobs after defers. `kill` resolves signals through the same typed

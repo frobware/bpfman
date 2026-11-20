@@ -23,7 +23,7 @@ use bpfman_shell_runtime::{CommandResponse, Value};
 use bpfman_shell_semantics::JobSignal;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
-    process::{Pid, Signal, kill_process_group},
+    process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid},
 };
 use signal_hook::{
     SigId,
@@ -32,6 +32,9 @@ use signal_hook::{
 };
 use tempfile::NamedTempFile;
 
+mod terminal;
+
+const INTERRUPT_GRACE: Duration = Duration::from_secs(2);
 const POLL: Duration = Duration::from_millis(5);
 
 pub(crate) struct Interrupt {
@@ -124,20 +127,32 @@ impl Drop for Interrupt {
 
 pub(super) fn capture(command: &mut Command, interrupt: &Interrupt) -> Result<Output, String> {
     interrupt.check()?;
-    let mut child = CapturedChild::spawn(command).map_err(|error| {
-        let executable = command.get_program().to_string_lossy();
-        if error.kind() == io::ErrorKind::NotFound {
-            format!("{executable}: command not found")
-        } else {
-            format!("{executable}: {error}")
-        }
-    })?;
-    loop {
-        interrupt.check()?;
-        if let Some(output) = child.try_output().map_err(|error| error.to_string())? {
-            return Ok(output);
-        }
-        thread::sleep(POLL);
+    let mut child = CapturedChild::spawn(command).map_err(|error| spawn_error(command, error))?;
+    let status = child.group.wait_interruptible(interrupt)?;
+    child.output(status).map_err(|error| error.to_string())
+}
+
+pub(super) fn foreground(
+    command: &mut Command,
+    interrupt: &Interrupt,
+) -> Result<CommandResponse, String> {
+    interrupt.check()?;
+    let mut group = Group::spawn(command).map_err(|error| spawn_error(command, error))?;
+    let _terminal = group.pid().and_then(terminal::Foreground::grant);
+    let status = group.wait_interruptible(interrupt)?;
+    Ok(response(Output {
+        status,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    }))
+}
+
+fn spawn_error(command: &Command, error: io::Error) -> String {
+    let executable = command.get_program().to_string_lossy();
+    if error.kind() == io::ErrorKind::NotFound {
+        format!("{executable}: command not found")
+    } else {
+        format!("{executable}: {error}")
     }
 }
 
@@ -180,14 +195,12 @@ impl CapturedChild {
         // Reopening also gives the reader an independent file offset.
         let stdout = tempfile::NamedTempFile::new()?;
         let stderr = tempfile::NamedTempFile::new()?;
-        let child = command
-            .process_group(0)
+        command
             .stdin(Stdio::null())
             .stdout(stdout.reopen()?)
-            .stderr(stderr.reopen()?)
-            .spawn()?;
+            .stderr(stderr.reopen()?);
         Ok(Self {
-            group: Group(Some(child)),
+            group: Group::spawn(command)?,
             stdout,
             stderr,
         })
@@ -215,11 +228,15 @@ impl CapturedChild {
         let Some(status) = self.group.try_wait()? else {
             return Ok(None);
         };
-        Ok(Some(Output {
+        self.output(status).map(Some)
+    }
+
+    fn output(&self, status: ExitStatus) -> io::Result<Output> {
+        Ok(Output {
             status,
             stdout: read_capture(&self.stdout)?,
             stderr: read_capture(&self.stderr)?,
-        }))
+        })
     }
 }
 
@@ -234,6 +251,44 @@ fn read_capture(file: &NamedTempFile) -> io::Result<Vec<u8>> {
 struct Group(Option<Child>);
 
 impl Group {
+    fn spawn(command: &mut Command) -> io::Result<Self> {
+        command
+            .process_group(0)
+            .spawn()
+            .map(|child| Self(Some(child)))
+    }
+
+    fn wait_interruptible(&mut self, interrupt: &Interrupt) -> Result<ExitStatus, String> {
+        let mut cancelled = None;
+        loop {
+            if cancelled.is_none()
+                && let Err(error) = interrupt.check()
+            {
+                if let Some(pid) = self.pid() {
+                    let _ = kill_process_group(pid, Signal::INT);
+                }
+                cancelled = Some((Instant::now() + INTERRUPT_GRACE, error));
+            }
+            if let Some((deadline, error)) = &cancelled {
+                // Keep the leader's PID reserved until the ownership guard
+                // can finish killing and reaping the group.
+                let exited = self.pid().is_some_and(|pid| {
+                    waitid(
+                        WaitId::Pid(pid),
+                        WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+                    )
+                    .is_ok_and(|status| status.is_some())
+                });
+                if exited || Instant::now() >= *deadline {
+                    return Err(error.clone());
+                }
+            } else if let Some(status) = self.try_wait().map_err(|error| error.to_string())? {
+                return Ok(status);
+            }
+            thread::sleep(POLL);
+        }
+    }
+
     fn pid(&self) -> Option<Pid> {
         let child = self.0.as_ref()?;
         i32::try_from(child.id()).ok().and_then(Pid::from_raw)

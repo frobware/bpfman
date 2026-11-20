@@ -276,6 +276,10 @@ fn backend_and_frontend_dependencies_stay_at_their_boundaries() {
                     ),
                     "syscalls belong in adapters or binary effect drivers"
                 ),
+                "nix" => assert_eq!(
+                    name, "bpfman-shell",
+                    "terminal signal masking belongs to the shell's process adapter"
+                ),
                 "aya" | "aya-obj" => assert_eq!(
                     name, "bpfman-kernel-aya",
                     "Aya, ELF parsing, and BPF ABI layouts belong in the concrete kernel adapter"
