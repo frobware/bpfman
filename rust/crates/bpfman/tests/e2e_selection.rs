@@ -61,6 +61,15 @@ impl Fixture {
         selected: Option<&Path>,
         implementation: Option<&str>,
     ) -> std::io::Result<Output> {
+        self.run_selection(selected, implementation, None)
+    }
+
+    fn run_selection(
+        &self,
+        selected: Option<&Path>,
+        implementation: Option<&str>,
+        shell: Option<&Path>,
+    ) -> std::io::Result<Output> {
         let mut command = Command::new("make");
         command
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
@@ -84,6 +93,10 @@ impl Fixture {
 
         if let Some(implementation) = implementation {
             command.arg(format!("BPFMAN_E2E_IMPLEMENTATION={implementation}"));
+        }
+
+        if let Some(shell) = shell {
+            command.arg(format!("BPFMAN_SHELL_UNDER_TEST={}", shell.display()));
         }
 
         command.output()
@@ -154,5 +167,22 @@ fn implementation_identity_is_explicit_and_invalid_values_fail_before_execution(
         assert!(output.stdout.is_empty());
         assert!(String::from_utf8_lossy(&output.stderr).contains("must be go or rust"));
     }
+    Ok(())
+}
+
+#[test]
+fn explicit_shell_and_daemon_selection_are_independent() -> Result {
+    let f = Fixture::new()?;
+    executable(
+        &f.rust.join("bpfman-shell"),
+        "\"$BPFMAN_BIN\"\nbpfman\ncase $(command -v bpfman-shell) in */rust/bpfman-shell) ;; *) exit 99 ;; esac\n",
+    )?;
+    let output = f.run_selection(
+        Some(&f.go.join("bpfman")),
+        Some("go"),
+        Some(&f.rust.join("bpfman-shell")),
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"go\ngo\n");
     Ok(())
 }

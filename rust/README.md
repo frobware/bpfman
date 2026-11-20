@@ -73,9 +73,9 @@ unchanged; SQLite still uses rusqlite's bundled library.
 | `bpfman-shell-semantics` | 2 | Origin and structural-shape vocabulary for proved native values, pure builtin, kill flag, and typed parameter literal contracts, and bind outcomes; unverified domain JSON shapes remain open |
 | `bpfman-shell-check` | 3 | Pure import planning and expansion, scope, calls, shape and job analyses, and the preflight transition from `ExpandedProgram` to `CheckedProgram` |
 | `bpfman-shell-ir` | 1 | Block-structured shell IR, reference verification, and deterministic dumping |
-| `bpfman-shell-lower` | 4 | Pure lowering from `CheckedProgram`, with an explicit unchecked entry point and initial straight-line coverage |
-| `bpfman-shell-runtime` | 5 | Pure shell execution, with typed command and output continuations |
-| `bpfman-shell` | 6 | Rust driver for stdin, scripts, imports, preflight, IR inspection, and initial execution effects |
+| `bpfman-shell-lower` | 4 | Pure lowering from `CheckedProgram`, with an explicit unchecked entry point and canonical Go-compatible IR |
+| `bpfman-shell-runtime` | 5 | Pure shell execution with typed command, query, clock, output, and cleanup continuations |
+| `bpfman-shell` | 6 | Rust CLI, source and IR inspection, and adapters for processes, jobs, networking, kernel fixtures, and images |
 | `bpfman-model` | 0 | Pure program specifications, stored records, kernel observations, and bounded XDP configuration |
 | `bpfman-core` | 1 | Pure listing/store policy, load/link compensation, unload continuations, and XDP replacement planning |
 | `bpfman-lock` | 1 | Go-compatible writer lock and borrowed mutation capabilities |
@@ -2195,13 +2195,16 @@ for reproduction evidence, timings and the remaining TX/direct REDIRECT tail.
 
 ## Script parity through the Go runner
 
-Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. There are
-84 admitted scripts: 52 shared Go/Rust scripts and 32 Rust-only scripts,
-out of 171 scripts in total. Eight DEVMAP files declare four named cases each;
-eight broadcast and eight TX/direct REDIRECT files declare two each. The 84-file
-isolated corpus therefore executes 124 script processes with SQLite: 60 plain
-scripts and 64 named cases. Each case has its own runtime, pooled network, timeout
-and residue checks. Direct shell execution still runs the complete matrix. See the
+The Rust test gate builds and selects the Rust `bpfman-shell` while the Go
+runner schedules cases, pools network fixtures, and checks residue. The gate
+also runs the Go workflow YAML expectations against the Rust CLI. The
+`RUST_SHELL_BINARY` Make variable selects a different shell for comparison.
+The runner selects the daemon independently.
+
+Scripts admitted against Rust carry `#pragma labels={"rust":"ok"}`. With the
+`rust=ok,!external` selector, the isolated runner passed 170 fixture entries,
+including named cases. The shared image-mode lane and public image fixtures
+also pass with both daemons. See the
 [case runner guide](../cmd/bpfman-shell/USER-GUIDE.md#running-and-checking-scripts).
 A Rust-only script additionally declares:
 

@@ -175,6 +175,12 @@ pub(super) fn rust() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_bpfman"))
 }
 
+pub(super) fn shell() -> PathBuf {
+    std::env::var_os("BPFMAN_RUST_SHELL_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repository().join("bin/bpfman-shell"))
+}
+
 pub(super) struct Context {
     _temporary: tempfile::TempDir,
     pub(super) layout: RuntimeLayout,

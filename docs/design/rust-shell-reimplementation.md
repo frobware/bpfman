@@ -326,8 +326,8 @@ mismatch leaves the upload available for retry.
 In image-bytecode mode, the registry adapter builds a repository-scoped
 image once per script and rewrites file loads to use that image. The Rust
 shell and Go daemon passed all 158 non-external image-mode fixture entries.
-The Rust daemon does not yet supply the image build and load commands that
-this mode requires.
+The shared image-mode corpus also passed all 158 entries with the Rust
+daemon, including the image build, inspect, load, and attach lifecycle.
 
 The isolated file-mode matrix passed for all four shell and daemon
 combinations. With the Go daemon, each shell passed 158 fixture entries
@@ -377,12 +377,17 @@ Command-status assertions can inspect a shell definition's guard outcome
 after its local defers drain. The signed-release fixture exercises the
 actual failed load through its helper, including the wrong-signer
 rejections for each pull policy. The signed fixture passed on rerun with the
-Rust shell and Go daemon, completing the eleven external fixture cases.
+Rust shell and Go daemon. All eleven external fixture cases passed with
+the Rust shell against each daemon.
 
 The userspace test gate runs all 136 Go workflow fixtures against the
 Rust executable. It reuses the existing YAML expectations, normalizers
 and output assertions, and checks exit status and the reported assertion,
 defer and job-leak counts.
+The Rust kernel acceptance gate uses the Rust shell for its script corpus
+and namespace worker. The Go runner still owns fixture scheduling and
+keeps its Go shell default for the Go CI bundle. To run the Rust gate with
+the Go shell as a reference, set `RUST_SHELL_BINARY=bin/bpfman-shell`.
 
 ## Typestate and internal invariants
 

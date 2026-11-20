@@ -213,7 +213,7 @@ fn pid_namespace_maps() {
     fs::create_dir(&native).expect("native path directory");
     let alias = native.join("libbpfmanpidns.so.1");
     fs::write(&alias, "host alias is not ELF").expect("host alias");
-    let shell = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../bin/bpfman-shell");
+    let shell = shell();
     let mut worker = Worker(Command::new("unshare").args(["--mount", "--pid", "--fork", "--kill-child=KILL", "--mount-proc", "--", "sh", "-c", "mount --make-rprivate / && mount -t tmpfs tmpfs /etc && mount --bind \"$1\" \"$2\" && printf 'ready\\n' && BPFMAN_SHELL_MODE=uprobe-fire-worker exec \"$2\" \"$3/sentinel\" \"$3/ack\" 1 1", "pidns-worker"]).arg(shell).arg(&alias).arg(temp.path()).stdout(Stdio::piped()).spawn().expect("PID namespace worker"));
     let mut ready = String::new();
     BufReader::new(worker.0.stdout.take().expect("stdout"))

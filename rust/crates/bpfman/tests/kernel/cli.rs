@@ -480,13 +480,14 @@ fn run_dsl_selection(
     let shell_dir = std::env::var_os("BPFMAN_SHELL_BIN_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| repository().join("bin"));
+    let shell = shell();
     let expected = if let Some(scripts) = scripts {
         scripts
             .iter()
             .map(|script| format!("{script}.bpfman"))
             .collect::<Vec<_>>()
     } else {
-        let listing = Command::new(shell_dir.join("bpfman-shell"))
+        let listing = Command::new(&shell)
             .args(["--list-scripts", "--selector", selector, "e2e/scripts"])
             .current_dir(repository())
             .output()
@@ -547,6 +548,7 @@ fn run_dsl_selection(
         .arg("make")
         .arg("run-e2e-scripts")
         .arg(format!("BPFMAN_UNDER_TEST={}", binary.display()))
+        .arg(format!("BPFMAN_SHELL_UNDER_TEST={}", shell.display()))
         .arg(format!(
             "BPFMAN_E2E_IMPLEMENTATION={}",
             if binary == rust() { "rust" } else { "go" }
