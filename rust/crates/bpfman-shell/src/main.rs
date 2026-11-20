@@ -18,10 +18,14 @@ mod driver;
 mod fixturemode;
 mod scripts;
 mod symbols;
+mod version;
 
 #[derive(Parser)]
-#[command(version, about, max_term_width = 80)]
+#[command(about, max_term_width = 80)]
 struct Options {
+    /// Print build and compiler information.
+    #[arg(short = 'V', long)]
+    version: bool,
     /// Change directory before reading scripts or executing commands.
     #[arg(short = 'C', long)]
     directory: Option<PathBuf>,
@@ -84,9 +88,16 @@ fn main() -> ExitCode {
             argument
         }
     }));
-    let result = driver::Interrupt::register()
-        .map_err(|error| error.to_string())
-        .and_then(|interrupt| run(options, &mut io::stdout().lock(), &interrupt));
+    let stdout = io::stdout();
+    let result = if options.version {
+        version::write(&mut stdout.lock())
+            .map(|()| 0)
+            .map_err(|error| error.to_string())
+    } else {
+        driver::Interrupt::register()
+            .map_err(|error| error.to_string())
+            .and_then(|interrupt| run(options, &mut stdout.lock(), &interrupt))
+    };
     match result {
         Ok(status) => ExitCode::from(status),
         Err(error) => {

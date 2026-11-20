@@ -540,3 +540,27 @@ fn command_status_assertion_observes_guard_failure_in_definition() -> io::Result
     assert!(output.stderr.is_empty(), "{output:?}");
     Ok(())
 }
+
+#[test]
+fn version_reports_build_information_without_opening_input() -> io::Result<()> {
+    let output = Command::new(env!("CARGO_BIN_EXE_bpfman-shell"))
+        .args([
+            "-V",
+            "-C",
+            "/nonexistent/working/directory",
+            "missing.bpfman",
+        ])
+        .output()?;
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for field in [
+        "Version:",
+        "Git commit:",
+        "Rust version: rustc",
+        "Platform:",
+    ] {
+        assert!(stdout.contains(field), "{stdout}");
+    }
+    assert!(output.stderr.is_empty(), "{output:?}");
+    Ok(())
+}
