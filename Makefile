@@ -46,6 +46,7 @@ DOC_PORT ?= 6060
 # Explicitly selects the independent workspace; the root manifest is legacy.
 RUST_MANIFEST := rust/Cargo.toml
 RUST_BUILD_PROFILE ?= dev
+RUST_SHELL_BINARY ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),rust/target)/$(if $(filter dev,$(RUST_BUILD_PROFILE)),debug,$(RUST_BUILD_PROFILE))/bpfman-shell
 RUST_BINARY ?= rust/target/$(if $(filter dev,$(RUST_BUILD_PROFILE)),debug,$(RUST_BUILD_PROFILE))/bpfman
 # Canonical bpfman-shell sources that should be formatter-owned. The
 # e2e corpus is the broad runnable script set; outside e2e, include
@@ -1131,6 +1132,7 @@ rust-test-unit: $(RUST_DISPATCHER)
 
 .PHONY: rust-test-userspace
 rust-test-userspace: rust-build bpfman-compile $(RUST_TEST_INPUTS)
+	BPFMAN_RUST_SHELL_TEST_BIN="$(abspath $(RUST_SHELL_BINARY))" go test ./cmd/bpfman-shell -run '^TestRustShellFixtureContracts$$'
 	$(RUST_TEST_ENV) sh rust/test-userspace.sh $(RUST_MANIFEST) $(RUST_TEST_RUNNER)
 
 # Public lifecycle with the stateful fake kernel and real SQLite.

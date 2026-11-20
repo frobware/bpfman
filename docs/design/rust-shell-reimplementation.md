@@ -379,6 +379,11 @@ actual failed load through its helper, including the wrong-signer
 rejections for each pull policy. The signed fixture passed on rerun with the
 Rust shell and Go daemon, completing the eleven external fixture cases.
 
+The userspace test gate runs all 136 Go workflow fixtures against the
+Rust executable. It reuses the existing YAML expectations, normalizers
+and output assertions, and checks exit status and the reported assertion,
+defer and job-leak counts.
+
 ## Typestate and internal invariants
 
 The normal driver path carries distinct `Parsed`, `Expanded`, `Checked`, and

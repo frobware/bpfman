@@ -332,11 +332,23 @@ func assertFixtureWorkflowOutcome(t *testing.T, tc fixtureWorkflowCase, run fixt
 		require.NoErrorf(t, run.err, "unexpected script error\nstdout:\n%s\nstderr:\n%s", run.stdout, run.stderr)
 	}
 
-	out := run.stdout
+	assertFixtureWorkflowOutput(t, tc, run.stdout, run.stderr)
+	assert.Equal(t, wantCounter(tc.wantAssertFails), run.session.AssertFailures(), "assert counter mismatch")
+	assert.Equal(t, wantCounter(tc.wantDeferFails), run.session.DeferFailures(), "defer counter mismatch")
+	assert.Equal(t, wantCounter(tc.wantJobLeaks), run.session.JobLeaks(), "job leak counter mismatch")
+	if tc.validate != nil {
+		tc.validate(t, workflowFixtureDir(tc.fixture), run)
+	}
+}
+
+func assertFixtureWorkflowOutput(t *testing.T, tc fixtureWorkflowCase, stdout, stderr string) {
+	t.Helper()
+
+	out := stdout
 	if tc.normaliseStdout != nil {
 		out = tc.normaliseStdout(out)
 	}
-	errOut := run.stderr
+	errOut := stderr
 	if tc.normaliseStderr != nil {
 		errOut = tc.normaliseStderr(errOut)
 	}
@@ -358,12 +370,6 @@ func assertFixtureWorkflowOutcome(t *testing.T, tc fixtureWorkflowCase, run fixt
 	}
 	if tc.wantErrText == "" && tc.wantErrIs == nil && len(tc.wantErrContains) == 0 && tc.normaliseStderr == nil {
 		assert.Empty(t, errOut, "successful fixtures must not write unexpected stderr; declare stderr_contains for expected stderr")
-	}
-	assert.Equal(t, wantCounter(tc.wantAssertFails), run.session.AssertFailures(), "assert counter mismatch")
-	assert.Equal(t, wantCounter(tc.wantDeferFails), run.session.DeferFailures(), "defer counter mismatch")
-	assert.Equal(t, wantCounter(tc.wantJobLeaks), run.session.JobLeaks(), "job leak counter mismatch")
-	if tc.validate != nil {
-		tc.validate(t, workflowFixtureDir(tc.fixture), run)
 	}
 }
 
