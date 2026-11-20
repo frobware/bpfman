@@ -906,7 +906,7 @@ impl<'a> Machine<'a> {
                 Argument::Value(value) => value
                     .scalar_text()
                     .unwrap_or_else(|| expression.to_string()),
-                Argument::Adapter { .. } => expression.to_string(),
+                Argument::Adapter { source, .. } => source.clone(),
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -1076,6 +1076,7 @@ impl<'a> Machine<'a> {
                 }
                 Argument::Adapter {
                     name: name.clone(),
+                    source: expression.to_string(),
                     value,
                 }
             }
@@ -1220,7 +1221,12 @@ impl<'a> Machine<'a> {
                     })
                     .collect::<Result<_, _>>()?,
             ),
-            _ => return Err("expression is not yet implemented".into()),
+            ir::ExpressionKind::Adapter { .. } => {
+                return Err(format!(
+                    "adapter {expression} cannot be used as an expression operand"
+                )
+                .into());
+            }
         })
     }
     fn lookup(&self, variable: &ir::VariableRef, soft: bool) -> Result<Value, String> {

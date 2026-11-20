@@ -95,9 +95,7 @@ pub(super) fn evaluate(
                 _ => Err("expected an unsigned builtin".to_owned()),
             }
         }
-        (B::Jq | B::PathExists, _) => {
-            Err("builtin requires an effect adapter that is not yet implemented".to_owned())
-        }
+        (B::Jq | B::PathExists, _) => Err("builtin requires a driver observation".to_owned()),
         _ => Err("invalid builtin argument count".to_owned()),
     }
 }

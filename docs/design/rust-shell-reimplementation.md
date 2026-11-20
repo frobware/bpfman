@@ -362,7 +362,8 @@ The runtime lists hoisted local and imported definitions in sorted order
 with `defs`. Direct calls to `range`, `zip`, `u32le` and `u64le` use
 the same pure implementation as their expression counterparts.
 `--trace` and `trace on/off` use typed output events that carry resolved
-arguments and values. The driver renders the events before the next effect.
+arguments and values. File adapters retain their source reference in trace
+output. The driver renders the events before the next effect.
 A defer records its argv and source location and observes the tracing
 setting again when it fires. Successful deferred prints and subprocesses
 publish their output.

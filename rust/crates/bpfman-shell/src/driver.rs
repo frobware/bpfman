@@ -84,6 +84,7 @@ pub(super) fn run(
                 for part in request.parts {
                     line.push_str(&match part {
                         TracePart::Text(text) => text,
+                        TracePart::Argument(Argument::Adapter { source, .. }) => source,
                         TracePart::Argument(argument) => {
                             files::render_argument(&argument, false).unwrap_or_default()
                         }

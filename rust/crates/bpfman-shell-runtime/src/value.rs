@@ -334,6 +334,8 @@ pub enum Argument {
     Adapter {
         /// Adapter name.
         name: String,
+        /// Source spelling without the resolved value.
+        source: String,
         /// Value that the adapter will render or consume.
         value: Value,
     },

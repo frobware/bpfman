@@ -565,3 +565,16 @@ fn version_reports_build_information_without_opening_input() -> io::Result<()> {
     assert!(output.stderr.is_empty(), "{output:?}");
     Ok(())
 }
+
+#[test]
+fn trace_prints_file_adapter_reference_while_the_command_receives_its_contents() -> io::Result<()> {
+    let output = run(&["-x"], "let contents = secret\nexec cat file:$contents\n")?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"secret");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.lines().last(),
+        Some("+ <stdin>:2: exec cat file:$contents")
+    );
+    Ok(())
+}
