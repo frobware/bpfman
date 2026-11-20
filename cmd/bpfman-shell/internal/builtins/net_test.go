@@ -2,6 +2,7 @@ package builtins
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"testing"
 
@@ -660,4 +661,56 @@ func TestNetnsVethPair_FieldsRemainReadableAfterRelease(t *testing.T) {
 	s, err := got.Scalar()
 	require.NoError(t, err)
 	assert.Equal(t, "198.51.100.1", s)
+}
+
+func TestRemoveNetworkResourceChecksAbsenceAfterFailedDelete(t *testing.T) {
+	t.Parallel()
+	deleteErr := errors.New("delete failed")
+	for _, tc := range []struct {
+		name        string
+		observation error
+		want        error
+	}{
+		{"already gone", os.ErrNotExist, nil},
+		{"still present", nil, deleteErr},
+		{"unknown", os.ErrPermission, deleteErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := removeNetworkResourceWith(func() error { return deleteErr }, func() error { return tc.observation })
+			if tc.want == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tc.want)
+			if tc.observation != nil {
+				require.ErrorIs(t, err, tc.observation)
+			}
+		})
+	}
+}
+
+func TestNetworkReleaseRetriesOnlyUnfinishedResources(t *testing.T) {
+	t.Parallel()
+	pair := &runtime.NetPair{}
+	firstCalls, secondCalls, finished := 0, 0, 0
+	failure := errors.New("namespace deletion failed")
+	first := func() error { firstCalls++; return nil }
+	second := func() error {
+		secondCalls++
+		if secondCalls == 1 {
+			return failure
+		}
+		return nil
+	}
+	finish := func() error { finished++; return nil }
+
+	require.ErrorIs(t, pair.Release(first, second, finish), failure)
+	assert.True(t, pair.IsReleased(), "a partially torn-down pair cannot run commands")
+	assert.Zero(t, finished, "the lease cannot be marked released while cleanup is pending")
+	require.NoError(t, pair.Release(first, second, finish))
+	require.NoError(t, pair.Release(first, second, finish))
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 2, secondCalls)
+	assert.Equal(t, 1, finished)
 }

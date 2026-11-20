@@ -203,27 +203,30 @@ impl Jobs {
         Ok(CommandResponse::success(Value::Absent))
     }
 
-    pub(super) fn finish(self, result: Result<u8, String>) -> Result<u8, String> {
-        let leaks: Vec<_> = self
-            .entries
-            .values()
-            .filter(|job| job.listed && !job.managed)
-            .map(|job| {
-                format!(
+    pub(super) fn finish(mut self, result: Result<u8, String>) -> Result<u8, String> {
+        let mut leaks = Vec::new();
+        let mut failures = Vec::new();
+        for job in self.entries.values_mut() {
+            if job.listed && !job.managed {
+                leaks.push(format!(
                     "[job] FAIL {}: never waited or killed: {}",
                     job.origin, job.argv
-                )
-            })
-            .collect();
+                ));
+            }
+            if let Err(error) = job.stop() {
+                failures.push(format!("[job] cleanup {}: {error}", job.origin));
+            }
+        }
+        let leaks_count = leaks.len();
+        leaks.extend(failures);
         if leaks.is_empty() {
             return result;
         }
         let mut message = result.err().into_iter().collect::<Vec<_>>();
-        let count = leaks.len();
-        message.extend(leaks);
-        if message.len() == count {
-            message.push(format!("{count} job(s) leaked"));
+        if message.is_empty() && leaks_count != 0 {
+            leaks.push(format!("{leaks_count} job(s) leaked"));
         }
+        message.extend(leaks);
         Err(message.join("\n"))
     }
 }
@@ -310,6 +313,27 @@ impl Job {
             completed,
             reaper: Some(reaper),
         })
+    }
+
+    fn stop(&mut self) -> Result<(), String> {
+        let Some(reaper) = self.reaper.take() else {
+            return Ok(());
+        };
+        let outcome_was_observed = self.managed && self.outcome.is_some();
+        // A disconnected control channel is normal if the child already exited.
+        if self.outcome.is_none() {
+            drop(self.control.send(Control::Stop));
+        }
+        reaper
+            .join()
+            .map_err(|_| "background job reaper panicked".to_owned())?;
+        self.refresh(Duration::ZERO)?;
+        // A result already inspected by wait is a command outcome, not a
+        // newly observed teardown failure.
+        if !outcome_was_observed && let Some(Err(error)) = &self.outcome {
+            return Err(error.clone());
+        }
+        Ok(())
     }
 
     fn refresh(&mut self, delay: Duration) -> Result<bool, String> {
@@ -418,7 +442,7 @@ fn reap_child(
             }
             Err(RecvTimeoutError::Timeout) => {}
             Ok(Control::Stop) | Err(RecvTimeoutError::Disconnected) => {
-                return Err("background job cancelled".to_owned());
+                return child.stop().map(response);
             }
         }
     }

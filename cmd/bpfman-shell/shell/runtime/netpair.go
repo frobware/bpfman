@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"strconv"
 	"sync"
 
@@ -19,7 +20,7 @@ import (
 // because the identity is still a historical description of what
 // existed.
 //
-// Concurrency: Mu guards Released. The identity fields are
+// Concurrency: Mu guards Released and release progress. The identity fields are
 // read-only after construction so they need no lock.
 type NetPair struct {
 	// Ns is the netns name the peer-side veth lives in.
@@ -59,13 +60,14 @@ type NetPair struct {
 	// tests that omit it.
 	HostNsid uint64
 
-	// Mu guards Released.
+	// Mu guards Released and release progress.
 	Mu sync.Mutex
 
 	// Released is true once net release has consumed the
 	// topology. Subsequent net exec / net start error; subsequent
 	// net release is a no-op (idempotent cleanup).
 	Released bool
+	release  networkReleaseProgress
 }
 
 // MarkReleased sets the lifecycle latch and reports whether it was
@@ -82,11 +84,46 @@ func (p *NetPair) MarkReleased() (wasReleased bool) {
 	return false
 }
 
-// IsReleased reports whether the handle has been consumed.
+// Release retries only unfinished cleanup and serializes release attempts.
+func (p *NetPair) Release(removeFirst, removeSecond, finish func() error) error {
+	p.Mu.Lock()
+	defer p.Mu.Unlock()
+	return p.release.run(&p.Released, [2]func() error{removeFirst, removeSecond}, finish)
+}
+
+// IsReleased reports whether teardown has started and the handle is unavailable.
 func (p *NetPair) IsReleased() bool {
 	p.Mu.Lock()
 	defer p.Mu.Unlock()
-	return p.Released
+	return p.Released || p.release.started
+}
+
+type networkReleaseProgress struct {
+	started bool
+	removed [2]bool
+}
+
+func (p *networkReleaseProgress) run(released *bool, remove [2]func() error, finish func() error) error {
+	if *released {
+		return nil
+	}
+	p.started = true
+	var failures error
+	for i, removeOne := range remove {
+		if p.removed[i] {
+			continue
+		}
+		if err := removeOne(); err != nil {
+			failures = errors.Join(failures, err)
+		} else {
+			p.removed[i] = true
+		}
+	}
+	if failures != nil {
+		return failures
+	}
+	*released = true
+	return finish()
 }
 
 // ValueFromNetPair wraps p as a Value with semantics.OriginNetPair. The path

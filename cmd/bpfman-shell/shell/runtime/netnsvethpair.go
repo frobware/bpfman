@@ -21,7 +21,7 @@ import (
 // released. Field reads remain valid after release because the
 // identity is still a historical description of what existed.
 //
-// Concurrency: Mu guards Released. The endpoint identity fields
+// Concurrency: Mu guards Released and release progress. The endpoint identity fields
 // are read-only after construction so they need no lock.
 type NetnsVethPair struct {
 	// A is the first endpoint of the pair. Set once by
@@ -34,7 +34,7 @@ type NetnsVethPair struct {
 	// rewritten.
 	B *NetnsVethEndpoint
 
-	// Mu guards Released.
+	// Mu guards Released and release progress.
 	Mu sync.Mutex
 
 	// Released is true once net release has consumed the
@@ -42,6 +42,7 @@ type NetnsVethPair struct {
 	// endpoint error; subsequent net release is a no-op
 	// (idempotent cleanup).
 	Released bool
+	release  networkReleaseProgress
 }
 
 // NetnsVethEndpoint is one side of a NetnsVethPair: the netns the
@@ -101,11 +102,18 @@ func (p *NetnsVethPair) MarkReleased() (wasReleased bool) {
 	return false
 }
 
-// IsReleased reports whether the handle has been consumed.
+// Release retries only unfinished cleanup and serializes release attempts.
+func (p *NetnsVethPair) Release(removeFirst, removeSecond, finish func() error) error {
+	p.Mu.Lock()
+	defer p.Mu.Unlock()
+	return p.release.run(&p.Released, [2]func() error{removeFirst, removeSecond}, finish)
+}
+
+// IsReleased reports whether teardown has started and the handle is unavailable.
 func (p *NetnsVethPair) IsReleased() bool {
 	p.Mu.Lock()
 	defer p.Mu.Unlock()
-	return p.Released
+	return p.Released || p.release.started
 }
 
 // valueFromNetnsVethEndpoint wraps e as a Value with

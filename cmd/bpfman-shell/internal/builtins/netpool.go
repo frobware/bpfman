@@ -19,9 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netns"
-
 	"github.com/bpfman/bpfman/cmd/bpfman-shell/shell/runtime"
 )
 
@@ -53,18 +50,7 @@ const defaultPoolRoot = "/run/bpfman-net-pool"
 // host = base+1, peer = base+2, broadcast = base+3.
 const poolSubnetPrefix = "198.51.100."
 
-// linkExistsFn / netnsExistsFn are the assertSlotClean
-// primitives. Callers normally leave them nil so the defaults
-// (netlink.LinkByName / netns.GetFromName) run; tests pass stubs
-// to model a leaked tenant without needing real kernel state.
-//
-// The defaults use vishvananda/netlink and vishvananda/netns
-// (both already direct module deps): netlink.LinkByName issues a
-// single RTM_GETLINK with NLM_F_REQUEST (targeted lookup, no
-// dump, so NLM_F_DUMP_INTR cannot strike); netns.GetFromName
-// opens the named netns file under /var/run/netns/. Both
-// definitively distinguish presence from absence without parsing
-// iproute2 output.
+// Tests can override the targeted existence probes used for residue admission.
 type linkExistsFn func(name string) bool
 type netnsExistsFn func(name string) bool
 
@@ -217,14 +203,6 @@ func tryAcquirePoolSlot(req poolAcquireRequest) (*poolLease, error) {
 	if root == "" {
 		root = defaultPoolRoot
 	}
-	linkCheck := req.linkExists
-	if linkCheck == nil {
-		linkCheck = defaultLinkCheck
-	}
-	netnsCheck := req.netnsExists
-	if netnsCheck == nil {
-		netnsCheck = defaultNetnsCheck
-	}
 
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, fmt.Errorf("net pool: mkdir %s: %w", root, err)
@@ -263,7 +241,7 @@ func tryAcquirePoolSlot(req poolAcquireRequest) (*poolLease, error) {
 			return nil, err
 		}
 
-		if err := assertSlotClean(c.slot, prev, linkCheck, netnsCheck); err != nil {
+		if err := assertSlotClean(c.slot, prev, req.linkExists, req.netnsExists); err != nil {
 			f.Close()
 			return nil, err
 		}
@@ -380,29 +358,6 @@ func takeNetnsVethPairLease(pair *runtime.NetnsVethPair) *poolLease {
 	return lease
 }
 
-// defaultLinkCheck issues a single RTM_GETLINK and reports
-// whether the kernel returned a link. Any error -- LinkNotFound,
-// permission, transport -- degrades to "absent" so the next
-// setup step surfaces the real problem rather than letting an
-// unrelated environment fault masquerade as a leak.
-func defaultLinkCheck(name string) bool {
-	_, err := netlink.LinkByName(name)
-	return err == nil
-}
-
-// defaultNetnsCheck opens /var/run/netns/NAME; the open succeeds
-// iff the named netns is currently mounted. The fd is closed
-// immediately because the netns is only needed for the existence
-// signal.
-func defaultNetnsCheck(name string) bool {
-	h, err := netns.GetFromName(name)
-	if err != nil {
-		return false
-	}
-	h.Close()
-	return true
-}
-
 // slotCandidate carries the sort key and previous provenance for
 // a slot during the acquire scan.
 type slotCandidate struct {
@@ -464,14 +419,31 @@ func assertSlotClean(slot uint32, prev provenance, linkCheck linkExistsFn, netns
 	if prev.ReleasedAt != "" {
 		return nil
 	}
-	if prev.LinkAName != "" && linkCheck(prev.LinkAName) {
-		return leakError(slot, prev, "link", prev.LinkAName)
-	}
-	if prev.NsName != "" && netnsCheck(prev.NsName) {
-		return leakError(slot, prev, "netns", prev.NsName)
-	}
-	if prev.NsBName != "" && netnsCheck(prev.NsBName) {
-		return leakError(slot, prev, "netns", prev.NsBName)
+	for _, resource := range []struct {
+		kind  string
+		name  string
+		check func(string) bool
+	}{
+		{"link", prev.LinkAName, linkCheck},
+		{"netns", prev.NsName, netnsCheck},
+		{"netns", prev.NsBName, netnsCheck},
+	} {
+		if resource.name == "" {
+			continue
+		}
+		if resource.check != nil {
+			if resource.check(resource.name) {
+				return leakError(slot, prev, resource.kind, resource.name)
+			}
+			continue
+		}
+		err := networkResourceStat(resource.kind, resource.name)
+		if err == nil {
+			return leakError(slot, prev, resource.kind, resource.name)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("net pool: verify slot %d residue: %w", slot, err)
+		}
 	}
 	return nil
 }

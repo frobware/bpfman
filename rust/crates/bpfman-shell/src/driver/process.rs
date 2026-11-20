@@ -224,6 +224,11 @@ impl CapturedChild {
         }
     }
 
+    pub(super) fn stop(&mut self) -> Result<Output, String> {
+        let status = self.group.stop()?;
+        self.output(status).map_err(|error| error.to_string())
+    }
+
     pub(super) fn try_output(&mut self) -> io::Result<Option<Output>> {
         let Some(status) = self.group.try_wait()? else {
             return Ok(None);
@@ -307,18 +312,31 @@ impl Group {
     }
 }
 
+impl Group {
+    fn stop(&mut self) -> Result<ExitStatus, String> {
+        let pid = self.pid();
+        let mut child = self.0.take().ok_or("process already joined")?;
+        if let Some(pid) = pid {
+            match kill_process_group(pid, Signal::KILL) {
+                Ok(()) | Err(rustix::io::Errno::SRCH) => {}
+                Err(error) => return Err(format!("kill process group {pid}: {error}")),
+            }
+        } else {
+            child
+                .kill()
+                .map_err(|error| format!("kill child: {error}"))?;
+        }
+        child
+            .wait()
+            .map_err(|error| format!("wait for child: {error}"))
+    }
+}
+
 impl Drop for Group {
     fn drop(&mut self) {
-        let pid = self.pid();
-        let Some(child) = self.0.as_mut() else {
-            return;
-        };
-        if let Some(pid) = pid {
-            let _ = kill_process_group(pid, Signal::KILL);
-        } else {
-            let _ = child.kill();
+        if self.0.is_some() {
+            let _ = self.stop();
         }
-        let _ = child.wait();
     }
 }
 

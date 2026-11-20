@@ -2,8 +2,7 @@
 // topologies used by TC / TCX / XDP dispatcher tests. The
 // script chooses the topology parameters (names, addresses);
 // the built-in owns the imperative order of ip(8) calls, the
-// idempotent pre-clean against leftover kernel state, and the
-// LIFO-correct teardown.
+// rollback of created resources, and teardown.
 //
 // net is for paired-veth single-netns topologies used by
 // TC / TCX / XDP dispatcher tests. A richer network-fixture
@@ -14,6 +13,7 @@ package builtins
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"net"
@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	vnetlink "github.com/vishvananda/netlink"
 	vnetns "github.com/vishvananda/netns"
@@ -375,41 +376,33 @@ func handleNetVethPair(ctx context.Context, origin string, args []runtime.Arg) (
 	// bypass rule before building the topology; the script-level
 	// host-route precheck then verifies the invariant holds.
 	if err := testnetroute.Ensure(); err != nil {
-		if lease != nil {
-			_ = releasePoolSlot(lease, f.Ns, "", f.HostLink)
-		}
-		return runtime.Value{}, fmt.Errorf("net veth-pair: %w", err)
+		return runtime.Value{}, errors.Join(fmt.Errorf("net veth-pair: %w", err), abandonNetworkLease(lease))
 	}
 
-	// Best-effort pre-clean against leftover state from a prior
-	// failed run. A residual veth alone is enough to fail the
-	// link-add later; a residual netns alone is enough to fail
-	// the netns-add. Both deletes are silent on missing-resource.
-	runIPIgnoreErr(ctx, "link", "del", f.HostLink)
-	runIPIgnoreErr(ctx, "netns", "del", f.Ns)
-
-	var nsCreated, linkCreated bool
-	rollback := func() {
+	var linkCreated, nsCreated bool
+	rollback := func(primary error) error {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		var cleanupErr error
 		if linkCreated {
-			runIPIgnoreErr(ctx, "link", "del", f.HostLink)
+			cleanupErr = errors.Join(cleanupErr, removeNetworkResource(cleanup, "link", f.HostLink))
 		}
 		if nsCreated {
-			runIPIgnoreErr(ctx, "netns", "del", f.Ns)
+			cleanupErr = errors.Join(cleanupErr, removeNetworkResource(cleanup, "netns", f.Ns))
 		}
-		if lease != nil {
-			_ = releasePoolSlot(lease, f.Ns, "", f.HostLink)
+		if cleanupErr != nil {
+			return errors.Join(primary, fmt.Errorf("network setup rollback: %w", cleanupErr), abandonNetworkLease(lease))
 		}
+		return errors.Join(primary, abandonNetworkLease(lease))
 	}
 
 	if err := runIP(ctx, "netns", "add", f.Ns); err != nil {
-		rollback()
-		return runtime.Value{}, fmt.Errorf("net veth-pair: %w", err)
+		return runtime.Value{}, rollback(fmt.Errorf("net veth-pair: %w", err))
 	}
 	nsCreated = true
 
 	if err := runIP(ctx, "link", "add", f.HostLink, "type", "veth", "peer", "name", f.PeerLink); err != nil {
-		rollback()
-		return runtime.Value{}, fmt.Errorf("net veth-pair: %w", err)
+		return runtime.Value{}, rollback(fmt.Errorf("net veth-pair: %w", err))
 	}
 	linkCreated = true
 
@@ -422,8 +415,7 @@ func handleNetVethPair(ctx context.Context, origin string, args []runtime.Arg) (
 	}
 	for _, step := range steps {
 		if err := runIP(ctx, step...); err != nil {
-			rollback()
-			return runtime.Value{}, fmt.Errorf("net veth-pair: %w", err)
+			return runtime.Value{}, rollback(fmt.Errorf("net veth-pair: %w", err))
 		}
 	}
 
@@ -493,44 +485,38 @@ func handleNetNetnsVethPair(ctx context.Context, origin string, args []runtime.A
 		return runtime.Value{}, fmt.Errorf("net netns-veth-pair: %w", err)
 	}
 
-	// Best-effort pre-clean against leftover state from a prior
-	// failed run. A crash between link-add and the move leaves
-	// the pair in the root namespace, so the link delete covers
-	// that window (deleting one end reclaims both); the netns
-	// deletes cascade to moved ends.
-	runIPIgnoreErr(ctx, "link", "del", linkA)
-	runIPIgnoreErr(ctx, "netns", "del", nsA)
-	runIPIgnoreErr(ctx, "netns", "del", nsB)
-
-	var nsACreated, nsBCreated, linkCreated bool
-	rollback := func() {
+	var linkCreated, nsACreated, nsBCreated bool
+	rollback := func(primary error) error {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		var cleanupErr error
 		if linkCreated {
-			runIPIgnoreErr(ctx, "link", "del", linkA)
+			cleanupErr = errors.Join(cleanupErr, removeNetworkResource(cleanup, "link", linkA))
 		}
 		if nsACreated {
-			runIPIgnoreErr(ctx, "netns", "del", nsA)
+			cleanupErr = errors.Join(cleanupErr, removeNetworkResource(cleanup, "netns", nsA))
 		}
 		if nsBCreated {
-			runIPIgnoreErr(ctx, "netns", "del", nsB)
+			cleanupErr = errors.Join(cleanupErr, removeNetworkResource(cleanup, "netns", nsB))
 		}
-		_ = releasePoolSlot(lease, nsA, nsB, linkA)
+		if cleanupErr != nil {
+			return errors.Join(primary, fmt.Errorf("network setup rollback: %w", cleanupErr), abandonNetworkLease(lease))
+		}
+		return errors.Join(primary, abandonNetworkLease(lease))
 	}
 
 	if err := runIP(ctx, "netns", "add", nsA); err != nil {
-		rollback()
-		return runtime.Value{}, fmt.Errorf("net netns-veth-pair: %w", err)
+		return runtime.Value{}, rollback(fmt.Errorf("net netns-veth-pair: %w", err))
 	}
 	nsACreated = true
 
 	if err := runIP(ctx, "netns", "add", nsB); err != nil {
-		rollback()
-		return runtime.Value{}, fmt.Errorf("net netns-veth-pair: %w", err)
+		return runtime.Value{}, rollback(fmt.Errorf("net netns-veth-pair: %w", err))
 	}
 	nsBCreated = true
 
 	if err := runIP(ctx, "link", "add", linkA, "type", "veth", "peer", "name", linkB); err != nil {
-		rollback()
-		return runtime.Value{}, fmt.Errorf("net netns-veth-pair: %w", err)
+		return runtime.Value{}, rollback(fmt.Errorf("net netns-veth-pair: %w", err))
 	}
 	linkCreated = true
 
@@ -544,8 +530,7 @@ func handleNetNetnsVethPair(ctx context.Context, origin string, args []runtime.A
 	}
 	for _, step := range steps {
 		if err := runIP(ctx, step...); err != nil {
-			rollback()
-			return runtime.Value{}, fmt.Errorf("net netns-veth-pair: %w", err)
+			return runtime.Value{}, rollback(fmt.Errorf("net netns-veth-pair: %w", err))
 		}
 	}
 
@@ -645,14 +630,9 @@ func generateTopologyNames() (ns, hostLink, peerLink string) {
 
 // handleNetRelease tears the topology down in LIFO-correct order:
 // delete the host-side veth first (the kernel reclaims the peer
-// end with it), then delete the netns. Both steps ignore failure
-// because missing resources are the desired terminal state. When
-// the pair was built in auto-address mode, the builtin-private
-// pool lease is released after the kernel teardown so the
-// lockfile's final provenance reflects the just-torn-down
-// topology. The second call against an already-released handle
-// short-circuits at the lifecycle latch. The envelope is always
-// OK so `defer net release $pair` never disturbs a clean exit.
+// end with it), then delete the netns. A missing resource is a
+// successful teardown. Keep the lease and handle available for retry if
+// teardown fails.
 func handleNetRelease(ctx context.Context, args []runtime.Arg) (runtime.Value, error) {
 	if len(args) != 1 {
 		return runtime.Value{}, fmt.Errorf("net release: requires exactly one $pair argument")
@@ -667,13 +647,12 @@ func handleNetRelease(ctx context.Context, args []runtime.Arg) (runtime.Value, e
 		if !ok {
 			return runtime.Value{}, fmt.Errorf("net release: $pair has no underlying handle (got %T)", sva.Value.Origin())
 		}
-		if pair.MarkReleased() {
-			return runtime.ValueFromEnvelope(runtime.OkEnvelope()), nil
-		}
-		runIPIgnoreErr(ctx, "link", "del", pair.HostLink)
-		runIPIgnoreErr(ctx, "netns", "del", pair.Ns)
-		if lease := takeNetPairLease(pair); lease != nil {
-			_ = releasePoolSlot(lease, pair.Ns, "", pair.HostLink)
+		if err := pair.Release(
+			func() error { return removeNetworkResource(ctx, "link", pair.HostLink) },
+			func() error { return removeNetworkResource(ctx, "netns", pair.Ns) },
+			func() error { return releasePoolSlot(takeNetPairLease(pair), pair.Ns, "", pair.HostLink) },
+		); err != nil {
+			return runtime.Value{}, err
 		}
 		return runtime.ValueFromEnvelope(runtime.OkEnvelope()), nil
 	case semantics.OriginNetnsVethPair:
@@ -681,15 +660,13 @@ func handleNetRelease(ctx context.Context, args []runtime.Arg) (runtime.Value, e
 		if !ok {
 			return runtime.Value{}, fmt.Errorf("net release: $pair has no underlying handle (got %T)", sva.Value.Origin())
 		}
-		if pair.MarkReleased() {
-			return runtime.ValueFromEnvelope(runtime.OkEnvelope()), nil
-		}
-		// Deleting each namespace reclaims the veth end inside
-		// it; no root-namespace resource exists to clean.
-		runIPIgnoreErr(ctx, "netns", "del", pair.A.Ns)
-		runIPIgnoreErr(ctx, "netns", "del", pair.B.Ns)
-		if lease := takeNetnsVethPairLease(pair); lease != nil {
-			_ = releasePoolSlot(lease, pair.A.Ns, pair.B.Ns, pair.A.Link)
+		// Namespace deletion reclaims the veth end inside it.
+		if err := pair.Release(
+			func() error { return removeNetworkResource(ctx, "netns", pair.A.Ns) },
+			func() error { return removeNetworkResource(ctx, "netns", pair.B.Ns) },
+			func() error { return releasePoolSlot(takeNetnsVethPairLease(pair), pair.A.Ns, pair.B.Ns, pair.A.Link) },
+		); err != nil {
+			return runtime.Value{}, err
 		}
 		return runtime.ValueFromEnvelope(runtime.OkEnvelope()), nil
 	case semantics.OriginNetnsVethEndpoint:
@@ -784,11 +761,53 @@ func runIP(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// runIPIgnoreErr runs `ip ARGS...` and discards stdout, stderr,
-// and the exit status. Used for best-effort pre-clean against
-// leftover kernel state and for the LIFO teardown in net release
-// where missing resources are the desired terminal state.
-func runIPIgnoreErr(ctx context.Context, args ...string) {
-	cmd := exec.CommandContext(ctx, "ip", args...)
-	_ = cmd.Run()
+// Re-observe after a failed delete. Removing an owned peer namespace
+// can make the host veth disappear during deletion.
+func removeNetworkResource(ctx context.Context, kind, name string) error {
+	return removeNetworkResourceWith(func() error {
+		return runIP(ctx, kind, "del", name)
+	}, func() error {
+		return networkResourceStat(kind, name)
+	})
+}
+
+func networkResourceStat(kind, name string) error {
+	if name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return fmt.Errorf("invalid network resource name %q", name)
+	}
+	root := "/run/netns"
+	if kind == "link" {
+		root = "/sys/class/net"
+	}
+	_, err := os.Lstat(filepath.Join(root, name))
+	return err
+}
+
+func removeNetworkResourceWith(remove, stat func() error) error {
+	err := remove()
+	if err == nil {
+		return nil
+	}
+	switch observed := stat(); {
+	case errors.Is(observed, os.ErrNotExist):
+		return nil
+	case observed != nil:
+		return errors.Join(err, fmt.Errorf("verify resource absence: %w", observed))
+	default:
+		return err
+	}
+}
+
+// Unlock without recording a successful release, so the next claimant
+// checks the residue recorded when the slot was acquired.
+func abandonNetworkLease(lease *poolLease) error {
+	if lease == nil || lease.lockFile == nil {
+		return nil
+	}
+	err := lease.lockFile.Close()
+	lease.lockFile = nil
+	if err != nil {
+		return fmt.Errorf("close unreleased network slot: %w", err)
+	}
+	return nil
 }

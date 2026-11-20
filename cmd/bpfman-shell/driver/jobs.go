@@ -4,6 +4,7 @@
 package driver
 
 import (
+	"errors"
 	"strings"
 	"syscall"
 
@@ -19,11 +20,8 @@ import (
 // non-zero exit. Scripts are a reproducible test contract;
 // leaking a job is a bug worth failing the run for.
 //
-// ESRCH (the process exited on its own between leak detection
-// and signal delivery) is silently fine; permission errors
-// fall through and would print, but in practice we sent the
-// job's own SIGTERM-able signal earlier or could not have
-// spawned it in the first place.
+// ESRCH means the process group has already exited. Other signal
+// errors are reported alongside the leak.
 func StrictJobLeakHandler(cli *cli.CLI, session *runtime.Session) func(*runtime.Job) {
 	return func(j *runtime.Job) {
 		origin := j.Origin
@@ -33,7 +31,9 @@ func StrictJobLeakHandler(cli *cli.CLI, session *runtime.Session) func(*runtime.
 		argv := strings.Join(j.Args, " ")
 		_ = cli.PrintErrf("[job] FAIL %s: never waited or killed: %s\n", origin, argv)
 		if j.PID > 0 {
-			_ = syscall.Kill(-j.PID, syscall.SIGKILL)
+			if err := syscall.Kill(-j.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				_ = cli.PrintErrf("[job] cleanup: kill process group %d: %v\n", j.PID, err)
+			}
 		}
 		session.RecordJobLeak()
 	}
