@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -93,4 +94,22 @@ func TestScriptRun_StdinWholeProgram_ImportResolvesFromCwd(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"cwd-lib"}, exactOutputLines(stdout))
 	assert.Empty(t, stderr)
+}
+
+func TestScriptRun_NegatedPathExistsRejectsSymlinkLoop(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	missing := filepath.Join(root, "missing")
+	stdout, stderr, err := runWholeProgramStdin(t, fmt.Sprintf("require not path-exists %q\nprint absent\n", missing))
+	require.NoError(t, err, stderr)
+	assert.Equal(t, "absent\n", stdout)
+
+	cycle := filepath.Join(root, "cycle")
+	require.NoError(t, os.Symlink("cycle", cycle))
+	stdout, stderr, err = runWholeProgramStdin(t, fmt.Sprintf("require not path-exists %q\nprint absent\n", cycle))
+	require.Error(t, err)
+	assert.Empty(t, stdout)
+	assert.Contains(t, stderr, "too many levels of symbolic links")
+	assert.Contains(t, stderr, cycle)
 }

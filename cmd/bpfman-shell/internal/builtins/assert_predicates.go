@@ -1,6 +1,7 @@
 package builtins
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -105,6 +106,9 @@ func evalPathExistsPredicate(span source.Span, args []runtime.Arg) (AssertPredic
 	}
 	path := driver.ArgText(args[0])
 	_, err := os.Stat(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return AssertPredicateResult{}, err
+	}
 	return AssertPredicateResult{
 		Pass:    err == nil,
 		Message: fmt.Sprintf("expected path %q to exist", path),

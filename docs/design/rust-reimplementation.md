@@ -8725,3 +8725,13 @@ The final Rust gate passed all 92 kernel cases. Both shells passed the shared
 147-file corpus in file and local-image modes, and all four shell and CLI
 pairings passed in file mode. The Go CLI kept its one existing
 clsact-reclamation policy skip.
+
+Go's `path-exists` now reports unexpected filesystem lookup errors. A real
+symlink loop previously satisfied `require not path-exists` and let the script
+continue. The rebuilt shell reports the lookup error and stops. The regression
+also confirms that a missing path still satisfies the negated predicate.
+Go race tests and lint passed.
+
+Both shells passed the 147-file shared corpus in file and local-image modes.
+All four shell and CLI pairings passed in file mode, with the existing
+clsact-reclamation policy skip when using the Go CLI.
