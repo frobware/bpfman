@@ -714,3 +714,24 @@ func TestNetworkReleaseRetriesOnlyUnfinishedResources(t *testing.T) {
 	assert.Equal(t, 2, secondCalls)
 	assert.Equal(t, 1, finished)
 }
+
+func TestObserveNetnsEndpointReportsMissingNamespace(t *testing.T) {
+	t.Parallel()
+
+	// An absolute path to a missing namespace avoids any dependency on host fixtures.
+	missing := t.TempDir() + "/missing"
+	_, err := observeNetnsEndpoint(missing, "testlink", "198.51.100.1")
+	require.ErrorContains(t, err, "open network namespace "+missing)
+}
+
+func TestCheckedIfindexRejectsZeroAndNegative(t *testing.T) {
+	t.Parallel()
+
+	_, err := checkedIfindex(0)
+	require.ErrorContains(t, err, "invalid interface index 0")
+	_, err = checkedIfindex(-1)
+	require.ErrorContains(t, err, "invalid interface index -1")
+	index, err := checkedIfindex(7)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(7), index)
+}

@@ -8642,3 +8642,20 @@ Cargo runner when their Make target has not already taken it. Comparison
 scripts invoked inside the Rust run reuse the outer guard and still take the Go
 test binary's existing lock. An overlapping invocation fails before it can
 disturb shared kernel fixtures.
+
+Both shell implementations now require valid interface and namespace IDs
+before publishing a veth fixture. Failed identity reads enter the existing
+setup rollback. Rust also checks the exit status of endpoint observations
+before decoding their JSON. Go reads the isolated namespace inode from the
+same handle used for the netlink lookup.
+
+The Go shell tests and lint passed, along with all 92 kernel cases in
+`make rust-check`. Fault injection in private network and mount namespaces
+verified rollback in both shells for both topology types. Rust rejected
+valid-looking link JSON from a command that exited unsuccessfully.
+
+The rebuilt Go shell also passed the shared `!external,!rust-only` corpus
+with SQLite and isolated runtimes in both file and local-image modes. Each run
+accounted for all 147 files in the selection manifest, with 146 passes and the
+existing Go clsact-reclamation policy skip. The Rust shell passed the same
+file and local-image corpus cases in the full gate.

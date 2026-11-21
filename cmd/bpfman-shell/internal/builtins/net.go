@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -27,6 +28,7 @@ import (
 
 	vnetlink "github.com/vishvananda/netlink"
 	vnetns "github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 
 	"github.com/bpfman/bpfman/cmd/bpfman-shell/driver"
 	"github.com/bpfman/bpfman/cmd/bpfman-shell/shell/runtime"
@@ -419,18 +421,21 @@ func handleNetVethPair(ctx context.Context, origin string, args []runtime.Arg) (
 		}
 	}
 
-	// Capture host-side identifiers needed by dispatcher-aware
-	// scripts (`bpfman dispatcher get tc-ingress $pair.host_nsid
-	// $pair.host_ifindex`). Both lookups are best-effort against
-	// the freshly-created topology: failures here leave the
-	// fields zero rather than aborting NetPair construction, so
-	// the legacy address-only call sites stay working even if a
-	// future kernel rejects the lookups for some reason.
-	var hostIfindex uint32
-	if iface, err := net.InterfaceByName(f.HostLink); err == nil {
-		hostIfindex = uint32(iface.Index)
+	iface, err := net.InterfaceByName(f.HostLink)
+	if err != nil {
+		return runtime.Value{}, rollback(fmt.Errorf("net veth-pair: look up host link %s: %w", f.HostLink, err))
 	}
-	hostNsid, _ := netns.CurrentNSID() //nolint:errcheck // Legacy address-only fixtures may omit dispatcher identifiers.
+	hostIfindex, err := checkedIfindex(iface.Index)
+	if err != nil {
+		return runtime.Value{}, rollback(fmt.Errorf("net veth-pair: host link %s: %w", f.HostLink, err))
+	}
+	hostNsid, err := netns.CurrentNSID()
+	if err != nil {
+		return runtime.Value{}, rollback(fmt.Errorf("net veth-pair: look up host namespace: %w", err))
+	}
+	if hostNsid == 0 {
+		return runtime.Value{}, rollback(errors.New("net veth-pair: host namespace has zero inode"))
+	}
 
 	pair := &runtime.NetPair{
 		Ns:          f.Ns,
@@ -534,62 +539,61 @@ func handleNetNetnsVethPair(ctx context.Context, origin string, args []runtime.A
 		}
 	}
 
-	// Per-side identifiers for attach assertions and dispatcher
-	// scoping (`bpfman dispatcher get tc-ingress $pair.a.nsid
-	// $pair.a.ifindex`). Best-effort, as in handleNetVethPair:
-	// failures leave the fields zero rather than aborting
-	// construction.
-	pair := runtime.NewNetnsVethPair(
-		runtime.NetnsVethEndpoint{
-			Ns:      nsA,
-			Link:    linkA,
-			Addr:    lease.hostAddr,
-			Ifindex: netnsLinkIfindex(nsA, linkA),
-			Nsid:    namedNetnsID(nsA),
-		},
-		runtime.NetnsVethEndpoint{
-			Ns:      nsB,
-			Link:    linkB,
-			Addr:    lease.peerAddr,
-			Ifindex: netnsLinkIfindex(nsB, linkB),
-			Nsid:    namedNetnsID(nsB),
-		},
-	)
+	a, err := observeNetnsEndpoint(nsA, linkA, lease.hostAddr)
+	if err != nil {
+		return runtime.Value{}, rollback(fmt.Errorf("net netns-veth-pair: %w", err))
+	}
+	b, err := observeNetnsEndpoint(nsB, linkB, lease.peerAddr)
+	if err != nil {
+		return runtime.Value{}, rollback(fmt.Errorf("net netns-veth-pair: %w", err))
+	}
+	pair := runtime.NewNetnsVethPair(a, b)
 	rememberNetnsVethPairLease(pair, lease)
 	return runtime.ValueFromNetnsVethPair(pair), nil
 }
 
-// netnsLinkIfindex returns the interface index of link inside the
-// named netns, or zero when the lookup fails (the same gap rule
-// handleNetVethPair applies to its host-side capture).
-func netnsLinkIfindex(nsName, link string) uint32 {
-	h, err := vnetns.GetFromName(nsName)
+func observeNetnsEndpoint(namespace, link, address string) (endpoint runtime.NetnsVethEndpoint, err error) {
+	h, err := vnetns.GetFromName(namespace)
 	if err != nil {
-		return 0
+		return endpoint, fmt.Errorf("open network namespace %s: %w", namespace, err)
 	}
-	defer h.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
+	defer func() {
+		if closeErr := h.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close network namespace %s: %w", namespace, closeErr))
+		}
+	}()
+
 	nlh, err := vnetlink.NewHandleAt(h)
 	if err != nil {
-		return 0
+		return endpoint, fmt.Errorf("open netlink handle in %s: %w", namespace, err)
 	}
 	defer nlh.Close()
 	l, err := nlh.LinkByName(link)
 	if err != nil {
-		return 0
+		return endpoint, fmt.Errorf("look up link %s in %s: %w", link, namespace, err)
 	}
-	return uint32(l.Attrs().Index)
+	index, err := checkedIfindex(l.Attrs().Index)
+	if err != nil {
+		return endpoint, fmt.Errorf("link %s in %s: %w", link, namespace, err)
+	}
+
+	// Stat the opened namespace so the inode and link lookup describe the
+	// same namespace even if the name is changed concurrently.
+	var stat unix.Stat_t
+	if err := unix.Fstat(int(h), &stat); err != nil {
+		return endpoint, fmt.Errorf("stat network namespace %s: %w", namespace, err)
+	}
+	if stat.Ino == 0 {
+		return endpoint, fmt.Errorf("network namespace %s has zero inode", namespace)
+	}
+	return runtime.NetnsVethEndpoint{Ns: namespace, Link: link, Addr: address, Ifindex: index, Nsid: stat.Ino}, nil
 }
 
-// namedNetnsID returns the inode number of the named netns, or
-// zero when the stat fails. The inode is the same identity
-// netns.CurrentNSID reports for the process's own namespace, so
-// $pair.a.nsid and $pair.host_nsid are directly comparable.
-func namedNetnsID(name string) uint64 {
-	id, err := netns.NSID(filepath.Join("/run/netns", name))
-	if err != nil {
-		return 0
+func checkedIfindex(index int) (uint32, error) {
+	if index <= 0 || uint64(index) > math.MaxUint32 {
+		return 0, fmt.Errorf("invalid interface index %d", index)
 	}
-	return id
+	return uint32(index), nil
 }
 
 // linkNameSeq is the process-local atomic counter feeding

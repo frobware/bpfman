@@ -3,6 +3,7 @@
 use std::{
     fs,
     net::Ipv4Addr,
+    num::{NonZeroU32, NonZeroU64},
     os::unix::fs::MetadataExt,
     path::Path,
     process::{Command, Output},
@@ -10,7 +11,7 @@ use std::{
 };
 
 use bpfman_shell_runtime::{HostNetworkPair, NetworkEndpoint};
-use serde_json::Value as Json;
+use serde::Deserialize;
 
 use crate::driver::{
     process::{self, Interrupt},
@@ -118,12 +119,15 @@ impl HostPair {
                 require_ip(step, interrupt)?;
             }
             let index_path = Path::new("/sys/class/net").join(host_link).join("ifindex");
-            let index = fs::read_to_string(index_path)
-                .ok()
-                .and_then(|index| index.trim().parse().ok())
-                .unwrap_or(0);
-            let namespace_id =
-                fs::metadata("/proc/self/ns/net").map_or(0, |metadata| metadata.ino());
+            let index = fs::read_to_string(&index_path)
+                .map_err(|error| format!("read {}: {error}", index_path.display()))?;
+            let index = index.trim().parse::<NonZeroU32>().map_err(|error| {
+                format!(
+                    "invalid interface index in {}: {error}",
+                    index_path.display()
+                )
+            })?;
+            let namespace_id = namespace_inode(Path::new("/proc/self/ns/net"))?;
             interrupt.check()?;
             let observed = HostNetworkPair {
                 namespace: namespace.to_owned(),
@@ -131,8 +135,8 @@ impl HostPair {
                 peer_link: peer_link.to_owned(),
                 host_address: host.address,
                 peer_address: peer.address,
-                host_interface_index: index,
-                host_namespace_id: namespace_id,
+                host_interface_index: index.get(),
+                host_namespace_id: namespace_id.get(),
             };
             Ok(observed)
         })?;
@@ -195,8 +199,8 @@ impl IsolatedPair {
             ] {
                 require_ip(step, interrupt)?;
             }
-            let a = observe_endpoint(&names.a, a);
-            let b = observe_endpoint(&names.b, b);
+            let a = observe_endpoint(&names.a, a, interrupt)?;
+            let b = observe_endpoint(&names.b, b, interrupt)?;
             interrupt.check()?;
             Ok((a, b))
         })?;
@@ -208,33 +212,48 @@ impl IsolatedPair {
     }
 }
 
-fn observe_endpoint(names: &EndpointNames, address: Ipv4Addr) -> NetworkEndpoint {
-    let index = ip(
-        &[
-            "-j",
-            "-n",
-            &names.namespace,
-            "link",
-            "show",
-            "dev",
-            &names.link,
-        ],
-        &Interrupt::unregistered(),
-    )
-    .ok()
-    .and_then(|output| serde_json::from_slice::<Json>(&output.stdout).ok())
-    .and_then(|value| value.get(0)?.get("ifindex")?.as_u64())
-    .and_then(|index| u32::try_from(index).ok())
-    .unwrap_or(0);
-    let namespace_id = fs::metadata(Path::new("/run/netns").join(&names.namespace))
-        .map_or(0, |metadata| metadata.ino());
-    NetworkEndpoint {
+fn observe_endpoint(
+    names: &EndpointNames,
+    address: Ipv4Addr,
+    interrupt: &Interrupt,
+) -> Result<NetworkEndpoint, String> {
+    let args = [
+        "-j",
+        "-n",
+        &names.namespace,
+        "link",
+        "show",
+        "dev",
+        &names.link,
+    ];
+    let output = checked_ip(&args, interrupt)?;
+    let index = decode_interface_index(&output.stdout)
+        .map_err(|error| format!("link {} in {}: {error}", names.link, names.namespace))?;
+    let namespace_id = namespace_inode(&Path::new("/run/netns").join(&names.namespace))?;
+    Ok(NetworkEndpoint {
         namespace: names.namespace.clone(),
         interface: names.link.clone(),
         address,
-        interface_index: index,
-        namespace_id,
+        interface_index: index.get(),
+        namespace_id: namespace_id.get(),
+    })
+}
+
+fn decode_interface_index(stdout: &[u8]) -> Result<NonZeroU32, String> {
+    #[derive(Deserialize)]
+    struct Link {
+        ifindex: NonZeroU32,
     }
+
+    let [link]: [Link; 1] = serde_json::from_slice(stdout)
+        .map_err(|error| format!("decode interface index: {error}"))?;
+    Ok(link.ifindex)
+}
+
+fn namespace_inode(path: &Path) -> Result<NonZeroU64, String> {
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("stat {}: {error}", path.display()))?;
+    NonZeroU64::new(metadata.ino()).ok_or_else(|| format!("{} has zero inode", path.display()))
 }
 
 struct Resources {
@@ -348,9 +367,13 @@ pub(super) fn ip(args: &[&str], interrupt: &Interrupt) -> Result<Output, String>
 }
 
 fn require_ip(args: &[&str], interrupt: &Interrupt) -> Result<(), String> {
+    checked_ip(args, interrupt).map(|_| ())
+}
+
+fn checked_ip(args: &[&str], interrupt: &Interrupt) -> Result<Output, String> {
     let output = ip(args, interrupt)?;
     if output.status.success() {
-        return Ok(());
+        return Ok(output);
     }
     Err(format!(
         "ip {}: {}",
@@ -361,7 +384,35 @@ fn require_ip(args: &[&str], interrupt: &Interrupt) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::remove_checked;
+    use super::{decode_interface_index, namespace_inode, remove_checked};
+
+    #[test]
+    fn endpoint_requires_exactly_one_link_with_a_nonzero_index() -> Result<(), String> {
+        assert_eq!(
+            decode_interface_index(br#"[{"ifindex":7,"ifname":"test"}]"#)?.get(),
+            7
+        );
+        for bad in [
+            "[]",
+            "[{}]",
+            r#"[{"ifindex":0}]"#,
+            r#"[{"ifindex":4294967296}]"#,
+            r#"[{"ifindex":7},{"ifindex":8}]"#,
+            "not json",
+        ] {
+            assert!(decode_interface_index(bad.as_bytes()).is_err(), "{bad}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn namespace_lookup_reports_the_path_on_failure() -> std::io::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let missing = temp.path().join("missing");
+        let error = namespace_inode(&missing).expect_err("missing namespace");
+        assert!(error.contains(&missing.display().to_string()));
+        Ok(())
+    }
 
     #[test]
     fn failed_delete_requires_proof_of_absence() {
