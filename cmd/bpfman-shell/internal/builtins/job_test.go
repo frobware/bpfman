@@ -632,3 +632,43 @@ func TestJobStart_ProcessGroupIsSet(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, job.PID, pgid, "child should be its own process-group leader")
 }
+
+func TestJobKill_CancelledReapDoesNotReportSuccess(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	job := &runtime.Job{PID: 123, Done: make(chan struct{})}
+	args := []runtime.Arg{
+		runtime.WordArg{Text: "--grace=0"},
+		runtime.StructuredValueArg{Value: runtime.ValueFromJob(job)},
+	}
+	var sent []syscall.Signal
+	_, err := killEnvelopeWith(ctx, args, func(pid int, sig syscall.Signal) error {
+		assert.Equal(t, -job.PID, pid)
+		sent = append(sent, sig)
+		if sig == syscall.SIGKILL {
+			cancel()
+		}
+		return nil
+	})
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}, sent)
+	assert.False(t, job.IsManaged())
+}
+
+func TestJobKill_FailedSignalDoesNotSetKilled(t *testing.T) {
+	t.Parallel()
+
+	job := &runtime.Job{PID: 123, Done: make(chan struct{})}
+	args := []runtime.Arg{runtime.StructuredValueArg{Value: runtime.ValueFromJob(job)}}
+	out, err := killEnvelopeWith(t.Context(), args, func(int, syscall.Signal) error {
+		return syscall.EPERM
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, out.ExitCode)
+	assert.Contains(t, out.Stderr, syscall.EPERM.Error())
+	assert.False(t, job.Killed)
+	assert.Empty(t, job.Signal)
+	assert.False(t, job.IsManaged())
+}

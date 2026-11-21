@@ -261,6 +261,7 @@ func spawnJob(ctx context.Context, env *runtime.Env, spec spawnSpec) (*runtime.J
 				// anything else here is unexpected. Use -1
 				// as the conventional "abnormal" sentinel.
 				exitCode = -1
+				fmt.Fprintf(stderr, "wait for background job: %v\n", err)
 			}
 		}
 		if cleanup := driver.RemoveAdapterFiles(spec.TempFiles); cleanup != nil {
@@ -411,17 +412,16 @@ const defaultKillGrace = 2 * time.Second
 // The kill targets the process group (-pgid) so descendants
 // the child fork-execs (an 'ip netns exec ...' wrapper, a
 // sh -c spawn) receive the signal too. ESRCH (the process
-// already exited) is treated as success because the desired
-// state (job not running) is true.
+// already exited) is benign. Default termination still waits for the
+// reaper to settle the job's outcome.
 //
-// Concurrency: Killed and Signal are written before the
-// initial signal goes out, so a concurrent 'wait' that races
-// the kill sees the requested termination. On escalation,
-// Signal is rewritten to "KILL" before SIGKILL is sent so the
-// final wait envelope reflects what actually ended the
-// process; the reaper's "don't overwrite a non-empty Signal"
-// rule preserves whichever value the kill builtin set last.
+// Signal delivery and the reaper synchronize on the job mutex, so a
+// wait sees updated signal metadata only after delivery is attempted.
 func KillEnvelope(ctx context.Context, args []runtime.Arg) (runtime.Envelope, error) {
+	return killEnvelopeWith(ctx, args, syscall.Kill)
+}
+
+func killEnvelopeWith(ctx context.Context, args []runtime.Arg, signal func(int, syscall.Signal) error) (runtime.Envelope, error) {
 	sig := syscall.SIGTERM
 	sigName := "TERM"
 	grace := defaultKillGrace
@@ -472,35 +472,21 @@ func KillEnvelope(ctx context.Context, args []runtime.Arg) (runtime.Envelope, er
 	default:
 	}
 
-	// Mark up-front so a concurrent wait reads "killed"
-	// regardless of whether the signal has been delivered yet.
-	job.Mu.Lock()
-	prevKilled := job.Killed
-	prevSignal := job.Signal
-	job.Killed = true
-	job.Signal = sigName
-	job.Mu.Unlock()
-
-	if err := syscall.Kill(-job.PID, sig); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
-			job.Mu.Lock()
-			job.Killed = prevKilled
-			job.Signal = prevSignal
-			job.Mu.Unlock()
-			job.MarkManaged()
-			return runtime.Envelope{ExitCode: 0}, nil
+	if err := signalJob(job, sig, sigName, false, signal); err != nil {
+		if !errors.Is(err, syscall.ESRCH) {
+			return runtime.Envelope{
+				ExitCode: 1,
+				Stderr:   fmt.Sprintf("kill -%d -%d: %v", int(sig), job.PID, err),
+			}, nil
 		}
-		return runtime.Envelope{
-			ExitCode: 1,
-			Stderr:   fmt.Sprintf("kill -%d -%d: %v", int(sig), job.PID, err),
-		}, nil
+		if !explicitSignal {
+			return waitForKilledJob(ctx, job)
+		}
 	}
-	job.MarkManaged()
 
-	// Custom signals are not termination paths: deliver and
-	// return. Escalation applies only when the user accepted
-	// the default (no --signal flag).
+	// Custom signals acknowledge delivery or a process group that already exited.
 	if explicitSignal {
+		job.MarkManaged()
 		return runtime.Envelope{ExitCode: 0}, nil
 	}
 
@@ -520,31 +506,53 @@ func KillEnvelope(ctx context.Context, args []runtime.Arg) (runtime.Envelope, er
 	// wait path, applying the same short-circuit means a fast
 	// SIGTERM kill flakes the Signal field between TERM and
 	// KILL depending on scheduler timing.
+	if grace > 0 && waitForDone(ctx, job, grace) {
+		job.MarkManaged()
+		return runtime.Envelope{ExitCode: 0}, nil
+	}
 	if grace > 0 {
-		if waitForDone(ctx, job, grace) {
-			return runtime.Envelope{ExitCode: 0}, nil
-		}
-		// Race: the process might have exited at the boundary
-		// of the grace window. Re-check before escalating.
 		select {
 		case <-job.Done:
+			job.MarkManaged()
 			return runtime.Envelope{ExitCode: 0}, nil
 		default:
 		}
 	}
-	job.Mu.Lock()
-	job.Signal = "KILL"
-	job.Mu.Unlock()
-	if err := syscall.Kill(-job.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+	if err := signalJob(job, syscall.SIGKILL, "KILL", grace == 0, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return runtime.Envelope{
 			ExitCode: 1,
 			Stderr:   fmt.Sprintf("kill -KILL -%d: %v", job.PID, err),
 		}, nil
 	}
-	// SIGKILL is uncatchable; the reaper will close Done
-	// almost immediately. Block on it (respecting ctx) so we
-	// return only after the kernel has reaped the process.
-	waitForDoneIndefinitely(ctx, job)
+	return waitForKilledJob(ctx, job)
+}
+
+// Serialize signal delivery with the reaper's publication of the job fields.
+func signalJob(job *runtime.Job, sig syscall.Signal, name string, zeroGrace bool, signal func(int, syscall.Signal) error) error {
+	job.Mu.Lock()
+	defer job.Mu.Unlock()
+	err := signal(-job.PID, sig)
+	if err == nil || (zeroGrace && errors.Is(err, syscall.ESRCH)) {
+		// The zero-grace path records KILL as its final requested signal
+		// even if the preceding TERM already ended the process group.
+		job.Killed = true
+		job.Signal = name
+	}
+	return err
+}
+
+func waitForKilledJob(ctx context.Context, job *runtime.Job) (runtime.Envelope, error) {
+	// Prefer completion if the reaper published the outcome before we checked.
+	select {
+	case <-job.Done:
+	default:
+		select {
+		case <-job.Done:
+		case <-ctx.Done():
+			return runtime.Envelope{}, fmt.Errorf("kill: wait for background job: %w", context.Cause(ctx))
+		}
+	}
+	job.MarkManaged()
 	return runtime.Envelope{ExitCode: 0}, nil
 }
 
@@ -568,17 +576,6 @@ func waitForDone(ctx context.Context, job *runtime.Job, timeout time.Duration) b
 		return false
 	case <-ctx.Done():
 		return false
-	}
-}
-
-// waitForDoneIndefinitely blocks until job.Done closes or ctx
-// is cancelled. Used after sending SIGKILL where the kernel
-// will reap the process imminently and we just need to wait
-// for the reaper goroutine to settle the captured fields.
-func waitForDoneIndefinitely(ctx context.Context, job *runtime.Job) {
-	select {
-	case <-job.Done:
-	case <-ctx.Done():
 	}
 }
 

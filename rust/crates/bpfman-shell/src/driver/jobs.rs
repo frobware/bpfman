@@ -147,12 +147,12 @@ impl Jobs {
         }
         let handle = handle.ok_or("kill requires a job argument")?;
         let job = self.entries.get_mut(&handle.id()).ok_or("unknown job")?;
-        if !job.refresh(Duration::ZERO)? {
-            if let Some(signal) = explicit {
-                job.send(SignalAction::One(signal))?;
-            } else {
-                job.terminate(grace, interrupt)?;
-            }
+        if job.refresh(Duration::ZERO)? {
+            job.completed_result()?;
+        } else if let Some(signal) = explicit {
+            job.send(SignalAction::One(signal))?;
+        } else {
+            job.terminate(grace, interrupt)?;
         }
         job.managed = true;
         Ok(CommandResponse::success(Value::Absent))
@@ -354,10 +354,7 @@ impl Job {
             interrupt.check()?;
             if self.refresh(CHECK_INTERVAL)? {
                 self.managed = true;
-                return self
-                    .outcome
-                    .clone()
-                    .ok_or("missing job outcome".to_owned())?;
+                return self.completed_result().cloned();
             }
         }
     }
@@ -365,11 +362,28 @@ impl Job {
     fn send(&mut self, action: SignalAction) -> Result<(), String> {
         let (reply, observed) = mpsc::channel();
         if self.control.send(Control::Signal(action, reply)).is_ok()
-            && observed.recv().unwrap_or(Ok(false))?
+            && let Ok(delivered) = observed.recv()
         {
-            self.signalled = true;
+            self.signalled |= delivered?;
+            return Ok(());
         }
-        Ok(())
+
+        // The reaper may have finished between refresh and the signal request.
+        // Accept that race only when the completed outcome confirms it.
+        self.outcome = Some(
+            self.completed
+                .recv()
+                .map_err(|_| "background job reaper disconnected without an outcome".to_owned())?,
+        );
+        self.completed_result().map(|_| ())
+    }
+
+    fn completed_result(&self) -> Result<&CommandResponse, String> {
+        self.outcome
+            .as_ref()
+            .ok_or_else(|| "missing job outcome".to_owned())?
+            .as_ref()
+            .map_err(Clone::clone)
     }
 
     fn terminate(&mut self, grace: Duration, interrupt: &Interrupt) -> Result<(), String> {
@@ -382,7 +396,7 @@ impl Job {
                 interrupt.check()?;
                 let remaining = grace.saturating_sub(started.elapsed());
                 if self.refresh(remaining.min(CHECK_INTERVAL))? {
-                    return Ok(());
+                    return self.completed_result().map(|_| ());
                 }
                 if remaining.is_zero() {
                     break;
@@ -409,14 +423,7 @@ impl Job {
 
 impl Drop for Job {
     fn drop(&mut self) {
-        // A disconnected receiver means the reaper has already exited.
-        drop(self.control.send(Control::Stop));
-        if let Some(reaper) = self.reaper.take() {
-            super::report_cleanup(
-                "join job reaper",
-                reaper.join().map_err(|_| "thread panicked"),
-            );
-        }
+        super::report_cleanup("stop background job", self.stop());
     }
 }
 
@@ -450,5 +457,60 @@ fn reap_child(
                 return child.stop().map(response);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn disconnected_job() -> (Job, Sender<Result<CommandResponse, String>>) {
+        let (control, requests) = mpsc::channel();
+        drop(requests);
+        let (publish, completed) = mpsc::channel();
+        (
+            Job {
+                pid: NonZeroU32::MIN,
+                argv: String::new(),
+                origin: String::new(),
+                started: String::new(),
+                managed: false,
+                listed: true,
+                signalled: false,
+                outcome: None,
+                control,
+                completed,
+                reaper: None,
+            },
+            publish,
+        )
+    }
+
+    #[test]
+    fn signal_requires_an_outcome_after_reaper_disconnect() -> Result<(), String> {
+        let (mut lost, publish) = disconnected_job();
+        drop(publish);
+        assert!(
+            lost.send(SignalAction::One(JobSignal::Term))
+                .expect_err("missing reaper outcome")
+                .contains("disconnected")
+        );
+
+        let (mut completed, publish) = disconnected_job();
+        publish
+            .send(Ok(CommandResponse::success(Value::Absent)))
+            .map_err(|error| error.to_string())?;
+        completed.send(SignalAction::One(JobSignal::Term))?;
+        assert!(!completed.signalled);
+
+        let (mut failed, publish) = disconnected_job();
+        publish
+            .send(Err("reap failed".to_owned()))
+            .map_err(|error| error.to_string())?;
+        assert_eq!(
+            failed.send(SignalAction::One(JobSignal::Term)),
+            Err("reap failed".to_owned())
+        );
+        Ok(())
     }
 }

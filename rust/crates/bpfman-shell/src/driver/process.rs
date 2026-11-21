@@ -280,21 +280,37 @@ impl Group {
             if let Some((deadline, error)) = &cancelled {
                 // Keep the leader's PID reserved until the ownership guard
                 // can finish killing and reaping the group.
-                let exited = self.pid().is_some_and(|pid| {
+                let observed = self.pid().map_or(Ok(true), |pid| {
                     waitid(
                         WaitId::Pid(pid),
                         WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
                     )
-                    .is_ok_and(|status| status.is_some())
+                    .map(|status| status.is_some())
                 });
-                if exited || Instant::now() >= *deadline {
-                    return Err(error.clone());
+                match observed {
+                    Ok(true) => return self.finish_interruption(error.clone()),
+                    Err(wait_error) if wait_error != rustix::io::Errno::INTR => {
+                        return self.finish_interruption(format!(
+                            "{error}; observe child exit: {wait_error}"
+                        ));
+                    }
+                    _ if Instant::now() >= *deadline => {
+                        return self.finish_interruption(error.clone());
+                    }
+                    _ => {}
                 }
             } else if let Some(status) = self.try_wait().map_err(|error| error.to_string())? {
                 return Ok(status);
             }
             thread::sleep(POLL);
         }
+    }
+
+    fn finish_interruption(&mut self, mut error: String) -> Result<ExitStatus, String> {
+        if let Err(cleanup) = self.stop() {
+            error.push_str(&format!("; {cleanup}"));
+        }
+        Err(error)
     }
 
     fn pid(&self) -> Option<Pid> {
@@ -317,10 +333,17 @@ impl Group {
 
 impl Group {
     fn stop(&mut self) -> Result<ExitStatus, String> {
+        self.stop_with(kill_process_group)
+    }
+
+    fn stop_with(
+        &mut self,
+        signal: impl FnOnce(Pid, Signal) -> rustix::io::Result<()>,
+    ) -> Result<ExitStatus, String> {
         let pid = self.pid();
-        let mut child = self.0.take().ok_or("process already joined")?;
+        let child = self.0.as_mut().ok_or("process already joined")?;
         if let Some(pid) = pid {
-            match kill_process_group(pid, Signal::KILL) {
+            match signal(pid, Signal::KILL) {
                 Ok(()) | Err(rustix::io::Errno::SRCH) => {}
                 Err(error) => return Err(format!("kill process group {pid}: {error}")),
             }
@@ -329,9 +352,11 @@ impl Group {
                 .kill()
                 .map_err(|error| format!("kill child: {error}"))?;
         }
-        child
+        let status = child
             .wait()
-            .map_err(|error| format!("wait for child: {error}"))
+            .map_err(|error| format!("wait for child: {error}"))?;
+        self.0 = None;
+        Ok(status)
     }
 }
 
@@ -362,4 +387,24 @@ fn signal_name(raw: i32) -> String {
         .into_iter()
         .find(|signal| syscall_signal(*signal).as_raw() == raw)
         .map_or_else(|| raw.to_string(), |signal| signal.name().to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_group_signal_keeps_the_child_for_cleanup() -> Result<(), String> {
+        let mut group = Group::spawn(Command::new("/bin/sh").args(["-c", "exec sleep 30"]))
+            .map_err(|error| error.to_string())?;
+        let pid = group.pid();
+        let error = group
+            .stop_with(|_, _| Err(rustix::io::Errno::PERM))
+            .expect_err("signal failure");
+        assert!(error.contains("kill process group"));
+        assert_eq!(group.pid(), pid);
+        assert_eq!(group.stop()?.signal(), Some(Signal::KILL.as_raw()));
+        assert!(group.pid().is_none());
+        Ok(())
+    }
 }

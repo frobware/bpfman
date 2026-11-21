@@ -8659,3 +8659,37 @@ with SQLite and isolated runtimes in both file and local-image modes. Each run
 accounted for all 147 files in the selection manifest, with 146 passes and the
 existing Go clsact-reclamation policy skip. The Rust shell passed the same
 file and local-image corpus cases in the full gate.
+
+### Shell process shutdown checkpoint
+
+Go's default `kill` waits for the reaper even when the process group disappears
+during signal delivery. If cancellation interrupts the wait, it returns the
+cancellation cause and keeps the job eligible for scope cleanup. Failed signals
+leave job metadata intact. Unexpected wait errors appear in captured stderr.
+
+Rust retains the child handle across failed signal or wait operations so the
+cleanup guard can retry. Cancellation reports failures observing and reaping
+the child. A disconnected signal channel succeeds only when the reaper has
+published a completed job outcome without a reaper error.
+
+Regression tests inject signal failure, cancellation before reaping and a
+disconnected reaper. The rebuilt Go shell passed the shared corpus in file
+and local-image modes with 146 passes and the existing clsact policy skip per
+mode. Go shell package tests passed with the race detector and lint was clean.
+
+`make rust-check` passed all 92 kernel cases, including the Rust shell's
+file and local-image corpus. The cross-paired file-bytecode runs completed
+the shell/CLI matrix using the same 147-file selection. The Go shell with
+the Rust CLI passed all 147. The Rust shell with the Go CLI passed 146 with
+the existing Go clsact policy skip.
+
+The focused shutdown stress run completed 24,576 jobs per shell with eight
+workers and zero failures. Each worker exercised zero-grace termination of a
+stopped-and-resumed job and a race with natural exit, then checked that the
+process had been reaped. Four Go kill regression tests also passed 500 runs
+each with the race detector enabled.
+
+The shared file-bytecode corpus stress target ran at parallelism 16, with four
+repetitions for parallel-eligible scripts and one for serial scripts. All 147
+selected files were accounted for on each shell. Rust passed all 573 cases.
+Go passed 569, with four repetitions of the existing clsact policy skip.
