@@ -41,7 +41,8 @@ impl Registry {
                     let Ok(mut stream) = stream else {
                         break;
                     };
-                    let _ = serve(&mut stream, &mut state);
+                    // A malformed request or disconnected client only ends this connection.
+                    drop(serve(&mut stream, &mut state));
                 }
             })?;
         Ok(Self {
@@ -59,9 +60,21 @@ impl Registry {
 impl Drop for Registry {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        let _ = TcpStream::connect_timeout(&self.address, TIMEOUT);
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            if !worker.is_finished() {
+                match TcpStream::connect_timeout(&self.address, TIMEOUT) {
+                    Ok(stream) => drop(stream),
+                    Err(error) if !worker.is_finished() => {
+                        super::super::report_cleanup("wake fixture registry", Err::<(), _>(error));
+                        return;
+                    }
+                    Err(_) => {}
+                }
+            }
+            super::super::report_cleanup(
+                "join fixture registry",
+                worker.join().map_err(|_| "thread panicked"),
+            );
         }
     }
 }

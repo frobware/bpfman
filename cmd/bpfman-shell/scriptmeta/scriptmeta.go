@@ -85,7 +85,7 @@ func Read(path string) (Mode, error) {
 		return Mode{}, fmt.Errorf("open script %s for header prescan: %w", path, err)
 	}
 
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	return Scan(f, path)
 }
 

@@ -65,7 +65,7 @@ func PreflightCheck(errOut io.Writer, file, src string) bool {
 	hadIssues := false
 	emitFrame := func(span source.Span, msg string) {
 		hadIssues = true
-		fmt.Fprint(errOut, renderDiagnostic(src, file, diagnostic{
+		fmt.Fprint(errOut, renderDiagnostic(src, file, diagnostic{ //nolint:errcheck // This diagnostic is best effort.
 			Span: span,
 			Msg:  msg,
 		}))
@@ -76,15 +76,15 @@ func PreflightCheck(errOut io.Writer, file, src string) bool {
 			if se.Span.Pos.File != "" && se.Span.Pos.File != file {
 				if lr, openErr := OpenScriptReader(se.Span.Pos.File); openErr == nil {
 					if childSrc, readErr := SlurpReader(lr); readErr == nil {
-						fmt.Fprint(errOut, renderDiagnostic(childSrc, se.Span.Pos.File, diagnostic{
+						fmt.Fprint(errOut, renderDiagnostic(childSrc, se.Span.Pos.File, diagnostic{ //nolint:errcheck // This diagnostic is best effort.
 							Span: se.Span,
 							Msg:  se.Msg,
 						}))
-						lr.Close()
+						lr.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 						hadIssues = true
 						return
 					}
-					lr.Close()
+					lr.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 				}
 			}
 			emitFrame(se.Span, se.Msg)
@@ -120,7 +120,7 @@ func PreflightCheck(errOut io.Writer, file, src string) bool {
 func CheckInput(r LineReader, errOut io.Writer, file string) bool {
 	src, err := SlurpReader(r)
 	if err != nil {
-		fmt.Fprintf(errOut, "%s: %v\n", file, err)
+		fmt.Fprintf(errOut, "%s: %v\n", file, err) //nolint:errcheck // This diagnostic is best effort.
 		return true
 	}
 

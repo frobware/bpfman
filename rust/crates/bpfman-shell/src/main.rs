@@ -1,5 +1,7 @@
 //! Rust bpfman-shell command-line driver.
 
+#![deny(unused_must_use, clippy::let_underscore_must_use)]
+
 use std::{
     collections::BTreeMap,
     fs,

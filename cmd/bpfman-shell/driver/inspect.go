@@ -57,7 +57,7 @@ func LoweredInput(r LineReader, out io.Writer, errOut io.Writer, file string) bo
 func SymbolsInput(r LineReader, out io.Writer, errOut io.Writer, file string) bool {
 	src, err := SlurpReader(r)
 	if err != nil {
-		fmt.Fprintf(errOut, "%s: %v\n", file, err)
+		fmt.Fprintf(errOut, "%s: %v\n", file, err) //nolint:errcheck // This diagnostic is best effort.
 		return true
 	}
 
@@ -67,7 +67,7 @@ func SymbolsInput(r LineReader, out io.Writer, errOut io.Writer, file string) bo
 
 	reportErr := func(err error) bool {
 		loc := SourceLoc{File: file, Line: 1}
-		fmt.Fprintf(errOut, "%serror: %v\n", loc, err)
+		fmt.Fprintf(errOut, "%serror: %v\n", loc, err) //nolint:errcheck // This diagnostic is best effort.
 		return true
 	}
 
@@ -100,7 +100,7 @@ func FormatInput(r LineReader, out io.Writer, errOut io.Writer, file string) boo
 
 	_, err := io.WriteString(out, formatted)
 	if err != nil {
-		fmt.Fprintf(errOut, "%s: %v\n", file, err)
+		fmt.Fprintf(errOut, "%s: %v\n", file, err) //nolint:errcheck // This diagnostic is best effort.
 		return true
 	}
 
@@ -112,7 +112,7 @@ func FormatInput(r LineReader, out io.Writer, errOut io.Writer, file string) boo
 func FormatInputString(r LineReader, errOut io.Writer, file string) (string, bool) {
 	src, err := SlurpReader(r)
 	if err != nil {
-		fmt.Fprintf(errOut, "%s: %v\n", file, err)
+		fmt.Fprintf(errOut, "%s: %v\n", file, err) //nolint:errcheck // This diagnostic is best effort.
 		return "", true
 	}
 
@@ -121,7 +121,7 @@ func FormatInputString(r LineReader, errOut io.Writer, file string) (string, boo
 	}
 	reportErr := func(err error) (string, bool) {
 		loc := SourceLoc{File: file, Line: 1}
-		fmt.Fprintf(errOut, "%serror: %v\n", loc, err)
+		fmt.Fprintf(errOut, "%serror: %v\n", loc, err) //nolint:errcheck // This diagnostic is best effort.
 		return "", true
 	}
 	prog, parseErr := parseProgram(file, src)
@@ -219,7 +219,7 @@ func visibleSymbolsDocument(file string, prog *syntax.Program) symbolsDocument {
 	rootScope := syntax.ProgramScope(prog)
 	visibleDefs := cloneDefInfo(nil)
 	recordTopLevelDefInfo(visibleDefs, prog.Stmts)
-	_, _ = expandDirectImports(
+	_, _ = expandDirectImports( //nolint:errcheck // The callback records the import error at its source span.
 		file,
 		"",
 		prog,
@@ -335,7 +335,7 @@ func posDTO(pos source.Pos) posObject {
 func renderWholeProgramInput(r LineReader, out io.Writer, errOut io.Writer, file string, render func(io.Writer, *syntax.Program) error) bool {
 	src, err := SlurpReader(r)
 	if err != nil {
-		fmt.Fprintf(errOut, "%s: %v\n", file, err)
+		fmt.Fprintf(errOut, "%s: %v\n", file, err) //nolint:errcheck // This diagnostic is best effort.
 		return true
 	}
 
@@ -345,7 +345,7 @@ func renderWholeProgramInput(r LineReader, out io.Writer, errOut io.Writer, file
 
 	reportErr := func(err error) bool {
 		loc := SourceLoc{File: file, Line: 1}
-		fmt.Fprintf(errOut, "%serror: %v\n", loc, err)
+		fmt.Fprintf(errOut, "%serror: %v\n", loc, err) //nolint:errcheck // This diagnostic is best effort.
 		return true
 	}
 

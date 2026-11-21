@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -217,8 +216,7 @@ func spawnJob(ctx context.Context, env *runtime.Env, spec spawnSpec) (*runtime.J
 	cmd.Stderr = stderr
 
 	if err := cmd.Start(); err != nil {
-		removeTempFiles(spec.TempFiles)
-		return nil, err
+		return nil, errors.Join(err, driver.RemoveAdapterFiles(spec.TempFiles))
 	}
 
 	job := &runtime.Job{
@@ -243,7 +241,6 @@ func spawnJob(ctx context.Context, env *runtime.Env, spec spawnSpec) (*runtime.J
 	// ended the process.
 	go func() {
 		defer close(job.Done)
-		defer removeTempFiles(spec.TempFiles)
 		err := cmd.Wait()
 		exitCode := 0
 		var sigName string
@@ -264,6 +261,12 @@ func spawnJob(ctx context.Context, env *runtime.Env, spec spawnSpec) (*runtime.J
 				// anything else here is unexpected. Use -1
 				// as the conventional "abnormal" sentinel.
 				exitCode = -1
+			}
+		}
+		if cleanup := driver.RemoveAdapterFiles(spec.TempFiles); cleanup != nil {
+			fmt.Fprintln(stderr, cleanup)
+			if exitCode == 0 {
+				exitCode = 1
 			}
 		}
 		job.Mu.Lock()
@@ -296,34 +299,21 @@ func resolveAdapterArgs(name string, args []runtime.Arg) ([]string, []runtime.Ar
 		switch aa := a.(type) {
 		case runtime.AdapterArg:
 			if aa.Adapter != "file" {
-				removeTempFiles(tempFiles)
-				return nil, nil, fmt.Errorf("unknown adapter %q", aa.Adapter)
+				return nil, nil, errors.Join(fmt.Errorf("unknown adapter %q", aa.Adapter), driver.RemoveAdapterFiles(tempFiles))
 			}
 			path, err := driver.WriteValueToTemp(aa.Value)
 			if err != nil {
-				removeTempFiles(tempFiles)
-				return nil, nil, fmt.Errorf("adapter file: %w", err)
+				return nil, nil, errors.Join(fmt.Errorf("adapter file: %w", err), driver.RemoveAdapterFiles(tempFiles))
 			}
 			tempFiles = append(tempFiles, path)
 			resolved[i] = runtime.ScalarValueArg{Text: path, Span: aa.Span}
 		case runtime.StructuredValueArg:
-			removeTempFiles(tempFiles)
-			return nil, nil, fmt.Errorf("%s: argument %d is a %s value; use a scalar path (e.g. $name.field) or the file adapter (file:$name)", name, i+1, aa.Value.Kind())
+			return nil, nil, errors.Join(fmt.Errorf("%s: argument %d is a %s value; use a scalar path (e.g. $name.field) or the file adapter (file:$name)", name, i+1, aa.Value.Kind()), driver.RemoveAdapterFiles(tempFiles))
 		default:
 			resolved[i] = a
 		}
 	}
 	return tempFiles, resolved, nil
-}
-
-// removeTempFiles removes any temp files written by adapter
-// resolution. Errors are ignored: removal failures are
-// non-fatal and the OS reaps stale temp files on its own
-// schedule anyway.
-func removeTempFiles(paths []string) {
-	for _, p := range paths {
-		os.Remove(p)
-	}
 }
 
 // WaitEnvelope blocks until the given job's reaper goroutine has

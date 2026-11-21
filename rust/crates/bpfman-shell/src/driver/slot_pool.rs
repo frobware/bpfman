@@ -56,7 +56,11 @@ impl Lock {
         let mut contents = Vec::new();
         self.file.seek(SeekFrom::Start(0))?;
         self.file.read_to_end(&mut contents)?;
-        Ok(serde_json::from_slice(&contents).unwrap_or_default())
+        if contents.is_empty() {
+            return Ok(Map::new());
+        }
+        serde_json::from_slice(&contents)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     pub(super) fn claim(mut self, metadata: Map<String, Json>) -> io::Result<Lease> {
@@ -105,4 +109,23 @@ fn last_used_at(path: &Path) -> io::Result<Option<Timestamp>> {
             .ok()
             .and_then(|time| Timestamp::try_from(time).ok())
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_lock_is_fresh_but_malformed_provenance_is_an_error() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let candidate = candidates(dir.path(), 0..=0)?.remove(0);
+        let mut lock = candidate.try_lock()?.expect("fresh slot is available");
+        assert!(lock.previous()?.is_empty());
+
+        fs::write(&candidate.path, b"{\"origin\":")?;
+        let error = lock.previous().expect_err("malformed provenance");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(fs::read(&candidate.path)?, b"{\"origin\":");
+        Ok(())
+    }
 }

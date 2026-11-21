@@ -14,7 +14,6 @@ use std::{
 use bpfman_shell_runtime::{Argument, CommandResponse, JobHandle, Value};
 use bpfman_shell_semantics::JobSignal;
 use bpfman_shell_syntax::parse_go_duration;
-use tempfile::NamedTempFile;
 
 use super::{
     files,
@@ -75,10 +74,10 @@ impl Jobs {
             .checked_add(1)
             .and_then(NonZeroU64::new)
             .ok_or("exhausted background job identities")?;
-        let mut files = Vec::new();
+        let mut files = files::AdapterFiles::default();
         let argv = arguments
             .iter()
-            .map(|argument| files::external_argument(argument, &mut files))
+            .map(|argument| files.argument(argument))
             .collect::<Result<Vec<_>, _>>()?;
         let (executable, args) = argv.split_first().ok_or("start requires a command")?;
         let mut command = Command::new(executable);
@@ -285,7 +284,7 @@ struct Job {
 impl Job {
     fn spawn(
         child: CapturedChild,
-        files: Vec<NamedTempFile>,
+        files: files::AdapterFiles,
         pid: NonZeroU32,
         argv: String,
         origin: String,
@@ -297,7 +296,8 @@ impl Job {
             .spawn(move || {
                 let outcome = reap_child(child, requests);
                 drop(files);
-                let _ = publish.send(outcome);
+                // The job table may already have dropped the receiver.
+                drop(publish.send(outcome));
             })
             .map_err(|error| format!("start job reaper: {error}"))?;
         Ok(Self {
@@ -409,9 +409,13 @@ impl Job {
 
 impl Drop for Job {
     fn drop(&mut self) {
-        let _ = self.control.send(Control::Stop);
+        // A disconnected receiver means the reaper has already exited.
+        drop(self.control.send(Control::Stop));
         if let Some(reaper) = self.reaper.take() {
-            let _ = reaper.join();
+            super::report_cleanup(
+                "join job reaper",
+                reaper.join().map_err(|_| "thread panicked"),
+            );
         }
     }
 }
@@ -438,7 +442,8 @@ fn reap_child(
                     }
                     signal.is_some()
                 });
-                let _ = reply.send(delivered);
+                // The caller may have stopped waiting after interruption.
+                drop(reply.send(delivered));
             }
             Err(RecvTimeoutError::Timeout) => {}
             Ok(Control::Stop) | Err(RecvTimeoutError::Disconnected) => {

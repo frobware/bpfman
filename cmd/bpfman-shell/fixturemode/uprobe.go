@@ -156,7 +156,7 @@ func runUprobeFireWorker(args []string) error {
 			return fmt.Errorf("uprobe-fire-worker: create ack %s: %w", ack, err)
 		}
 
-		f.Close()
+		f.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	}
 	return nil
 }

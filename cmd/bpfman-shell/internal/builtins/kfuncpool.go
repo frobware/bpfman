@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -83,17 +84,20 @@ func acquireKfuncSlot(req kfuncAcquireRequest) (*runtime.Kfunc, *kfuncLease, err
 		}
 
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			f.Close()
-			if errors.Is(err, syscall.EWOULDBLOCK) {
+			closeErr := f.Close()
+			if errors.Is(err, syscall.EWOULDBLOCK) && closeErr == nil {
 				continue
 			}
-			return nil, nil, fmt.Errorf("kfunc pool: flock %s: %w", path, err)
+			return nil, nil, errors.Join(fmt.Errorf("kfunc pool: flock %s: %w", path, err), closeErr)
+		}
+
+		if _, err := readKfuncProvenanceFromFile(f); err != nil {
+			return nil, nil, errors.Join(fmt.Errorf("kfunc pool: read %s: %w", path, err), f.Close())
 		}
 
 		kf := kfuncForSlot(c.slot)
 		if err := assertKfuncSlotAvailable(kf); err != nil {
-			f.Close()
-			return nil, nil, err
+			return nil, nil, errors.Join(err, f.Close())
 		}
 
 		now := time.Now().UTC()
@@ -106,8 +110,7 @@ func acquireKfuncSlot(req kfuncAcquireRequest) (*runtime.Kfunc, *kfuncLease, err
 			AcquiredAt: now.Format(time.RFC3339Nano),
 		}
 		if err := writeKfuncProvenance(f, fresh); err != nil {
-			f.Close()
-			return nil, nil, fmt.Errorf("kfunc pool: write %s: %w", path, err)
+			return nil, nil, errors.Join(fmt.Errorf("kfunc pool: write %s: %w", path, err), f.Close())
 		}
 		return kf, &kfuncLease{slot: c.slot, lockFile: f, origin: req.origin}, nil
 	}
@@ -126,22 +129,24 @@ func releaseKfuncSlot(lease *kfuncLease, kf *runtime.Kfunc) error {
 		Count:      kf.Count,
 		ReleasedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if prev, err := readKfuncProvenanceFromFile(lease.lockFile); err == nil {
-		final.AcquiredAt = prev.AcquiredAt
-	}
-
-	if err := writeKfuncProvenance(lease.lockFile, final); err != nil {
-		lease.lockFile.Close()
-		lease.lockFile = nil
-		return fmt.Errorf("kfunc pool: write final provenance: %w", err)
-	}
-
-	err := lease.lockFile.Close()
-	lease.lockFile = nil
+	prev, err := readKfuncProvenanceFromFile(lease.lockFile)
 	if err != nil {
-		return fmt.Errorf("kfunc pool: close slot %d lockfile: %w", lease.slot, err)
+		closeErr := lease.lockFile.Close()
+		lease.lockFile = nil
+		return errors.Join(fmt.Errorf("kfunc pool: read provenance before release: %w", err), closeErr)
 	}
-	return nil
+	final.AcquiredAt = prev.AcquiredAt
+
+	writeErr := writeKfuncProvenance(lease.lockFile, final)
+	if writeErr != nil {
+		writeErr = fmt.Errorf("kfunc pool: write final provenance: %w", writeErr)
+	}
+	closeErr := lease.lockFile.Close()
+	lease.lockFile = nil
+	if closeErr != nil {
+		closeErr = fmt.Errorf("kfunc pool: close slot %d lockfile: %w", lease.slot, closeErr)
+	}
+	return errors.Join(writeErr, closeErr)
 }
 
 func rememberKfuncLease(kf *runtime.Kfunc, lease *kfuncLease) {
@@ -182,7 +187,11 @@ func scanKfuncSlots(root string) ([]kfuncCandidate, error) {
 			return nil, fmt.Errorf("kfunc pool: stat %s: %w", path, err)
 		}
 
-		prev, _ := readKfuncProvenance(path)
+		// Sorting is advisory because another process may be writing.
+		prev, err := readKfuncProvenance(path)
+		if err != nil {
+			prev = kfuncProvenance{}
+		}
 		key := time.Time{}
 		if prev.ReleasedAt != "" {
 			if t, err := time.Parse(time.RFC3339Nano, prev.ReleasedAt); err == nil {
@@ -226,11 +235,7 @@ func readKfuncProvenance(path string) (kfuncProvenance, error) {
 		return kfuncProvenance{}, fmt.Errorf("kfunc pool: read %s: %w", path, err)
 	}
 
-	var p kfuncProvenance
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &p)
-	}
-	return p, nil
+	return decodeSlotProvenance[kfuncProvenance](body)
 }
 
 func readKfuncProvenanceFromFile(f *os.File) (kfuncProvenance, error) {
@@ -238,16 +243,12 @@ func readKfuncProvenanceFromFile(f *os.File) (kfuncProvenance, error) {
 		return kfuncProvenance{}, err
 	}
 
-	body, err := readAll(f)
+	body, err := io.ReadAll(f)
 	if err != nil {
 		return kfuncProvenance{}, err
 	}
 
-	var p kfuncProvenance
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &p)
-	}
-	return p, nil
+	return decodeSlotProvenance[kfuncProvenance](body)
 }
 
 func writeKfuncProvenance(f *os.File, p kfuncProvenance) error {

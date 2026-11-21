@@ -34,21 +34,42 @@ fn file_contents(argument: &Argument) -> Result<String, String> {
     Ok(contents)
 }
 
-pub(super) fn external_argument(
-    argument: &Argument,
-    files: &mut Vec<NamedTempFile>,
-) -> Result<String, String> {
-    if let Argument::Adapter { name, .. } = argument {
-        if name != "file" {
-            return Err(format!("unknown adapter {name:?}"));
+#[derive(Default)]
+pub(super) struct AdapterFiles(Vec<NamedTempFile>);
+
+impl AdapterFiles {
+    pub(super) fn argument(&mut self, argument: &Argument) -> Result<String, String> {
+        if let Argument::Adapter { name, .. } = argument {
+            if name != "file" {
+                return Err(format!("unknown adapter {name:?}"));
+            }
+            let file = new_file(argument)?;
+            let path = file.path().to_string_lossy().into_owned();
+            self.0.push(file);
+            Ok(path)
+        } else {
+            super::argument(argument)
         }
-        let mut file = new_file(argument)?;
-        file.flush().map_err(|error| error.to_string())?;
-        let path = file.path().to_string_lossy().into_owned();
-        files.push(file);
-        Ok(path)
-    } else {
-        super::argument(argument)
+    }
+}
+
+impl Drop for AdapterFiles {
+    fn drop(&mut self) {
+        for file in self.0.drain(..) {
+            remove_adapter_file(file);
+        }
+    }
+}
+
+fn remove_adapter_file(file: NamedTempFile) {
+    let path = file.path().to_owned();
+    if let Err(error) = file.close()
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        super::report_cleanup(
+            "remove adapter file",
+            Err::<(), _>(format!("{}: {error}", path.display())),
+        );
     }
 }
 
@@ -91,8 +112,10 @@ fn new_file(argument: &Argument) -> Result<NamedTempFile, String> {
         .prefix("bpfman-driver-")
         .tempfile()
         .map_err(|error| format!("create temp file: {error}"))?;
-    file.write_all(contents.as_bytes())
-        .map_err(|error| format!("write temp file: {error}"))?;
+    if let Err(error) = file.write_all(contents.as_bytes()) {
+        remove_adapter_file(file);
+        return Err(format!("write temp file: {error}"));
+    }
     Ok(file)
 }
 

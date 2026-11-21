@@ -68,7 +68,7 @@ func runUnlinkatFireWorker(args []string) error {
 				return fmt.Errorf("unlinkat-fire-worker: open wave=%d i=%d: %w", wave, i, err)
 			}
 
-			syscall.Close(fd)
+			syscall.Close(fd) //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 			if err := unix.Unlinkat(unix.AT_FDCWD, path, 0); err != nil {
 				return fmt.Errorf("unlinkat-fire-worker: unlinkat wave=%d i=%d: %w", wave, i, err)
 			}
@@ -78,7 +78,7 @@ func runUnlinkatFireWorker(args []string) error {
 			return fmt.Errorf("unlinkat-fire-worker: create ack %s: %w", ack, err)
 		}
 
-		f.Close()
+		f.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	}
 	return nil
 }

@@ -71,7 +71,7 @@ func handleLinkInfo(c driver.Ctx) (runtime.Value, error) {
 	if err != nil {
 		return runtime.Value{}, fmt.Errorf("linkinfo: open link id %d: %w", id, err)
 	}
-	defer l.Close()
+	defer l.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	info, err := l.Info()
 	if err != nil {

@@ -28,6 +28,13 @@ mod uprobe;
 pub(super) use process::Interrupt;
 pub(super) use registry::Registry as ImageRegistry;
 
+fn report_cleanup<T>(action: &str, result: Result<T, impl std::fmt::Display>) {
+    if let Err(error) = result {
+        // Drop has no caller to return a second error to if stderr is closed.
+        drop(writeln!(io::stderr().lock(), "{action}: {error}"));
+    }
+}
+
 #[derive(Default)]
 struct Fixtures {
     functions: kfunc::Pool,
@@ -92,7 +99,8 @@ pub(super) fn run(
                             .unwrap_or_else(|_| "<unrenderable value>".to_owned()),
                     });
                 }
-                let _ = writeln!(io::stderr().lock(), "{line}");
+                // A trace sink failure must not change script execution.
+                drop(writeln!(io::stderr().lock(), "{line}"));
                 continuation.resume(Ok(()))
             }
             Step::PathExists {
@@ -292,10 +300,10 @@ fn dispatch(
     } else {
         (head, request.arguments.as_slice())
     };
-    let mut files = Vec::new();
+    let mut files = files::AdapterFiles::default();
     let arguments = arguments
         .iter()
-        .map(|value| files::external_argument(value, &mut files))
+        .map(|value| files.argument(value))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             if process::has_executable(&executable) {

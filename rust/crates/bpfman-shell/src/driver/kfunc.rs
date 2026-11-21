@@ -77,12 +77,14 @@ impl Pool {
             .map_err(|error| format!("kfunc pool: {}: {error}", self.root.display()))?;
         for slot in slots {
             let index = slot.index;
-            let Some(lock) = slot
+            let Some(mut lock) = slot
                 .try_lock()
                 .map_err(|error| format!("kfunc pool: lock {index}: {error}"))?
             else {
                 continue;
             };
+            lock.previous()
+                .map_err(|error| format!("kfunc pool: read slot {index}: {error}"))?;
             let name = format!("bpfman_e2e_target_{index}");
             let trigger = self.debugfs.join(format!("trigger_{index:03}"));
             let count = self.debugfs.join(format!("count_{index:03}"));

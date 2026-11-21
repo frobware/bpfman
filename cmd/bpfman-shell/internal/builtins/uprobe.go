@@ -79,7 +79,7 @@ func elfSymbolFileOffset(path, symbol string) (uint64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("open ELF %s: %w", path, err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	syms, err := f.Symbols()
 	if err != nil {
 		return 0, fmt.Errorf("read symbols of %s: %w", path, err)

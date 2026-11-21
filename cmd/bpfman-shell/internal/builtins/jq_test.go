@@ -84,6 +84,8 @@ func TestJQ_ScalarRejectsTrailingData(t *testing.T) {
 
 	for _, input := range []string{"1]", "1}", "1 2"} {
 		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+
 			_, err := jqCall(t, []runtime.Arg{
 				runtime.WordArg{Text: "."},
 				runtime.QuotedArg{Text: input},

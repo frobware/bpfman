@@ -60,7 +60,7 @@ func handleProgInfo(c driver.Ctx) (runtime.Value, error) {
 	default:
 		return runtime.Value{}, fmt.Errorf("proginfo: unknown subcommand %q (valid: id, pinned)", sub)
 	}
-	defer prog.Close()
+	defer prog.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	info, err := prog.Info()
 	if err != nil {

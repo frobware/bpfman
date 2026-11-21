@@ -29,10 +29,10 @@ func StrictJobLeakHandler(cli *cli.CLI, session *runtime.Session) func(*runtime.
 			origin = "<stdin>"
 		}
 		argv := strings.Join(j.Args, " ")
-		_ = cli.PrintErrf("[job] FAIL %s: never waited or killed: %s\n", origin, argv)
+		_ = cli.PrintErrf("[job] FAIL %s: never waited or killed: %s\n", origin, argv) //nolint:errcheck // This diagnostic is best effort.
 		if j.PID > 0 {
 			if err := syscall.Kill(-j.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-				_ = cli.PrintErrf("[job] cleanup: kill process group %d: %v\n", j.PID, err)
+				_ = cli.PrintErrf("[job] cleanup: kill process group %d: %v\n", j.PID, err) //nolint:errcheck // This diagnostic is best effort.
 			}
 		}
 		session.RecordJobLeak()

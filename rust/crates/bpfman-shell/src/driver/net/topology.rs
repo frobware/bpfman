@@ -301,7 +301,7 @@ impl Resources {
 
 impl Drop for Resources {
     fn drop(&mut self) {
-        let _ = self.release();
+        super::super::report_cleanup("release network topology", self.release());
     }
 }
 

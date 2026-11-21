@@ -7,6 +7,7 @@
 package driver
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -70,11 +71,21 @@ func WriteValueToTemp(v runtime.Value) (string, error) {
 		return "", fmt.Errorf("create temp file: %w", err)
 	}
 
-	defer f.Close()
-	if _, err := f.Write(data); err != nil {
-		os.Remove(f.Name())
-		return "", fmt.Errorf("write temp file: %w", err)
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		return "", errors.Join(fmt.Errorf("write temp file: %w", err), RemoveAdapterFiles([]string{f.Name()}))
 	}
-
 	return f.Name(), nil
+}
+
+// RemoveAdapterFiles attempts every removal and reports residue.
+func RemoveAdapterFiles(paths []string) error {
+	var failures error
+	for _, path := range paths {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			failures = errors.Join(failures, fmt.Errorf("remove adapter file: %w", err))
+		}
+	}
+	return failures
 }

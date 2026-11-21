@@ -102,7 +102,7 @@ func handleKfuncFire(args []runtime.Arg) (runtime.Value, error) {
 	if err != nil {
 		return runtime.Value{}, fmt.Errorf("kfunc fire: open %s: %w", kf.Trigger, err)
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	for i := range n {
 		if _, err := f.Write([]byte{0}); err != nil {
 			return runtime.Value{}, fmt.Errorf("kfunc fire: write %s (%d/%d): %w", kf.Trigger, i+1, n, err)

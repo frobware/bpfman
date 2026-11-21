@@ -267,10 +267,13 @@ impl Group {
         let mut cancelled = None;
         loop {
             if cancelled.is_none()
-                && let Err(error) = interrupt.check()
+                && let Err(mut error) = interrupt.check()
             {
-                if let Some(pid) = self.pid() {
-                    let _ = kill_process_group(pid, Signal::INT);
+                if let Some(pid) = self.pid()
+                    && let Err(signal_error) = kill_process_group(pid, Signal::INT)
+                    && signal_error != rustix::io::Errno::SRCH
+                {
+                    error.push_str(&format!("; interrupt process group: {signal_error}"));
                 }
                 cancelled = Some((Instant::now() + INTERRUPT_GRACE, error));
             }
@@ -335,7 +338,7 @@ impl Group {
 impl Drop for Group {
     fn drop(&mut self) {
         if self.0.is_some() {
-            let _ = self.stop();
+            super::report_cleanup("stop child process group", self.stop());
         }
     }
 }

@@ -53,7 +53,7 @@ func runLsmOpenWorker(args []string) error {
 		if err != nil {
 			return fmt.Errorf("lsm-open-worker: open %s (%d/%d): %w", file, i+1, n, err)
 		}
-		_ = unix.Close(fd)
+		_ = unix.Close(fd) //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	}
 	return nil
 }

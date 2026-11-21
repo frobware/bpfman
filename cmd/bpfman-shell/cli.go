@@ -134,13 +134,13 @@ func (c *CLI) Execute(ctx context.Context) error {
 	// cd'd there manually.
 	if c.Directory != "" {
 		if err := os.Chdir(c.Directory); err != nil {
-			_ = c.PrintErrf("bpfman-shell: error: chdir %q: %v\n", c.Directory, err)
+			_ = c.PrintErrf("bpfman-shell: error: chdir %q: %v\n", c.Directory, err) //nolint:errcheck // This diagnostic is best effort.
 			return err
 		}
 	}
 	if err := c.Run(ctx); err != nil {
 		if !errors.Is(err, driver.ErrSilent) {
-			_ = c.PrintErrf("bpfman-shell: error: %v\n", err)
+			_ = c.PrintErrf("bpfman-shell: error: %v\n", err) //nolint:errcheck // This diagnostic is best effort.
 		}
 		return err
 	}
@@ -184,7 +184,7 @@ func (c *CLI) runCheck() error {
 		return err
 	}
 
-	defer reader.Close()
+	defer reader.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	file := c.inputFileLabel()
 	if driver.CheckInput(reader, c.Err, file) {
@@ -201,7 +201,7 @@ func (c *CLI) runAST() error {
 		return err
 	}
 
-	defer reader.Close()
+	defer reader.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	file := c.inputFileLabel()
 	if driver.ASTInput(reader, c.Out, c.Err, file) {
@@ -219,7 +219,7 @@ func (c *CLI) runLowered() error {
 		return err
 	}
 
-	defer reader.Close()
+	defer reader.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	file := c.inputFileLabel()
 	if driver.LoweredInput(reader, c.Out, c.Err, file) {
@@ -236,7 +236,7 @@ func (c *CLI) runSymbols() error {
 		return err
 	}
 
-	defer reader.Close()
+	defer reader.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	file := c.inputFileLabel()
 	if driver.SymbolsInput(reader, c.Out, c.Err, file) {
@@ -258,7 +258,7 @@ func (c *CLI) runFmt() error {
 		if err != nil {
 			return err
 		}
-		defer reader.Close()
+		defer reader.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 		formatted, hadIssue := driver.FormatInputString(reader, c.Err, c.inputFileLabel())
 		if hadIssue {
@@ -276,7 +276,7 @@ func (c *CLI) runFmt() error {
 		return err
 	}
 
-	defer reader.Close()
+	defer reader.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	file := c.inputFileLabel()
 	if driver.FormatInput(reader, c.Out, c.Err, file) {
@@ -326,7 +326,7 @@ func (c *CLI) Run(ctx context.Context) error {
 		return err
 	}
 
-	defer lr.Close()
+	defer lr.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 
 	return driver.Run(ctx, driver.Config{
 		CLI:          &c.CLI,

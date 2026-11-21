@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -225,25 +226,23 @@ func tryAcquirePoolSlot(req poolAcquireRequest) (*poolLease, error) {
 		}
 
 		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			f.Close()
-			if errors.Is(err, syscall.EWOULDBLOCK) {
+			closeErr := f.Close()
+			if errors.Is(err, syscall.EWOULDBLOCK) && closeErr == nil {
 				continue
 			}
-			return nil, fmt.Errorf("net pool: flock %s: %w", path, err)
+			return nil, errors.Join(fmt.Errorf("net pool: flock %s: %w", path, err), closeErr)
 		}
 
 		// Re-read under the lock; the scan-time body is potentially
 		// stale because another process may have released and
 		// re-acquired between the scan and the flock.
-		prev, err := readProvenance(path)
+		prev, err := readProvenanceFromFile(f)
 		if err != nil {
-			f.Close()
-			return nil, err
+			return nil, errors.Join(fmt.Errorf("net pool: read %s: %w", path, err), f.Close())
 		}
 
 		if err := assertSlotClean(c.slot, prev, req.linkExists, req.netnsExists); err != nil {
-			f.Close()
-			return nil, err
+			return nil, errors.Join(err, f.Close())
 		}
 
 		now := time.Now().UTC()
@@ -255,8 +254,7 @@ func tryAcquirePoolSlot(req poolAcquireRequest) (*poolLease, error) {
 			AcquiredAt: now.Format(time.RFC3339Nano),
 		}
 		if err := writeProvenance(f, fresh); err != nil {
-			f.Close()
-			return nil, fmt.Errorf("net pool: write %s: %w", path, err)
+			return nil, errors.Join(fmt.Errorf("net pool: write %s: %w", path, err), f.Close())
 		}
 
 		host, peer := slotAddrs(c.slot)
@@ -300,22 +298,24 @@ func releasePoolSlot(lease *poolLease, nsName, nsBName, linkAName string) error 
 	}
 	// Preserve AcquiredAt from the on-disk body so the released
 	// record carries both timestamps for post-mortem inspection.
-	if prev, err := readProvenanceFromFile(lease.lockFile); err == nil {
-		final.AcquiredAt = prev.AcquiredAt
-	}
-
-	if err := writeProvenance(lease.lockFile, final); err != nil {
-		lease.lockFile.Close()
-		lease.lockFile = nil
-		return fmt.Errorf("net pool: write final provenance: %w", err)
-	}
-
-	err := lease.lockFile.Close()
-	lease.lockFile = nil
+	prev, err := readProvenanceFromFile(lease.lockFile)
 	if err != nil {
-		return fmt.Errorf("net pool: close slot %d lockfile: %w", lease.slot, err)
+		closeErr := lease.lockFile.Close()
+		lease.lockFile = nil
+		return errors.Join(fmt.Errorf("net pool: read provenance before release: %w", err), closeErr)
 	}
-	return nil
+	final.AcquiredAt = prev.AcquiredAt
+
+	writeErr := writeProvenance(lease.lockFile, final)
+	if writeErr != nil {
+		writeErr = fmt.Errorf("net pool: write final provenance: %w", writeErr)
+	}
+	closeErr := lease.lockFile.Close()
+	lease.lockFile = nil
+	if closeErr != nil {
+		closeErr = fmt.Errorf("net pool: close slot %d lockfile: %w", lease.slot, closeErr)
+	}
+	return errors.Join(writeErr, closeErr)
 }
 
 func rememberNetPairLease(pair *runtime.NetPair, lease *poolLease) {
@@ -385,7 +385,11 @@ func scanSlots(root string) ([]slotCandidate, error) {
 			return nil, fmt.Errorf("net pool: stat %s: %w", path, err)
 		}
 
-		prev, _ := readProvenance(path)
+		// Sorting is advisory because another process may be writing.
+		prev, err := readProvenance(path)
+		if err != nil {
+			prev = provenance{}
+		}
 		key := time.Time{}
 		if prev.ReleasedAt != "" {
 			if t, err := time.Parse(time.RFC3339Nano, prev.ReleasedAt); err == nil {
@@ -485,58 +489,46 @@ func slotAddrs(slot uint32) (host, peer string) {
 	return fmt.Sprintf("%s%d", poolSubnetPrefix, base+1), fmt.Sprintf("%s%d", poolSubnetPrefix, base+2)
 }
 
-// readProvenance loads the slot body from path, ignoring parse
-// errors so a malformed legacy body is treated as empty and falls
-// back to mtime-based ordering.
+// readProvenance loads and validates the slot body from path.
 func readProvenance(path string) (provenance, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return provenance{}, fmt.Errorf("net pool: read %s: %w", path, err)
 	}
 
-	var p provenance
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &p)
-	}
-	return p, nil
+	return decodeSlotProvenance[provenance](body)
 }
 
 // readProvenanceFromFile is the under-the-lock variant: the caller
 // already holds the open fd, so we seek to start and decode
-// without reopening the file. Parse failures degrade to the empty
-// provenance the same way readProvenance does.
+// without reopening the file.
 func readProvenanceFromFile(f *os.File) (provenance, error) {
 	if _, err := f.Seek(0, 0); err != nil {
 		return provenance{}, err
 	}
 
-	body, err := readAll(f)
+	body, err := io.ReadAll(f)
 	if err != nil {
 		return provenance{}, err
 	}
 
-	var p provenance
-	if len(body) > 0 {
-		_ = json.Unmarshal(body, &p)
-	}
-	return p, nil
+	return decodeSlotProvenance[provenance](body)
 }
 
-// readAll drains the file into a byte slice. It exists as a small
-// helper so writeProvenance and readProvenanceFromFile do not
-// reach for io.ReadAll directly and bring an extra import.
-func readAll(f *os.File) ([]byte, error) {
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
+// A fresh lockfile is empty. A populated lockfile must contain a record.
+func decodeSlotProvenance[T any](body []byte) (T, error) {
+	var zero T
+	if len(body) == 0 {
+		return zero, nil
 	}
-
-	buf := make([]byte, info.Size())
-	_, err = f.ReadAt(buf, 0)
-	if err != nil && !errors.Is(err, fs.ErrClosed) {
-		return buf, err
+	var record *T
+	if err := json.Unmarshal(body, &record); err != nil {
+		return zero, fmt.Errorf("decode slot provenance: %w", err)
 	}
-	return buf, nil
+	if record == nil {
+		return zero, errors.New("decode slot provenance: expected a record")
+	}
+	return *record, nil
 }
 
 // writeProvenance truncates the lockfile, rewinds, and writes the

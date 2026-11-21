@@ -116,10 +116,11 @@ func TestExecSource_Defer_StdoutFlushedThroughRenderDeferOutput(t *testing.T) {
 	env := &Env{
 		Session:  NewSession(),
 		ExecBind: r.execBind,
-		RenderDeferOutput: func(args []Arg, rc Envelope) {
+		RenderDeferOutput: func(args []Arg, rc Envelope) error {
 			if rc.Stdout != "" {
 				flushed = append(flushed, rc.Stdout)
 			}
+			return nil
 		},
 	}
 	require.NoError(t, runProgramWithEnv(t, "defer say hello\n", env))
@@ -467,4 +468,29 @@ func TestParse_Defer_IsReservedDefName(t *testing.T) {
 	_, err := parseSource(t, "def defer() { print hi }")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "reserved word \"defer\"")
+}
+
+func TestDeferOutputFailureDoesNotStopCleanup(t *testing.T) {
+	t.Parallel()
+
+	r := &recorder{}
+	var failed Envelope
+	env := &Env{
+		Session:  NewSession(),
+		ExecBind: r.execBind,
+		RenderDeferOutput: func(args []Arg, _ Envelope) error {
+			if argText0(recordedCall{args: args}) == "broken" {
+				return errors.New("output writer failed")
+			}
+			return nil
+		},
+		RenderDeferFailure: func(_ source.Pos, _ []Arg, rc Envelope) {
+			failed = rc
+		},
+	}
+	require.NoError(t, runProgramWithEnv(t, "defer later\ndefer broken\n", env))
+	require.Len(t, r.calls, 2)
+	assert.Equal(t, "later", argText0(r.calls[1]))
+	assert.Equal(t, 1, env.Session.DeferFailures())
+	assert.Contains(t, failed.Stderr, "output writer failed")
 }

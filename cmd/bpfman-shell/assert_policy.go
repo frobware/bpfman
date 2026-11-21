@@ -32,7 +32,7 @@ func completeAssertResult(cli *cli.CLI, session *runtime.Session, isRequire bool
 	if result.pass {
 		return nil
 	}
-	_ = cli.PrintErrf("%s[%s] FAIL: %s\n", loc, label, result.message)
+	_ = cli.PrintErrf("%s[%s] FAIL: %s\n", loc, label, result.message) //nolint:errcheck // This diagnostic is best effort.
 	if isRequire {
 		return &runtime.RequireFailure{Span: failureSpan, Expr: result.message}
 	}

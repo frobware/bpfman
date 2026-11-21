@@ -18,16 +18,29 @@ impl Foreground {
         if tcgetpgrp(&stdin).ok()? != shell_group {
             return None;
         }
-        assign(&stdin, child_group).ok()?;
+        if let Err(error) = assign(&stdin, child_group) {
+            super::super::report_cleanup("grant foreground terminal", Err::<(), _>(error));
+            return None;
+        }
         // A fast child may have attempted a read before the handoff.
-        let _ = kill_process_group(child_group, Signal::CONT);
+        let resumed = kill_process_group(child_group, Signal::CONT).or_else(|error| {
+            if error == rustix::io::Errno::SRCH {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        });
+        super::super::report_cleanup("resume foreground process group", resumed);
         Some(Self { stdin, shell_group })
     }
 }
 
 impl Drop for Foreground {
     fn drop(&mut self) {
-        let _ = assign(&self.stdin, self.shell_group);
+        super::super::report_cleanup(
+            "reclaim foreground terminal",
+            assign(&self.stdin, self.shell_group),
+        );
     }
 }
 

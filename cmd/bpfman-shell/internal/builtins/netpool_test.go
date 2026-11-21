@@ -604,3 +604,20 @@ func TestAcquirePoolSlot_CrashLeakedSecondNetnsAttributed(t *testing.T) {
 	assert.Contains(t, err.Error(), "crashed_test.bpfman:7")
 	assert.Contains(t, err.Error(), "never released")
 }
+
+func TestPoolReleasePreservesCorruptProvenance(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	lease, err := tryAcquirePoolSlot(poolReq(root, "test", "testns", "testlink"))
+	require.NoError(t, err)
+	path := slotLockPath(root, lease.slot)
+	corrupt := []byte("null\n")
+	require.NoError(t, os.WriteFile(path, corrupt, 0o600))
+
+	require.ErrorContains(t, releasePoolSlot(lease, "testns", "", "testlink"), "expected a record")
+	assert.Nil(t, lease.lockFile)
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, corrupt, got)
+}

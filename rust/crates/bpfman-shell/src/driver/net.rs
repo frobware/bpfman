@@ -162,10 +162,10 @@ impl Network {
 }
 
 fn exec(arguments: &[Argument], interrupt: &Interrupt) -> Result<CommandResponse, String> {
-    let mut files = Vec::new();
+    let mut files = files::AdapterFiles::default();
     let arguments = arguments
         .iter()
-        .map(|argument| files::external_argument(argument, &mut files))
+        .map(|argument| files.argument(argument))
         .collect::<Result<Vec<_>, _>>()?;
     let (program, args) = arguments
         .split_first()

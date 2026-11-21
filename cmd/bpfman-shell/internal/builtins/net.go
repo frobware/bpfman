@@ -430,7 +430,7 @@ func handleNetVethPair(ctx context.Context, origin string, args []runtime.Arg) (
 	if iface, err := net.InterfaceByName(f.HostLink); err == nil {
 		hostIfindex = uint32(iface.Index)
 	}
-	hostNsid, _ := netns.CurrentNSID()
+	hostNsid, _ := netns.CurrentNSID() //nolint:errcheck // Legacy address-only fixtures may omit dispatcher identifiers.
 
 	pair := &runtime.NetPair{
 		Ns:          f.Ns,
@@ -567,7 +567,7 @@ func netnsLinkIfindex(nsName, link string) uint32 {
 	if err != nil {
 		return 0
 	}
-	defer h.Close()
+	defer h.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	nlh, err := vnetlink.NewHandleAt(h)
 	if err != nil {
 		return 0
@@ -613,7 +613,7 @@ var linkNameSeq atomic.Uint64
 func uniqueLinkBase() string {
 	n := linkNameSeq.Add(1)
 	h := fnv.New64a()
-	fmt.Fprintf(h, "%d:%d", os.Getpid(), n)
+	fmt.Fprintf(h, "%d:%d", os.Getpid(), n) //nolint:errcheck // The in-memory FNV writer cannot fail.
 	return fmt.Sprintf("B%012xN", h.Sum64()&0xffffffffffff)
 }
 

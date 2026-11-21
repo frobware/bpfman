@@ -196,36 +196,27 @@ func ResolveExternalArgs(args []runtime.Arg) (argv []string, tempFiles []string,
 		switch aa := a.(type) {
 		case runtime.AdapterArg:
 			if aa.Adapter != "file" {
-				for _, f := range tempFiles {
-					os.Remove(f)
-				}
-				return nil, nil, &ExecArgError{
+				return nil, nil, errors.Join(&ExecArgError{
 					Msg:  fmt.Sprintf("argument %d: unknown adapter %q", i+1, aa.Adapter),
 					Span: aa.Span,
-				}
+				}, RemoveAdapterFiles(tempFiles))
 			}
 			path, terr := WriteValueToTemp(aa.Value)
 			if terr != nil {
-				for _, f := range tempFiles {
-					os.Remove(f)
-				}
-				return nil, nil, &ExecArgError{
+				return nil, nil, errors.Join(&ExecArgError{
 					Msg:  fmt.Sprintf("argument %d: file adapter: %v", i+1, terr),
 					Span: aa.Span,
-				}
+				}, RemoveAdapterFiles(tempFiles))
 			}
 			tempFiles = append(tempFiles, path)
 			resolved[i] = runtime.ScalarValueArg{Text: path, Span: aa.Span}
 		case runtime.StructuredValueArg:
-			for _, f := range tempFiles {
-				os.Remove(f)
-			}
-			return nil, nil, &ExecArgError{
+			return nil, nil, errors.Join(&ExecArgError{
 				Msg: fmt.Sprintf(
 					"argument %d: cannot pass a %s value to an external command; use a scalar field (e.g. $name.field) or the file adapter (file:$name)",
 					i+1, aa.Value.Kind()),
 				Span: aa.Span,
-			}
+			}, RemoveAdapterFiles(tempFiles))
 		default:
 			resolved[i] = a
 		}
@@ -240,7 +231,7 @@ func ResolveExternalArgs(args []runtime.Arg) (argv []string, tempFiles []string,
 // because they cannot be flattened into argv text. Non-zero exit
 // is reported via ExecCapture.ExitCode, not as an error: callers
 // decide whether non-zero is fatal.
-func RunExternal(ctx context.Context, args []runtime.Arg) (ExecCapture, error) {
+func RunExternal(ctx context.Context, args []runtime.Arg) (_ ExecCapture, resultErr error) {
 	if len(args) == 0 {
 		return ExecCapture{}, fmt.Errorf("exec requires at least one argument")
 	}
@@ -250,8 +241,8 @@ func RunExternal(ctx context.Context, args []runtime.Arg) (ExecCapture, error) {
 	}
 
 	defer func() {
-		for _, f := range tempFiles {
-			os.Remove(f)
+		if cleanup := RemoveAdapterFiles(tempFiles); cleanup != nil {
+			resultErr = errors.Join(resultErr, cleanup)
 		}
 	}()
 
@@ -303,8 +294,8 @@ func RunExternalInherit(ctx context.Context, cli *cli.CLI, args []runtime.Arg) (
 	}
 
 	defer func() {
-		for _, f := range tempFiles {
-			os.Remove(f)
+		if cleanup := RemoveAdapterFiles(tempFiles); cleanup != nil {
+			err = errors.Join(err, cleanup)
 		}
 	}()
 
@@ -331,8 +322,15 @@ func RunExternalInherit(ctx context.Context, cli *cli.CLI, args []runtime.Arg) (
 	// stop us. A failure here means the child runs without owning
 	// the foreground group; the user may see ^C affect the shell
 	// rather than the child, but the run still completes.
-	_ = fg.Grant(cmd.Process.Pid)
-	defer func() { _ = fg.Reclaim() }()
+	if grantErr := fg.Grant(cmd.Process.Pid); grantErr != nil {
+		// Still wait for the started child and preserve its outcome.
+		defer func() { err = errors.Join(err, fmt.Errorf("grant foreground terminal: %w", grantErr)) }()
+	}
+	defer func() {
+		if reclaimErr := fg.Reclaim(); reclaimErr != nil {
+			err = errors.Join(err, fmt.Errorf("reclaim foreground terminal: %w", reclaimErr))
+		}
+	}()
 
 	rerr := cmd.Wait()
 	if rerr != nil {

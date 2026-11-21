@@ -64,7 +64,7 @@ func runKillFireWorker(args []string) error {
 			return fmt.Errorf("kill-fire-worker: create ack %s: %w", ack, err)
 		}
 
-		f.Close()
+		f.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 	}
 	return nil
 }

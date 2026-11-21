@@ -36,14 +36,20 @@ var ErrScriptError = errors.New("script error")
 // formatting; subprocess output that lacks a trailing newline
 // will appear without one, matching how the same command would
 // look when run directly on stdout/stderr.
-func makeDeferOutputFlusher(cli *cli.CLI) func(args []runtime.Arg, rc runtime.Envelope) {
-	return func(_ []runtime.Arg, rc runtime.Envelope) {
+func makeDeferOutputFlusher(cli *cli.CLI) func(args []runtime.Arg, rc runtime.Envelope) error {
+	return func(_ []runtime.Arg, rc runtime.Envelope) error {
+		var stdout, stderr error
 		if rc.Stdout != "" {
-			_ = cli.PrintOut(rc.Stdout)
+			if err := cli.PrintOut(rc.Stdout); err != nil {
+				stdout = fmt.Errorf("write deferred stdout: %w", err)
+			}
 		}
 		if rc.Stderr != "" {
-			_ = cli.PrintErr(rc.Stderr)
+			if err := cli.PrintErr(rc.Stderr); err != nil {
+				stderr = fmt.Errorf("write deferred stderr: %w", err)
+			}
 		}
+		return errors.Join(stdout, stderr)
 	}
 }
 
@@ -79,7 +85,7 @@ func RenderEnvelopeFailure(cli *cli.CLI, verb string, fallbackFile string, stmtL
 	writeIndented(&b, env.Stdout)
 	b.WriteString("stderr:\n")
 	writeIndented(&b, env.Stderr)
-	_ = cli.PrintErrf("%s", b.String())
+	_ = cli.PrintErrf("%s", b.String()) //nolint:errcheck // This diagnostic is best effort.
 }
 
 // writeIndented appends s to b with each line prefixed by two

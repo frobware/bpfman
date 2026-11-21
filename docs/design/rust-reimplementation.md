@@ -8611,3 +8611,25 @@ attempt was blocked by the session sandbox denying a localhost `httptest`
 listener in the unrelated OCI package; the host-access rerun passes. Logs are
 under `/tmp/bpfman-schema3-parity/`: `go-file-final.log`, `go-image.log`,
 `rust-corpus.log` and `go-test-race.log`.
+
+### Shell error handling checkpoint
+
+Both shell drivers validate fixture-pool provenance while holding the slot lock.
+A fresh empty lockfile can be claimed. A corrupt record fails closed and remains
+available for diagnosis. The unlocked ordering scan can still use file timestamps
+when a concurrent writer makes the record unreadable.
+
+Go reports adapter-file write, close and removal failures, retains cleanup
+errors alongside the primary failure, and drains all deferred commands when
+output forwarding fails. Rust reports destructor cleanup failures for adapter
+files, terminal restoration and owned process or fixture guards. Both drivers
+keep error handling at the I/O boundary.
+
+The Go lint configuration checks unchecked errors and blank assignments in
+production shell code. The Rust shell binary denies unused must-use values and
+Clippy's explicit underscore discard. Intentional best-effort diagnostics
+and disconnected channels during teardown are identified at their call sites.
+
+The Go shell packages pass with race detection and the configured linters.
+A standalone `make rust-check` passes all 92 selected kernel cases, including
+the script corpus, plus userspace tests, formatting, Clippy and documentation.

@@ -151,17 +151,17 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 
 	if n := cfg.Session.AssertFailures(); n > 0 {
-		_ = cfg.CLI.PrintErrf("%d assertion(s) failed\n", n)
+		_ = cfg.CLI.PrintErrf("%d assertion(s) failed\n", n) //nolint:errcheck // This diagnostic is best effort.
 		return fmt.Errorf("%d assertion(s) failed", n)
 	}
 
 	if n := cfg.Session.DeferFailures(); n > 0 {
-		_ = cfg.CLI.PrintErrf("%d defer(s) failed\n", n)
+		_ = cfg.CLI.PrintErrf("%d defer(s) failed\n", n) //nolint:errcheck // This diagnostic is best effort.
 		return fmt.Errorf("%d defer(s) failed", n)
 	}
 
 	if n := cfg.Session.JobLeaks(); n > 0 {
-		_ = cfg.CLI.PrintErrf("%d job(s) leaked\n", n)
+		_ = cfg.CLI.PrintErrf("%d job(s) leaked\n", n) //nolint:errcheck // This diagnostic is best effort.
 		return fmt.Errorf("%d job(s) leaked", n)
 	}
 
@@ -246,10 +246,10 @@ func makeRenderPollFailure(cli *cli.CLI) func(source.Span, time.Duration, time.D
 	return func(span source.Span, timeout, every time.Duration, attempts int, lastRetry string) {
 		loc := SourceLoc{File: span.Pos.File, Line: span.Pos.Line, Col: span.Pos.Col}
 		if lastRetry == "" {
-			_ = cli.PrintErrf("%s[poll] FAIL: timed out after %s every %s across %d attempt(s)\n", loc, timeout, every, attempts)
+			_ = cli.PrintErrf("%s[poll] FAIL: timed out after %s every %s across %d attempt(s)\n", loc, timeout, every, attempts) //nolint:errcheck // This diagnostic is best effort.
 			return
 		}
-		_ = cli.PrintErrf("%s[poll] FAIL: timed out after %s every %s across %d attempt(s): %s\n", loc, timeout, every, attempts, lastRetry)
+		_ = cli.PrintErrf("%s[poll] FAIL: timed out after %s every %s across %d attempt(s): %s\n", loc, timeout, every, attempts, lastRetry) //nolint:errcheck // This diagnostic is best effort.
 	}
 }
 
@@ -281,7 +281,7 @@ func scriptLoop(ctx context.Context, cfg Config) error {
 
 	src, slurpErr := SlurpReader(lr)
 	if slurpErr != nil {
-		_ = cli.PrintErrf("%s: %v\n", file, slurpErr)
+		_ = cli.PrintErrf("%s: %v\n", file, slurpErr) //nolint:errcheck // This diagnostic is best effort.
 		return ErrScriptError
 	}
 	if !cfg.NoCheck {
@@ -326,13 +326,13 @@ func sourceBaseDir(file string) string {
 // source text.
 func runProgramSource(ctx context.Context, cli *cli.CLI, env *runtime.Env, input string, loc SourceLoc, baseDir string) error {
 	emitFrame := func(span source.Span, msg string) {
-		_ = cli.PrintErr(renderDiagnostic(input, loc.File, diagnostic{
+		_ = cli.PrintErr(renderDiagnostic(input, loc.File, diagnostic{ //nolint:errcheck // This diagnostic is best effort.
 			Span: span,
 			Msg:  msg,
 		}))
 	}
 	cite := func(span source.Span, body string) {
-		_ = cli.PrintErrf("%s%s\n", loc.WithSpan(span).String(), body)
+		_ = cli.PrintErrf("%s%s\n", loc.WithSpan(span).String(), body) //nolint:errcheck // This diagnostic is best effort.
 	}
 	report := func(err error) error {
 		if isContextCancellation(ctx, err) {
@@ -347,7 +347,7 @@ func runProgramSource(ctx context.Context, cli *cli.CLI, env *runtime.Env, input
 
 		var ae *ExecArgError
 		if errors.As(err, &ae) {
-			cite(ae.Span, ae.Msg)
+			cite(ae.Span, err.Error())
 			return ErrScriptError
 		}
 
@@ -371,7 +371,7 @@ func runProgramSource(ctx context.Context, cli *cli.CLI, env *runtime.Env, input
 					writeIndented(&b, ef.Stderr)
 				}
 				if b.Len() > 0 {
-					_ = cli.PrintErr(b.String())
+					_ = cli.PrintErr(b.String()) //nolint:errcheck // This diagnostic is best effort.
 				}
 			}
 			return ErrScriptError
@@ -390,14 +390,14 @@ func runProgramSource(ctx context.Context, cli *cli.CLI, env *runtime.Env, input
 			// lines up.
 			if se.Span.Pos.File != "" && se.Span.Pos.File != loc.File {
 				absLoc := SourceLoc{File: se.Span.Pos.File, Line: se.Span.Pos.Line, Col: se.Span.Pos.Col}
-				_ = cli.PrintErrf("%s%s\n", absLoc.String(), se.Msg)
+				_ = cli.PrintErrf("%s%s\n", absLoc.String(), se.Msg) //nolint:errcheck // This diagnostic is best effort.
 				return ErrScriptError
 			}
 			emitFrame(se.Span, se.Msg)
 			return ErrScriptError
 		}
 
-		_ = cli.PrintErrf("%serror: %v\n", loc, err)
+		_ = cli.PrintErrf("%serror: %v\n", loc, err) //nolint:errcheck // This diagnostic is best effort.
 		return ErrScriptError
 	}
 	if strings.TrimSpace(input) == "" {
@@ -641,7 +641,7 @@ func makeTracePrinter(cli *cli.CLI, session *runtime.Session) func(source.Pos, s
 		if file == "" {
 			file = "<stdin>"
 		}
-		_ = cli.PrintErrf("+ %s:%d: %s\n", file, pos.Line, rendered)
+		_ = cli.PrintErrf("+ %s:%d: %s\n", file, pos.Line, rendered) //nolint:errcheck // This diagnostic is best effort.
 	}
 }
 

@@ -88,7 +88,7 @@ func expandDirectImports(file, baseDir string, prog *syntax.Program, visibleDefs
 		}
 
 		childSrc, err := SlurpReader(lr)
-		lr.Close()
+		lr.Close() //nolint:errcheck // Closing a read-side or rejected handle has no further recovery action.
 		if err != nil {
 			err = syntaxError(file, span, err.Error())
 			if handleErr(err) {
