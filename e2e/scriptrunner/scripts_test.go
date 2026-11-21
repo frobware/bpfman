@@ -89,6 +89,13 @@ import (
 //
 //nolint:paralleltest // The suite coordinates exclusive cases and must finish before other top-level tests.
 func TestBPFManScripts(t *testing.T) {
+	before := scriptProcesses.Load()
+	t.Cleanup(func() {
+		// This runs after all parallel subtests and any cohort cleanups.
+		if !t.Failed() && scriptProcesses.Load() == before {
+			t.Error(emptyScriptSelection())
+		}
+	})
 	if err := emitScriptTimelineMarker("suite_start", t.Name()); err != nil {
 		t.Fatalf("write suite timeline: %v", err)
 	}
@@ -606,6 +613,9 @@ func runBPFManScript(t *testing.T, e2eDir, script string, timeout time.Duration,
 	}
 	started := time.Now()
 	out, err := runScriptCommand(ctx, cmd)
+	if cmd.Process != nil {
+		scriptProcesses.Add(1)
+	}
 	if timelineErr := emitScriptProcessMarker(t.Name(), scope, cmd, time.Since(started), len(out)); timelineErr != nil {
 		t.Errorf("write script process timeline: %v", timelineErr)
 	}

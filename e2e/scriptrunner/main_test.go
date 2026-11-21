@@ -3,9 +3,11 @@
 package scriptrunner
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -32,6 +34,15 @@ const e2eSuiteLockPath = "/tmp/bpfman-e2e.lock"
 // process exit.
 var suiteLock *os.File
 var closeSharedRegistry func()
+
+var requireScriptExecution = flag.Bool("require-script-execution", false, "fail if no .bpfman script runs")
+var scriptProcesses atomic.Uint64
+
+func emptyScriptSelection() string {
+	filter := flag.Lookup("test.run").Value.String()
+	return fmt.Sprintf("no .bpfman scripts executed (test filter %q, label selector %q)",
+		filter, os.Getenv("BPFMAN_E2E_SCRIPT_SELECTOR"))
+}
 
 func acquireSuiteLock() {
 	f, err := os.OpenFile(e2eSuiteLockPath, os.O_CREATE|os.O_RDWR, 0644)
@@ -80,6 +91,12 @@ func TestMain(m *testing.M) {
 	rc := m.Run()
 	if closeSharedRegistry != nil {
 		closeSharedRegistry()
+	}
+	// A top-level filter can exclude TestBPFManScripts entirely, in which
+	// case its cleanup check never runs.
+	if rc == 0 && *requireScriptExecution && scriptProcesses.Load() == 0 {
+		fmt.Fprintln(os.Stderr, "scriptrunner:", emptyScriptSelection())
+		rc = 1
 	}
 	os.Exit(rc)
 }

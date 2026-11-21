@@ -8735,3 +8735,22 @@ Go race tests and lint passed.
 Both shells passed the 147-file shared corpus in file and local-image modes.
 All four shell and CLI pairings passed in file mode, with the existing
 clsact-reclamation policy skip when using the Go CLI.
+
+### Empty script selections
+
+The script runner counts actual shell process launches after parallel subtests
+finish. A selected suite with zero launches fails, including an empty label
+selection or a selection consisting entirely of capability skips. Make also
+requires script execution at the runner boundary so a top-level test filter
+that excludes the suite cannot return success.
+
+Real Make invocations verified the nonzero exits for an unmatched top-level
+test, an unmatched script name, an empty label selector and a capability-only
+selection. A valid one-script selection and an independent harness unit test
+passed.
+
+The full Rust gate passed all 92 kernel cases, including both shared corpus
+modes. The Go shell passed file and local-image corpus runs, and all four
+shell and CLI pairings passed in file mode. Runs with the Go CLI retained
+the existing clsact-reclamation policy skip, with all 147 selected files
+accounted for. Runner lint passed.

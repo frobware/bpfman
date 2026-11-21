@@ -1077,7 +1077,7 @@ _locked-run-e2e-scripts:
 	    BPFMAN_E2E_DIR=$(abspath e2e) \
 	    BPFMAN_LOCK_TIMEOUT=$(if $(BPFMAN_LOCK_TIMEOUT),$(BPFMAN_LOCK_TIMEOUT),5m) \
 	    $(call forward-env,$(E2E_SCRIPTS_FORWARD_VARS)) \
-	    $(E2E_SCRIPTS_TEST_BIN) -test.v \
+	    $(E2E_SCRIPTS_TEST_BIN) -require-script-execution -test.v \
 	    -test.count=$(STRESS_COUNT) $(if $(filter-out 0,$(PARALLEL)),-test.parallel $(PARALLEL)) \
 	    -test.run "$(if $(TEST),$(TEST),TestBPFManScripts)"
 
