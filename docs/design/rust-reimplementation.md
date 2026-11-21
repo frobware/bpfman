@@ -8633,3 +8633,12 @@ and disconnected channels during teardown are identified at their call sites.
 The Go shell packages pass with race detection and the configured linters.
 A standalone `make rust-check` passes all 92 selected kernel cases, including
 the script corpus, plus userspace tests, formatting, Clippy and documentation.
+
+Privileged Make test targets share a host-wide nonblocking flock at
+`/tmp/bpfman-kernel-test-gate.lock`. The full Rust gate takes it before running userspace
+checks or preparing the kernel module. The Go end-to-end targets hold it
+across setup and execution, and focused Rust kernel tests acquire it through the
+Cargo runner when their Make target has not already taken it. Comparison
+scripts invoked inside the Rust run reuse the outer guard and still take the Go
+test binary's existing lock. An overlapping invocation fails before it can
+disturb shared kernel fixtures.

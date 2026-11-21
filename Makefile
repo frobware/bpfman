@@ -868,8 +868,22 @@ $(BIN_DIR)/e2e.test: $(DISPATCHER_BPF_EMBEDS) $(E2E_BPF_OBJECTS) | $(BIN_DIR)
 # is harmless at the default 1 and turns the same recipe into a
 # stress run when bumped (CI pins it to 5 so every PR gets a small
 # count loop on top of the deterministic gate).
-.PHONY: test-e2e
-test-e2e: $(BIN_DIR)/e2e.test
+# One privileged fixture run per host. Acquire before any module setup and
+# keep the lock through all nested test binaries and their cleanup.
+KERNEL_TEST_TARGETS := test-e2e run-e2e-grpc test-e2e-grpc run-e2e-scripts test-e2e-scripts \
+	ci-test-e2e ci-test-e2e-scripts ci-test-e2e-grpc \
+	rust-check rust-test rust-test-scripts rust-test-bytecode-corpus rust-test-kprobe rust-test-map-sharing \
+	rust-test-uprobe rust-test-function-tracing rust-test-serve
+KERNEL_TEST_LOCK := sh "$(abspath e2e/with-kernel-test-lock.sh)"
+# Recursive recipes run even under -n. Let the inner Make print the plan
+# without acquiring the host lock.
+KERNEL_TEST_DRY_RUN = $(findstring n,$(filter-out --%,$(firstword $(MAKEFLAGS))))
+
+.PHONY: $(KERNEL_TEST_TARGETS) $(addprefix _locked-,$(KERNEL_TEST_TARGETS))
+$(KERNEL_TEST_TARGETS):
+	+$(Q)$(if $(KERNEL_TEST_DRY_RUN),,$(KERNEL_TEST_LOCK)) $(MAKE) _locked-$@
+
+_locked-test-e2e: $(BIN_DIR)/e2e.test
 	$(Q)$(MAKE) e2e-kmod-reload
 	sudo BPFMAN_E2E_BYTECODE_DIR=$(abspath e2e) $(call forward-env,BPFMAN_E2E_ISOLATED_RUNTIME BPFMAN_E2E_POLICY_RULE_PREF BPFMAN_LOG) $(BIN_DIR)/e2e.test -test.v -test.failfast -test.count=$(STRESS_COUNT) $(if $(filter-out 0,$(PARALLEL)),-test.parallel $(PARALLEL)) $(if $(TEST),-test.run "$(TEST)")
 
@@ -928,18 +942,16 @@ build-e2e-grpc: $(BIN_DIR)/e2e-grpc.test bpfman-compile
 # it just produced the binary at $(E2E_GRPC_BPFMAN_BIN) -- so we
 # pass an absolute path through sudo rather than relying on PATH
 # munging.
-.PHONY: run-e2e-grpc
-run-e2e-grpc:
+_locked-run-e2e-grpc:
 	sudo BPFMAN_BIN=$(abspath $(E2E_GRPC_BPFMAN_BIN)) \
 	    BPFMAN_E2E_BYTECODE_DIR=$(E2E_GRPC_BYTECODE_DIR) \
 	    $(call forward-env,$(E2E_GRPC_FORWARD_VARS)) \
 	    $(E2E_GRPC_TEST_BIN) -test.v -test.failfast \
 	    -test.count=$(STRESS_COUNT) $(if $(TEST),-test.run "$(TEST)")
 
-.PHONY: test-e2e-grpc
-test-e2e-grpc: build-e2e-grpc
+_locked-test-e2e-grpc: build-e2e-grpc
 	$(Q)$(MAKE) e2e-kmod-reload
-	$(Q)$(MAKE) run-e2e-grpc
+	$(Q)$(MAKE) _locked-run-e2e-grpc
 
 # Run every .bpfman script under e2e/scripts/ against the built
 # bpfman binary. Each script executes from e2e/ so
@@ -1050,8 +1062,7 @@ build-e2e-scripts: bpfman-compile bpfman-shell-compile $(E2E_SCRIPTS_TEST_BIN) $
 
 # Select the shell independently of the daemon, including fixture
 # helpers that resolve the shell from PATH inside scripts.
-.PHONY: run-e2e-scripts
-run-e2e-scripts:
+_locked-run-e2e-scripts:
 	@test "$(BPFMAN_E2E_IMPLEMENTATION)" = go -o "$(BPFMAN_E2E_IMPLEMENTATION)" = rust || { echo "BPFMAN_E2E_IMPLEMENTATION must be go or rust" >&2; exit 1; }
 	@test "$(notdir $(BPFMAN_UNDER_TEST))" = bpfman || { echo "BPFMAN_UNDER_TEST must name an executable called bpfman" >&2; exit 1; }
 	@test -x "$(abspath $(BPFMAN_UNDER_TEST))" || { echo "BPFMAN_UNDER_TEST is not executable: $(abspath $(BPFMAN_UNDER_TEST))" >&2; exit 1; }
@@ -1096,7 +1107,7 @@ export BPFMAN_BUILD_OIDC_ISSUER = $(OIDC_ISSUER)
 export PROTOC = $(abspath $(BIN_DIR))/protoc
 test-e2e-selection rust-build rust-build-csi rust-test-unit rust-test-kernel-fake rust-test-xdp-store rust-test-load-compensation rust-test-unload rust-lint rust-doc: | $(BIN_DIR)/protoc
 
-rust-check: rust-fmt rust-lint rust-test rust-doc
+_locked-rust-check: rust-fmt rust-lint _locked-rust-test rust-doc
 
 rust-build: $(RUST_DISPATCHER)
 	cargo build --manifest-path $(RUST_MANIFEST) --workspace --locked --profile $(RUST_BUILD_PROFILE)
@@ -1121,7 +1132,8 @@ RUST_TEST_RUNNER = --config 'target."cfg(target_os = \"linux\")".runner = ["sh",
 $(BIN_DIR)/xdp-delivery-probe: e2e/testdata/xdp-delivery/main.go go.mod go.sum | $(BIN_DIR)
 	CGO_ENABLED=0 go build -o $@ ./e2e/testdata/xdp-delivery
 
-rust-test: rust-test-userspace e2e-kmod-insmod
+_locked-rust-test: rust-test-userspace
+	$(Q)$(MAKE) e2e-kmod-insmod
 	$(RUST_TEST_ENV) BPFMAN_KERNEL_SUITE=all cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER)
 
 # Fail cheap admission/persistence contracts before privileged integration tests.
@@ -1198,9 +1210,8 @@ rust-clean:
 # previously-loaded (or absent) module. The sub-make invocation
 # enforces the phase boundary: build + reload complete first, then
 # the runner kicks off.
-.PHONY: test-e2e-scripts
-test-e2e-scripts: build-e2e-scripts e2e-kmod-reload
-	$(Q)$(MAKE) run-e2e-scripts
+_locked-test-e2e-scripts: build-e2e-scripts e2e-kmod-reload
+	$(Q)$(MAKE) _locked-run-e2e-scripts
 
 .PHONY: test-e2e-scripts-file
 test-e2e-scripts-file:
@@ -1927,8 +1938,7 @@ ci-test: ci-image
 # e2e.test binary and its on-disk BPF object tree are then run on
 # the host with sudo so it has the kernel privileges the e2e suite
 # needs.
-.PHONY: ci-test-e2e
-ci-test-e2e:
+_locked-ci-test-e2e:
 	$(RM) -r $(CI_E2E_BUNDLE)
 	$(OCI_BIN) buildx build --target=e2e-export --output type=local,dest=$(CI_E2E_BUNDLE) -f $(CI_DOCKERFILE) --build-arg RACE=$(RACE) --build-arg EXTRA_TAGS=$(EXTRA_TAGS) $(CI_BUILDX_CACHE) .
 	$(MAKE) e2e-kmod-reload
@@ -1951,13 +1961,12 @@ ci-test-e2e:
 # from a previous run could otherwise mask "didn't rebuild" bugs.
 # golangci-lint under bin/ is preserved -- it has its own rule
 # and re-fetching over the network is slow.
-.PHONY: ci-test-e2e-scripts
-ci-test-e2e-scripts:
+_locked-ci-test-e2e-scripts:
 	$(RM) bin/bpfman bin/bpfman-shell bin/e2e.test bin/e2e-scripts.test
 	$(MAKE) clean-bpf
 	$(OCI_BIN) buildx build --target=e2e-export --output type=local,dest=. -f $(CI_DOCKERFILE) --build-arg RACE=$(RACE) --build-arg EXTRA_TAGS=$(EXTRA_TAGS) $(CI_BUILDX_CACHE) .
 	$(MAKE) e2e-kmod-reload
-	$(MAKE) run-e2e-scripts
+	$(MAKE) _locked-run-e2e-scripts
 
 # Reproduce the workflow's gRPC parallel e2e job locally. The test
 # binary, bpfman, and BPF object tree live in the bundle path; tell
@@ -1966,12 +1975,11 @@ ci-test-e2e-scripts:
 # from the bundle) rather than ci-test-e2e-scripts (which has to
 # extract because the .bpfman scripts reference testdata via
 # relative paths on disk).
-.PHONY: ci-test-e2e-grpc
-ci-test-e2e-grpc:
+_locked-ci-test-e2e-grpc:
 	$(RM) -r $(CI_E2E_BUNDLE)
 	$(OCI_BIN) buildx build --target=e2e-export --output type=local,dest=$(CI_E2E_BUNDLE) -f $(CI_DOCKERFILE) --build-arg RACE=$(RACE) --build-arg EXTRA_TAGS=$(EXTRA_TAGS) $(CI_BUILDX_CACHE) .
 	$(MAKE) e2e-kmod-reload
-	$(MAKE) run-e2e-grpc E2E_GRPC_TEST_BIN=$(CI_E2E_BUNDLE)/bin/e2e-grpc.test E2E_GRPC_BPFMAN_BIN=$(CI_E2E_BUNDLE)/bin/bpfman E2E_GRPC_BYTECODE_DIR=$(abspath $(CI_E2E_BUNDLE)/e2e)
+	$(MAKE) _locked-run-e2e-grpc E2E_GRPC_TEST_BIN=$(CI_E2E_BUNDLE)/bin/e2e-grpc.test E2E_GRPC_BPFMAN_BIN=$(CI_E2E_BUNDLE)/bin/bpfman E2E_GRPC_BYTECODE_DIR=$(abspath $(CI_E2E_BUNDLE)/e2e)
 
 # Umbrella: run every CI pipeline locally. Cheap checks first
 # (vendor/fmt) so failures surface fast; build before tests so
@@ -1982,24 +1990,20 @@ ci-test-e2e-grpc:
 # single dev box that fan-out collides on shared kernel state --
 # bpffs mounts, dispatcher slot tables, the global program-id
 # space, and the inode that uprobes attach to (for which both
-# suites use the same e2e.test binary). Symptoms range from spurious
-# attach failures to shell counter assertions seeing the other
-# suite's events. Don't `make -j ci-test-e2e ci-test-e2e-scripts`
-# locally, and don't run them in two shells at once.
+# suites use the same e2e.test binary). The host-wide gate rejects
+# overlapping privileged test goals.
 .PHONY: ci
 ci: ci-check-vendor ci-check-fmt ci-check-goimports ci-check-vet ci-check-gofix ci-check-bpfman-shell-fmt ci-build ci-lint ci-test ci-test-e2e ci-test-e2e-scripts ci-test-e2e-grpc
 
 # Focused subsets of the kernel suite also run by rust-test and rust-check.
 # Script acceptance isolates ordinary scripts and retains a concurrent shared
 # runtime subset per backend; the Go runner parallelizes scripts within each batch.
-.PHONY: rust-test-scripts
-rust-test-scripts: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+_locked-rust-test-scripts: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- script_corpus --nocapture
 
 # Full shared non-external corpus against Rust, with file and local OCI sources.
 # These cases also run in the normal gate's serial corpus stage.
-.PHONY: rust-test-bytecode-corpus
-rust-test-bytecode-corpus: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+_locked-rust-test-bytecode-corpus: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- bytecode_script_corpus --nocapture
 
 .PHONY: rust-test-kernel-load
@@ -2098,22 +2102,18 @@ rust-test-tcx: rust-build $(RUST_TEST_INPUTS)
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- tcx_ --nocapture
 
 # Native kernel probes: unchanged shared acceptance plus recovery contracts.
-.PHONY: rust-test-kprobe
-rust-test-kprobe: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+_locked-rust-test-kprobe: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- kprobe_ --nocapture
 
 # Explicit map-owner and PinByName parity, plus retained cleanup contracts.
-.PHONY: rust-test-map-sharing
-rust-test-map-sharing: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+_locked-rust-test-map-sharing: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- map_sharing --nocapture
 
-.PHONY: rust-test-uprobe
-rust-test-uprobe: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+_locked-rust-test-uprobe: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- uprobe_ --nocapture
 
 # Native function tracing, including module BTF and unchanged acceptance scripts.
-.PHONY: rust-test-function-tracing
-rust-test-function-tracing: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+_locked-rust-test-function-tracing: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) -- function_tracing_ --nocapture
 
 # Native LSM hooks: unchanged acceptance plus execution and recovery contracts.
@@ -2144,8 +2144,7 @@ rust-test-grpc: rust-build $(RUST_TEST_INPUTS)
 
 # The unchanged daemon lifecycle suite also exercises the Rust composition root.
 
-.PHONY: rust-test-serve
-rust-test-serve: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
+_locked-rust-test-serve: rust-build $(RUST_TEST_INPUTS) e2e-kmod-insmod
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test serve --locked
 	$(RUST_TEST_ENV) cargo test --manifest-path $(RUST_MANIFEST) -p bpfman --test kernel --locked $(RUST_TEST_RUNNER) sqlite_serve_grpc -- --nocapture
 

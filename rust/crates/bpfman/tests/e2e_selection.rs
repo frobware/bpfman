@@ -73,7 +73,8 @@ impl Fixture {
         let mut command = Command::new("make");
         command
             .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.."))
-            .args(["--no-print-directory", "-s", "run-e2e-scripts"])
+            // The fake sudo and runner only exercise command selection.
+            .args(["--no-print-directory", "-s", "_locked-run-e2e-scripts"])
             .arg(format!("BIN_DIR={}", self.go.display()))
             .env("BPFMAN_BIN", self.go.join("bpfman"))
             .env_remove("BPFMAN_UNDER_TEST")

@@ -546,7 +546,8 @@ fn run_dsl_selection(
     let output = command
         .arg("300s")
         .arg("make")
-        .arg("run-e2e-scripts")
+        // The Cargo runner already holds the host fixture lock.
+        .arg("_locked-run-e2e-scripts")
         .arg(format!("BPFMAN_UNDER_TEST={}", binary.display()))
         .arg(format!("BPFMAN_SHELL_UNDER_TEST={}", shell.display()))
         .arg(format!(

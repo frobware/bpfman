@@ -7,6 +7,9 @@ case "${1##*/}" in
         exec sh "${0%/*}/test-kernel-fake.sh" "$@"
         ;;
     kernel-*)
+        if [ "${BPFMAN_KERNEL_TEST_LOCK_HELD:-}" != 1 ]; then
+            exec sh "${0%/*}/../e2e/with-kernel-test-lock.sh" sh "$0" "$@"
+        fi
         if [ -n "${BPFMAN_KERNEL_SUITE:-}" ]; then
             exec sudo -n \
                 --preserve-env=BPFMAN_KERNEL_TMPFS,BPFMAN_GO_BIN,BPFMAN_DSL_TEST_BIN,BPFMAN_RUST_SHELL_BIN,BPFMAN_SHELL_BIN_DIR,BPFMAN_KERNEL_TIMINGS,BPFMAN_E2E_SCRIPT_TIMELINE,RUST_LOG,BPFMAN_KERNEL_SUITE,BPFMAN_KERNEL_TEST_THREADS,PARALLEL \
