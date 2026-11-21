@@ -264,6 +264,9 @@ impl Machine<'_> {
             || self.callers.last().map_or(0, |caller| caller.deferred_base),
             |poll| poll.deferred_base,
         );
+        // Defers in the caller belong to this attempt while retry unwinds.
+        // A cleanup failure must abort before scheduling another attempt.
+        self.attempt_cleanup = Some(retry.span.clone());
         self.pending_retry = Some(retry);
         self.draining = Some(base);
     }

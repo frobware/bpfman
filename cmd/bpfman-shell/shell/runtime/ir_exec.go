@@ -323,7 +323,9 @@ func (ex *executor) runUnit(entry *ir.BasicBlock) error {
 // drain attempt-local scopes and either re-enter Attempt or
 // transfer to OnTimeout when the deadline has elapsed.
 func (ex *executor) continueOrTimeout(top *pollState) (*ir.BasicBlock, error) {
-	ex.drainToAttemptStart(top)
+	if failed := ex.drainToAttemptStart(top); failed > 0 {
+		return nil, ex.failPollCleanup(top, failed)
+	}
 	if !ex.env.now().Before(top.Deadline) {
 		top.Failed = true
 		top.TimedOut = true
@@ -362,13 +364,14 @@ func renderPollRetryMessage(v Value) string {
 // block starts from a clean slate. The attempt block's own
 // ir.EnterFrame and ir.EnterDeferScope re-open them when control
 // returns.
-func (ex *executor) drainToAttemptStart(state *pollState) {
+func (ex *executor) drainToAttemptStart(state *pollState) int {
+	failures := 0
 	for len(ex.loops) > state.AttemptLoopDepth {
 		ex.loops = ex.loops[:len(ex.loops)-1]
 	}
 	for len(ex.scopes) > state.AttemptScopeDepth {
 		if ex.env.defers != nil {
-			runDefers(ex.env, *ex.env.defers)
+			failures += runDefers(ex.env, *ex.env.defers)
 		}
 		n := len(ex.scopes)
 		ex.env.defers = ex.scopes[n-1]
@@ -377,6 +380,13 @@ func (ex *executor) drainToAttemptStart(state *pollState) {
 	for ex.env.Session.FrameDepth() > state.AttemptFrameDepth {
 		ex.env.Session.PopFrame()
 	}
+	return failures
+}
+
+func (ex *executor) failPollCleanup(poll *pollState, failed int) error {
+	poll.Failed = true
+	traceNote(ex.env, poll.Span, "poll fatal")
+	return syntax.SpanErrorf(poll.Span, "poll: attempt-local defer failed during unwind (%d cleanup failure(s)); halting the construct", failed)
 }
 
 // runBlock executes each instruction in blk in order. Non-terminator
@@ -484,10 +494,7 @@ func (ex *executor) execInstr(ins ir.Instr) (*ir.BasicBlock, bool, error) {
 		// progress.
 		if v.Policy == ir.RunDefersAttemptFatal && failed > 0 {
 			if len(ex.polls) > 0 {
-				top := ex.polls[len(ex.polls)-1]
-				top.Failed = true
-				traceNote(ex.env, top.Span, "poll fatal")
-				return nil, false, syntax.SpanErrorf(top.Span, "poll: attempt-local defer failed during unwind (%d cleanup failure(s)); halting the construct", failed)
+				return nil, false, ex.failPollCleanup(ex.polls[len(ex.polls)-1], failed)
 			}
 			if ex.inDef && ex.env.InPoll() {
 				return nil, false, syntax.SpanErrorf(v.Span, "poll: helper defer failed during retry unwind (%d cleanup failure(s)); halting the construct", failed)

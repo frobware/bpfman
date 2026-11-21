@@ -1,0 +1,12 @@
+err_is: silent
+defer_failures: 1
+stdout_lines:
+  - before-poll
+  - first-attempt
+  - attempt-cleanup
+  - outer-cleanup
+stderr_contains:
+  - "[defer] FAIL"
+  - "exec false"
+stderr_not_contains:
+  - "[poll] FAIL"

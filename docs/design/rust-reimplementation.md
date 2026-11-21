@@ -8770,3 +8770,19 @@ status 1. A real nonzero command exit still satisfies a negative assertion.
 Go regression and race tests and lint passed. Both shells passed the shared
 file and local-image corpus, with all four shell and CLI pairings passing in
 file mode and the existing clsact policy skip for the Go CLI.
+
+### Failed cleanup during a helper retry
+
+The shared `.bpfman` regression reproduced both shells running a second
+poll attempt and continuing after the poll despite a failed attempt-local
+defer. Both interpreters now halt the poll when cleanup during a propagated
+retry fails. The fixture requires the remaining attempt cleanup and the
+outer cleanup to run, and rejects both the next attempt and the statement
+after the poll.
+
+The fixture failed before the fixes and passed with both rebuilt shells.
+Go race tests and lint passed. The full Rust gate passed all 92 kernel cases
+with `GOMAXPROCS=4` after existing 100 ms CLI fixtures timed out during the
+default-parallelism runs. The fixture deadlines were retained. Both shells
+passed the shared file and local-image corpus, and all four shell and CLI
+pairings passed in file mode with the existing Go clsact policy skip.

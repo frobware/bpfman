@@ -1,0 +1,21 @@
+def again() {
+  retry
+}
+
+guard scratch <- tempdir poll-cleanup
+defer exec rm -rf $scratch.path
+defer print outer-cleanup
+let started = "${scratch.path}/attempt-started"
+
+print before-poll
+poll timeout 1s every 1ms {
+  if not path-exists $started {
+    print first-attempt
+    defer print attempt-cleanup
+    defer exec false
+    exec touch $started
+    again
+  }
+  print second-attempt-ran
+}
+print after-poll

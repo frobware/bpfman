@@ -38,6 +38,10 @@ func TestScriptRun_PollWorkflowFixtureMatrix(t *testing.T) {
 			fixture: "poll/guard-bind-helper-retry-called-from-poll-retries-until-ready",
 		},
 		{
+			name:    "helper_retry_stops_after_attempt_cleanup_failure",
+			fixture: "poll/helper-retry-stops-after-attempt-cleanup-failure",
+		},
+		{
 			name:    "helper_retry_outside_poll_is_runtime_error",
 			fixture: "poll/helper-retry-outside-poll-is-runtime-error",
 		},
