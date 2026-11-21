@@ -138,10 +138,15 @@ func Run(ctx context.Context, cfg Config) error {
 	loopErr := Loop(ctx, cfg)
 
 	if isContextCancellation(ctx, loopErr) {
-		if cause := context.Cause(ctx); cause != nil {
+		cause, cancelled := context.Cause(ctx), ctx.Err()
+		if cause == nil || errors.Is(loopErr, cause) || !errors.Is(loopErr, cancelled) {
+			return loopErr
+		}
+		if loopErr == cancelled {
 			return cause
 		}
-		return loopErr
+		// Keep a wrapped or joined failure while adding the root cause.
+		return errors.Join(cause, loopErr)
 	}
 	if errors.Is(loopErr, runtime.ErrRequireFailed) || errors.Is(loopErr, ErrScriptError) {
 		return ErrSilent

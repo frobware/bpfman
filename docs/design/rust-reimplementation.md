@@ -8693,3 +8693,14 @@ The shared file-bytecode corpus stress target ran at parallelism 16, with four
 repetitions for parallel-eligible scripts and one for serial scripts. All 147
 selected files were accounted for on each shell. Rust passed all 573 cases.
 Go passed 569, with four repetitions of the existing clsact policy skip.
+
+Go's top-level cancellation handling now preserves wrapped and joined errors.
+A real SIGINT test replaced the command's adapter file with a nonempty
+directory before interrupting it. The previous shell printed only the signal
+cause. The rebuilt shell reported both the signal and the removal failure
+and preserved exit status 1. Driver regression tests cover cancellation
+with and without a joined cleanup error and pass with the race detector.
+
+The shared 147-file corpus passed in file and local-image modes with both
+shells. All four shell and CLI combinations passed in file mode. Runs
+with the Go CLI retain the existing clsact-reclamation policy skip.
