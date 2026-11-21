@@ -134,3 +134,24 @@ func TestScriptRun_NegativeCommandStatusRequiresAnOutcome(t *testing.T) {
 		})
 	}
 }
+
+func TestScriptRun_CommandLookupPreservesPermissionFailure(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "not-executable")
+	require.NoError(t, os.WriteFile(blocked, []byte("#!/bin/sh\n"), 0o600))
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{blocked, "permission denied"},
+		{filepath.Join(dir, "missing"), "command not found"},
+	} {
+		stdout, stderr, err := runWholeProgramStdin(t, fmt.Sprintf("guard _ <- exec %q\n", tc.path))
+		require.Error(t, err)
+		assert.Empty(t, stdout)
+		assert.Contains(t, stderr, tc.path)
+		assert.Contains(t, stderr, tc.want)
+	}
+}

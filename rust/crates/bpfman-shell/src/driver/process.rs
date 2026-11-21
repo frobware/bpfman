@@ -149,10 +149,15 @@ pub(super) fn foreground(
 
 fn spawn_error(command: &Command, error: io::Error) -> String {
     let executable = command.get_program().to_string_lossy();
-    if error.kind() == io::ErrorKind::NotFound {
-        format!("{executable}: command not found")
+    if error.kind() != io::ErrorKind::NotFound {
+        return format!("{executable}: {error}");
+    }
+    // exec can return ENOENT for a missing interpreter or loader even
+    // when the requested executable exists.
+    if has_executable(&executable) {
+        format!("{executable}: could not start: {error}")
     } else {
-        format!("{executable}: {error}")
+        format!("{executable}: command not found")
     }
 }
 

@@ -8802,3 +8802,16 @@ default test parallelism.
 The full Rust gate passed all 92 kernel cases with default test parallelism.
 Both shells passed the shared file and local-image corpus, and all four
 shell and CLI pairings passed in file mode with the existing Go clsact skip.
+
+### Command lookup and launch diagnostics
+
+Go preserves lookup errors such as permission denied for an explicit path.
+Genuinely absent commands retain the existing source-located diagnostic.
+Rust distinguishes an absent executable from a launch-time ENOENT when the
+target is executable, as with a missing shebang interpreter. The CLI
+regression also verifies that a command which runs and exits 7 still
+publishes exit code 7 in its result envelope. Go race tests and lint passed.
+
+The full Rust gate passed all 92 kernel cases. Both shells passed the
+shared file and local-image corpus, and all four shell and CLI pairings
+passed in file mode with the existing Go clsact skip.

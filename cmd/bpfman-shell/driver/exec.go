@@ -22,6 +22,7 @@ import (
 
 	"github.com/bpfman/bpfman/cmd/bpfman-shell/shell/runtime"
 	"github.com/bpfman/bpfman/cmd/bpfman-shell/shell/source"
+	"github.com/bpfman/bpfman/cmd/bpfman-shell/shell/syntax"
 	"github.com/bpfman/bpfman/cmd/internal/cli"
 	"github.com/bpfman/bpfman/internal/execcancel"
 )
@@ -133,12 +134,14 @@ func (e *RuntimeError) SourceSpan() source.Span { return e.Span }
 // ResolveCommandPath returns nil if name names an executable
 // reachable from the current process: an absolute path, a relative
 // path containing a slash, or a bare name that exec.LookPath finds
-// on $PATH. Otherwise it returns a *CommandNotFound carrying the
-// originating Span so the renderer can cite the source line. No
-// caching: exec.LookPath rescans $PATH on every call.
+// on $PATH. Missing commands use CommandNotFound. Other lookup
+// failures retain the underlying error and the command span.
 func ResolveCommandPath(name string, span source.Span) error {
 	if _, err := exec.LookPath(name); err != nil {
-		return &CommandNotFound{Name: name, Span: span}
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+			return &CommandNotFound{Name: name, Span: span}
+		}
+		return syntax.FrameAt(span, err)
 	}
 	return nil
 }

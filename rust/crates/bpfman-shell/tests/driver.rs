@@ -591,3 +591,32 @@ fn trace_prints_file_adapter_reference_while_the_command_receives_its_contents()
     );
     Ok(())
 }
+
+#[test]
+fn command_launch_distinguishes_missing_executable_and_missing_interpreter() -> io::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let executable = dir.path().join("script");
+    let missing_interpreter = dir.path().join("missing-interpreter");
+    fs::write(
+        &executable,
+        format!("#!{}\n", missing_interpreter.display()),
+    )?;
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+
+    for (path, expected) in [
+        (executable, "could not start:"),
+        (dir.path().join("missing-executable"), "command not found"),
+    ] {
+        let output = run(&[], &format!("exec \"{}\"\n", path.display()))?;
+        assert_eq!(output.status.code(), Some(1), "{output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{stderr}");
+    }
+    let output = run(
+        &[],
+        "let result <- exec sh -c 'exit 7'\nprint $result.exit_code\n",
+    )?;
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(output.stdout, b"7\n");
+    Ok(())
+}
