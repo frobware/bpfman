@@ -8704,3 +8704,24 @@ with and without a joined cleanup error and pass with the race detector.
 The shared 147-file corpus passed in file and local-image modes with both
 shells. All four shell and CLI combinations passed in file mode. Runs
 with the Go CLI retain the existing clsact-reclamation policy skip.
+
+### Shell registry listener failures
+
+Go binds the fixture registry listener before starting HTTP and returns the
+binding errors if both loopback families fail. Rust retains fatal accept
+errors, refuses to return a dead registry address, and reports an unobserved
+listener failure when the script exits. Interrupted accepts and aborted
+client connections leave the listener running.
+
+Real descriptor-limit probes reproduced both failures in the previous
+binaries. Go previously panicked at startup. Rust previously returned its
+dead address and exited successfully after a client connection was refused.
+The rebuilt Go shell reports the startup error and exits 1. Rust reports the
+accept error once, either at the next lookup or at script exit. Its healthy
+local listener serves `/v2/` and shuts down normally. Go race tests and lint
+pass, including an occupied-address regression.
+
+The final Rust gate passed all 92 kernel cases. Both shells passed the shared
+147-file corpus in file and local-image modes, and all four shell and CLI
+pairings passed in file mode. The Go CLI kept its one existing
+clsact-reclamation policy skip.

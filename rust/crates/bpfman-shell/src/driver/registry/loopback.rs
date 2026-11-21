@@ -21,7 +21,8 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) struct Registry {
     address: SocketAddr,
     stop: Arc<AtomicBool>,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<io::Result<()>>>,
+    failure: Option<String>,
 }
 
 impl Registry {
@@ -32,51 +33,94 @@ impl Registry {
         let observe_stop = Arc::clone(&stop);
         let worker = thread::Builder::new()
             .name("bpfman-fixture-registry".to_owned())
-            .spawn(move || {
-                let mut state = State::default();
-                for stream in listener.incoming() {
-                    if observe_stop.load(Ordering::Acquire) {
-                        break;
-                    }
-                    let Ok(mut stream) = stream else {
-                        break;
-                    };
-                    // A malformed request or disconnected client only ends this connection.
-                    drop(serve(&mut stream, &mut state));
-                }
-            })?;
+            .spawn(move || run_listener(listener.incoming(), &observe_stop))?;
         Ok(Self {
             address,
             stop,
             worker: Some(worker),
+            failure: None,
         })
     }
 
-    pub(super) fn address(&self) -> SocketAddr {
-        self.address
+    pub(super) fn address(&mut self) -> Result<SocketAddr, String> {
+        if self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
+            self.join();
+        }
+        self.result().map(|()| self.address)
+    }
+
+    pub(super) fn finish(mut self) -> Result<(), String> {
+        // A lookup that already joined the worker returned its failure.
+        if self.worker.is_none() {
+            return Ok(());
+        }
+        self.stop_worker();
+        self.result()
+    }
+
+    fn result(&self) -> Result<(), String> {
+        self.failure
+            .as_ref()
+            .map_or(Ok(()), |error| Err(error.clone()))
+    }
+
+    fn join(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            self.failure = match worker.join() {
+                Ok(Ok(())) => None,
+                Ok(Err(error)) => Some(format!("accept fixture registry connection: {error}")),
+                Err(_) => Some("fixture registry worker panicked".to_owned()),
+            };
+        }
+    }
+
+    fn stop_worker(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = &self.worker
+            && !worker.is_finished()
+            && let Err(error) = TcpStream::connect_timeout(&self.address, TIMEOUT)
+            && !worker.is_finished()
+        {
+            // The worker may be waiting in accept. A failed wake cannot
+            // guarantee a bounded join.
+            drop(self.worker.take());
+            self.failure = Some(format!("wake fixture registry: {error}"));
+            return;
+        }
+        self.join();
     }
 }
 
 impl Drop for Registry {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(worker) = self.worker.take() {
-            if !worker.is_finished() {
-                match TcpStream::connect_timeout(&self.address, TIMEOUT) {
-                    Ok(stream) => drop(stream),
-                    Err(error) if !worker.is_finished() => {
-                        super::super::report_cleanup("wake fixture registry", Err::<(), _>(error));
-                        return;
-                    }
-                    Err(_) => {}
-                }
-            }
-            super::super::report_cleanup(
-                "join fixture registry",
-                worker.join().map_err(|_| "thread panicked"),
-            );
+        if self.worker.is_some() {
+            self.stop_worker();
+            super::super::report_cleanup("stop fixture registry", self.result());
         }
     }
+}
+
+fn run_listener(
+    incoming: impl IntoIterator<Item = io::Result<TcpStream>>,
+    stop: &AtomicBool,
+) -> io::Result<()> {
+    let mut state = State::default();
+    for accepted in incoming {
+        match accepted {
+            Ok(_) if stop.load(Ordering::Acquire) => break,
+            Ok(mut stream) => {
+                // A malformed request or disconnected client only ends this connection.
+                drop(serve(&mut stream, &mut state));
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn serve(stream: &mut TcpStream, state: &mut State) -> io::Result<()> {
@@ -418,6 +462,49 @@ impl Reply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn listener_failure_survives_join_and_prevents_reusing_its_address() -> Result<(), String> {
+        let address = "127.0.0.1:1234"
+            .parse()
+            .map_err(|error: std::net::AddrParseError| error.to_string())?;
+        let failed_registry = || Registry {
+            address,
+            stop: Arc::new(AtomicBool::new(false)),
+            worker: Some(thread::spawn(|| {
+                run_listener(
+                    [
+                        Err(io::Error::from(io::ErrorKind::Interrupted)),
+                        Err(io::Error::from_raw_os_error(
+                            rustix::io::Errno::MFILE.raw_os_error(),
+                        )),
+                    ],
+                    &AtomicBool::new(false),
+                )
+            })),
+            failure: None,
+        };
+        let mut registry = failed_registry();
+        registry.join();
+        let error = registry.address().expect_err("listener failure");
+        assert!(
+            error.contains("accept fixture registry connection"),
+            "{error}"
+        );
+        assert!(error.contains("Too many open files"), "{error}");
+        assert_eq!(registry.address(), Err(error.clone()));
+        assert_eq!(registry.finish(), Ok(()));
+        let registry = failed_registry();
+        while !registry
+            .worker
+            .as_ref()
+            .is_some_and(JoinHandle::is_finished)
+        {
+            thread::yield_now();
+        }
+        assert_eq!(registry.finish(), Err(error));
+        Ok(())
+    }
 
     #[test]
     fn digest_mismatch_leaves_the_upload_available_for_retry() -> Result<(), &'static str> {

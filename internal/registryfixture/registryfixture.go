@@ -3,10 +3,12 @@
 package registryfixture
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -162,15 +164,30 @@ func SanitiseComponent(s string) string {
 }
 
 func newRegistry() (*httptest.Server, string, error) {
-	server := httptest.NewServer(registry.New(
-		registry.Logger(log.New(io.Discard, "", 0)),
-	))
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		server.Close()
-		return nil, "", fmt.Errorf("start e2e image registry: %w", err)
+	server, host, ipv4Err := listenRegistry("127.0.0.1:0")
+	if ipv4Err == nil {
+		return server, host, nil
 	}
-	return server, u.Host, nil
+	server, host, ipv6Err := listenRegistry("[::1]:0")
+	if ipv6Err == nil {
+		return server, host, nil
+	}
+	return nil, "", fmt.Errorf("start e2e image registry: %w", errors.Join(ipv4Err, ipv6Err))
+}
+
+func listenRegistry(address string) (*httptest.Server, string, error) {
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, "", err
+	}
+	server := &httptest.Server{
+		Listener: listener,
+		Config: &http.Server{Handler: registry.New(
+			registry.Logger(log.New(io.Discard, "", 0)),
+		)},
+	}
+	server.Start()
+	return server, listener.Addr().String(), nil
 }
 
 func normaliseHost(s string) (string, error) {

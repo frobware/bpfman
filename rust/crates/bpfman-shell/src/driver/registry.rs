@@ -21,6 +21,16 @@ pub(crate) struct Registry {
 }
 
 impl Registry {
+    pub(crate) fn finish(self, result: Result<u8, String>) -> Result<u8, String> {
+        match self.server.map_or(Ok(()), loopback::Registry::finish) {
+            Ok(()) => result,
+            Err(cleanup) => match result {
+                Ok(_) => Err(cleanup),
+                Err(primary) => Err(format!("{primary}\n{cleanup}")),
+            },
+        }
+    }
+
     pub(super) fn invoke(&mut self, arguments: &[Argument]) -> Result<Value, String> {
         let (mode, rest) = arguments
             .split_first()
@@ -129,10 +139,10 @@ impl Registry {
         }
         let server = self
             .server
-            .as_ref()
+            .as_mut()
             .ok_or("fixture registry did not start")?;
         Ok(Endpoint {
-            authority: server.address().to_string(),
+            authority: server.address()?.to_string(),
             scheme: "http",
         })
     }

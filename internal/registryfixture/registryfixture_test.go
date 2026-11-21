@@ -1,7 +1,10 @@
 package registryfixture
 
 import (
+	"errors"
+	"net"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -67,5 +70,26 @@ func TestRefReturnsAliasReference(t *testing.T) {
 	prefix := RegistryAlias + "/" + RepositoryPrefix + "/explicit-xdp-pass:"
 	if !strings.HasPrefix(ref, prefix) {
 		t.Fatalf("Ref = %q, want prefix %q", ref, prefix)
+	}
+}
+
+func TestRegistryReturnsListenerBindFailure(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := listener.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+
+	server, host, err := listenRegistry(listener.Addr().String())
+	if server != nil {
+		server.Close()
+	}
+	if server != nil || host != "" || !errors.Is(err, syscall.EADDRINUSE) {
+		t.Fatalf("listenRegistry on occupied address returned server=%v, host=%q, err=%v", server != nil, host, err)
 	}
 }

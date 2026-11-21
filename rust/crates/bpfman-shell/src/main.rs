@@ -198,13 +198,9 @@ fn run(
     }
     .map_err(|error| error.to_string())?;
 
-    driver::run(
-        &ir,
-        stdout,
-        &mut driver::ImageRegistry::default(),
-        options.trace,
-        interrupt,
-    )
+    let mut registry = driver::ImageRegistry::default();
+    let result = driver::run(&ir, stdout, &mut registry, options.trace, interrupt);
+    registry.finish(result)
 }
 
 fn read_source(
