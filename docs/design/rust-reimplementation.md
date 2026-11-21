@@ -8754,3 +8754,11 @@ modes. The Go shell passed file and local-image corpus runs, and all four
 shell and CLI pairings passed in file mode. Runs with the Go CLI retained
 the existing clsact-reclamation policy skip, with all 147 selected files
 accounted for. Runner lint passed.
+
+The harness now rejects malformed, nonpositive or overflowing repeat counts
+and timeouts before launching scripts. Omitted values retain their defaults.
+Real Make probes confirmed that `3x` and `1msx` fail without launching a
+script, while a repeat count of three runs the selected script exactly three
+times. Parser tests and tagged runner lint passed. Both shells passed file and
+local-image shared corpus checks, and all four file-mode shell and CLI pairings
+passed with the existing clsact policy skip for the Go CLI.

@@ -89,6 +89,14 @@ import (
 //
 //nolint:paralleltest // The suite coordinates exclusive cases and must finish before other top-level tests.
 func TestBPFManScripts(t *testing.T) {
+	timeout, err := parseScriptTimeout(os.Getenv(bpfmanShellTimeoutEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeats, err := parseScriptRepeats(os.Getenv(bpfmanShellRepeatsEnv))
+	if err != nil {
+		t.Fatal(err)
+	}
 	before := scriptProcesses.Load()
 	t.Cleanup(func() {
 		// This runs after all parallel subtests and any cohort cleanups.
@@ -125,7 +133,7 @@ func TestBPFManScripts(t *testing.T) {
 		if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") == "1" {
 			scope = "isolated"
 		}
-		runScriptCohort(t, scope, nil, false, failfast, abortCtx, abortCancel)
+		runScriptCohort(t, scope, nil, false, failfast, abortCtx, abortCancel, timeout, repeats)
 		return
 	}
 	if os.Getenv("BPFMAN_E2E_ISOLATED_RUNTIME") != "1" {
@@ -137,15 +145,13 @@ func TestBPFManScripts(t *testing.T) {
 	for _, scope := range []string{"shared", "isolated"} {
 		t.Run(scope, func(t *testing.T) {
 			t.Parallel()
-			runScriptCohort(t, scope, shared, true, failfast, abortCtx, abortCancel)
+			runScriptCohort(t, scope, shared, true, failfast, abortCtx, abortCancel, timeout, repeats)
 		})
 	}
 }
 
-func runScriptCohort(t *testing.T, scope string, shared map[string]bool, mixed, failfast bool, abortCtx context.Context, abortCancel context.CancelFunc) {
+func runScriptCohort(t *testing.T, scope string, shared map[string]bool, mixed, failfast bool, abortCtx context.Context, abortCancel context.CancelFunc, timeout time.Duration, repeats int) {
 	t.Helper()
-	timeout := scriptTimeout()
-	repeats := scriptRepeats()
 	e2eDir := e2ePackageDir(t)
 	env := os.Environ()
 	var sharedSlots chan struct{}
@@ -443,30 +449,32 @@ func writeScriptTimelineMarker(marker scriptTimelineMarker) error {
 	return nil
 }
 
-func scriptTimeout() time.Duration {
-	raw := os.Getenv(bpfmanShellTimeoutEnv)
+func parseScriptTimeout(raw string) (time.Duration, error) {
 	if raw == "" {
-		return bpfmanShellTimeoutDefault
+		return bpfmanShellTimeoutDefault, nil
 	}
 	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
-		return bpfmanShellTimeoutDefault
+	if err != nil {
+		return 0, fmt.Errorf("parse %s=%q: %w", bpfmanShellTimeoutEnv, raw, err)
 	}
-
-	return d
+	if d <= 0 {
+		return 0, fmt.Errorf("%s=%q must be a positive duration", bpfmanShellTimeoutEnv, raw)
+	}
+	return d, nil
 }
 
-func scriptRepeats() int {
-	raw := os.Getenv(bpfmanShellRepeatsEnv)
+func parseScriptRepeats(raw string) (int, error) {
 	if raw == "" {
-		return bpfmanShellRepeatsDefault
+		return bpfmanShellRepeatsDefault, nil
 	}
 	n, err := strconv.Atoi(raw)
-	if err != nil || n < 1 {
-		return bpfmanShellRepeatsDefault
+	if err != nil {
+		return 0, fmt.Errorf("parse %s=%q: %w", bpfmanShellRepeatsEnv, raw, err)
 	}
-
-	return n
+	if n < 1 {
+		return 0, fmt.Errorf("%s=%q must be a positive integer", bpfmanShellRepeatsEnv, raw)
+	}
+	return n, nil
 }
 
 type scriptMetadata struct {
@@ -709,4 +717,34 @@ func TestClsactReclaimCapabilityOverride(t *testing.T) {
 	require.True(t, clsactReclaimEnabled())
 	t.Setenv("BPFMAN_E2E_CLSACT_RECLAIM", "false")
 	require.Equal(t, tcpolicy.ReclaimClsactOnDetach, clsactReclaimEnabled())
+}
+
+func TestScriptTimeoutSetting(t *testing.T) {
+	t.Parallel()
+
+	for _, invalid := range []string{"1msx", "0s", "-1s", "9999999999999999999h"} {
+		_, err := parseScriptTimeout(invalid)
+		require.ErrorContains(t, err, fmt.Sprintf("%s=%q", bpfmanShellTimeoutEnv, invalid))
+	}
+	d, err := parseScriptTimeout("")
+	require.NoError(t, err)
+	require.Equal(t, bpfmanShellTimeoutDefault, d)
+	d, err = parseScriptTimeout("250ms")
+	require.NoError(t, err)
+	require.Equal(t, 250*time.Millisecond, d)
+}
+
+func TestScriptRepeatSetting(t *testing.T) {
+	t.Parallel()
+
+	for _, invalid := range []string{"3x", "0", "-1", "99999999999999999999999999999"} {
+		_, err := parseScriptRepeats(invalid)
+		require.ErrorContains(t, err, fmt.Sprintf("%s=%q", bpfmanShellRepeatsEnv, invalid))
+	}
+	n, err := parseScriptRepeats("")
+	require.NoError(t, err)
+	require.Equal(t, bpfmanShellRepeatsDefault, n)
+	n, err = parseScriptRepeats("3")
+	require.NoError(t, err)
+	require.Equal(t, 3, n)
 }
