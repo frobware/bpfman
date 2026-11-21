@@ -1,4 +1,7 @@
 stdout_lines:
+  - attempt
+  - attempt
+  - attempt
   - json-ready
   - ready
 stderr_not_contains:

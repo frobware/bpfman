@@ -1,4 +1,6 @@
 stdout_lines:
+  - attempt
+  - attempt
   - guard-bind-ready
   - after
 stderr_not_contains:

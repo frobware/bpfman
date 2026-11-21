@@ -8786,3 +8786,19 @@ with `GOMAXPROCS=4` after existing 100 ms CLI fixtures timed out during the
 default-parallelism runs. The fixture deadlines were retained. Both shells
 passed the shared file and local-image corpus, and all four shell and CLI
 pairings passed in file mode with the existing Go clsact policy skip.
+
+### Deterministic polling fixtures
+
+Seven readiness fixtures now assert exact attempt counts in their expected
+output. Six reach readiness on the second attempt and the JSON state fixture
+does so on the third. Their five-second deadline bounds stalled runs. The
+Rust interpreter's injected-clock test continues to assert the retry
+interval and the exact timeout boundary, and the dedicated CLI timeout
+fixture continues to exercise the real timer.
+
+The Go poll fixtures and Rust CLI fixture suite passed 20 repetitions at the
+default test parallelism.
+
+The full Rust gate passed all 92 kernel cases with default test parallelism.
+Both shells passed the shared file and local-image corpus, and all four
+shell and CLI pairings passed in file mode with the existing Go clsact skip.

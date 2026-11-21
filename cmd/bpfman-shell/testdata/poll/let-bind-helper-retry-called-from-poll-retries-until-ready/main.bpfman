@@ -9,7 +9,8 @@ def await_marker(path) {
   print let-bind-ready
 }
 
-poll timeout 100ms every 1ms {
+poll timeout 5s every 1ms {
+  print attempt
   let _ <- await_marker $marker
 }
 

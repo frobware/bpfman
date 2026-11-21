@@ -2,7 +2,8 @@ guard d <- tempdir poll-json-ready
 defer exec rm -rf $d.path
 let state = "${d.path}/state.json"
 
-poll timeout 100ms every 1ms {
+poll timeout 5s every 1ms {
+  print attempt
   let probe <- exec test -f $state
   if $probe.ok {
     guard raw <- exec cat $state

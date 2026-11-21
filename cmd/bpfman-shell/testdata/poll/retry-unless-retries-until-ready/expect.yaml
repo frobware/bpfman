@@ -1,4 +1,6 @@
 stdout_lines:
+  - attempt
+  - attempt
   - inside-ready
   - after
 stderr_not_contains:

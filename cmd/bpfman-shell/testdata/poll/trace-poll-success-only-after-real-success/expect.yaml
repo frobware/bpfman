@@ -1,4 +1,6 @@
 stdout_lines:
+  - attempt
+  - attempt
   - ready
   - after
 stderr_contains:

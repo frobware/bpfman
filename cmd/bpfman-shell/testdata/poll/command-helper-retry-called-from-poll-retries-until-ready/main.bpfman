@@ -12,7 +12,8 @@ def await_marker(path) {
   }
 }
 
-poll timeout 100ms every 1ms {
+poll timeout 5s every 1ms {
+  print attempt
   await_marker $marker
 }
 
