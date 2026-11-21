@@ -113,3 +113,24 @@ func TestScriptRun_NegatedPathExistsRejectsSymlinkLoop(t *testing.T) {
 	assert.Contains(t, stderr, "too many levels of symbolic links")
 	assert.Contains(t, stderr, cycle)
 }
+
+func TestScriptRun_NegativeCommandStatusRequiresAnOutcome(t *testing.T) {
+	t.Parallel()
+
+	for _, prefix := range []string{"assert fail", "assert not ok", "require fail", "require not ok"} {
+		t.Run(prefix, func(t *testing.T) {
+			t.Parallel()
+
+			stdout, stderr, err := runWholeProgramStdin(t, prefix+" exec false\nprint continued\n")
+			require.NoError(t, err, stderr)
+			assert.Equal(t, "continued\n", stdout)
+
+			missing := filepath.Join(t.TempDir(), "missing-command")
+			stdout, stderr, err = runWholeProgramStdin(t, fmt.Sprintf("%s exec %q\nprint continued\n", prefix, missing))
+			require.Error(t, err)
+			assert.Empty(t, stdout)
+			assert.Contains(t, stderr, "command not found")
+			assert.Contains(t, stderr, missing)
+		})
+	}
+}

@@ -281,6 +281,9 @@ The transitional command-status forms are still valid:
 - `require fail COMMAND`;
 - the same forms with leading `not`.
 
+These forms test the status of a command outcome. Dispatch or launch errors
+propagate as script errors, including in the negated forms.
+
 Named predicates are expression-lane pure calls, not command-status
 tails. The current assertion predicates include:
 

@@ -308,10 +308,7 @@ func assertOk(env *runtime.Env, verbSpan source.Span, args []runtime.Arg) (asser
 	}
 	br, err := assertCommandBind(env, verbSpan, args)
 	if err != nil {
-		return assertResult{
-			pass:    false,
-			message: fmt.Sprintf("expected command to succeed, but got: %v", err),
-		}, nil
+		return assertResult{}, err
 	}
 
 	if !br.Rc.OK() {
@@ -336,10 +333,7 @@ func assertFail(env *runtime.Env, verbSpan source.Span, args []runtime.Arg) (ass
 	}
 	br, err := assertCommandBind(env, verbSpan, args)
 	if err != nil {
-		return assertResult{
-			pass:    true,
-			message: "expected command to fail",
-		}, nil
+		return assertResult{}, err
 	}
 
 	if !br.Rc.OK() {

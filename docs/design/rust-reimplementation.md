@@ -8762,3 +8762,11 @@ script, while a repeat count of three runs the selected script exactly three
 times. Parser tests and tagged runner lint passed. Both shells passed file and
 local-image shared corpus checks, and all four file-mode shell and CLI pairings
 passed with the existing clsact policy skip for the Go CLI.
+
+Go command-status assertions now propagate dispatch and launch errors through
+both `ok` and `fail`, including their negated forms. A missing executable and
+an executable with a missing interpreter both stopped the rebuilt shell with
+status 1. A real nonzero command exit still satisfies a negative assertion.
+Go regression and race tests and lint passed. Both shells passed the shared
+file and local-image corpus, with all four shell and CLI pairings passing in
+file mode and the existing clsact policy skip for the Go CLI.
