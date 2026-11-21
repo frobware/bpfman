@@ -1,19 +1,20 @@
 use crate::{
     Bpfman, LoadError, PreparedProgram, PreparedPrograms,
     kernel::LocalObject,
-    load_error::{Failure, LoadCause, finish},
+    load_error::{Failure, LoadCause},
 };
-use bpfman_core::{EffectFailure, KernelAcquisitions, LoadProgram};
 use bpfman_fs::RuntimeWriter;
 use bpfman_lock::AcquireOptions;
 use bpfman_model::{ObservedProgram, ProgramSpec, StoredProgramSummary};
 use std::{collections::BTreeMap, path::Path};
 
+mod acquisition;
 mod effects;
 mod real;
 #[cfg(test)]
 mod tests;
 
+use acquisition::{PublishedBatch, acquire};
 use effects::Inputs;
 pub(super) use effects::{CleanupEffects, FailureFor, LoadEffects};
 pub(super) use real::Effects;
@@ -303,15 +304,6 @@ fn run<F: LoadEffects>(
     run_batch(writer, effects, input, &[]).map(|(first, _)| first)
 }
 
-type Acquired<F> = (
-    bpfman_core::PersistProgram<
-        <F as crate::LoadCleanup>::ProgramPin,
-        <F as crate::LoadCleanup>::MapPin,
-        <F as crate::LoadCleanup>::Bytecode,
-    >,
-    Option<<F as CleanupEffects>::MapDirectory>,
-);
-
 fn run_batch<F: LoadEffects>(
     writer: &RuntimeWriter<'_>,
     effects: &mut F,
@@ -329,238 +321,47 @@ fn run_batch<F: LoadEffects>(
     }
     check_cancelled(effects, first)?;
     let filesystem = effects.prepare(writer).map_err(Failure::NoOwnedArtifacts)?;
-    let mut acquired = Vec::new();
-    let mut records = Vec::new();
+    // Prepare maps, load and pin each program, then publish its bytecode.
+    let first_program = acquire(writer, effects, &filesystem, first)?;
+    let first_id = first_program.id();
+    let mut records = vec![(first_id, first)];
+    let mut batch = PublishedBatch::new(first_program);
 
-    for input in std::iter::once(first).chain(remaining) {
+    for input in remaining {
         match acquire(writer, effects, &filesystem, input) {
-            Ok(item) => {
-                records.push((F::program_id(item.0.inputs().1), input));
-                acquired.push(item);
+            Ok(program) => {
+                records.push((program.id(), input));
+                batch.push(program);
             }
-            Err(primary) => return Err(abort_batch(writer, effects, primary, acquired)),
+            Err(primary) => return Err(batch.abort(writer, effects, primary)),
         }
     }
 
     // Construct results before the sole commit. Input order is preserved.
-    let summaries: Vec<_> = records
-        .iter()
-        .map(|(id, input)| {
-            StoredProgramSummary::new(
-                *id,
-                input.spec.name().as_str().into(),
-                input.spec.kind(),
-                input.metadata.clone(),
-                Vec::new(),
-            )
-        })
-        .collect();
-    let mut summaries = summaries.into_iter();
-    let Some(first_summary) = summaries.next() else {
-        let cause = effects.batch_aborted();
-        return Err(abort_batch(
-            writer,
-            effects,
-            Failure::NoOwnedArtifacts(cause),
-            acquired,
-        ));
+    let summary = |id, input: &Inputs<'_>| {
+        StoredProgramSummary::new(
+            id,
+            input.spec.name().as_str().into(),
+            input.spec.kind(),
+            input.metadata.clone(),
+            Vec::new(),
+        )
     };
-    let remaining_summaries = summaries.collect();
+    let first_summary = summary(first_id, first);
+    let remaining_summaries = records
+        .iter()
+        .skip(1)
+        .map(|(id, input)| summary(*id, input))
+        .collect();
 
     if let Err(cause) =
         cancellation_cause(effects, first).and_then(|()| effects.persist(writer, &records))
     {
-        let primary = match acquired.pop() {
-            Some((persist, directory)) => {
-                finish(writer, effects, persist.failed(cause), directory, vec![])
-            }
-            None => Failure::NoOwnedArtifacts(cause),
-        };
-        return Err(abort_batch(writer, effects, primary, acquired));
+        return Err(batch.commit_failed(writer, effects, cause));
     }
 
-    for (persist, _directory) in acquired {
-        let _committed = persist.committed(());
-    }
-
+    batch.committed();
     Ok((first_summary, remaining_summaries))
-}
-
-fn abort_batch<F: LoadEffects>(
-    writer: &RuntimeWriter<'_>,
-    effects: &mut F,
-    primary: FailureFor<F>,
-    acquired: Vec<Acquired<F>>,
-) -> FailureFor<F> {
-    if acquired.is_empty() {
-        return primary;
-    }
-
-    let mut previous = Vec::new();
-    for (persist, directory) in acquired.into_iter().rev() {
-        let cause = effects.batch_aborted();
-        previous.push(finish(
-            writer,
-            effects,
-            persist.failed(cause),
-            directory,
-            vec![],
-        ));
-    }
-
-    Failure::Batch {
-        primary: Box::new(primary),
-        previous,
-    }
-}
-
-fn acquire<F: LoadEffects>(
-    writer: &RuntimeWriter<'_>,
-    effects: &mut F,
-    filesystem: &F::Prepared,
-    input: &Inputs<'_>,
-) -> Result<Acquired<F>, FailureFor<F>> {
-    check_cancelled(effects, input)?;
-    let operation = LoadProgram::new(input.spec.clone());
-
-    check_cancelled(effects, input)?;
-    let mut pins = Vec::new();
-    if input.map_owner.is_none() {
-        for name in &input.object.shared_maps {
-            let result = admission(effects, input, Vec::new()).and_then(|()| {
-                effects.prepare_maps(writer, filesystem, input, std::slice::from_ref(name))
-            });
-            match result {
-                Ok(acquired) => pins.extend(acquired),
-                Err(failure) => {
-                    pins.extend(failure.remaining);
-                    return Err(finish(
-                        writer,
-                        effects,
-                        operation.failed(EffectFailure {
-                            cause: failure.cause,
-                            remaining: KernelAcquisitions {
-                                program_pin: None,
-                                map_pins: pins,
-                            },
-                        }),
-                        None,
-                        vec![],
-                    ));
-                }
-            }
-        }
-    }
-    let mut kernel = match cancellation_cause(effects, input)
-        .and_then(|()| effects.load_kernel(writer, input, &pins))
-    {
-        Ok(kernel) => kernel,
-        Err(cause) => {
-            return Err(finish(
-                writer,
-                effects,
-                operation.failed(EffectFailure {
-                    cause,
-                    remaining: KernelAcquisitions {
-                        program_pin: None,
-                        map_pins: pins,
-                    },
-                }),
-                None,
-                vec![],
-            ));
-        }
-    };
-    let program_pin = match admission(effects, input, None)
-        .and_then(|()| effects.pin_program(writer, filesystem, &mut kernel, input.spec.name()))
-    {
-        Ok(pin) => pin,
-        Err(failure) => {
-            return Err(finish(
-                writer,
-                effects,
-                operation.failed(EffectFailure {
-                    cause: failure.cause,
-                    remaining: KernelAcquisitions {
-                        program_pin: failure.remaining,
-                        map_pins: pins,
-                    },
-                }),
-                None,
-                vec![],
-            ));
-        }
-    };
-    let id = F::program_id(&program_pin);
-    let directory = if input.map_owner.is_some() {
-        None
-    } else {
-        match admission(effects, input, None)
-            .and_then(|()| effects.create_map_directory(writer, filesystem, id))
-        {
-            Ok(directory) => Some(directory),
-            Err(failure) => {
-                return Err(finish(
-                    writer,
-                    effects,
-                    operation.failed(EffectFailure {
-                        cause: failure.cause,
-                        remaining: KernelAcquisitions {
-                            program_pin: Some(program_pin),
-                            map_pins: pins,
-                        },
-                    }),
-                    failure.remaining,
-                    vec![],
-                ));
-            }
-        }
-    };
-
-    for name in F::map_names(&kernel) {
-        let Some(ref container) = directory else {
-            break;
-        };
-        match admission(effects, input, None)
-            .and_then(|()| effects.pin_map(writer, &kernel, container, name))
-        {
-            Ok(pin) => pins.push(pin),
-            Err(failure) => {
-                pins.extend(failure.remaining);
-
-                return Err(finish(
-                    writer,
-                    effects,
-                    operation.failed(EffectFailure {
-                        cause: failure.cause,
-                        remaining: KernelAcquisitions {
-                            program_pin: Some(program_pin),
-                            map_pins: pins,
-                        },
-                    }),
-                    directory,
-                    vec![],
-                ));
-            }
-        }
-    }
-
-    let publish = operation.loaded(program_pin, pins);
-    let bytecode = match admission(effects, input, vec![])
-        .and_then(|()| effects.publish(writer, &kernel, id, input))
-    {
-        Ok(bytecode) => bytecode,
-        Err(failure) => {
-            return Err(finish(
-                writer,
-                effects,
-                publish.failed(failure),
-                directory,
-                vec![],
-            ));
-        }
-    };
-    Ok((publish.published(bytecode), directory))
 }
 
 // Checks live in the interpreter so fake and real adapters follow identical policy.
@@ -576,12 +377,4 @@ fn cancellation_cause<F: LoadEffects>(effects: &F, input: &Inputs<'_>) -> Result
 
 fn check_cancelled<F: LoadEffects>(effects: &F, input: &Inputs<'_>) -> Result<(), FailureFor<F>> {
     cancellation_cause(effects, input).map_err(Failure::NoOwnedArtifacts)
-}
-
-fn admission<F: LoadEffects, R>(
-    effects: &F,
-    input: &Inputs<'_>,
-    remaining: R,
-) -> Result<(), EffectFailure<R, F::Error>> {
-    cancellation_cause(effects, input).map_err(|cause| EffectFailure { cause, remaining })
 }
